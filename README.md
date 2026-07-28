@@ -155,6 +155,43 @@ that already had (or now has) a natural home, at the user's request for a
 simpler, easier-to-debug schema. See "Schema simplification" below for
 the full design and the real migration/data-carryover details.
 
+**Milestone 8 (FAIRe-aware extraction, corrected to v3):** the LLM
+text-extraction prompt (`extraction/text.py`) went from fully
+open-vocabulary -- "extract whatever you find, name it however you like"
+-- to structured: `extraction/faire_fields.py` is a single-source-of-truth
+taxonomy of ~70 atomic concepts, grouped the way FAIRe groups them (DNA
+extraction, PCR/assay setup, controls & replicates, qPCR/standard curve,
+sequencing/library prep, bioinformatics workflow, taxonomic assignment
+output), each with a short prompt-facing hint. **v2 initially asked the
+model to use FAIRe's own exact field spelling (`annealingTemp`, `neg_cont_type`,
+`otu_db`, ...) as `fact_type_candidate` itself -- coupling a raw fact's own
+identity to one specific standard, the same coupling this pipeline
+deliberately avoids everywhere else (a repository adapter's
+`fact_type_candidate` is never phrased in Darwin Core/MIxS's own spelling
+either). Caught before any real data was built on it, and corrected in
+v3:** `fact_type_candidate` is now always a plain, standard-agnostic
+native name (`annealing_temperature`, `negative_control_type`,
+`reference_database`, `scientific_name`), and the model may additionally
+return an *optional* `candidate_standard_fields` hint per fact (e.g.
+`{"faire": "annealingTemp"}`), stored in `RawFact.confidence_metadata` (a
+pre-existing, previously-unused JSON column -- no migration needed) and
+never folded into the fact's own identity. Dropping every hint still
+leaves a fully valid, source-native raw fact; standardizing onto FAIRe
+remains entirely `mapping/rules.py`'s job, a separate downstream step. An
+open fallback is still preserved for explicitly-stated facts that don't
+fit any listed concept -- structure is the default, not the only option.
+This is what unlocks PCR volumes, primer concentrations, assay names,
+controls, replicate structure, thresholds, standard curves, and taxonomy
+outputs that the old coarse-blob prompt (`PCR_amplification_conditions` as
+one string) could never separate into atomic facts, without coupling
+extraction to any one standard's vocabulary.
+`extraction/sections.py`'s title patterns and default text budget were
+both expanded to match (see "Milestone 8" below for why). The benchmark
+harness (`llm/benchmark.py`) now runs every gold case through the exact
+same `build_prompt` production code calls, instead of gold cases each
+carrying their own free-form `instructions` field that could silently
+drift from the real prompt -- see "Model benchmarking" below.
+
 **What it does not do yet:** OBIS/GBIF/BCO-DMO/PANGAEA/DataCite (no
 adapter yet -- a study with none of DOI/BioProject/ENA accession raises
 `NotImplementedError` from the handler), BeBOP/MIOP raw_fact mapping (see
@@ -658,6 +695,155 @@ contributed which field the moment it merged them, so there was nothing
 more precise to recover. Running `weekly-update` + `worker` after the
 migration naturally repopulates these fields per-adapter going forward.
 
+## Milestone 8 validation: FAIRe-aware extraction against 6 real local models
+
+**Note:** the run below (and its `fact_type_candidate` values like
+`annealingTemp`/`otu_db`) predates the v3 correction described just above
+-- it was measured against v2's design, where FAIRe's own field spellings
+were used directly as `fact_type_candidate`. Kept here as an accurate
+historical record of that run rather than silently rewritten. v3 keeps
+the same checklist size/structure (so the group-header-confusion and
+small-model-goes-silent findings below are expected to still generalize),
+but uses native names instead -- see "Milestone 8 follow-up" below for the
+re-validation against v3's actual prompt.
+
+`fair-ocean benchmark-models` run against all 6 real, currently-running
+local Ollama models from `config/benchmark_models.yaml`, over all 6 gold
+cases (the original example plus the five new FAIRe-aware cases):
+
+| candidate | json_valid | evidence_verif | precision | recall | f1 | mean latency (s) |
+|---|---|---|---|---|---|---|
+| qwen2.5-3b | 1.00 | 1.00 | 0.40 | 0.04 | 0.07 | 13.3 |
+| qwen3-4b-instruct | 1.00 | 0.98 | 0.71 | 0.71 | 0.71 | 25.1 |
+| llama3.2-3b | 1.00 | 0.36 | 0.15 | 0.06 | 0.09 | 23.4 |
+| phi4-mini-3.8b | 1.00 | 0.47 | 0.76 | 0.27 | 0.39 | 17.9 |
+| gemma3-4b | 1.00 | 0.62 | 0.38 | 0.29 | 0.33 | 40.4 |
+| granite3.3-8b | 1.00 | 0.76 | 0.59 | 0.45 | 0.51 | 55.3 |
+
+All 6 produced syntactically valid JSON every time -- the real
+differentiator across this richer, ~70-field checklist is precision/recall,
+which spans a wide range (qwen3-4b-instruct's 0.71 F1 down to qwen2.5-3b's
+0.07). Two real, opposite failure modes turned up on inspection of
+`detail.json`, not just the summary numbers:
+
+1. **qwen2.5:3b went silent on 4 of 6 cases** -- `json_valid: true`,
+   `returned_facts: []`, for source text with 6-11 extractable facts each.
+   Not an error: the model chose to report nothing rather than engage with
+   the longer, denser checklist. This is the real, direct cost of a
+   FAIRe-aware taxonomy replacing a short, open-ended prompt -- the
+   smallest model tested (3B) couldn't productively use the extra
+   structure at all.
+2. **llama3.2:3b confused the checklist's group headers
+   ("PCR / assay setup:") with the field names themselves**, e.g.
+   returning `{"fact_type_candidate": "PCR / assay setup", "raw_value":
+   "assay_name: MiFish-U-12S", ...}` instead of
+   `{"fact_type_candidate": "assay_name", "raw_value": "MiFish-U-12S",
+   ...}` -- real evidence quotes, correctly-shaped JSON, but the
+   fact/value nesting the model invented didn't match the schema at all
+   (0 true positives on that case, all real content lost to the wrong
+   shape).
+
+**Fix:** added one explicit clarifying paragraph to
+`EXTRACTION_INSTRUCTIONS` distinguishing group headings (reference only,
+never use as `fact_type_candidate`) from field names (the single
+identifier before each bullet's own colon). Re-verified directly against
+the real API, not assumed:
+
+- **llama3.2:3b improved but wasn't fully fixed** -- true positives on the
+  affected case went from 0/10 to 2/10; roughly half its answers still
+  used a group heading. A genuinely weak model's confusion isn't
+  eliminated by one clarifying paragraph.
+- **qwen2.5:3b got measurably worse on that same case** -- the longer
+  prompt pushed it from a valid-but-empty response (33.8s) to output that
+  no longer parsed as JSON at all after retries (88.7s). The extra prompt
+  length cost this specific small model more than the clarification bought
+  it.
+- **qwen3-4b-instruct (the strongest performer) was unaffected in the
+  direction that matters**: re-checked directly against the same case,
+  8 true positives / 0 false positives / 2 false negatives -- confirming
+  the fix doesn't cost a model that already understood the schema
+  anything, while still being a real, justified prompt-engineering
+  improvement for models in between.
+
+Net conclusion, grounded in these real runs rather than assumed: this
+FAIRe-aware taxonomy is usable today with **qwen3-4b-instruct or
+granite3.3-8b** (the two candidates that engaged productively with the
+full checklist); **qwen2.5:3b and llama3.2:3b are not well-suited to this
+richer schema** regardless of prompt polish, and reverting to the old,
+shorter open-vocabulary prompt would be the only way to get useful output
+from models that small -- which would give up exactly the FAIRe-field
+coverage this milestone exists to add. This is precisely the kind of
+finding `llm/benchmark.py` exists to surface before anyone commits to a
+model for real extraction work.
+
+## Milestone 8 follow-up: v2 -> v3, decoupling extraction from FAIRe's own vocabulary
+
+A user review caught a real architecture problem in v2 before any
+production data was built on it: v2 asked the model to use FAIRe's own
+exact field spellings (`annealingTemp`, `otu_db`, `neg_cont_type`, ...)
+directly as `fact_type_candidate` -- coupling a raw fact's own identity to
+one specific standard's vocabulary, the same coupling every other raw-fact
+source in this pipeline (repository adapters, structured API/XML facts)
+deliberately avoids. `standardized_values` mapping is supposed to be a
+strictly separate, downstream step over source-native `raw_facts` --
+extraction was quietly blurring that boundary.
+
+**Fix:** `extraction/faire_fields.py`'s `FaireExtractionField` now carries
+`native_name` (a plain, standard-agnostic description -- what
+`fact_type_candidate` is set to, e.g. `annealing_temperature`,
+`reference_database`, `negative_control_type`) separately from
+`faire_hint` (the FAIRe slot spelling that concept corresponds to, e.g.
+`annealingTemp`, `otu_db`, `neg_cont_type`). The prompt (`extraction/text.py`,
+now `PROMPT_VERSION = "text-extraction-v3-native-with-hints"`) asks for an
+**optional** `candidate_standard_fields` field per fact (e.g.
+`{"faire": "annealingTemp"}`), which `extract_facts_from_section` stores
+in `RawFactCandidate.confidence_metadata` and, from there,
+`RawFact.confidence_metadata` -- a JSON column that already existed on the
+ORM model, unused, so this needed **no migration**. Dropping the hint
+entirely still leaves a fully valid, standard-agnostic raw fact;
+standardizing onto FAIRe (or any other vocabulary) remains entirely
+`mapping/rules.py`'s job.
+
+Re-validated live against qwen3-4b-instruct (the strongest performer in
+the original run) on all 6 gold cases, now scored against v3's native
+names:
+
+| | v2 (FAIRe names as identity) | v3 (native names + optional hints) |
+|---|---|---|
+| precision | 0.71 | 0.72 |
+| recall | 0.71 | 0.73 |
+| f1 | 0.71 | 0.73 |
+| mean latency (s) | 25.1 | 39.8 |
+
+Precision/recall/F1 are essentially unchanged (slightly better, within
+normal run-to-run noise for a live model) -- confirming the rename didn't
+cost this model anything, as expected, since the underlying checklist size
+and structure are the same. Mean latency increased (25.1s -> 39.8s): the
+prompt is longer now (native name + hint + example per concept, plus the
+`candidate_standard_fields` output instructions), a real, expected cost of
+the correction. Inspecting the raw output (not just the aggregate score)
+confirmed the mechanism itself works as designed: the model reliably
+returned `candidate_standard_fields` hints that matched
+`faire_fields.py`'s own `faire_hint` values (e.g. `annealing_temperature`
+paired with `{"faire": "annealingTemp"}`), and every returned
+`fact_type_candidate` used a native name, never a FAIRe spelling directly
+-- across all 41 facts the model returned, not one instance of the v2
+coupling reappeared.
+
+**A real mismatch to flag, not yet resolved:** `mapping/rules.py`'s
+current rules are keyed on neither v2's FAIRe-literal names nor v3's
+native names -- they use a third, older naming style
+(`PCR_forward_primer_sequence`, `PCR_amplification_conditions_temp_cycles`,
+...) built from Milestone 4's original coarse, fully open-vocabulary
+extraction output, before either FAIRe-aware taxonomy existed. As things
+stand, `mapping/rules.py` has zero rules that would match a
+`fact_type_candidate` this v3 taxonomy produces (`annealing_temperature`,
+`pcr_reaction_volume`, `forward_primer_sequence`, ...), whether or not a
+`candidate_standard_fields` hint is attached. This is mapping-owned work
+(`mapping/rules.py`), not something this update touches -- flagging it
+here since it directly affects whether v3's atomic extraction output ever
+reaches a `StandardizedValue` row.
+
 ## Loading your own seed list
 
 Put your file at `data/seeds/studies.csv` (or `.jsonl`) -- copy
@@ -809,19 +995,27 @@ your own manual review).
    {
      "case_id": "unique-id",
      "source_text": "the exact paper section text",
-     "instructions": "what to extract from this text",
+     "section_title": "PCR amplification",
      "expected_facts": [
-       {"fact_type_candidate": "collection_date", "raw_value": "2022-01-04", "evidence_quote": "verbatim quote from source_text"}
+       {"fact_type_candidate": "annealing_temperature", "raw_value": "57C", "evidence_quote": "verbatim quote from source_text"}
      ],
      "curated_by": "claude"
    }
    ```
 
-   `data/benchmark/gold/example-001.json` is a fictional worked example
-   (clearly marked, not a real paper) so the harness runs end-to-end before
-   you have real cases -- replace it with real Claude-curated (or later,
-   manually-reviewed) cases before drawing any real conclusions from the
-   report.
+   `section_title` defaults to `"Methods"` if omitted. There's no
+   `instructions` field -- every case is run through the exact same
+   `extraction.text.build_prompt` production code uses, so a gold case
+   can't silently test a different prompt than the real pipeline sends
+   (see "Milestone 8" below for why that used to be possible and isn't
+   anymore). `data/benchmark/gold/example-001.json` is a fictional worked
+   example (clearly marked, not a real paper); five more
+   (`pcr-assay-detail-001`, `controls-replicates-001`,
+   `qpcr-standard-curve-001`, `sequencing-library-001`,
+   `bioinformatics-taxonomy-001`) exercise the FAIRe-aware field groups
+   (`extraction/faire_fields.py`) specifically. Add real, Claude-curated
+   (or later, manually-reviewed) cases before drawing conclusions meant
+   for a paper.
 
 4. Run it:
 
@@ -932,11 +1126,19 @@ not a value was actually found.
   Core mapping was never in scope for this milestone and `config/
   models.yaml` still has placeholder version strings for both.
 - **FAIRe mapping coverage is real but partial by design**, not yet-total-
-  but-eventually-complete: coarse LLM-extracted facts are mapped to
-  FAIRe's free-text fallback fields (flagged `review_required`), not the
-  atomic fields (`pcr_cond`, `pcr_cycles`, `annealingTemp`, ...) they don't
-  give deterministic evidence for. Full atomic coverage needs a
-  FAIRe-aware extraction prompt -- out of scope here. `assay_name` (a
+  but-eventually-complete. This note predates Milestone 8: at the time it
+  was written, extraction was still fully open-vocabulary, so every
+  LLM-extracted fact could only ever map to FAIRe's free-text fallback
+  fields (flagged `review_required`), never an atomic one. Milestone 8
+  (corrected in v3, see above) gives the extractor a structured checklist
+  of atomic concepts with standard-agnostic `fact_type_candidate` names
+  (`pcr_conditions`, `pcr_cycle_count`, `annealing_temperature`, ...) plus
+  an optional `candidate_standard_fields` hint suggesting the matching
+  FAIRe field (e.g. `annealingTemp`) -- closing the extraction-side half of
+  this gap. Whether `mapping/rules.py` actually has rules consuming these
+  new native names (with or without their hints) yet is a separate,
+  mapping-owned question this note doesn't track -- check `mapping/rules.py`
+  directly rather than assuming from this paragraph. `assay_name` (a
   FAIRe-mandatory join key on `ampData`/`stdData`/`experimentRunMetadata`/
   `eLowQuantData`) has no data source at all in this pipeline yet, since
   no adapter models a PCR assay as its own Entity -- those four tables

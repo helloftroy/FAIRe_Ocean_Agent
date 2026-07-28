@@ -305,12 +305,20 @@ combinations present in the 101-study database, not by reading FAIRe's
 ~300-slot schema top-down and guessing at correspondences. The two most
 consequential decisions that fell out of that: (1) FAIRe's atomic
 PCR/extraction fields (`pcr_primer_forward`, `pcr_cond`, `annealingTemp`,
-`nucl_acid_ext_kit`, ...) have no rule at all, because the Milestone 4
-extraction prompt produces one coarse free-text blob per concept
+`nucl_acid_ext_kit`, ...) had no rule at all, because the Milestone 4
+extraction prompt produced one coarse free-text blob per concept
 (`PCR_amplification_conditions`) -- mapping that blob into six atomic
 fields would mean inventing structure the source text doesn't give
-deterministic evidence for, so it's mapped only to FAIRe's own
+deterministic evidence for, so it was mapped only to FAIRe's own
 `*_method_additional` fallback field, always flagged `review_required`.
+**This predates Milestone 8** (see "Why the extraction taxonomy is one
+module the prompt is rendered from" below): extraction now produces
+atomic, standard-agnostic `fact_type_candidate` values
+(`pcr_conditions`, `annealing_temperature`, `dna_extraction_kit`, ...) with
+an optional FAIRe-field hint attached, closing the extraction-side half of
+this gap. Whether `mapping/rules.py` has rules consuming these new native
+names yet is separate, ongoing mapping-side work -- check `mapping/rules.py`
+directly for current coverage rather than assuming from this paragraph.
 (2) `eventDate` needed a precision-aware ISO formatter
 (`mapping/units.py`'s `to_iso_event_date`, using the dual-anchor
 dateutil trick) rather than reusing `dates.try_parse_date` directly --
@@ -454,6 +462,98 @@ authoritative store for every other cross-reference. The old
 genuine second source of truth -- removing the duplication was strictly a
 subtraction, not a redesign.
 
+## Why the extraction taxonomy is one module the prompt is rendered from, not prose written directly into the prompt (Milestone 8)
+
+`extraction/faire_fields.py` exists as a separate, structured module
+(`FaireExtractionField` dataclasses grouped in `FIELD_GROUPS`) rather than
+just writing the ~70-concept checklist directly into
+`extraction/text.py`'s prompt string, for the same reason
+`mapping/rules.py`'s `RULES` table is data instead of inline logic: the
+taxonomy is something three different things need to agree on --
+the prompt (`render_field_reference()`), gold-case validation
+(`all_field_names()`, used by `test_gold_cases_use_native_taxonomy_names_or_a_documented_fallback`),
+and any future mapping-layer work that wants to know exactly which
+concepts extraction can even produce. Encoding it once and rendering the
+prompt from it means those three can't quietly drift out of sync the way
+gold cases and the production prompt used to (see below).
+
+**v2 -> v3 correction.** v2's field names were FAIRe's own exact slot
+spellings (`annealingTemp`, not "PCR annealing temperature"), on the
+reasoning that an exact-label mapping rule is more reliable than a fuzzy
+one. That coupled `fact_type_candidate` -- a raw fact's own identity -- to
+one specific standard's vocabulary, which is exactly the coupling this
+pipeline avoids everywhere else in the raw-facts layer (a repository
+adapter's `fact_type_candidate` is never phrased in Darwin Core or MIxS's
+own spelling; standardizing onto any vocabulary is `mapping/rules.py`'s
+job alone, a separate downstream step over source-native raw_facts). A
+user caught this before any real database held rows built on it. v3 keeps
+every `FaireExtractionField` but splits it into two attributes: `native_name`
+(a plain, standard-agnostic description -- what `fact_type_candidate`
+actually gets set to, e.g. `annealing_temperature`) and `faire_hint` (the
+FAIRe slot spelling that concept corresponds to, e.g. `annealingTemp` --
+rendered into the prompt only as a bracketed suggestion, never as the
+concept's own name). The model may optionally return a
+`candidate_standard_fields` hint per fact (e.g. `{"faire": "annealingTemp"}`),
+which `extract_facts_from_section` stores in `RawFactCandidate.confidence_metadata`
+and, from there, `RawFact.confidence_metadata` -- a JSON column that
+already existed, unused, so this needed no migration. A hint is
+deliberately non-authoritative: a raw fact with no hint at all, or a hint
+a caller ignores entirely, is still a fully valid, standard-agnostic raw
+fact. `mapping/rules.py` can choose to trust a hint as a fast path or
+ignore it and match purely on `native_name`/`entity_level` the way every
+other adapter's facts are matched -- that choice is entirely
+`mapping/rules.py`'s to make, not decided at extraction time.
+
+Before this taxonomy existed at all (pre-Milestone-8), the extraction
+prompt had no reason to produce anything but ad hoc names, so every atomic
+PCR/sequencing/bioinformatics fact collapsed into one coarse per-concept
+blob (`PCR_amplification_conditions`) that could only ever map onto
+FAIRe's free-text `*_method_additional` fallback fields, flagged for
+manual review. The v3 taxonomy fixes that same gap without re-introducing
+the standard-coupling problem v2 introduced while fixing it.
+
+## Why the benchmark harness builds its prompt from extraction/text.py instead of a gold-case-local `instructions` field
+
+Before this milestone, `GoldCase` carried its own `instructions` string,
+rendered by a second, benchmark-local prompt template
+(`EXTRACTION_PROMPT_TEMPLATE`). That meant the benchmark harness could
+score a candidate model against a prompt that wasn't actually the one
+`handle_extract_text_facts` sends in production -- a change to
+`extraction/text.py`'s real instructions wouldn't be reflected in a
+benchmark run until someone remembered to copy the change into every gold
+case file too. `GoldCase.section_title` (defaulting to `"Methods"`) plus
+`run_case` calling `extraction.text.build_prompt` directly removes that
+second copy entirely: whatever the real pipeline's prompt says right now
+is exactly what the next `fair-ocean benchmark-models` run tests, by
+construction, not by discipline.
+
+## Why the checklist-vs-group-header clarification was kept despite a real cost to the weakest model
+
+Live benchmarking (README's "Milestone 8 validation") found two opposite
+real failure modes across 6 local models: llama3.2:3b confused the
+checklist's group headings ("PCR / assay setup:") with the field names
+themselves, while qwen2.5:3b simply went silent on more than half the
+cases rather than engage with the longer, denser prompt at all. A single
+clarifying paragraph added to `EXTRACTION_INSTRUCTIONS` (distinguishing
+headings from field names) measurably helped llama3.2:3b (0/10 -> 2/10
+true positives on the affected case) but measurably hurt qwen2.5:3b
+further on that same case (a valid-but-empty response became one that
+didn't parse as JSON at all, and took nearly 3x longer). Re-checked
+directly against qwen3-4b-instruct (the strongest performer) to confirm
+the addition cost it nothing: 8 true positives / 0 false positives / 2
+false negatives on the same case, unaffected in the direction that
+matters.
+
+The fix was kept anyway. Neither weak model produces usable output for
+this task with or without it -- qwen2.5:3b's failure mode shifting from
+"silent" to "malformed" doesn't change whether its output is usable (it
+isn't, either way), while the clarification is a real, independently
+justified correctness improvement for every model capable enough to need
+it. Tuning the prompt to rescue a 3B model's failure mode would optimize
+for a candidate this taxonomy was never going to work well with in the
+first place, at a real cost (a longer, more hedged prompt) paid by every
+other candidate.
+
 ## Task queue
 
 See `workflow/task_queue.py` docstrings for the idempotency-key scheme and
@@ -475,3 +575,4 @@ README.md's "Assumptions and placeholders" section.
 | 6 follow-ups: FAIRe completeness, exact_mappings, BeBOP decision | Done -- see README's "Milestone 6 follow-ups". BeBOP/MIOP raw_fact mapping is a decided-out-of-scope call (paper-derived input doesn't carry protocol-document metadata), not an open question or a blocker. |
 | 7: Refresh known studies, watermarks, retry/rediscovery cadences, weekly updates | Done -- validated against the real 101-study database and live Crossref/OpenAlex/Europe PMC/NCBI/ENA (found/fixed 2 real bugs: a monkeypatch-escaping import in scheduling/weekly.py, and a naive/aware datetime subtraction in is_rediscovery_due). Brand-new-study discovery via keyword search/citation expansion remains unbuilt (`DiscoveryConfig.keyword_search_enabled`/`citation_expansion_max_depth`). |
 | 7 continued: schema simplification (missingness -> standardized_values, publications -> sources) | Done -- migration `0fc0bf2bf46a` applied to the real database (1,845 missingness rows + 99 publication rows carried forward, not discarded); see README's "Schema simplification". |
+| 8: FAIRe-aware extraction (raw fact taxonomy, targeted prompt, benchmark harness alignment) | Done, corrected to v3 -- see README's "Milestone 8 validation" for the original real multi-model benchmark run, and "Milestone 8 follow-up" for the v2 -> v3 architecture correction (native, standard-agnostic `fact_type_candidate` names + optional `candidate_standard_fields` hints, replacing v2's direct use of FAIRe's own field spellings). |

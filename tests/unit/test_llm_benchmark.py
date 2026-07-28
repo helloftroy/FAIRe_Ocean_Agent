@@ -16,7 +16,6 @@ from fair_ocean_agent.llm.mock import MockLLMBackend
 CASE = GoldCase(
     case_id="case-1",
     source_text="Samples were collected on 4 January 2022 at a depth of 5 meters.",
-    instructions="Extract collection_date and sampling_depth.",
     expected_facts=[
         {"fact_type_candidate": "collection_date", "raw_value": "2022-01-04", "evidence_quote": "collected on 4 January 2022"},
         {"fact_type_candidate": "sampling_depth", "raw_value": "5 meters", "evidence_quote": "depth of 5 meters"},
@@ -32,15 +31,50 @@ def test_load_gold_cases_from_directory(tmp_path):
     assert cases[0].case_id == "case-1"
 
 
-def test_example_gold_case_includes_primer_names_requested_by_instructions():
-    cases = load_gold_cases("data/benchmark/gold")
-    example = next(case for case in cases if case.case_id == "example-001")
+def test_run_case_uses_the_real_production_prompt(monkeypatch):
+    """Regression guard: gold cases used to carry their own free-form
+    `instructions` field, rendered by a benchmark-local prompt template --
+    a second copy of "the prompt" that could silently drift from what
+    extraction/text.py actually sends in production. run_case must build
+    its prompt via extraction.text.build_prompt, the same function
+    handle_extract_text_facts calls."""
+    import fair_ocean_agent.llm.benchmark as benchmark_module
 
-    requested_primer_names = "primer names" in example.instructions.lower()
-    expected_labels = {_normalize_label(f.fact_type_candidate) for f in example.expected_facts}
+    captured = {}
+    real_build_prompt = benchmark_module.build_prompt
 
-    assert requested_primer_names
-    assert "primer names" in expected_labels
+    def spy(section_title, section_text):
+        captured["section_title"] = section_title
+        captured["section_text"] = section_text
+        return real_build_prompt(section_title, section_text)
+
+    monkeypatch.setattr(benchmark_module, "build_prompt", spy)
+    backend = MockLLMBackend(responses=["[]"])
+    benchmark_module.run_case(backend, CASE)
+
+    assert captured["section_title"] == CASE.section_title
+    assert captured["section_text"] == CASE.source_text
+
+
+def test_gold_cases_use_native_taxonomy_names_or_a_documented_fallback():
+    """Every real gold case's expected fact_type_candidate should either be
+    an exact native_name from the taxonomy (extraction/faire_fields.py --
+    standard-agnostic, never a FAIRe field spelling) or one of the two
+    deliberate fallback-demo exceptions in example-001 (collection_date/
+    sampling_depth -- normally repository-sourced, kept here only to
+    demonstrate the prompt's open-fallback path still works). Catches gold
+    data quietly drifting from the taxonomy it's meant to validate."""
+    from fair_ocean_agent.extraction.faire_fields import all_field_names
+
+    known_names = all_field_names()
+    documented_fallback_exceptions = {"collection_date", "sampling_depth"}
+
+    for case in load_gold_cases("data/benchmark/gold"):
+        for fact in case.expected_facts:
+            assert (
+                fact.fact_type_candidate in known_names
+                or fact.fact_type_candidate in documented_fallback_exceptions
+            ), f"{case.case_id}: {fact.fact_type_candidate!r} is not in the native-name taxonomy or documented fallbacks"
 
 
 def test_run_benchmark_perfect_model_gets_perfect_scores():

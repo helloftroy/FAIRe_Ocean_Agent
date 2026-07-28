@@ -26,24 +26,53 @@ RELEVANT_SECTION_TITLE_PATTERNS = [
         r"environmental",
         r"extraction",
         r"pcr",
+        r"qpcr",
+        r"quantitative pcr",
         r"amplif",
+        r"assay",
+        r"primer",
+        r"librar",  # "Library preparation" -- distinct subsection from "sequencing"
+                    # in many papers, and this taxonomy's atomic lib_conc/adapter
+                    # fields specifically live there, not under "sequencing".
         r"sequenc",
         r"bioinformatic",
+        r"taxonom",  # "Taxonomic assignment"/"Taxonomy" -- where otu_db/tax_assign_cat/
+                     # scientificName-level facts are reported, distinct from the
+                     # broader "bioinformatic" pattern (e.g. "Taxonomy" alone, with no
+                     # "bioinformatic" in the title at all).
+        r"standard curve",
         r"data availab",
         r"supplementary method",
         r"quality control",
     )
 ]
 
+# A truncated fragment below this length is rarely worth its own LLM call --
+# not enough context for the model to report much, and it still costs a
+# full extraction call. Skip it (leave the remaining budget for whatever
+# section comes next in document order) rather than send a near-empty
+# section through the pipeline.
+MIN_FRAGMENT_CHARS = 500
 
-def select_relevant_sections(fulltext_xml: str, max_chars: int = 20000) -> list[dict]:
+
+def select_relevant_sections(fulltext_xml: str, max_chars: int = 40000) -> list[dict]:
     """Returns [{"title": str, "text": str}, ...] for <sec> elements whose
     <title> matches a relevant-section pattern, in document order, with
     combined text truncated to max_chars total across all selected
     sections -- bounding what gets sent to the LLM (section 10: "Avoids
     sending an entire long paper"). Returns [] on unparseable XML rather
     than raising, since a malformed document simply has nothing to
-    extract from."""
+    extract from.
+
+    max_chars defaults to 40000 (raised from an original 20000): the
+    FAIRe-aware taxonomy (extraction/faire_fields.py) targets fields spread
+    across more, often separately-titled leaf sections than the original
+    prompt did (Sampling, DNA extraction, PCR, Library prep, Sequencing,
+    Bioinformatics, Taxonomic assignment can each be their own <sec> in a
+    real paper) -- the original budget risked truncating away exactly the
+    later sections (bioinformatics/taxonomy) this expansion is meant to
+    reach, since sections are accepted in document order until the budget
+    runs out."""
     try:
         root = ET.fromstring(fulltext_xml)
     except ET.ParseError:
@@ -75,6 +104,8 @@ def select_relevant_sections(fulltext_xml: str, max_chars: int = 20000) -> list[
             continue
 
         remaining = max_chars - total_chars
+        if remaining < MIN_FRAGMENT_CHARS:
+            continue
         truncated_text = text[:remaining]
         sections.append({"title": title, "text": truncated_text})
         total_chars += len(truncated_text)

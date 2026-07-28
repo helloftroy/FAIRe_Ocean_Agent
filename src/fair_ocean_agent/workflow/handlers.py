@@ -291,6 +291,7 @@ def _persist_source_and_facts(
                 support_type=fact.support_type.value,
                 extraction_method=f"adapter:{adapter.name}",
                 review_status=ReviewStatus.ACCEPTED.value,
+                confidence_metadata=fact.confidence_metadata,
             )
         )
 
@@ -645,6 +646,7 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
                     model_name=backend.label,
                     prompt_version=PROMPT_VERSION,
                     review_status=ReviewStatus.ACCEPTED.value,
+                    confidence_metadata=fact.confidence_metadata,
                 )
             )
 

@@ -1,0 +1,44 @@
+{
+  "case_id": "sequencing-library-001",
+  "curated_by": "claude",
+  "notes": "Fictional example -- exercises the sequencing/library field group using v3's standard-agnostic native names: sequencing_kit, library_layout, sequencing_instrument, library_concentration_method, library_concentration, phix_percentage, sequencing_location.",
+  "section_title": "Library preparation and sequencing",
+  "source_text": "Libraries were prepared using the Illumina Nextera XT kit and sequenced in a paired-end 2x300 bp configuration on an Illumina MiSeq using a MiSeq Reagent Kit v3. Library concentration was measured with a Qubit fluorometer and normalized to 4 nM. PhiX was spiked in at 10% to increase base diversity. Sequencing was performed at the Genomics Core Facility, University of Example.",
+  "expected_facts": [
+    {
+      "fact_type_candidate": "sequencing_kit",
+      "raw_value": "MiSeq Reagent Kit v3",
+      "evidence_quote": "using a MiSeq Reagent Kit v3"
+    },
+    {
+      "fact_type_candidate": "library_layout",
+      "raw_value": "paired-end",
+      "evidence_quote": "sequenced in a paired-end 2x300 bp configuration"
+    },
+    {
+      "fact_type_candidate": "sequencing_instrument",
+      "raw_value": "Illumina MiSeq",
+      "evidence_quote": "on an Illumina MiSeq using a MiSeq Reagent Kit v3"
+    },
+    {
+      "fact_type_candidate": "library_concentration_method",
+      "raw_value": "Qubit fluorometer",
+      "evidence_quote": "measured with a Qubit fluorometer"
+    },
+    {
+      "fact_type_candidate": "library_concentration",
+      "raw_value": "4 nM",
+      "evidence_quote": "normalized to 4 nM"
+    },
+    {
+      "fact_type_candidate": "phix_percentage",
+      "raw_value": "10%",
+      "evidence_quote": "PhiX was spiked in at 10%"
+    },
+    {
+      "fact_type_candidate": "sequencing_location",
+      "raw_value": "Genomics Core Facility, University of Example",
+      "evidence_quote": "performed at the Genomics Core Facility, University of Example"
+    }
+  ]
+}

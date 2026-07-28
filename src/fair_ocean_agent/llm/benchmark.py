@@ -7,6 +7,14 @@ This module has no opinion about which model is "best"; it only measures.
 Gold cases are meant to be curated by Claude now (see GoldCase.curated_by)
 and, later, validated/replaced by manual review -- the format doesn't
 change either way, only who authored the expected_facts.
+
+Every case is run through the exact same `build_prompt` production code
+uses (`extraction/text.py`), not a second, locally-defined prompt template
+-- gold cases used to each carry their own free-form `instructions` field,
+which meant the benchmark could silently drift from what the real pipeline
+actually sends a model. There's now one prompt-construction path; a
+change to extraction/text.py's instructions is automatically what the next
+benchmark run tests, with no gold file to update in lockstep.
 """
 from __future__ import annotations
 
@@ -20,6 +28,7 @@ from pydantic import BaseModel
 
 from fair_ocean_agent.dates import try_parse_date
 from fair_ocean_agent.extraction.evidence import verify_evidence_quote
+from fair_ocean_agent.extraction.text import build_prompt
 from fair_ocean_agent.llm.base import LLMBackend, LLMBackendError
 
 
@@ -32,7 +41,7 @@ class GoldFact(BaseModel):
 class GoldCase(BaseModel):
     case_id: str
     source_text: str
-    instructions: str
+    section_title: str = "Methods"
     expected_facts: list[GoldFact]
     curated_by: str = "unspecified"
     notes: str | None = None
@@ -41,23 +50,6 @@ class GoldCase(BaseModel):
 def load_gold_cases(directory: str | Path) -> list[GoldCase]:
     directory = Path(directory)
     return [GoldCase.model_validate(json.loads(p.read_text())) for p in sorted(directory.glob("*.json"))]
-
-
-EXTRACTION_PROMPT_TEMPLATE = """{instructions}
-
-Return ONLY a JSON array of objects, each with exactly these fields:
-- fact_type_candidate (string)
-- raw_value (string)
-- evidence_quote (string, must be copied verbatim from the source text below)
-
-If nothing in the source text supports a fact, return an empty array. Do
-not infer, guess, or use outside knowledge.
-
-Source text:
-\"\"\"
-{source_text}
-\"\"\"
-"""
 
 
 def _normalize(value: str) -> str:
@@ -134,7 +126,7 @@ class CaseResult:
 
 
 def run_case(backend: LLMBackend, case: GoldCase) -> CaseResult:
-    prompt = EXTRACTION_PROMPT_TEMPLATE.format(instructions=case.instructions, source_text=case.source_text)
+    prompt = build_prompt(case.section_title, case.source_text)
     try:
         parsed, response = backend.generate_json(prompt, temperature=0)
     except LLMBackendError as exc:

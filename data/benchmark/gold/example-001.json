@@ -1,9 +1,9 @@
 {
   "case_id": "example-001",
   "curated_by": "claude",
-  "notes": "Fictional example case, not a real paper -- demonstrates the gold-case format and lets the benchmark harness run end-to-end before real Claude-curated cases exist. Replace/add real cases under data/benchmark/gold/ before running a real comparison.",
-  "source_text": "Water samples were collected on 14 March 2021 at a depth of 5 meters from three stations in the reef lagoon. DNA was extracted using a DNeasy PowerWater kit. The 18S rRNA V4 region was amplified using primers TAReuk454FWD1 and TAReukREV3. Sequencing was performed on an Illumina MiSeq platform.",
-  "instructions": "Extract facts about marine eDNA sampling and sequencing methodology that are explicitly stated in this text: collection date, sampling depth, DNA extraction method, primer names, and sequencing platform. Only extract what is explicitly stated.",
+  "notes": "Fictional example case, not a real paper -- demonstrates the gold-case format and lets the benchmark harness run end-to-end before real Claude-curated cases exist. Updated for the v3 native-name taxonomy (extraction/faire_fields.py): fact_type_candidate values are standard-agnostic native names (dna_extraction_kit, target_gene, forward_primer_name/reverse_primer_name, pcr_reaction_volume, annealing_temperature, pcr_cycle_count, sequencing_instrument) rather than FAIRe's own slot spellings (nucl_acid_ext_kit, annealingTemp, pcr_cycles, instrument, ...) -- those FAIRe names now live only as each taxonomy entry's optional faire_hint, never as a fact's own identity. collection_date/sampling_depth are kept as free-choice fallback facts -- neither is in the taxonomy checklist (those two are normally repository-sourced, not text-extracted), demonstrating the prompt's open fallback still works for facts outside the explicit list.",
+  "section_title": "Methods",
+  "source_text": "Water samples were collected on 14 March 2021 at a depth of 5 meters from three stations in the reef lagoon. DNA was extracted using a DNeasy PowerWater kit. The 18S rRNA V4 region was amplified using primers TAReuk454FWD1 and TAReukREV3 in a 25 uL reaction volume with an annealing temperature of 57C for 35 cycles. Sequencing was performed on an Illumina MiSeq platform.",
   "expected_facts": [
     {
       "fact_type_candidate": "collection_date",
@@ -16,17 +16,47 @@
       "evidence_quote": "at a depth of 5 meters"
     },
     {
-      "fact_type_candidate": "dna_extraction_method",
+      "fact_type_candidate": "dna_extraction_kit",
       "raw_value": "DNeasy PowerWater kit",
       "evidence_quote": "DNA was extracted using a DNeasy PowerWater kit"
     },
     {
-      "fact_type_candidate": "primer_names",
-      "raw_value": "TAReuk454FWD1 and TAReukREV3",
+      "fact_type_candidate": "target_gene",
+      "raw_value": "18S rRNA",
+      "evidence_quote": "The 18S rRNA V4 region was amplified"
+    },
+    {
+      "fact_type_candidate": "target_subfragment",
+      "raw_value": "V4",
+      "evidence_quote": "The 18S rRNA V4 region was amplified"
+    },
+    {
+      "fact_type_candidate": "forward_primer_name",
+      "raw_value": "TAReuk454FWD1",
       "evidence_quote": "using primers TAReuk454FWD1 and TAReukREV3"
     },
     {
-      "fact_type_candidate": "sequencing_platform",
+      "fact_type_candidate": "reverse_primer_name",
+      "raw_value": "TAReukREV3",
+      "evidence_quote": "using primers TAReuk454FWD1 and TAReukREV3"
+    },
+    {
+      "fact_type_candidate": "pcr_reaction_volume",
+      "raw_value": "25 uL",
+      "evidence_quote": "in a 25 uL reaction volume"
+    },
+    {
+      "fact_type_candidate": "annealing_temperature",
+      "raw_value": "57C",
+      "evidence_quote": "an annealing temperature of 57C for 35 cycles"
+    },
+    {
+      "fact_type_candidate": "pcr_cycle_count",
+      "raw_value": "35",
+      "evidence_quote": "an annealing temperature of 57C for 35 cycles"
+    },
+    {
+      "fact_type_candidate": "sequencing_instrument",
       "raw_value": "Illumina MiSeq",
       "evidence_quote": "Sequencing was performed on an Illumina MiSeq platform"
     }

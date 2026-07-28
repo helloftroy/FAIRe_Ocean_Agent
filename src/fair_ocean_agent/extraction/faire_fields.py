@@ -1,46 +1,37 @@
-"""The FAIRe-aware raw fact taxonomy: the exact set of atomic fields
+"""The extraction concept taxonomy: the set of source-native concepts
 `extraction/text.py`'s prompt asks the model to look for, grouped the way
-FAIRe itself groups them (PCR/assay, controls, qPCR/standard curve,
-sequencing, bioinformatics, taxonomic assignment).
+FAIRe groups them (PCR/assay, controls, qPCR/standard curve, sequencing,
+bioinformatics, taxonomic assignment) for organizational convenience only.
 
-This is the single source of truth for that taxonomy -- the prompt is
-rendered from it (`render_field_reference`), so the list of fields a
-maintainer edits here is exactly the list a reader sees in the prompt and
-the list `all_field_names()` exposes for tests. Before this module
-existed, the extraction prompt asked the model to find whatever it
-thought relevant under an open-ended `fact_type_candidate` of its own
-choosing (e.g. "PCR_amplification_conditions" as one blob) -- useful for
-never missing something explicitly stated, but useless for populating
-FAIRe's atomic fields (PCR volumes, primer concentrations, annealing
-temperature, standard-curve slope/intercept, ...), since nothing forced
-the model's vocabulary to line up with FAIRe's own field names. Naming
-each field here exactly the way FAIRe's schema.yaml does (see
-schemas/faire/README.md) means a fact this extracts can map onto FAIRe
-with an exact-label rule instead of a fuzzy one -- see mapping/rules.py's
-own docstring for how that mapping layer treats a fact's name.
+**A raw fact's identity is never a standard's vocabulary.** Each entry's
+`native_name` -- what `fact_type_candidate` actually gets set to -- is a
+plain, standard-agnostic description of the concept (`annealing_temperature`,
+`r_squared`, `reference_database`), not FAIRe's own slot spelling
+(`annealingTemp`, `r2`, `otu_db`). `faire_hint` records which FAIRe field
+this concept *might* correspond to, but that hint is carried as a
+separate, optional suggestion (`candidate_standard_fields` on the
+extracted fact, stored in `RawFact.confidence_metadata` -- see
+extraction/text.py) -- never folded into the fact's own name. A raw fact
+produced under this taxonomy is exactly as standard-independent as one
+produced by any repository adapter; standardization/mapping onto FAIRe
+(or any other standard) stays mapping/faire.py's job, a separate
+downstream step over raw_facts, same as always.
 
-Field `hint` text is a short, prompt-facing paraphrase of FAIRe's own
-slot description (schemas/faire/schema.yaml), not a copy of the full
-official wording -- kept brief deliberately, since ~70 fields' worth of
-full FAIRe prose would bloat the prompt for no benefit; the authoritative
-long-form definition is always schemas/faire/schema.yaml itself.
+An earlier version of this module used FAIRe's own slot names directly as
+`fact_type_candidate` (`annealingTemp` as the fact's own identity, not a
+hint about it) -- that coupled a raw fact's identity to one specific
+standard, which is exactly what raw_facts elsewhere in this pipeline
+deliberately avoids (a repository-adapter fact's `fact_type_candidate` is
+never phrased in Darwin Core or MIxS's own vocabulary spelling either).
+Fixed by splitting `native_name` (the fact's real identity) from
+`faire_hint` (a suggestion about it) once a user caught the coupling
+before any real data was built on it.
 
-Not every FAIRe field belongs here. Left out on purpose:
-- Fields that are inherently per-sample/per-replicate bookkeeping rather
-  than a single paper-level narrative fact (`technical_rep_id`,
-  `biological_rep_relation`, `samp_name`, `pcr_plate_id`) -- a paper's
-  Methods text doesn't usually state "this specific replicate is
-  numbered 3," and forcing the model to invent one would risk
-  fabrication, not extraction.
-- Fields already well-covered by structured NCBI/ENA repository data
-  (`collection_date`, `lat_lon`, `depth`, `env_broad_scale`, ...) --
-  extending atomic coverage here is about what repository metadata
-  *doesn't* give: assay/PCR/sequencing/bioinformatics/taxonomy detail
-  that only ever appears in a paper's own Methods section.
-- Enum-valued instrument-set fields unlikely to appear as free prose
-  (`automaticThresholdQuantificationCycle`, `automaticBaselineValue` --
-  "was the threshold set automatically or manually" is qPCR-software
-  metadata, not something a paper's Methods section narrates).
+This is still the single source of truth the prompt is rendered from
+(`render_field_reference`) and tests validate against
+(`all_field_names`/`all_faire_hints`) -- editing the taxonomy here is
+editing what the model is shown and what a gold case is checked against,
+in one place.
 """
 from __future__ import annotations
 
@@ -49,113 +40,114 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class FaireExtractionField:
-    name: str
+    native_name: str
     hint: str
+    faire_hint: str | None = None
     example: str | None = None
 
 
 FIELD_GROUPS: dict[str, tuple[FaireExtractionField, ...]] = {
     "DNA extraction": (
-        FaireExtractionField("nucl_acid_ext_kit", "name of the extraction kit used", "DNeasy PowerWater Kit"),
-        FaireExtractionField("nucl_acid_ext_lysis", "lysis method (e.g. physical, chemical, enzymatic)", "bead-beating"),
-        FaireExtractionField("nucl_acid_ext_sep", "how DNA was separated/purified (e.g. spin column, magnetic beads)"),
-        FaireExtractionField("samp_vol_we_dna_ext", "volume or mass of sample processed for extraction", "500 mL"),
-        FaireExtractionField("samp_vol_we_dna_ext_unit", "unit for samp_vol_we_dna_ext", "mL"),
-        FaireExtractionField("concentration", "DNA concentration after extraction", "12.4 ng/uL"),
-        FaireExtractionField("concentration_method", "instrument/method used to measure DNA concentration", "Qubit fluorometer"),
-        FaireExtractionField("ratioOfAbsorbance260_280", "A260/A280 absorbance ratio (DNA purity)", "1.85"),
-        FaireExtractionField("dna_cleanup_method", "DNA clean-up/purification method or kit name"),
+        FaireExtractionField("dna_extraction_kit", "name of the extraction kit used", "nucl_acid_ext_kit", "DNeasy PowerWater Kit"),
+        FaireExtractionField("dna_lysis_method", "lysis method (e.g. physical, chemical, enzymatic)", "nucl_acid_ext_lysis", "bead-beating"),
+        FaireExtractionField("dna_separation_method", "how DNA was separated/purified (e.g. spin column, magnetic beads)", "nucl_acid_ext_sep"),
+        FaireExtractionField("sample_volume_for_extraction", "volume or mass of sample processed for extraction", "samp_vol_we_dna_ext", "500 mL"),
+        FaireExtractionField("sample_volume_for_extraction_unit", "unit for sample_volume_for_extraction", "samp_vol_we_dna_ext_unit", "mL"),
+        FaireExtractionField("dna_concentration", "DNA concentration after extraction", "concentration", "12.4 ng/uL"),
+        FaireExtractionField("dna_concentration_method", "instrument/method used to measure DNA concentration", "concentration_method", "Qubit fluorometer"),
+        FaireExtractionField("absorbance_260_280_ratio", "A260/A280 absorbance ratio (DNA purity)", "ratioOfAbsorbance260_280", "1.85"),
+        FaireExtractionField("dna_cleanup_method", "DNA clean-up/purification method or kit name", "dna_cleanup_method"),
     ),
     "PCR / assay setup": (
-        FaireExtractionField("assay_name", "a short name/identifier the paper gives its assay", "18S-V4-eukaryote"),
-        FaireExtractionField("assay_type", "targeted, metabarcoding, or other detection approach"),
-        FaireExtractionField("target_gene", "targeted gene or locus", "16S rRNA"),
-        FaireExtractionField("target_subfragment", "targeted hypervariable subregion", "V4"),
-        FaireExtractionField("pcr_primer_forward", "forward primer sequence, 5' to 3'"),
-        FaireExtractionField("pcr_primer_reverse", "reverse primer sequence, 5' to 3'"),
-        FaireExtractionField("pcr_primer_name_forward", "forward primer's name", "515F"),
-        FaireExtractionField("pcr_primer_name_reverse", "reverse primer's name", "926R"),
-        FaireExtractionField("pcr_primer_conc_forward", "forward primer's stock concentration", "10 uM"),
-        FaireExtractionField("pcr_primer_conc_reverse", "reverse primer's stock concentration", "10 uM"),
-        FaireExtractionField("pcr_primer_vol_forward", "forward primer volume per reaction", "1 uL"),
-        FaireExtractionField("pcr_primer_vol_reverse", "reverse primer volume per reaction", "1 uL"),
-        FaireExtractionField("ampliconSize", "expected amplicon length in base pairs, excluding primers/adapters", "411 bp"),
-        FaireExtractionField("amplificationReactionVolume", "total PCR reaction volume", "25 uL"),
-        FaireExtractionField("pcr_dna_vol", "template DNA volume added per PCR reaction", "2 uL"),
-        FaireExtractionField("thermocycler", "thermocycler manufacturer and model"),
-        FaireExtractionField("annealingTemp", "PCR annealing temperature", "55C"),
-        FaireExtractionField("pcr_cycles", "number of PCR cycles", "35"),
-        FaireExtractionField("pcr_cond", "full description of PCR reaction conditions/thermal profile"),
-        FaireExtractionField("commercial_mm", "commercial master mix name/brand, if one was used"),
-        FaireExtractionField("custom_mm", "custom master mix composition, if a commercial one was not used"),
+        FaireExtractionField("assay_name", "a short name/identifier the paper gives its assay", "assay_name", "18S-V4-eukaryote"),
+        FaireExtractionField("assay_type", "targeted, metabarcoding, or other detection approach", "assay_type"),
+        FaireExtractionField("target_gene", "targeted gene or locus", "target_gene", "16S rRNA"),
+        FaireExtractionField("target_subfragment", "targeted hypervariable subregion", "target_subfragment", "V4"),
+        FaireExtractionField("forward_primer_sequence", "forward primer sequence, 5' to 3'", "pcr_primer_forward"),
+        FaireExtractionField("reverse_primer_sequence", "reverse primer sequence, 5' to 3'", "pcr_primer_reverse"),
+        FaireExtractionField("forward_primer_name", "forward primer's name", "pcr_primer_name_forward", "515F"),
+        FaireExtractionField("reverse_primer_name", "reverse primer's name", "pcr_primer_name_reverse", "926R"),
+        FaireExtractionField("forward_primer_concentration", "forward primer's stock concentration", "pcr_primer_conc_forward", "10 uM"),
+        FaireExtractionField("reverse_primer_concentration", "reverse primer's stock concentration", "pcr_primer_conc_reverse", "10 uM"),
+        FaireExtractionField("forward_primer_volume", "forward primer volume per reaction", "pcr_primer_vol_forward", "1 uL"),
+        FaireExtractionField("reverse_primer_volume", "reverse primer volume per reaction", "pcr_primer_vol_reverse", "1 uL"),
+        FaireExtractionField("amplicon_size", "expected amplicon length in base pairs, excluding primers/adapters", "ampliconSize", "411 bp"),
+        FaireExtractionField("pcr_reaction_volume", "total PCR reaction volume", "amplificationReactionVolume", "25 uL"),
+        FaireExtractionField("template_dna_volume", "template DNA volume added per PCR reaction", "pcr_dna_vol", "2 uL"),
+        FaireExtractionField("thermocycler", "thermocycler manufacturer and model", "thermocycler"),
+        FaireExtractionField("annealing_temperature", "PCR annealing temperature", "annealingTemp", "55C"),
+        FaireExtractionField("pcr_cycle_count", "number of PCR cycles", "pcr_cycles", "35"),
+        FaireExtractionField("pcr_conditions", "full description of PCR reaction conditions/thermal profile", "pcr_cond"),
+        FaireExtractionField("commercial_master_mix", "commercial master mix name/brand, if one was used", "commercial_mm"),
+        FaireExtractionField("custom_master_mix", "custom master mix composition, if a commercial one was not used", "custom_mm"),
     ),
     "Controls & replicates": (
-        FaireExtractionField("neg_cont_type", "type of negative control used", "extraction blank"),
-        FaireExtractionField("pos_cont_type", "type of positive control used", "synthetic DNA standard"),
-        FaireExtractionField("biological_rep", "number of biological replicates collected per sample/treatment", "3"),
-        FaireExtractionField("pcr_rep", "number of PCR technical replicates per sample", "3"),
+        FaireExtractionField("negative_control_type", "type of negative control used", "neg_cont_type", "extraction blank"),
+        FaireExtractionField("positive_control_type", "type of positive control used", "pos_cont_type", "synthetic DNA standard"),
+        FaireExtractionField("biological_replicate_count", "number of biological replicates collected per sample/treatment", "biological_rep", "3"),
+        FaireExtractionField("pcr_replicate_count", "number of PCR technical replicates per sample", "pcr_rep", "3"),
     ),
     "qPCR / standard curve": (
-        FaireExtractionField("thresholdQuantificationCycle", "the fluorescence threshold value used for Cq/Ct"),
-        FaireExtractionField("quantificationCycle", "a reported quantification cycle (Cq/Ct) value"),
-        FaireExtractionField("std_type", "type of qPCR standard used (e.g. gBlock, plasmid, synthetic gene fragment)"),
-        FaireExtractionField("std_conc", "input quantity of the qPCR standard"),
-        FaireExtractionField("std_conc_unit", "unit for std_conc", "copies/uL"),
-        FaireExtractionField("std_source", "source/supplier of the qPCR standard"),
-        FaireExtractionField("slope", "slope of the qPCR standard curve"),
-        FaireExtractionField("intercept", "intercept of the qPCR standard curve"),
-        FaireExtractionField("r2", "R-squared value of the qPCR standard curve"),
-        FaireExtractionField("efficiency", "qPCR amplification efficiency (%)", "98%"),
-        FaireExtractionField("estimatedNumberOfCopies", "estimated concentration of target molecules/copies"),
-        FaireExtractionField("estimatedNumberOfCopies_unit", "unit for estimatedNumberOfCopies", "copies/reaction"),
-        FaireExtractionField("estimatedNumberOfCopies_method", "method used to estimate target copy number"),
-        FaireExtractionField("pcr_assay_lod", "assay's limit of detection (LOD)"),
-        FaireExtractionField("pcr_assay_lod_unit", "unit for pcr_assay_lod"),
-        FaireExtractionField("pcr_assay_loq", "assay's limit of quantification (LOQ)"),
-        FaireExtractionField("pcr_assay_loq_unit", "unit for pcr_assay_loq"),
+        FaireExtractionField("quantification_cycle_threshold", "the fluorescence threshold value used for Cq/Ct", "thresholdQuantificationCycle"),
+        FaireExtractionField("quantification_cycle", "a reported quantification cycle (Cq/Ct) value", "quantificationCycle"),
+        FaireExtractionField("qpcr_standard_type", "type of qPCR standard used (e.g. gBlock, plasmid, synthetic gene fragment)", "std_type"),
+        FaireExtractionField("qpcr_standard_concentration", "input quantity of the qPCR standard", "std_conc"),
+        FaireExtractionField("qpcr_standard_concentration_unit", "unit for qpcr_standard_concentration", "std_conc_unit", "copies/uL"),
+        FaireExtractionField("qpcr_standard_source", "source/supplier of the qPCR standard", "std_source"),
+        FaireExtractionField("standard_curve_slope", "slope of the qPCR standard curve", "slope"),
+        FaireExtractionField("standard_curve_intercept", "intercept of the qPCR standard curve", "intercept"),
+        FaireExtractionField("standard_curve_r_squared", "R-squared value of the qPCR standard curve", "r2"),
+        FaireExtractionField("qpcr_amplification_efficiency", "qPCR amplification efficiency (%)", "efficiency", "98%"),
+        FaireExtractionField("estimated_copy_number", "estimated concentration of target molecules/copies", "estimatedNumberOfCopies"),
+        FaireExtractionField("estimated_copy_number_unit", "unit for estimated_copy_number", "estimatedNumberOfCopies_unit", "copies/reaction"),
+        FaireExtractionField("estimated_copy_number_method", "method used to estimate target copy number", "estimatedNumberOfCopies_method"),
+        FaireExtractionField("assay_limit_of_detection", "assay's limit of detection (LOD)", "pcr_assay_lod"),
+        FaireExtractionField("assay_limit_of_detection_unit", "unit for assay_limit_of_detection", "pcr_assay_lod_unit"),
+        FaireExtractionField("assay_limit_of_quantification", "assay's limit of quantification (LOQ)", "pcr_assay_loq"),
+        FaireExtractionField("assay_limit_of_quantification_unit", "unit for assay_limit_of_quantification", "pcr_assay_loq_unit"),
     ),
     "Sequencing / library prep": (
-        FaireExtractionField("platform", "general sequencing platform (e.g. Illumina, PacBio, Oxford Nanopore)"),
-        FaireExtractionField("instrument", "specific sequencer manufacturer and model", "Illumina MiSeq"),
-        FaireExtractionField("seq_kit", "sequencing kit name", "MiSeq Reagent Kit v3"),
-        FaireExtractionField("lib_layout", "single, paired, or other read layout"),
-        FaireExtractionField("adapter_forward", "forward sequencing adapter sequence"),
-        FaireExtractionField("adapter_reverse", "reverse sequencing adapter sequence"),
-        FaireExtractionField("lib_conc", "concentration of the prepared sequencing library"),
-        FaireExtractionField("lib_conc_meth", "method used to estimate library concentration"),
-        FaireExtractionField("lib_conc_unit", "unit for lib_conc"),
-        FaireExtractionField("phix_perc", "% PhiX spiked into the sequencing run", "10%"),
-        FaireExtractionField("sequencing_location", "facility/lab where sequencing was performed"),
+        FaireExtractionField("sequencing_platform_general", "general sequencing platform (e.g. Illumina, PacBio, Oxford Nanopore)", "platform"),
+        FaireExtractionField("sequencing_instrument", "specific sequencer manufacturer and model", "instrument", "Illumina MiSeq"),
+        FaireExtractionField("sequencing_kit", "sequencing kit name", "seq_kit", "MiSeq Reagent Kit v3"),
+        FaireExtractionField("library_layout", "single, paired, or other read layout", "lib_layout"),
+        FaireExtractionField("forward_sequencing_adapter", "forward sequencing adapter sequence", "adapter_forward"),
+        FaireExtractionField("reverse_sequencing_adapter", "reverse sequencing adapter sequence", "adapter_reverse"),
+        FaireExtractionField("library_concentration", "concentration of the prepared sequencing library", "lib_conc"),
+        FaireExtractionField("library_concentration_method", "method used to estimate library concentration", "lib_conc_meth"),
+        FaireExtractionField("library_concentration_unit", "unit for library_concentration", "lib_conc_unit"),
+        FaireExtractionField("phix_percentage", "% PhiX spiked into the sequencing run", "phix_perc", "10%"),
+        FaireExtractionField("sequencing_location", "facility/lab where sequencing was performed", "sequencing_location"),
     ),
     "Bioinformatics workflow": (
-        FaireExtractionField("trim_method", "primer/adapter trimming method, including software and version"),
-        FaireExtractionField("trim_param", "trimming parameters/cutoffs used, if non-default"),
-        FaireExtractionField("demux_tool", "software (with version) used to demultiplex reads"),
-        FaireExtractionField("merge_tool", "software (with version) used to merge paired-end reads"),
-        FaireExtractionField("merge_min_overlap", "minimum overlap required to merge paired-end reads", "12 bp"),
-        FaireExtractionField("error_rate_tool", "software used for denoising/error-correction (e.g. DADA2)"),
-        FaireExtractionField("min_len_cutoff", "minimum read length threshold used for filtering"),
-        FaireExtractionField("min_len_tool", "software used to filter reads by length"),
-        FaireExtractionField("chimera_check_method", "chimera detection approach, including software/version"),
-        FaireExtractionField("otu_clust_tool", "software (with version) used for OTU/ASV clustering"),
-        FaireExtractionField("otu_clust_cutoff", "percent similarity threshold used for OTU/ASV clustering", "97%"),
-        FaireExtractionField("otu_db", "reference database(s) used for taxonomic assignment, with version", "SILVA 138"),
-        FaireExtractionField("tax_assign_cat", "taxonomic assignment approach (e.g. BLAST, naive Bayesian classifier)"),
-        FaireExtractionField("sop_bioinformatics", "reference/link/DOI to the bioinformatics standard operating procedure"),
+        FaireExtractionField("adapter_trimming_method", "primer/adapter trimming method, including software and version", "trim_method"),
+        FaireExtractionField("adapter_trimming_parameters", "trimming parameters/cutoffs used, if non-default", "trim_param"),
+        FaireExtractionField("demultiplexing_tool", "software (with version) used to demultiplex reads", "demux_tool"),
+        FaireExtractionField("read_merging_tool", "software (with version) used to merge paired-end reads", "merge_tool"),
+        FaireExtractionField("read_merge_minimum_overlap", "minimum overlap required to merge paired-end reads", "merge_min_overlap", "12 bp"),
+        FaireExtractionField("denoising_tool", "software used for denoising/error-correction (e.g. DADA2)", "error_rate_tool"),
+        FaireExtractionField("minimum_read_length", "minimum read length threshold used for filtering", "min_len_cutoff"),
+        FaireExtractionField("length_filtering_tool", "software used to filter reads by length", "min_len_tool"),
+        FaireExtractionField("chimera_detection_method", "chimera detection approach, including software/version", "chimera_check_method"),
+        FaireExtractionField("clustering_tool", "software (with version) used for OTU/ASV clustering", "otu_clust_tool"),
+        FaireExtractionField("clustering_similarity_threshold", "percent similarity threshold used for OTU/ASV clustering", "otu_clust_cutoff", "97%"),
+        FaireExtractionField("reference_database", "reference database(s) used for taxonomic assignment, with version", "otu_db", "SILVA 138"),
+        FaireExtractionField("taxonomic_assignment_method", "taxonomic assignment approach (e.g. BLAST, naive Bayesian classifier)", "tax_assign_cat"),
+        FaireExtractionField("bioinformatics_sop_reference", "reference/link/DOI to the bioinformatics standard operating procedure", "sop_bioinformatics"),
     ),
     "Taxonomic assignment output": (
-        FaireExtractionField("scientificName", "a taxon name the paper reports as assigned/detected"),
-        FaireExtractionField("taxonRank", "the taxonomic rank of an assigned name (e.g. species, genus)"),
-        FaireExtractionField("kingdom", "kingdom-level name for a reported taxon"),
-        FaireExtractionField("phylum", "phylum-level name for a reported taxon"),
-        FaireExtractionField("class", "class-level name for a reported taxon"),
-        FaireExtractionField("order", "order-level name for a reported taxon"),
-        FaireExtractionField("family", "family-level name for a reported taxon"),
-        FaireExtractionField("genus", "genus-level name for a reported taxon"),
-        FaireExtractionField("specificEpithet", "the species epithet of a reported scientificName"),
-        FaireExtractionField("percent_match", "% sequence identity to a reference used for taxonomic assignment"),
-        FaireExtractionField("percent_query_cover", "% query coverage against a reference sequence"),
-        FaireExtractionField("confidence_score", "confidence/bootstrap score for a taxonomic assignment"),
+        FaireExtractionField("scientific_name", "a taxon name the paper reports as assigned/detected", "scientificName"),
+        FaireExtractionField("taxon_rank", "the taxonomic rank of an assigned name (e.g. species, genus)", "taxonRank"),
+        FaireExtractionField("taxon_kingdom", "kingdom-level name for a reported taxon", "kingdom"),
+        FaireExtractionField("taxon_phylum", "phylum-level name for a reported taxon", "phylum"),
+        FaireExtractionField("taxon_class", "class-level name for a reported taxon", "class"),
+        FaireExtractionField("taxon_order", "order-level name for a reported taxon", "order"),
+        FaireExtractionField("taxon_family", "family-level name for a reported taxon", "family"),
+        FaireExtractionField("taxon_genus", "genus-level name for a reported taxon", "genus"),
+        FaireExtractionField("species_epithet", "the species epithet of a reported scientific name", "specificEpithet"),
+        FaireExtractionField("percent_sequence_identity", "% sequence identity to a reference used for taxonomic assignment", "percent_match"),
+        FaireExtractionField("percent_query_coverage", "% query coverage against a reference sequence", "percent_query_cover"),
+        FaireExtractionField("taxonomic_assignment_confidence", "confidence/bootstrap score for a taxonomic assignment", "confidence_score"),
     ),
 }
 
@@ -167,6 +159,8 @@ FIELD_GROUPS: dict[str, tuple[FaireExtractionField, ...]] = {
 # evidence-backed fact worth recording under one of these). Pre-dates this
 # module (Milestone 4); mapping/rules.py already has rules treating these
 # as free-text fallbacks onto FAIRe's own "*_method_additional" fields.
+# No faire_hint: these are deliberately coarse narrative catch-alls, not a
+# specific FAIRe field's atomic content.
 FALLBACK_NARRATIVE_FIELDS: tuple[FaireExtractionField, ...] = (
     FaireExtractionField("DNA_extraction_method", "general DNA extraction narrative, if no atomic kit/method field applies"),
     FaireExtractionField("PCR_amplification_conditions", "general PCR narrative, if no atomic PCR field applies"),
@@ -178,23 +172,45 @@ FALLBACK_NARRATIVE_FIELDS: tuple[FaireExtractionField, ...] = (
 
 
 def all_field_names() -> frozenset[str]:
-    names = {f.name for fields in FIELD_GROUPS.values() for f in fields}
-    names |= {f.name for f in FALLBACK_NARRATIVE_FIELDS}
+    """Every valid `fact_type_candidate` this taxonomy defines -- always a
+    native_name, never a faire_hint (a hint is never a fact's own
+    identity)."""
+    names = {f.native_name for fields in FIELD_GROUPS.values() for f in fields}
+    names |= {f.native_name for f in FALLBACK_NARRATIVE_FIELDS}
     return frozenset(names)
+
+
+def all_faire_hints() -> frozenset[str]:
+    """Every FAIRe field name this taxonomy can suggest as a
+    `candidate_standard_fields` hint -- for validating that a hint the
+    model returns is one this taxonomy actually knows about."""
+    return frozenset(f.faire_hint for fields in FIELD_GROUPS.values() for f in fields if f.faire_hint)
+
+
+def native_name_to_faire_hint() -> dict[str, str]:
+    """Maps a taxonomy native_name to its FAIRe hint, where one exists --
+    lets a caller reconstruct the intended hint if a model omits
+    `candidate_standard_fields` for a field this taxonomy knows a hint
+    for."""
+    return {f.native_name: f.faire_hint for fields in FIELD_GROUPS.values() for f in fields if f.faire_hint}
 
 
 def render_field_reference() -> str:
     """Renders FIELD_GROUPS + FALLBACK_NARRATIVE_FIELDS as the itemized,
     group-headed checklist `extraction/text.py`'s prompt embeds -- one
     source of truth, so the taxonomy a maintainer edits here is exactly
-    what the model is shown."""
+    what the model is shown. Each line shows the native_name (what
+    fact_type_candidate must be set to) and, in parentheses, which FAIRe
+    field it hints at (what candidate_standard_fields may suggest) --
+    clearly two different things, never merged into one name."""
     lines: list[str] = []
     for group_name, fields in FIELD_GROUPS.items():
         lines.append(f"{group_name}:")
         for f in fields:
             example = f" (e.g. \"{f.example}\")" if f.example else ""
-            lines.append(f"- {f.name}: {f.hint}{example}")
-    lines.append("General narrative fallback (use only if no atomic field above applies):")
+            hint_note = f" [FAIRe hint: {f.faire_hint}]" if f.faire_hint else ""
+            lines.append(f"- {f.native_name}: {f.hint}{example}{hint_note}")
+    lines.append("General narrative fallback (use only if no concept above applies; no FAIRe hint):")
     for f in FALLBACK_NARRATIVE_FIELDS:
-        lines.append(f"- {f.name}: {f.hint}")
+        lines.append(f"- {f.native_name}: {f.hint}")
     return "\n".join(lines)

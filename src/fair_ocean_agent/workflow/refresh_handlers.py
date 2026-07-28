@@ -149,6 +149,7 @@ def _persist_refreshed_source_and_facts(
                 support_type=fact.support_type.value,
                 extraction_method=f"adapter:{adapter.name}",
                 review_status=ReviewStatus.ACCEPTED.value,
+                confidence_metadata=fact.confidence_metadata,
             )
         )
 

@@ -1,0 +1,59 @@
+{
+  "case_id": "pcr-assay-detail-001",
+  "curated_by": "claude",
+  "notes": "Fictional example -- exercises the PCR/assay field group (extraction/faire_fields.py), using v3's standard-agnostic native names: assay_name, target_gene, template_dna_volume, forward/reverse primer volume and concentration (reported once for 'each primer', so both forward and reverse are expected with the same evidence_quote -- a realistic case where one sentence supports two atomic fields), commercial_master_mix, pcr_reaction_volume, thermocycler.",
+  "section_title": "PCR amplification",
+  "source_text": "The assay, named MiFish-U-12S, targeted the 12S rRNA mitochondrial gene using a two-step PCR protocol. Each 20 uL PCR reaction contained 2 uL of template DNA, 1 uL of each primer at a stock concentration of 10 uM, and 10 uL of a commercial KAPA HiFi HotStart ReadyMix master mix. Thermocycling was performed on a Bio-Rad T100 thermal cycler.",
+  "expected_facts": [
+    {
+      "fact_type_candidate": "assay_name",
+      "raw_value": "MiFish-U-12S",
+      "evidence_quote": "named MiFish-U-12S"
+    },
+    {
+      "fact_type_candidate": "target_gene",
+      "raw_value": "12S rRNA",
+      "evidence_quote": "targeted the 12S rRNA mitochondrial gene"
+    },
+    {
+      "fact_type_candidate": "pcr_reaction_volume",
+      "raw_value": "20 uL",
+      "evidence_quote": "Each 20 uL PCR reaction"
+    },
+    {
+      "fact_type_candidate": "template_dna_volume",
+      "raw_value": "2 uL",
+      "evidence_quote": "contained 2 uL of template DNA"
+    },
+    {
+      "fact_type_candidate": "forward_primer_volume",
+      "raw_value": "1 uL",
+      "evidence_quote": "1 uL of each primer at a stock concentration of 10 uM"
+    },
+    {
+      "fact_type_candidate": "reverse_primer_volume",
+      "raw_value": "1 uL",
+      "evidence_quote": "1 uL of each primer at a stock concentration of 10 uM"
+    },
+    {
+      "fact_type_candidate": "forward_primer_concentration",
+      "raw_value": "10 uM",
+      "evidence_quote": "1 uL of each primer at a stock concentration of 10 uM"
+    },
+    {
+      "fact_type_candidate": "reverse_primer_concentration",
+      "raw_value": "10 uM",
+      "evidence_quote": "1 uL of each primer at a stock concentration of 10 uM"
+    },
+    {
+      "fact_type_candidate": "commercial_master_mix",
+      "raw_value": "KAPA HiFi HotStart ReadyMix",
+      "evidence_quote": "a commercial KAPA HiFi HotStart ReadyMix master mix"
+    },
+    {
+      "fact_type_candidate": "thermocycler",
+      "raw_value": "Bio-Rad T100",
+      "evidence_quote": "performed on a Bio-Rad T100 thermal cycler"
+    }
+  ]
+}

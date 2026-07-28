@@ -1,0 +1,39 @@
+{
+  "case_id": "qpcr-standard-curve-001",
+  "curated_by": "claude",
+  "notes": "Fictional example -- exercises the qPCR/standard-curve field group using v3's standard-agnostic native names: qpcr_standard_type, standard_curve_slope, standard_curve_intercept, standard_curve_r_squared, qpcr_amplification_efficiency, assay_limit_of_detection. The text gives a dilution *range* for the standard rather than one input quantity, so qpcr_standard_concentration/qpcr_standard_concentration_unit are deliberately not expected here -- a range isn't a single value, and this case is meant to check the model doesn't fabricate one.",
+  "section_title": "qPCR standard curve",
+  "source_text": "Absolute quantification was performed by qPCR using a standard curve generated from a tenfold dilution series of a synthetic gBlock gene fragment ranging from 10 to 10^6 copies/uL. The standard curve had a slope of -3.32, an intercept of 38.9, and an R-squared value of 0.998, corresponding to an amplification efficiency of 100%. The assay's limit of detection was 5 copies per reaction.",
+  "expected_facts": [
+    {
+      "fact_type_candidate": "qpcr_standard_type",
+      "raw_value": "synthetic gBlock gene fragment",
+      "evidence_quote": "a synthetic gBlock gene fragment"
+    },
+    {
+      "fact_type_candidate": "standard_curve_slope",
+      "raw_value": "-3.32",
+      "evidence_quote": "a slope of -3.32"
+    },
+    {
+      "fact_type_candidate": "standard_curve_intercept",
+      "raw_value": "38.9",
+      "evidence_quote": "an intercept of 38.9"
+    },
+    {
+      "fact_type_candidate": "standard_curve_r_squared",
+      "raw_value": "0.998",
+      "evidence_quote": "an R-squared value of 0.998"
+    },
+    {
+      "fact_type_candidate": "qpcr_amplification_efficiency",
+      "raw_value": "100%",
+      "evidence_quote": "an amplification efficiency of 100%"
+    },
+    {
+      "fact_type_candidate": "assay_limit_of_detection",
+      "raw_value": "5 copies per reaction",
+      "evidence_quote": "limit of detection was 5 copies per reaction"
+    }
+  ]
+}

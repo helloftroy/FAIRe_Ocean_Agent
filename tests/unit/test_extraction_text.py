@@ -1,7 +1,8 @@
 import json
 
 from fair_ocean_agent.database.enums import SupportType
-from fair_ocean_agent.extraction.text import PROMPT_VERSION, extract_facts_from_section
+from fair_ocean_agent.extraction.faire_fields import all_field_names
+from fair_ocean_agent.extraction.text import EXTRACTION_INSTRUCTIONS, PROMPT_VERSION, build_prompt, extract_facts_from_section
 from fair_ocean_agent.llm.mock import MockLLMBackend
 
 SECTION_TEXT = "Samples were collected on 4 January 2022 at a depth of 5 meters near the reef."
@@ -44,4 +45,102 @@ def test_invalid_json_response_yields_no_facts():
 
 
 def test_prompt_version_is_stable_constant():
-    assert PROMPT_VERSION == "text-extraction-v1"
+    assert PROMPT_VERSION == "text-extraction-v3-native-with-hints"
+
+
+# --- FAIRe-aware taxonomy regression tests (Milestone 8, corrected in v3) ---
+# Before extraction/faire_fields.py existed, this prompt was fully open-
+# vocabulary -- nothing forced the model's fact_type_candidate choices to
+# line up with any structured taxonomy, so mapping/rules.py could only ever
+# route what it extracted to FAIRe's free-text "*_method_additional"
+# fallback fields. v2 fixed the coverage gap but coupled fact_type_candidate
+# to FAIRe's own field spellings; v3 keeps the same atomic coverage but
+# fact_type_candidate is always a standard-agnostic native_name, with a
+# FAIRe field name only ever appearing as an optional candidate_standard_fields
+# hint. These tests check the prompt carries the native-name checklist (the
+# fact identity) and, separately, the FAIRe hints (never the fact identity).
+
+
+def test_prompt_embeds_the_native_name_checklist():
+    prompt = build_prompt("PCR", SECTION_TEXT)
+    # Spot-check one native_name from each group actually appears in the
+    # prompt the model sees, not just in extraction/faire_fields.py.
+    for native_name in (
+        "annealing_temperature",
+        "negative_control_type",
+        "standard_curve_slope",
+        "sequencing_kit",
+        "reference_database",
+        "scientific_name",
+    ):
+        assert native_name in prompt
+
+
+def test_prompt_embeds_faire_hints_as_hints_not_identity():
+    prompt = build_prompt("PCR", SECTION_TEXT)
+    assert "[FAIRe hint: annealingTemp]" in prompt
+    assert "candidate_standard_fields" in prompt
+
+
+def test_every_native_field_name_appears_in_instructions():
+    for field_name in all_field_names():
+        assert field_name in EXTRACTION_INSTRUCTIONS, f"{field_name!r} missing from the extraction prompt"
+
+
+def test_extracting_an_atomic_native_field_by_exact_name():
+    """A model following the prompt should report the concept's native
+    name, not FAIRe's own spelling -- confirms extract_facts_from_section
+    doesn't rewrite or reject a native name like "annealing_temperature"."""
+    section_text = "PCR was performed with an annealing temperature of 57C for 35 cycles."
+    response = json.dumps(
+        [
+            {
+                "fact_type_candidate": "annealing_temperature",
+                "raw_value": "57C",
+                "evidence_quote": "an annealing temperature of 57C",
+                "candidate_standard_fields": {"faire": "annealingTemp"},
+            },
+            {"fact_type_candidate": "pcr_cycle_count", "raw_value": "35", "evidence_quote": "for 35 cycles"},
+        ]
+    )
+    backend = MockLLMBackend(responses=[response])
+    facts, _ = extract_facts_from_section(backend, "PCR", section_text)
+
+    fact_types = {f.fact_type_candidate for f in facts}
+    assert fact_types == {"annealing_temperature", "pcr_cycle_count"}
+
+
+def test_candidate_standard_fields_hint_is_stored_in_confidence_metadata():
+    """The hint must land in confidence_metadata, completely separate from
+    fact_type_candidate -- dropping this field entirely must still leave a
+    fully valid, standard-agnostic raw fact."""
+    section_text = "PCR was performed with an annealing temperature of 57C."
+    response = json.dumps(
+        [
+            {
+                "fact_type_candidate": "annealing_temperature",
+                "raw_value": "57C",
+                "evidence_quote": "an annealing temperature of 57C",
+                "candidate_standard_fields": {"faire": "annealingTemp"},
+            }
+        ]
+    )
+    backend = MockLLMBackend(responses=[response])
+    facts, _ = extract_facts_from_section(backend, "PCR", section_text)
+
+    assert len(facts) == 1
+    assert facts[0].fact_type_candidate == "annealing_temperature"
+    assert facts[0].confidence_metadata == {"candidate_standard_fields": {"faire": "annealingTemp"}}
+
+
+def test_omitted_candidate_standard_fields_hint_leaves_a_valid_fact():
+    section_text = "PCR was performed with an annealing temperature of 57C."
+    response = json.dumps(
+        [{"fact_type_candidate": "annealing_temperature", "raw_value": "57C", "evidence_quote": "an annealing temperature of 57C"}]
+    )
+    backend = MockLLMBackend(responses=[response])
+    facts, _ = extract_facts_from_section(backend, "PCR", section_text)
+
+    assert len(facts) == 1
+    assert facts[0].fact_type_candidate == "annealing_temperature"
+    assert facts[0].confidence_metadata is None

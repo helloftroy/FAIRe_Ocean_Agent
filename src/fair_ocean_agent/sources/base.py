@@ -90,6 +90,16 @@ class RawFactCandidate(BaseModel):
     # persistence; left None for structured API/XML facts, where
     # source_locator (a JSON/XML path) already pins down the evidence.
     evidence_quote: str | None = None
+    # Optional, non-authoritative metadata about this fact -- currently used
+    # by extraction/text.py to carry a candidate_standard_fields hint (e.g.
+    # {"candidate_standard_fields": {"faire": "annealingTemp"}}) suggesting
+    # which standard field this fact might map to. A hint, never part of
+    # this fact's own identity: fact_type_candidate must stay meaningful and
+    # standard-agnostic with this field absent entirely. Persisted as-is
+    # into RawFact.confidence_metadata (workflow/handlers.py); standardizing
+    # a fact onto FAIRe or any other vocabulary remains mapping/rules.py's
+    # job, never decided here.
+    confidence_metadata: dict | None = None
 
 
 def hash_payload(payload: dict) -> str:

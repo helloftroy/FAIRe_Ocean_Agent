@@ -1,4 +1,4 @@
-from fair_ocean_agent.extraction.sections import select_relevant_sections
+from fair_ocean_agent.extraction.sections import MIN_FRAGMENT_CHARS, select_relevant_sections
 
 NESTED_JATS_XML = """<article>
   <body>
@@ -70,3 +70,49 @@ def test_unparseable_xml_returns_empty_list():
 def test_no_relevant_sections_returns_empty_list():
     xml = "<article><body><sec><title>Introduction</title><p>text</p></sec></body></article>"
     assert select_relevant_sections(xml) == []
+
+
+# --- FAIRe-aware taxonomy additions (Milestone 8) ---------------------------
+# The expanded taxonomy (extraction/faire_fields.py) targets fields spread
+# across more, often separately-titled leaf sections than before (PCR,
+# assay, primer, library, sequencing, bioinformatics, taxonomy can each be
+# their own <sec>) -- these check the new title patterns and the
+# raised default budget that exists specifically so later sections in that
+# list aren't truncated away.
+
+
+def test_matches_new_topic_specific_section_titles():
+    for title in (
+        "Assay design and validation",
+        "Primer selection",
+        "Library preparation",
+        "qPCR conditions",
+        "Taxonomic assignment",
+        "Standard curve generation",
+    ):
+        xml = f"<article><body><sec><title>{title}</title><p>Relevant text.</p></sec></body></article>"
+        sections = select_relevant_sections(xml)
+        assert [s["title"] for s in sections] == [title], f"{title!r} was not recognized as relevant"
+
+
+def test_default_max_chars_is_raised_for_the_expanded_taxonomy():
+    """Regression guard: the original 20000-char default risked truncating
+    away exactly the later sections (bioinformatics/taxonomy) this
+    taxonomy expansion is meant to reach, since sections are accepted in
+    document order until the budget runs out."""
+    import inspect
+
+    default_max_chars = inspect.signature(select_relevant_sections).parameters["max_chars"].default
+    assert default_max_chars > 20000
+
+
+def test_skips_a_fragment_too_small_to_be_worth_an_extraction_call():
+    xml = """<article><body>
+      <sec><title>Sampling</title><p>{first}</p></sec>
+      <sec><title>PCR</title><p>{second}</p></sec>
+    </body></article>""".format(first="A" * 100, second="B" * 100)
+    # Budget covers the first section fully, leaving less than
+    # MIN_FRAGMENT_CHARS for the second -- the second should be dropped
+    # entirely rather than sent through as a near-empty fragment.
+    sections = select_relevant_sections(xml, max_chars=100 + MIN_FRAGMENT_CHARS - 1)
+    assert [s["title"] for s in sections] == ["Sampling"]
