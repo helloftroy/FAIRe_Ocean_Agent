@@ -1,7 +1,7 @@
-# Source-adapter configuration. crossref/europe_pmc/openalex (Milestone 2)
-# and ncbi_bioproject/ncbi_biosample/ena (Milestone 3) are implemented; the
-# rest are interface-level placeholders so adding a real adapter later is
-# config + one new file, not an orchestrator change.
+# Source-adapter configuration. crossref/europe_pmc/openalex,
+# ncbi_bioproject/ncbi_biosample/ena, and dataset metadata adapters
+# (BCO-DMO/PANGAEA/DataCite/OBIS/GBIF) are implemented. Adapters retrieve
+# metadata and manifests only -- never large primary data files.
 #
 # ncbi_bioproject and ncbi_biosample share one rate-limited HTTP client at
 # runtime (workflow/handlers.py) since they both hit eutils.ncbi.nlm.nih.gov,
@@ -60,31 +60,31 @@ sources:
     priority: 7
 
   obis:
-    enabled: false
+    enabled: true
     base_url: "https://api.obis.org"
     rate_limit_per_second: 5
     priority: 8
 
   gbif:
-    enabled: false
+    enabled: true
     base_url: "https://api.gbif.org/v1"
     rate_limit_per_second: 5
     priority: 9
 
   bcodmo:
-    enabled: false
-    base_url: "https://api.bco-dmo.org"
+    enabled: true
+    base_url: "https://www.bco-dmo.org/api"
     rate_limit_per_second: 3
     priority: 10
 
   pangaea:
-    enabled: false
-    base_url: "https://ws.pangaea.de"
+    enabled: true
+    base_url: "https://doi.pangaea.de"
     rate_limit_per_second: 3
     priority: 11
 
   datacite:
-    enabled: false
+    enabled: true
     base_url: "https://api.datacite.org"
     rate_limit_per_second: 5
     priority: 12

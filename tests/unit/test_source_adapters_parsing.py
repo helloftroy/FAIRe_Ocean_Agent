@@ -11,9 +11,14 @@ import pytest
 
 from fair_ocean_agent.database.enums import AccessStatus, IdentifierType
 from fair_ocean_agent.sources.base import SourceConfig, SourceRecord, hash_payload
+from fair_ocean_agent.sources.bcodmo import BcoDmoAdapter
 from fair_ocean_agent.sources.crossref import CrossrefAdapter
+from fair_ocean_agent.sources.datacite import DataCiteAdapter
 from fair_ocean_agent.sources.europe_pmc import EuropePmcAdapter
+from fair_ocean_agent.sources.gbif import GbifAdapter
+from fair_ocean_agent.sources.obis import ObisAdapter
 from fair_ocean_agent.sources.openalex import OpenAlexAdapter
+from fair_ocean_agent.sources.pangaea import PangaeaAdapter
 
 FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
 
@@ -153,3 +158,113 @@ def test_openalex_find_related_strips_full_url(openalex_adapter):
     assert len(related) == 1
     assert related[0].identifier_type == IdentifierType.OPENALEX_ID
     assert related[0].value == "W2413577766"
+
+
+def test_datacite_extracts_dataset_metadata_and_related_identifiers(retrieval_config):
+    adapter = DataCiteAdapter(SourceConfig(name="datacite", enabled=True, base_url="https://api.datacite.org"), retrieval_config)
+    raw = {
+        "data": {
+            "id": "10.1594/pangaea.923577",
+            "attributes": {
+                "doi": "10.1594/pangaea.923577",
+                "titles": [{"title": "Marine dataset"}],
+                "publisher": "PANGAEA",
+                "publicationYear": 2024,
+                "relatedIdentifiers": [
+                    {"relatedIdentifier": "10.1000/paper", "relatedIdentifierType": "DOI", "relationType": "References"}
+                ],
+            },
+        }
+    }
+    record = _record("datacite", raw, external_identifier="10.1594/pangaea.923577")
+
+    facts = adapter.extract_structured_facts(record)
+    related = adapter.find_related(record)
+
+    assert any(f.fact_type_candidate == "titles" for f in facts)
+    assert any(r.identifier_type == IdentifierType.DATASET_DOI for r in related)
+    assert any(r.identifier_type == IdentifierType.DOI and r.value == "10.1000/paper" for r in related)
+    adapter.close()
+
+
+def test_bcodmo_extracts_metadata_without_downloading_data(retrieval_config):
+    adapter = BcoDmoAdapter(SourceConfig(name="bcodmo", enabled=True, base_url="https://www.bco-dmo.org/api"), retrieval_config)
+    record = _record(
+        "bcodmo",
+        {
+            "id": "765432",
+            "title": "BCO-DMO dataset",
+            "doi": "10.26008/1912/bco-dmo.765432.1",
+            "parameters": [{"name": "temperature"}],
+            "files": [{"name": "data.csv", "size": "1200"}],
+        },
+        external_identifier="765432",
+    )
+
+    facts = adapter.extract_structured_facts(record)
+    related = adapter.find_related(record)
+
+    assert {f.fact_type_candidate for f in facts} >= {"dataset_id", "title", "doi", "parameters", "files"}
+    assert any(r.identifier_type == IdentifierType.BCODMO_DATASET_ID for r in related)
+    assert any(r.identifier_type == IdentifierType.DATASET_DOI for r in related)
+    adapter.close()
+
+
+def test_pangaea_extracts_jsonld_metadata_and_related_identifiers(retrieval_config):
+    adapter = PangaeaAdapter(SourceConfig(name="pangaea", enabled=True, base_url="https://doi.pangaea.de"), retrieval_config)
+    record = _record(
+        "pangaea",
+        {
+            "@id": "https://doi.org/10.1594/PANGAEA.923577",
+            "name": "PANGAEA dataset",
+            "spatialCoverage": {"geo": {"latitude": 54.0, "longitude": 10.0}},
+            "variableMeasured": [{"name": "salinity"}],
+        },
+        external_identifier="10.1594/PANGAEA.923577",
+    )
+
+    facts = adapter.extract_structured_facts(record)
+    related = adapter.find_related(record)
+
+    assert any(f.fact_type_candidate == "spatialCoverage" for f in facts)
+    assert any(r.identifier_type == IdentifierType.PANGAEA_ID for r in related)
+    assert any(r.identifier_type == IdentifierType.DATASET_DOI for r in related)
+    adapter.close()
+
+
+def test_obis_extracts_dataset_metadata_and_dataset_uuid(retrieval_config):
+    adapter = ObisAdapter(SourceConfig(name="obis", enabled=True, base_url="https://api.obis.org"), retrieval_config)
+    record = _record(
+        "obis",
+        {"id": "11111111-2222-3333-4444-555555555555", "title": "OBIS dataset", "records": 123},
+        external_identifier="11111111-2222-3333-4444-555555555555",
+    )
+
+    facts = adapter.extract_structured_facts(record)
+    related = adapter.find_related(record)
+
+    assert any(f.fact_type_candidate == "records" for f in facts)
+    assert related[0].identifier_type == IdentifierType.OBIS_DATASET_UUID
+    adapter.close()
+
+
+def test_gbif_extracts_dataset_metadata_and_dataset_key(retrieval_config):
+    adapter = GbifAdapter(SourceConfig(name="gbif", enabled=True, base_url="https://api.gbif.org/v1"), retrieval_config)
+    record = _record(
+        "gbif",
+        {
+            "key": "11111111-2222-3333-4444-555555555555",
+            "title": "GBIF dataset",
+            "doi": "10.15468/example",
+            "recordCount": 321,
+        },
+        external_identifier="11111111-2222-3333-4444-555555555555",
+    )
+
+    facts = adapter.extract_structured_facts(record)
+    related = adapter.find_related(record)
+
+    assert any(f.fact_type_candidate == "recordCount" for f in facts)
+    assert any(r.identifier_type == IdentifierType.GBIF_DATASET_KEY for r in related)
+    assert any(r.identifier_type == IdentifierType.DATASET_DOI for r in related)
+    adapter.close()

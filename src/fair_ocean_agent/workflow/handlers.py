@@ -42,11 +42,16 @@ from fair_ocean_agent.sources.base import (
     SourceRecordNotFoundError,
     hash_payload,
 )
+from fair_ocean_agent.sources.bcodmo import BcoDmoAdapter
 from fair_ocean_agent.sources.crossref import CrossrefAdapter
+from fair_ocean_agent.sources.datacite import DataCiteAdapter
 from fair_ocean_agent.sources.ena import EnaAdapter
 from fair_ocean_agent.sources.europe_pmc import EuropePmcAdapter
+from fair_ocean_agent.sources.gbif import GbifAdapter
 from fair_ocean_agent.sources.ncbi import NcbiBioProjectAdapter, NcbiBioSampleAdapter
+from fair_ocean_agent.sources.obis import ObisAdapter
 from fair_ocean_agent.sources.openalex import OpenAlexAdapter
+from fair_ocean_agent.sources.pangaea import PangaeaAdapter
 from fair_ocean_agent.workflow.worker import TASK_HANDLERS
 
 logger = get_logger(__name__)
@@ -64,6 +69,11 @@ _REPOSITORY_ADAPTER_CLASSES: dict[str, type[SourceAdapter]] = {
     "ncbi_bioproject": NcbiBioProjectAdapter,
     "ncbi_biosample": NcbiBioSampleAdapter,
     "ena": EnaAdapter,
+    "bcodmo": BcoDmoAdapter,
+    "pangaea": PangaeaAdapter,
+    "datacite": DataCiteAdapter,
+    "obis": ObisAdapter,
+    "gbif": GbifAdapter,
 }
 
 # Process-lifetime cache: rate limiting is per-adapter-instance state
@@ -116,6 +126,10 @@ def _build_enabled_adapters() -> dict[str, SourceAdapter]:
 
     if is_enabled("ena"):
         adapters["ena"] = EnaAdapter(make_config("ena"), retrieval_config)
+
+    for name in ("bcodmo", "pangaea", "datacite", "obis", "gbif"):
+        if is_enabled(name):
+            adapters[name] = _REPOSITORY_ADAPTER_CLASSES[name](make_config(name), retrieval_config)
 
     _adapter_cache = adapters
     return adapters
@@ -420,6 +434,72 @@ def _resolve_repository_sources(
     return study
 
 
+def _fetch_and_persist_repository_record(
+    session: Session,
+    study: Study,
+    adapters: dict[str, SourceAdapter],
+    adapter_name: str,
+    identifier: str,
+    persist_fn: PersistFn,
+) -> Study:
+    adapter = adapters.get(adapter_name)
+    if adapter is None:
+        return study
+    try:
+        record = adapter.fetch_record(identifier)
+    except SourceRecordNotFoundError:
+        logger.info("no %s record for %s", adapter_name, identifier)
+        return study
+
+    persist_fn(session, study, adapter, SourceType.REPOSITORY_API, identifier, record)
+    study = _apply_related_identifiers(session, study, adapter.find_related(record), adapter_name)
+    if not study.title:
+        title = (
+            record.raw.get("title")
+            or record.raw.get("name")
+            or record.raw.get("headline")
+            or (((record.raw.get("data") or {}).get("attributes") or {}).get("titles") or [{}])[0].get("title")
+        )
+        if title:
+            study.title = title
+    return study
+
+
+def _resolve_dataset_sources(
+    session: Session,
+    study: Study,
+    *,
+    dataset_doi: str | None,
+    bcodmo_id: str | None,
+    pangaea_id: str | None,
+    obis_uuid: str | None,
+    gbif_key: str | None,
+    persist_fn: PersistFn = _persist_source_and_facts,
+) -> Study:
+    adapters = _build_enabled_adapters()
+
+    if dataset_doi:
+        # DataCite is the generic DOI metadata authority for datasets.
+        study = _fetch_and_persist_repository_record(session, study, adapters, "datacite", dataset_doi, persist_fn)
+        # Repository-specific DOI prefixes are also resolved against their
+        # native metadata API when available, preserving both sources.
+        if "pangaea" in dataset_doi.lower():
+            study = _fetch_and_persist_repository_record(session, study, adapters, "pangaea", dataset_doi, persist_fn)
+        if "bco-dmo" in dataset_doi.lower() or "bcodmo" in dataset_doi.lower():
+            study = _fetch_and_persist_repository_record(session, study, adapters, "bcodmo", dataset_doi, persist_fn)
+
+    if bcodmo_id:
+        study = _fetch_and_persist_repository_record(session, study, adapters, "bcodmo", bcodmo_id, persist_fn)
+    if pangaea_id:
+        study = _fetch_and_persist_repository_record(session, study, adapters, "pangaea", pangaea_id, persist_fn)
+    if obis_uuid:
+        study = _fetch_and_persist_repository_record(session, study, adapters, "obis", obis_uuid, persist_fn)
+    if gbif_key:
+        study = _fetch_and_persist_repository_record(session, study, adapters, "gbif", gbif_key, persist_fn)
+
+    return study
+
+
 def handle_discover_identifiers(session: Session, task: Task) -> None:
     """Resolves whichever of DOI / BioProject accession / ENA study
     accession the study already has:
@@ -442,15 +522,21 @@ def handle_discover_identifiers(session: Session, task: Task) -> None:
         return ei.identifier_value if ei else None
 
     doi = identifier_value(IdentifierType.DOI)
+    dataset_doi = identifier_value(IdentifierType.DATASET_DOI)
     bioproject_accession = identifier_value(IdentifierType.BIOPROJECT_ACCESSION)
     ena_accession = identifier_value(IdentifierType.ENA_STUDY_ACCESSION)
+    bcodmo_id = identifier_value(IdentifierType.BCODMO_DATASET_ID)
+    pangaea_id = identifier_value(IdentifierType.PANGAEA_ID)
+    obis_uuid = identifier_value(IdentifierType.OBIS_DATASET_UUID)
+    gbif_key = identifier_value(IdentifierType.GBIF_DATASET_KEY)
 
-    if not any((doi, bioproject_accession, ena_accession)):
+    if not any((doi, dataset_doi, bioproject_accession, ena_accession, bcodmo_id, pangaea_id, obis_uuid, gbif_key)):
         raise NotImplementedError(
             "DISCOVER_IDENTIFIERS currently resolves studies with a DOI "
-            "(crossref/europe_pmc/openalex) or a BioProject/ENA study accession "
-            "(ncbi_bioproject/ncbi_biosample/ena). This study has none of those -- "
-            "OBIS/GBIF/BCO-DMO/PANGAEA-only resolution is a later milestone."
+            "(crossref/europe_pmc/openalex), a dataset DOI "
+            "(datacite plus native repository adapters where recognized), "
+            "a BioProject/ENA study accession (ncbi_bioproject/ncbi_biosample/ena), "
+            "or a BCO-DMO/PANGAEA/OBIS/GBIF dataset identifier. This study has none of those."
         )
 
     if not _build_enabled_adapters():
@@ -460,6 +546,16 @@ def handle_discover_identifiers(session: Session, task: Task) -> None:
         study = _resolve_publication_sources(session, study, doi)
     if bioproject_accession or ena_accession:
         study = _resolve_repository_sources(session, study, bioproject_accession, ena_accession)
+    if any((dataset_doi, bcodmo_id, pangaea_id, obis_uuid, gbif_key)):
+        study = _resolve_dataset_sources(
+            session,
+            study,
+            dataset_doi=dataset_doi,
+            bcodmo_id=bcodmo_id,
+            pangaea_id=pangaea_id,
+            obis_uuid=obis_uuid,
+            gbif_key=gbif_key,
+        )
 
     session.flush()
 

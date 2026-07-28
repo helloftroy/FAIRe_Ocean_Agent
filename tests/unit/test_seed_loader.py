@@ -1,6 +1,7 @@
 import json
 
 from fair_ocean_agent.config import REPO_ROOT
+from fair_ocean_agent.database.enums import IdentifierType
 from fair_ocean_agent.database.models import ExternalIdentifier, RawFact, Study
 from fair_ocean_agent.discovery.seed_loader import (
     SeedRow,
@@ -70,6 +71,26 @@ def test_ingest_seed_row_reports_invalid_identifier_but_still_creates_study(db_s
     study = db_session.get(Study, result.study_id)
     assert study.title == "Broken DOI study"
     assert db_session.query(ExternalIdentifier).filter_by(study_id=study.study_id).count() == 0
+
+
+def test_dataset_id_uses_repository_specific_identifier_type(db_session):
+    row = SeedRow(seed_id="pangaea", dataset_id="923577", repository="PANGAEA")
+    result = ingest_seed_row(db_session, row)
+    db_session.commit()
+
+    identifier = db_session.query(ExternalIdentifier).filter_by(study_id=result.study_id).one()
+    assert identifier.identifier_type == IdentifierType.PANGAEA_ID.value
+    assert identifier.identifier_value == "923577"
+
+
+def test_dataset_doi_without_repository_is_typed_as_dataset_doi(db_session):
+    row = SeedRow(seed_id="dataset-doi", dataset_id="https://doi.org/10.1594/PANGAEA.923577")
+    result = ingest_seed_row(db_session, row)
+    db_session.commit()
+
+    identifier = db_session.query(ExternalIdentifier).filter_by(study_id=result.study_id).one()
+    assert identifier.identifier_type == IdentifierType.DATASET_DOI.value
+    assert identifier.identifier_value == "10.1594/pangaea.923577"
 
 
 def test_enqueue_seed_backfill_queues_one_task_per_candidate_study(db_session):

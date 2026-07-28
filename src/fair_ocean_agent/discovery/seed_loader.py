@@ -57,6 +57,23 @@ _COLUMN_TO_IDENTIFIER_TYPE = {
 }
 
 
+def _dataset_identifier_type(repository: str | None, dataset_id: str) -> IdentifierType:
+    repo = (repository or "").lower()
+    if "bco" in repo or "bcodmo" in repo or "bco-dmo" in repo:
+        return IdentifierType.BCODMO_DATASET_ID
+    if "pangaea" in repo:
+        return IdentifierType.PANGAEA_ID
+    if "obis" in repo:
+        return IdentifierType.OBIS_DATASET_UUID
+    if "gbif" in repo:
+        return IdentifierType.GBIF_DATASET_KEY
+    if "datacite" in repo:
+        return IdentifierType.DATASET_DOI
+    if dataset_id.strip().lower().startswith(("10.", "doi:", "https://doi.org/")):
+        return IdentifierType.DATASET_DOI
+    return IdentifierType.OTHER
+
+
 class SeedRow(BaseModel):
     seed_id: str | None = None
     title: str | None = None
@@ -84,7 +101,7 @@ class SeedRow(BaseModel):
             if value:
                 candidates.append((identifier_type, value))
         if self.dataset_id:
-            candidates.append((IdentifierType.OTHER, self.dataset_id))
+            candidates.append((_dataset_identifier_type(self.repository, self.dataset_id), self.dataset_id))
         return candidates
 
 

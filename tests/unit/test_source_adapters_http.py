@@ -4,7 +4,11 @@ deterministic."""
 import httpx
 import pytest
 
+from fair_ocean_agent.sources.base import SourceConfig
 from fair_ocean_agent.sources.base import RateLimitedClient, SourceRecordNotFoundError
+from fair_ocean_agent.sources.bcodmo import BcoDmoAdapter
+from fair_ocean_agent.sources.datacite import DataCiteAdapter
+from fair_ocean_agent.sources.pangaea import PangaeaAdapter
 
 
 def _client(retrieval_config, handler, rate_limit_per_second=1000, tmp_path=None) -> RateLimitedClient:
@@ -144,3 +148,62 @@ def test_rate_limiting_enforces_minimum_interval(retrieval_config, monkeypatch):
 
     assert any(s == pytest.approx(0.5, abs=1e-6) for s in sleep_calls)
     client.close()
+
+
+def test_datacite_fetch_record_uses_doi_endpoint(retrieval_config):
+    seen = {}
+
+    def handler(request):
+        seen["path"] = request.url.path
+        return httpx.Response(200, json={"data": {"id": "10.1594/pangaea.923577", "attributes": {"doi": "10.1594/pangaea.923577"}}})
+
+    adapter = DataCiteAdapter(
+        SourceConfig(name="datacite", enabled=True, base_url="https://api.datacite.org"),
+        retrieval_config,
+        transport=httpx.MockTransport(handler),
+    )
+    record = adapter.fetch_record("10.1594/pangaea.923577")
+
+    assert seen["path"] == "/dois/10.1594/pangaea.923577"
+    assert record.external_identifier == "10.1594/pangaea.923577"
+    adapter.close()
+
+
+def test_pangaea_fetch_record_requests_metadata_jsonld(retrieval_config):
+    seen = {}
+
+    def handler(request):
+        seen["path"] = request.url.path
+        seen["query"] = str(request.url.query)
+        return httpx.Response(200, json={"@id": "https://doi.org/10.1594/PANGAEA.923577", "name": "Dataset"})
+
+    adapter = PangaeaAdapter(
+        SourceConfig(name="pangaea", enabled=True, base_url="https://doi.pangaea.de"),
+        retrieval_config,
+        transport=httpx.MockTransport(handler),
+    )
+    record = adapter.fetch_record("923577")
+
+    assert seen["path"] == "/10.1594/PANGAEA.923577"
+    assert "format=metadata_jsonld" in seen["query"]
+    assert record.external_identifier == "10.1594/PANGAEA.923577"
+    adapter.close()
+
+
+def test_bcodmo_fetch_record_extracts_dataset_id_from_doi(retrieval_config):
+    seen = {}
+
+    def handler(request):
+        seen["path"] = request.url.path
+        return httpx.Response(200, json={"id": "765432", "title": "Dataset"})
+
+    adapter = BcoDmoAdapter(
+        SourceConfig(name="bcodmo", enabled=True, base_url="https://www.bco-dmo.org/api"),
+        retrieval_config,
+        transport=httpx.MockTransport(handler),
+    )
+    record = adapter.fetch_record("10.26008/1912/bco-dmo.765432.1")
+
+    assert seen["path"] == "/api/dataset/765432"
+    assert record.external_identifier == "765432"
+    adapter.close()

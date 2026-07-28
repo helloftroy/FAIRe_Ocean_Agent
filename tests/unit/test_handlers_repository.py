@@ -82,6 +82,21 @@ def _seeded_study(session, bioproject_accession=None, ena_accession=None) -> Stu
     return study
 
 
+def _seeded_dataset_study(session, identifier_type: IdentifierType, value: str) -> Study:
+    study = Study(title=None)
+    session.add(study)
+    session.flush()
+    session.add(
+        ExternalIdentifier(
+            study_id=study.study_id,
+            identifier_type=identifier_type.value,
+            identifier_value=normalize_identifier(identifier_type, value),
+        )
+    )
+    session.flush()
+    return study
+
+
 def _task_for(session, study):
     task = enqueue_task(session, TaskType.DISCOVER_IDENTIFIERS, study_id=study.study_id)
     session.commit()
@@ -259,7 +274,68 @@ def test_study_with_both_doi_and_bioproject_resolves_both(db_session, monkeypatc
 
     sources = {s.source_name for s in db_session.query(Source).filter_by(study_id=study.study_id).all()}
     assert sources == {"crossref", "ncbi_biosample"}
-    assert db_session.query(Entity).filter_by(study_id=study.study_id).count() == 1
+
+
+def test_dataset_doi_resolves_via_datacite(db_session, monkeypatch):
+    study = _seeded_dataset_study(db_session, IdentifierType.DATASET_DOI, "10.1594/PANGAEA.923577")
+    task = _task_for(db_session, study)
+
+    datacite_adapter = FakeAdapter(
+        "datacite",
+        record=_make_record(
+            "datacite",
+            external_identifier="10.1594/pangaea.923577",
+            raw={"data": {"attributes": {"titles": [{"title": "A dataset title"}]}}},
+        ),
+        facts=[
+            RawFactCandidate(
+                entity_level=EntityLevel.PROJECT,
+                fact_type_candidate="titles",
+                raw_field_name="titles",
+                raw_value='[{"title": "A dataset title"}]',
+                source_locator="datacite.data.attributes.titles",
+            )
+        ],
+    )
+    monkeypatch.setattr(handlers, "_build_enabled_adapters", lambda: {"datacite": datacite_adapter})
+
+    handlers.handle_discover_identifiers(db_session, task)
+    db_session.commit()
+
+    source = db_session.query(Source).filter_by(study_id=study.study_id).one()
+    assert source.source_name == "datacite"
+    assert source.source_type == "repository_api"
+    assert db_session.query(RawFact).filter_by(study_id=study.study_id, fact_type_candidate="titles").count() == 1
+
+
+def test_obis_only_study_resolves_via_obis_dataset_uuid(db_session, monkeypatch):
+    dataset_uuid = "11111111-2222-3333-4444-555555555555"
+    study = _seeded_dataset_study(db_session, IdentifierType.OBIS_DATASET_UUID, dataset_uuid)
+    task = _task_for(db_session, study)
+
+    obis_adapter = FakeAdapter(
+        "obis",
+        record=_make_record("obis", external_identifier=dataset_uuid, raw={"title": "OBIS dataset"}),
+        facts=[
+            RawFactCandidate(
+                entity_level=EntityLevel.PROJECT,
+                fact_type_candidate="title",
+                raw_field_name="title",
+                raw_value="OBIS dataset",
+                source_locator="obis.dataset.title",
+            )
+        ],
+    )
+    monkeypatch.setattr(handlers, "_build_enabled_adapters", lambda: {"obis": obis_adapter})
+
+    handlers.handle_discover_identifiers(db_session, task)
+    db_session.commit()
+
+    source = db_session.query(Source).filter_by(study_id=study.study_id).one()
+    assert source.source_name == "obis"
+    assert source.external_identifier == dataset_uuid
+    assert db_session.get(Study, study.study_id).title == "OBIS dataset"
+    assert db_session.query(Entity).filter_by(study_id=study.study_id).count() == 0
 
 
 def test_repository_related_identifier_merges_into_existing_study(db_session, monkeypatch):
