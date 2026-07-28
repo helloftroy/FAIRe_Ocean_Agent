@@ -1,0 +1,4 @@
+seed_id,title,doi,pmid,pmcid,bioproject_accession,ena_study_accession,dataset_id,repository,url,notes
+seed-001,Example marine eDNA metabarcoding study,10.1234/example.doi,,,PRJNA000001,,,,,Not every column needs a value; leave blank if unknown
+seed-002,,10.5678/another.example,,,,,,,,DOI only is enough to attempt resolution
+seed-003,Study known only by BioProject,,,,PRJNA000002,,,,,

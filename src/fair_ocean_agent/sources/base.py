@@ -1,0 +1,261 @@
+"""Shared source-adapter interface (section 6). Every concrete adapter
+implements search()/fetch_record() and returns the shared Pydantic models
+below -- never a source-specific dict -- so no source-specific parsing ever
+needs to live in the orchestrator (workflow/handlers.py).
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import time
+from abc import ABC, abstractmethod
+from datetime import datetime
+from pathlib import Path
+
+import httpx
+from pydantic import BaseModel, ConfigDict
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
+
+from fair_ocean_agent.config import REPO_ROOT, RetrievalConfig
+from fair_ocean_agent.database.enums import EntityLevel, IdentifierType, RelationshipType, SupportType
+from fair_ocean_agent.logging_setup import get_logger
+
+logger = get_logger(__name__)
+
+
+class SourceRecordNotFoundError(Exception):
+    """Raised when an identifier is well-formed but the source has no record
+    for it (e.g. a 404, or an empty search result for a search-only API like
+    Europe PMC). Distinct from transport/5xx errors, which retry instead."""
+
+
+class SourceConfig(BaseModel):
+    name: str
+    enabled: bool = False
+    base_url: str
+    rate_limit_per_second: float = 3.0
+    priority: int = 100
+
+
+class SearchQuery(BaseModel):
+    query: str
+    filters: dict = {}
+    cursor: str | None = None
+    limit: int = 20
+
+
+class SourceRecord(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    source_name: str
+    external_identifier: str
+    url: str | None = None
+    raw: dict
+    retrieved_at: datetime
+    content_hash: str
+    from_cache: bool = False
+
+
+class SearchPage(BaseModel):
+    records: list[SourceRecord] = []
+    next_cursor: str | None = None
+    total_count: int | None = None
+
+
+class RelatedIdentifier(BaseModel):
+    identifier_type: IdentifierType
+    value: str
+    relationship_type: RelationshipType
+    source: str
+
+
+class RawFactCandidate(BaseModel):
+    entity_level: EntityLevel
+    fact_type_candidate: str
+    raw_field_name: str
+    raw_value: str
+    source_locator: str
+    support_type: SupportType = SupportType.STRUCTURED_SOURCE
+    # Set when this fact describes a specific sub-entity (a BioSample, an
+    # ENA run, ...) rather than the study as a whole -- e.g. a BioProject's
+    # accession fetches a *batch* of samples in one Source row, but each
+    # attribute fact still needs to land on its own Entity row. The handler
+    # get-or-creates an Entity keyed on (study_id, entity_level,
+    # external_identifier) when this is set; entity_id stays None otherwise
+    # (study-wide fact, same as every Milestone 2 adapter).
+    entity_external_id: str | None = None
+    entity_label: str | None = None
+    # Verbatim quote from the source text, required for LLM-derived facts
+    # (extraction/text.py) and verified by extraction/evidence.py before
+    # persistence; left None for structured API/XML facts, where
+    # source_locator (a JSON/XML path) already pins down the evidence.
+    evidence_quote: str | None = None
+
+
+def hash_payload(payload: dict) -> str:
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code >= 500 or exc.response.status_code == 429
+    return isinstance(exc, (httpx.TransportError, httpx.TimeoutException))
+
+
+class RateLimitedClient:
+    """Synchronous httpx wrapper: minimum-interval rate limiting, retry with
+    exponential backoff on 5xx/429/timeouts (never on 4xx, which are
+    permanent), and a permanent on-disk response cache keyed by request URL
+    + params -- repeated dev/test runs against the same identifiers never
+    re-hit the live API."""
+
+    def __init__(
+        self,
+        source_name: str,
+        retrieval_config: RetrievalConfig,
+        rate_limit_per_second: float,
+        transport: httpx.BaseTransport | None = None,
+    ):
+        self._client = httpx.Client(
+            timeout=retrieval_config.request_timeout_seconds,
+            headers={"User-Agent": retrieval_config.user_agent},
+            transport=transport,
+        )
+        self._min_interval = 1.0 / rate_limit_per_second if rate_limit_per_second > 0 else 0.0
+        self._last_request_at = 0.0
+        self._cache_enabled = retrieval_config.cache_enabled
+        self._cache_dir = REPO_ROOT / retrieval_config.cache_dir / source_name
+        if self._cache_enabled:
+            self._cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def _cache_path(self, url: str, params: dict | None, suffix: str) -> Path:
+        basis = json.dumps({"url": url, "params": params or {}}, sort_keys=True)
+        digest = hashlib.sha256(basis.encode()).hexdigest()
+        return self._cache_dir / f"{digest}.{suffix}"
+
+    def _throttle(self) -> None:
+        if self._min_interval <= 0:
+            return
+        elapsed = time.monotonic() - self._last_request_at
+        if elapsed < self._min_interval:
+            time.sleep(self._min_interval - elapsed)
+
+    @retry(
+        retry=retry_if_exception(_is_retryable),
+        stop=stop_after_attempt(4),
+        wait=wait_exponential(multiplier=1, min=1, max=30),
+        reraise=True,
+    )
+    def _get_bytes(self, url: str, params: dict | None) -> bytes:
+        """Uncached, unretried-on-404 raw fetch. Raises
+        SourceRecordNotFoundError on 404 rather than retrying (a missing
+        record won't appear on retry)."""
+        self._throttle()
+        response = self._client.get(url, params=params)
+        self._last_request_at = time.monotonic()
+        if response.status_code == 404:
+            raise SourceRecordNotFoundError(f"404 Not Found: {url}")
+        response.raise_for_status()
+        return response.content
+
+    def get_json(self, url: str, params: dict | None = None) -> tuple[dict, bool]:
+        """Returns (payload, from_cache)."""
+        cache_path = self._cache_path(url, params, "json") if self._cache_enabled else None
+        if cache_path is not None and cache_path.exists():
+            return json.loads(cache_path.read_text()), True
+
+        content = self._get_bytes(url, params)
+        payload = json.loads(content)
+        if cache_path is not None:
+            cache_path.write_text(json.dumps(payload))
+        return payload, False
+
+    def get_text(self, url: str, params: dict | None = None) -> tuple[str, bool]:
+        """Same contract as get_json but for XML/plain-text APIs (e.g. NCBI
+        E-utilities' efetch/esearch, which return XML, not JSON)."""
+        cache_path = self._cache_path(url, params, "xml") if self._cache_enabled else None
+        if cache_path is not None and cache_path.exists():
+            return cache_path.read_text(), True
+
+        content = self._get_bytes(url, params)
+        text = content.decode("utf-8")
+        if cache_path is not None:
+            cache_path.write_text(text)
+        return text, False
+
+    def clear_cache(self) -> int:
+        """Deletes every cached response file for this adapter instance.
+        The on-disk cache (see get_json/get_text above) never expires on
+        its own -- correct for the normal discovery/retry path, where a
+        cached response being "stale" is never the point (a DOI's Crossref
+        record isn't expected to change between retries of the same task).
+        Milestone 7's refresh path calls this once per adapter before a
+        refresh pass specifically because it *does* want a genuinely fresh
+        network response, and the alternative (getting each adapter's
+        fetch_record to accept a per-call cache-bypass flag) would touch
+        six adapters' method signatures and internal helper functions for
+        the same effect. Returns the number of files removed."""
+        if not self._cache_enabled or not self._cache_dir.exists():
+            return 0
+        removed = 0
+        for path in self._cache_dir.iterdir():
+            if path.is_file():
+                path.unlink()
+                removed += 1
+        return removed
+
+    def close(self) -> None:
+        self._client.close()
+
+
+class SourceAdapter(ABC):
+    name: str
+
+    def __init__(
+        self,
+        config: SourceConfig,
+        retrieval_config: RetrievalConfig,
+        transport: httpx.BaseTransport | None = None,
+        http: RateLimitedClient | None = None,
+    ):
+        """`http`, when given, is used as-is instead of building a new
+        RateLimitedClient -- for adapters that share one physical API/rate
+        limit across multiple "sources" (e.g. NCBI BioProject and BioSample
+        both hit eutils.ncbi.nlm.nih.gov and share its single per-IP rate
+        limit; two independent throttles would each allow bursts that
+        together exceed it). See workflow/handlers.py's NCBI wiring."""
+        self.config = config
+        self.http = http or RateLimitedClient(
+            config.name, retrieval_config, config.rate_limit_per_second, transport=transport
+        )
+
+    @abstractmethod
+    def search(self, query: SearchQuery) -> SearchPage:
+        ...
+
+    @abstractmethod
+    def fetch_record(self, identifier: str) -> SourceRecord:
+        ...
+
+    def find_related(self, record: SourceRecord) -> list[RelatedIdentifier]:
+        return []
+
+    def extract_structured_facts(self, record: SourceRecord) -> list[RawFactCandidate]:
+        return []
+
+    def parse_publication_fields(self, record: SourceRecord) -> dict:
+        """Adapter-specific mapping from its raw record to the
+        bibliographic fields (authors/journal/publication_year/
+        fulltext_available/open_access_status/title) that
+        workflow/handlers.py applies onto this adapter's own Source row
+        (source_type="publication_api") and, for title, onto Study.title.
+        Not part of the section-6 interface (which is source-shaped) but
+        kept on the adapter rather than the handler so parsing logic stays
+        out of the orchestrator, per section 6."""
+        return {}
+
+    def get_watermark(self):
+        return None
+
+    def close(self) -> None:
+        self.http.close()

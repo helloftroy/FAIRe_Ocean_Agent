@@ -1,0 +1,16 @@
+{
+  "pmid": "27000000",
+  "pmcid": "PMC5000000",
+  "doi": "10.1002/2015jg003300",
+  "title": "Shifts in the community structure of anaerobic ammonium oxidation bacteria",
+  "authorString": "Doe J, Smith J",
+  "journalTitle": "Journal of Geophysical Research: Biogeosciences",
+  "pubYear": "2016",
+  "isOpenAccess": "Y",
+  "inEPMC": "Y",
+  "fullTextUrlList": {
+    "fullTextUrl": [
+      {"url": "https://europepmc.org/articles/PMC5000000", "documentStyle": "html", "availability": "Open access"}
+    ]
+  }
+}

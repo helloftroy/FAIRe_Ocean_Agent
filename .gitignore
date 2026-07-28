@@ -1,0 +1,35 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+.env
+config/local.yaml
+
+data/fair_ocean.db
+data/cache/*
+!data/cache/.gitkeep
+data/exports/*
+!data/exports/.gitkeep
+
+standards/compiled/*
+!standards/compiled/.gitkeep
+
+# Upstream reference clones (FAIRe_checklist, miop, 0_protocol_collection_template)
+# -- each is its own full git repo; the parts this pipeline actually needs
+# are vendored under schemas/ instead. See schemas/*/README.md for
+# provenance (source repo + commit). Never commit these nested repos.
+/FAIRe_templates/
+/BeBOP_templates/
+/miop/
+/FAIRe_checklist
+/0_protocol_collection_template
+
+.pytest_cache/
+.coverage
+htmlcov/
+
+.DS_Store

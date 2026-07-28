@@ -1,0 +1,333 @@
+id: http://w3id.org/miop/terms
+name: terms
+imports:
+- linkml:types
+- ranges
+prefixes:
+  linkml: https://w3id.org/linkml/
+  miop.vocab: https://w3id.org/miop/vocab/
+  MIOP: https://w3id.org/miop/terms/
+  MIXS: https://w3id.org/mixs/terms/
+  dc: http://purl.org/dc/terms/
+  # dce: http://purl.org/dc/elements/1.1/
+  rdfs: http://www.w3.org/2000/01/rdf-schema#
+default_prefix: miop.vocab
+slots:
+  core field:
+    abstract: true
+    description: MIOP field determined to be essential across all protocols, can be mandatory or optional
+  society field:
+    abstract: true
+    description: placeholder to match future potential packages championed by dedicated communities, e.g. for the Ocean 
+      Biomolecular Observing Network (OBON) or the Omic Biodiversity Observation Network (Omic BON).
+  meth_cat:
+    is_a: core field
+    title: methodology category 
+    description: >
+      Methodology category which the uploaded protocol belongs to. This links to the associated 
+      methodology categories which precede and succeed it in the workflow, to facilitate the linking of protocols 
+      into entire workflows, while keeping granularity and flexibility. This will enable the mixing and matching of 
+      protocol modules from various uploaded workflows.
+    range: meth_cat_enum
+    multivalued: false
+    examples:
+    - value: society
+    - value: ethics and law
+    - value: design and logistics
+    comments: 
+    aliases:
+    - method type
+    - methodological category
+    - protocol type
+    annotations:
+      expected_value: text
+    string_serialization: '{text}'
+    slot_uri: MIOP:0000001
+  project:
+    is_a: core field
+    title: project
+    description: >
+      Details about the project that generated this version of the protocol (e.g., full name of project, acronym(s), 
+      principle investigator, lead institute(s), persistant website, funding agency). If possible please provide the 
+      most consistent URI associated with your project (e.g. Cordis Project ID for EU projects).
+    range: string
+    multivalued: false
+    examples:
+    - value: Moorea BioCode, https://www.moorea.berkeley.edu/programs/research/moorea-biocode
+    - value: "Improving and integrating European ocean observing and forecasting systems for sustainable use of the oceans, EuroSea, Toste Tanhua, Alfred Wegener Institute Helmholtz Centre for Polar and Marine Research, https://eurosea.eu, EU Horizon2020, Grant agreement ID: 862626"
+    comments: 
+    aliases:
+    - source project  
+    - authoring project
+    - published by project
+    annotations:
+      expected_value: text
+    string_serialization: '{text}'
+    slot_uri: MIOP:0000002
+  purpose:
+    is_a: core field
+    title: purpose
+    description: > 
+      Terms to describe the purpose of the omics research. This field accepts ontology terms from the 
+      Ontology for Biomedical Investigations (OBI). For a browser of OBI (v 2024-06-10) terms, please see 
+      https://www.ebi.ac.uk/ols4/ontologies/obi.
+    range: string
+    multivalued: true
+    examples:
+    - value: time series design [OBI:0500020]
+    - value: time series design [OBI:0500020]|taxonomic diversity assessment by targeted gene survey [OBI:0001960]
+    slot_uri: MIOP:0000003
+  analyses:
+    is_a: core field
+    title: analyses
+    description: >
+      Terms to describe the types of analyses used in the protocol. This field accepts ontology terms from the 
+      Ontology for Biomedical Investigations (OBI). For a browser of OBI (v 2024-06-10) terms, please see 
+      https://www.ebi.ac.uk/ols4/ontologies/obi.
+    range: string
+    multivalued: true
+    examples:
+    - value: amplicon sequencing assay [OBI:0002767]
+    - value: amplicon sequencing assay [OBI:0002767]|polymerase chain reaction [OBI:0002692]
+    slot_uri: MIOP:0000004
+  geographic_location:
+    is_a: core field
+    title: geographic location
+    description: >
+      Geographic location(s) in which the protocol has been used. This field accepts ontology terms from the 
+      GAZ ontology. For a browser of GAZ terms, please see https://www.ebi.ac.uk/ols/ontologies/gaz.
+    range: string
+    multivalued: true
+    examples:
+    - value: Monterey Bay [GAZ:00002509]
+    - value: Monterey Bay [GAZ:00002509]|FRAM Strait [GAZ:00000060]
+    slot_uri: MIXS:0000005
+  broad-scale_environmental_context:
+    is_a: core field
+    title: broad-scale environmental context
+    description: >
+      Biomes in which the protocol was successfully used. This field accepts ontology terms from the 
+      Environment Ontology (ENVO). For a browser of ENVO (v 2021-05-14) terms, please see 
+      https://www.ebi.ac.uk/ols/ontologies/envo.
+    range: string
+    multivalued: true
+    examples:
+    - value: oceanic epipelagic zone biome [ENVO:01000033]
+    - value: oceanic epipelagic zone biome [ENVO:01000033]|large river delta biome [ENVO:00000889]
+    slot_uri: MIXS:0000006
+  local_environmental_context:
+    is_a: core field
+    title: local environmental context
+    description: >
+      Environmental features targeted using the protocol. This field accepts ontology terms from the 
+      Environment Ontology (ENVO). For a browser of ENVO (v 2021-05-14) terms, please see 
+      https://www.ebi.ac.uk/ols/ontologies/envo.
+    range: string
+    multivalued: true
+    examples:
+    - value: seasonal marine thermocline [ENVO:01000107]
+    - value: seasonal marine thermocline [ENVO:01000107]|marine wind mixed layer [ENVO:01000061]
+    slot_uri: MIXS:0000007
+  environmental_medium:
+    is_a: core field
+    title: environmental medium
+    description: >
+      Identify the environmental or organismal material from which the biological
+      molecule (e.g., DNA/RNA/Protein) was extracted. This field accepts ontology terms from the 
+      Environment Ontology (ENVO) and/or the Uber-anatomy ontology (UBERON). For a browser of ENVO 
+      (v 2021-05-14) terms, please see https://www.ebi.ac.uk/ols/ontologies/envo; for a browser of
+      UBERON (2022-09-30) terms, please see https://www.ebi.ac.uk/ols/ontologies/uberon.
+    range: string
+    multivalued: true
+    examples:
+    - value: sea water [ENVO:00002149] 
+    - value: sea water [ENVO:00002149] | feces [UBERON:0001988]
+    slot_uri: MIXS:0000008
+  target:
+    is_a: core field
+    title: target
+    description: >
+      Identify the target taxa, gene and/or molecule for the protocol. This field accepts terms 
+      from ncbitaxon (NCBITAXON) and/or NCI Thesaurus OBO Edition (NCIT). For a browser of 
+      NCBITAXON (v 2022-08-18) terms, please see https://www.ebi.ac.uk/ols/ontologies/ncbitaxon; for 
+      a browser of NCIT (v 22.07d) terms, please see https://www.ebi.ac.uk/ols/ontologies/ncit.
+    range: string
+    multivalued: true
+    examples:
+    - value: Polaribacter [NCBITaxon:1642819]
+    - value: Polaribacter [NCBITaxon:1642819]|16S Mitochondrial Ribosomal RNA [NCIT:C131261] 
+    slot_uri: MIOP:0000009
+  creator:
+    is_a: core field
+    title: creator
+    description: >
+      An entity responsible for making the resource.
+    rdfs:comment: >
+      Recommended practice is to identify the creator with a URI. If this is not possible or feasible, 
+      a literal value that identifies the creator may be provided.
+    range: string
+    multivalued: true
+    examples:
+    - value: Kathleen Johnson Pitz, https://orcid.org/0000-0002-4931-8592
+    - value: Kathleen Johnson Pitz, https://orcid.org/0000-0002-4931-8592|Raïssa Meyer, https://orcid.org/0000-0002-2996-719X
+    slot_uri: dc:creator
+  materials_required:
+    is_a: core field
+    title: materials_required
+    description: >
+      Terms to identify the key resources needed to complete the protocol. When possible 
+      use controlled vocabuliaries using (namespace:ID).
+      This field accepts ontology terms from the Ontology for Biomedical Investigations (OBI)
+      and/or the Experimental Factor Ontology (EFO). For a browser of OBI (v 2024-06-10) terms, please see 
+      https://www.ebi.ac.uk/ols4/ontologies/obi; for a browser of EFO (v 3.49.0) terms, please see
+      https://www.ebi.ac.uk/ols/ontologies/efo. 
+    range: string
+    multivalued: true
+    examples:
+    - value: Illumina MiSeq [EFO:0004205]
+    - value: Illumina MiSeq [EFO:0004205]|centrifuge [OBI:0400106]|ZymoBIOMICS™ Fecal Reference with TruMatrix™ Technology
+    slot_uri: MIOP:0000010
+  skills_required:
+    is_a: core field
+    title: skills_required
+    description: >
+      Description of expertise required to execute protocol.
+    range: string
+    multivalued: true
+    examples:
+    - value: molecular biologist with experience in PCR
+    - value: molecular biologist with experience in PCR|laboratory technician with experience in PCR
+    slot_uri: MIOP:0000011
+  time_required:
+    is_a: core field
+    title: time_required
+    description: >
+      Number of minutes required to complete protocol (round up to nearest whole number).
+    range: integer
+    multivalued: false
+    examples:
+    - value: 10
+    slot_uri: MIOP:0000012
+  personnel_required:
+    is_a: core field
+    title: personnel_required
+    description: >
+      Recommended number of people required to execute protocol. For example, when deploying an instrument or 
+      when scuba diving, or doing ice work you may need a minimum number of individuals.
+    range: integer
+    multivalued: false
+    examples:
+    - value: 2
+    slot_uri: MIOP:0000013
+  language:
+    is_a: core field
+    title: language
+    description: >
+      A language of the resource. Recommended practice is to use either a non-literal value 
+      representing a language from a controlled vocabulary such as ISO 639-2 or ISO 639-3, 
+      or a literal value consisting of an IETF Best Current Practice 47 [IETF-BCP47] language tag.
+    range: string
+    multivalued: true
+    examples:
+    - value: en
+    - value: en|es
+    slot_uri: dc:language
+  issued:
+    is_a: core field
+    title: issued
+    description: >
+      Date of formal issuance of the resource.
+    rdfs:comment: >
+      Recommended practice is to describe the date, date/time, or period of time as recommended for the property Date, 
+      of which this is a subproperty: 
+      Recommended practice is to express the date, date/time, or period of time according to ISO 8601-1 [ISO 8601-1] or 
+      a published profile of the ISO standard, such as the W3C Note on Date and Time Formats [W3CDTF] or the Extended 
+      Date/Time Format Specification [EDTF]. If the full date is unknown, month and year (YYYY-MM) or just year (YYYY) 
+      may be used. Date ranges may be specified using ISO 8601 period of time specification in which start and end dates 
+      are separated by a '/' (slash) character. Either the start or end date may be missing.
+    range: string
+    multivalued: false
+    examples:
+    - value: 2012-02-15
+    - value: 2007-03-01T13:00:00Z
+    slot_uri: dc:issued
+  audience:
+    is_a: core field
+    title: audience
+    description: >
+      A class of agents for whom the resource is intended or useful.
+    rdfs:comment: >
+      Recommended practice is to use this property with non-literal values from a vocabulary of audience types.
+    range: string
+    multivalued: true
+    examples:
+    - value: scientists
+    - value: scientists|classroom|managers
+    slot_uri: dc:audience
+  publisher:
+    is_a: core field
+    title: publisher
+    description: >
+      An entity responsible for making the resource available.
+    range: string
+    multivalued: false
+    examples:
+    - value: Nature
+    - value: Woods Hole Oceanographic Institution
+    - value: Monterey Bay Aquarium Research Institute, Chavez Lab
+    slot_uri: dc:publisher
+  hasVersion:
+    is_a: core field
+    title: hasVersion
+    description: >
+      A related resource that is a version, edition, or adaptation of the described resource.
+    rdfs:comment: >
+      Changes in version imply substantive changes in content rather than differences in format. 
+      This property is intended to be used with non-literal values. This property is an inverse property of Is Version Of.
+    range: string
+    multivalued: false
+    examples:
+    - value: 1.1.2
+    - value: 0.2
+    slot_uri: dc:hasVersion
+  license:
+    is_a: core field
+    title: license
+    description: >
+      A legal document giving official permission to do something with the resource.
+    range: string
+    multivalued: false
+    examples:
+    - value: Public Domain (CC0) 
+    - value: All rights reserved
+    - value: CC BY 4.0
+    slot_uri: dc:license
+  maturity_level:
+    is_a: core field
+    title: maturity level
+    description: >
+      Enter the maturity level of the methodology in the document. 
+      Mature: Methodologies are well demonstrated for a given objective, documented and peer reviewed; methods are commonly used by more than one organization.
+      Pilot or Demonstrated: Methodologies are being demonstrated and validated; limited consensus exists on widespread use or in any given situation.
+      Concept: A methodology is being developed at one institution(s) but has not been agreed to by the community; requirements and form for a methodology are understood.
+    range: string
+    multivalued: false
+    examples:
+    - value: Mature
+    - value: Pilot
+    - value: Concept
+    slot_uri: MIOP:0000014
+enums:
+   meth_cat_enum:
+    permissible_values:
+      society: {}
+      design and logistics: {}
+      ethics and law: {}
+      data management: {}
+      sample collection: {}
+      bioinformatics: {}
+      contextual field data: {}
+      sample extraction and purification: {}
+      omics analysis: {}
+      sample archiving or biobanking: {}
+      data analysis: {}

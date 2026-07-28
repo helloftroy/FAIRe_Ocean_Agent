@@ -1,0 +1,56 @@
+# Candidate open-weight models for the benchmark harness (llm/benchmark.py).
+#
+# This project does not choose or hard-code a specific model anywhere.
+# Every candidate below must point at a real, currently-running
+# OpenAI-compatible inference endpoint (Ollama, vLLM, TGI's OpenAI router,
+# an institutional gateway, ...) before `fair-ocean benchmark-models` can
+# use it -- "OpenAI-compatible" here means only the HTTP request/response
+# shape (POST {base_url}/chat/completions); nothing contacts an
+# OpenAI-operated host or requires an OpenAI account.
+#
+# Add as many candidates as you want compared side by side. `label`
+# identifies each one in benchmark reports -- make it descriptive
+# (e.g. the actual model name/quantization), not generic.
+
+candidates:
+  - label: "qwen2.5-3b-ollama"
+    base_url: "http://localhost:11434/v1"
+    model: "qwen2.5:3b"
+    api_key_env: "LOCAL_LLM_API_KEY"
+    timeout_seconds: 180
+    max_concurrency: 1
+
+  - label: "qwen3-4b-instruct-ollama"
+    base_url: "http://localhost:11434/v1"
+    model: "qwen3:4b-instruct"
+    api_key_env: "LOCAL_LLM_API_KEY"
+    timeout_seconds: 180
+    max_concurrency: 1
+
+  - label: "llama3.2-3b-ollama"
+    base_url: "http://localhost:11434/v1"
+    model: "llama3.2"
+    api_key_env: "LOCAL_LLM_API_KEY"
+    timeout_seconds: 180
+    max_concurrency: 1
+
+  - label: "phi4-mini-3.8b-ollama"
+    base_url: "http://localhost:11434/v1"
+    model: "phi4-mini"
+    api_key_env: "LOCAL_LLM_API_KEY"
+    timeout_seconds: 180
+    max_concurrency: 1
+
+  - label: "gemma3-4b-ollama"
+    base_url: "http://localhost:11434/v1"
+    model: "gemma3:4b"
+    api_key_env: "LOCAL_LLM_API_KEY"
+    timeout_seconds: 180
+    max_concurrency: 1
+
+  - label: "granite3.3-8b-ollama"
+    base_url: "http://localhost:11434/v1"
+    model: "granite3.3:8b"
+    api_key_env: "LOCAL_LLM_API_KEY"
+    timeout_seconds: 180
+    max_concurrency: 1

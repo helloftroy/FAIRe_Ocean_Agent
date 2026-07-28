@@ -1,0 +1,34 @@
+{
+  "case_id": "example-001",
+  "curated_by": "claude",
+  "notes": "Fictional example case, not a real paper -- demonstrates the gold-case format and lets the benchmark harness run end-to-end before real Claude-curated cases exist. Replace/add real cases under data/benchmark/gold/ before running a real comparison.",
+  "source_text": "Water samples were collected on 14 March 2021 at a depth of 5 meters from three stations in the reef lagoon. DNA was extracted using a DNeasy PowerWater kit. The 18S rRNA V4 region was amplified using primers TAReuk454FWD1 and TAReukREV3. Sequencing was performed on an Illumina MiSeq platform.",
+  "instructions": "Extract facts about marine eDNA sampling and sequencing methodology that are explicitly stated in this text: collection date, sampling depth, DNA extraction method, primer names, and sequencing platform. Only extract what is explicitly stated.",
+  "expected_facts": [
+    {
+      "fact_type_candidate": "collection_date",
+      "raw_value": "2021-03-14",
+      "evidence_quote": "Water samples were collected on 14 March 2021"
+    },
+    {
+      "fact_type_candidate": "sampling_depth",
+      "raw_value": "5 meters",
+      "evidence_quote": "at a depth of 5 meters"
+    },
+    {
+      "fact_type_candidate": "dna_extraction_method",
+      "raw_value": "DNeasy PowerWater kit",
+      "evidence_quote": "DNA was extracted using a DNeasy PowerWater kit"
+    },
+    {
+      "fact_type_candidate": "primer_names",
+      "raw_value": "TAReuk454FWD1 and TAReukREV3",
+      "evidence_quote": "using primers TAReuk454FWD1 and TAReukREV3"
+    },
+    {
+      "fact_type_candidate": "sequencing_platform",
+      "raw_value": "Illumina MiSeq",
+      "evidence_quote": "Sequencing was performed on an Illumina MiSeq platform"
+    }
+  ]
+}

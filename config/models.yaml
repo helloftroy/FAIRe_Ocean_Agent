@@ -1,0 +1,32 @@
+# Standards/schema mapping versions used by the (future) mapping layer.
+# Bumping a version here does not require re-running extraction (raw_facts
+# are schema-agnostic); it only affects standardized_values generation.
+
+standards:
+  faire:
+    version: "1.0.2"
+    schema_source: "https://github.com/FAIR-eDNA/FAIRe_checklist"
+    schema_source_commit: "042ced519c9a4e3808086e6078c12883cb884cd0"
+    vendored_at: "schemas/faire/ (schema.yaml, classes.yaml, enums.yaml -- see schemas/faire/README.md)"
+    note: "Mapping rules (mapping/rules.py) have full coverage for sample-level (coordinates, depth, env_*, geo_loc_name, collection_date) and run-level (platform, accessions) fields observed in this pipeline's real raw_facts. LLM-extracted blob-like facts (PCR/extraction/storage narrative text) are mapped to the closest '..._method_additional' free-text field with review_required=True rather than forced into atomic fields they don't match -- see mapping/rules.py docstring."
+
+  bebop_miop:
+    version: null  # miop has no version file/tag upstream -- the commit pin is the only real version marker
+    schema_source: "https://github.com/BeBOP-OBON/miop"
+    schema_source_commit: "be576bc7c9bce260905a1f6eec5c226104ad3ac4"
+    bebop_templates_source: "https://github.com/BeBOP-OBON/0_protocol_collection_template"
+    bebop_templates_source_commit: "5a17dabb192e65d3d9ea39613492f8330c9e86fc"
+    vendored_at: "schemas/miop/ (terms.yaml, ranges.yaml) and schemas/bebop/ (5 protocol templates) -- see their READMEs"
+    note: "Schema is vendored and compiled (fair-ocean build-standards-registry -> standards/compiled/bebop_miop_registry.json, term_crosswalk.csv, template_field_usage.csv). Raw_fact -> StandardizedValue mapping (mapping/bebop.py) is a DECIDED-OUT-OF-SCOPE, not a gap: confirmed with the user that MIOP/BeBOP's protocol-document metadata (author, license, version) doesn't apply to this pipeline's paper-derived input types. Revisit only if a future input type is an actual protocol submission -- see mapping/bebop.py's docstring."
+
+  mixs:
+    version: "unpinned-placeholder"
+
+  darwin_core:
+    version: "unpinned-placeholder"
+
+vocabularies:
+  envo:
+    enabled: false
+  nerc_vocab:
+    enabled: false

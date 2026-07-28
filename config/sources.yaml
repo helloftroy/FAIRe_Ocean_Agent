@@ -1,0 +1,105 @@
+# Source-adapter configuration. crossref/europe_pmc/openalex (Milestone 2)
+# and ncbi_bioproject/ncbi_biosample/ena (Milestone 3) are implemented; the
+# rest are interface-level placeholders so adding a real adapter later is
+# config + one new file, not an orchestrator change.
+#
+# ncbi_bioproject and ncbi_biosample share one rate-limited HTTP client at
+# runtime (workflow/handlers.py) since they both hit eutils.ncbi.nlm.nih.gov,
+# which enforces its per-IP limit across all eutils calls combined -- the
+# rate_limit_per_second below (3, matching NCBI's no-API-key guidance) is
+# the one that actually gets enforced for both.
+#
+# ncbi_sra is deliberately left disabled/unimplemented: run-level SRA data
+# (library strategy, platform, file accessions) is served by the `ena`
+# adapter's read_run query instead, since ENA mirrors the same INSDC-shared
+# records via much cleaner JSON than NCBI's SRA XML. See sources/ncbi.py.
+#
+# rate_limit_per_second and priority are read by the adapter base class.
+
+sources:
+  crossref:
+    enabled: true
+    base_url: "https://api.crossref.org"
+    rate_limit_per_second: 5
+    priority: 1
+
+  europe_pmc:
+    enabled: true
+    base_url: "https://www.ebi.ac.uk/europepmc/webservices/rest"
+    rate_limit_per_second: 5
+    priority: 2
+
+  openalex:
+    enabled: true
+    base_url: "https://api.openalex.org"
+    rate_limit_per_second: 5
+    priority: 3
+
+  ncbi_bioproject:
+    enabled: true
+    base_url: "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
+    rate_limit_per_second: 3
+    priority: 4
+
+  ncbi_biosample:
+    enabled: true
+    base_url: "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
+    rate_limit_per_second: 3
+    priority: 5
+
+  ncbi_sra:
+    enabled: false
+    base_url: "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
+    rate_limit_per_second: 3
+    priority: 6
+
+  ena:
+    enabled: true
+    base_url: "https://www.ebi.ac.uk/ena/portal/api"
+    rate_limit_per_second: 5
+    priority: 7
+
+  obis:
+    enabled: false
+    base_url: "https://api.obis.org"
+    rate_limit_per_second: 5
+    priority: 8
+
+  gbif:
+    enabled: false
+    base_url: "https://api.gbif.org/v1"
+    rate_limit_per_second: 5
+    priority: 9
+
+  bcodmo:
+    enabled: false
+    base_url: "https://api.bco-dmo.org"
+    rate_limit_per_second: 3
+    priority: 10
+
+  pangaea:
+    enabled: false
+    base_url: "https://ws.pangaea.de"
+    rate_limit_per_second: 3
+    priority: 11
+
+  datacite:
+    enabled: false
+    base_url: "https://api.datacite.org"
+    rate_limit_per_second: 5
+    priority: 12
+
+# Keyword search terms for later broad discovery (section 7). Not executed
+# until discovery.keyword_search_enabled is true and a keyword-search command
+# is run explicitly.
+discovery_keywords:
+  - "marine environmental DNA"
+  - "marine eDNA"
+  - "ocean metabarcoding"
+  - "seawater metabarcoding"
+  - "marine 16S"
+  - "marine 18S"
+  - "marine COI"
+  - "marine 12S"
+  - "marine metagenomics"
+  - "ocean molecular observations"

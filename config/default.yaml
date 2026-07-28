@@ -1,0 +1,44 @@
+# Default configuration for fair-ocean-agent.
+# Values here can be overridden by environment variables prefixed FAIR_OCEAN_
+# (see src/fair_ocean_agent/config.py) or by a local config/local.yaml (gitignored).
+
+database:
+  url: "sqlite:///data/fair_ocean.db"
+
+workflow:
+  worker_id: "local-worker"
+  max_attempts: 3
+  task_timeout_seconds: 600
+  stale_claim_minutes: 30
+  default_batch_size: 25
+
+llm:
+  enabled: false
+  provider: "mock"
+  base_url: "http://localhost:11434/v1"
+  model: "REPLACE_WITH_MODEL_NAME"
+  api_key_env: "LOCAL_LLM_API_KEY"
+  timeout_seconds: 180
+  max_retries: 3
+  temperature: 0
+  max_concurrency: 1
+
+retrieval:
+  request_timeout_seconds: 60
+  cache_enabled: true
+  cache_dir: "data/cache"
+  user_agent: "fair-ocean-agent/0.1 (contact: REPLACE_WITH_CONTACT_EMAIL)"
+
+discovery:
+  citation_expansion_max_depth: 1
+  keyword_search_enabled: false
+
+scheduling:
+  weekly_overlap_days: 14
+  retry_failed_after_hours: 24
+  monthly_unresolved_retry: true
+  quarterly_full_rediscovery: true
+
+logging:
+  level: "INFO"
+  json: false

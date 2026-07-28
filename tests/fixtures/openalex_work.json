@@ -1,0 +1,14 @@
+{
+  "id": "https://openalex.org/W2413577766",
+  "doi": "https://doi.org/10.1002/2015jg003300",
+  "title": "Shifts in the community structure of anaerobic ammonium oxidation bacteria",
+  "display_name": "Shifts in the community structure of anaerobic ammonium oxidation bacteria",
+  "publication_year": 2016,
+  "open_access": {"is_oa": true, "oa_status": "green"},
+  "primary_location": {"source": {"display_name": "Journal of Geophysical Research: Biogeosciences"}},
+  "authorships": [
+    {"author": {"display_name": "Jane Doe"}},
+    {"author": {"display_name": "John Smith"}}
+  ],
+  "cited_by_count": 15
+}

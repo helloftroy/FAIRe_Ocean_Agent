@@ -1,0 +1,2 @@
+seed_id,title,doi,pmid,pmcid,bioproject_accession,ena_study_accession,dataset_id,repository,url,notes
+m3-001,,,,,PRJNA1425045,,,,,Real public marine eDNA BioProject (SF Bay 18S Metabarcoding Monitoring) used to validate the Milestone 3 NCBI/ENA adapters end-to-end
