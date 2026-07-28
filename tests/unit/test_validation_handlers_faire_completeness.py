@@ -78,11 +78,23 @@ def test_handle_validate_faire_completeness_wraps_populate(db_session):
     assert db_session.query(StandardizedValue).filter_by(study_id=study.study_id, target_schema="faire").count() > 0
 
 
-def test_enqueue_faire_completeness_backfill_only_queues_studies_with_faire_values(db_session):
+def test_enqueue_faire_completeness_backfill_queues_studies_with_raw_facts(db_session):
     mapped_study = Study(title="Has FAIRe values")
-    unmapped_study = Study(title="No FAIRe values yet")
-    db_session.add_all([mapped_study, unmapped_study])
+    unmapped_study = Study(title="Raw facts but no FAIRe values yet")
+    untouched_study = Study(title="No extracted facts yet")
+    db_session.add_all([mapped_study, unmapped_study, untouched_study])
     db_session.flush()
+    for study in (mapped_study, unmapped_study):
+        db_session.add(
+            RawFact(
+                study_id=study.study_id,
+                raw_field_name="title",
+                raw_value=study.title,
+                fact_type_candidate="title",
+                entity_level=EntityLevel.STUDY.value,
+                support_type=SupportType.STRUCTURED_SOURCE.value,
+            )
+        )
     db_session.add(
         StandardizedValue(
             study_id=mapped_study.study_id, target_schema="faire", target_schema_version="1.0.2",
@@ -94,6 +106,6 @@ def test_enqueue_faire_completeness_backfill_only_queues_studies_with_faire_valu
     count = enqueue_faire_completeness_backfill(db_session)
     db_session.commit()
 
-    assert count == 1
+    assert count == 2
     task_study_ids = {t.study_id for t in db_session.query(Task).all()}
-    assert task_study_ids == {mapped_study.study_id}
+    assert task_study_ids == {mapped_study.study_id, unmapped_study.study_id}

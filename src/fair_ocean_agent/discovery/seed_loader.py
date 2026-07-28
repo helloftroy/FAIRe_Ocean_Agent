@@ -133,6 +133,7 @@ def load_seed_rows(path: str | Path) -> list[SeedRow]:
 
 def ingest_seed_row(session: Session, row: SeedRow) -> SeedIngestResult:
     candidates = row.identifier_candidates()
+    seed_payload = row.model_dump_json()
 
     identifier_errors: list[str] = []
     normalized: list[tuple[IdentifierType, str]] = []
@@ -177,22 +178,32 @@ def ingest_seed_row(session: Session, row: SeedRow) -> SeedIngestResult:
         )
         existing_values.add(key)
 
-    session.add(
-        RawFact(
-            study_id=study.study_id,
-            entity_id=None,
-            source_id=None,
-            source_locator="seed_file",
-            raw_field_name="seed_row",
-            raw_value=row.model_dump_json(),
-            evidence_quote=row.model_dump_json(),
-            fact_type_candidate="seed_record",
-            entity_level=EntityLevel.STUDY.value,
-            support_type=SupportType.STRUCTURED_SOURCE.value,
-            extraction_method="seed_loader",
-            review_status=ReviewStatus.ACCEPTED.value,
+    existing_seed_fact = session.scalars(
+        select(RawFact).where(
+            RawFact.study_id == study.study_id,
+            RawFact.source_locator == "seed_file",
+            RawFact.raw_field_name == "seed_row",
+            RawFact.fact_type_candidate == "seed_record",
+            RawFact.raw_value == seed_payload,
         )
-    )
+    ).first()
+    if existing_seed_fact is None:
+        session.add(
+            RawFact(
+                study_id=study.study_id,
+                entity_id=None,
+                source_id=None,
+                source_locator="seed_file",
+                raw_field_name="seed_row",
+                raw_value=seed_payload,
+                evidence_quote=seed_payload,
+                fact_type_candidate="seed_record",
+                entity_level=EntityLevel.STUDY.value,
+                support_type=SupportType.STRUCTURED_SOURCE.value,
+                extraction_method="seed_loader",
+                review_status=ReviewStatus.ACCEPTED.value,
+            )
+        )
 
     return SeedIngestResult(
         seed_id=row.seed_id,

@@ -59,6 +59,7 @@ def test_ingest_seed_file_is_idempotent_on_rerun(db_session):
 
     assert db_session.query(Study).count() == first_study_count
     assert all(not r.created for r in results)  # every row merged into existing study
+    assert db_session.query(RawFact).filter_by(fact_type_candidate="seed_record").count() == 3
 
 
 def test_ingest_seed_row_reports_invalid_identifier_but_still_creates_study(db_session):

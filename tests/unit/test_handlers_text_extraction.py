@@ -21,6 +21,13 @@ FULLTEXT_XML = """<article><body>
 </sec>
 </body></article>"""
 
+MULTI_SECTION_XML = """<article><body>
+<sec><title>Methods</title>
+<sec><title>Sampling</title><p>Water samples were collected on 4 January 2022 at a depth of 5 meters.</p></sec>
+<sec><title>PCR</title><p>PCR used the primers mlCOIintF and jgHCO2198.</p></sec>
+</sec>
+</body></article>"""
+
 
 class FakeEuropePmcAdapter:
     name = "europe_pmc"
@@ -36,6 +43,13 @@ class FakeEuropePmcAdapter:
 
     def close(self):
         pass
+
+
+class SecondCallFailsBackend(MockLLMBackend):
+    def generate(self, *args, **kwargs):
+        if len(self.calls) == 1:
+            raise LLMBackendError("simulated section timeout")
+        return super().generate(*args, **kwargs)
 
 
 def _seeded_study_with_pmcid(session, pmcid="PMC1234567") -> Study:
@@ -116,6 +130,29 @@ def test_handler_is_idempotent_on_retry(db_session, monkeypatch):
 
     assert db_session.query(Source).filter_by(study_id=study.study_id).count() == 1
     assert db_session.query(RawFact).filter_by(study_id=study.study_id, extraction_method="llm_text_extraction").count() == 1
+
+
+def test_handler_preserves_successful_sections_when_later_section_times_out(db_session, monkeypatch):
+    study = _seeded_study_with_pmcid(db_session)
+    task = _task_for(db_session, study)
+
+    response = json.dumps(
+        [{"fact_type_candidate": "collection_date", "raw_value": "2022-01-04", "evidence_quote": "collected on 4 January 2022"}]
+    )
+    handlers._llm_backend_cache = SecondCallFailsBackend(label="flaky-model", responses=[response])
+    monkeypatch.setattr(
+        handlers,
+        "_build_enabled_adapters",
+        lambda: {"europe_pmc": FakeEuropePmcAdapter(fulltext_xml=MULTI_SECTION_XML)},
+    )
+
+    handlers.handle_extract_text_facts(db_session, task)
+    db_session.commit()
+
+    assert db_session.query(Source).filter_by(study_id=study.study_id, source_name="europe_pmc_fulltext").count() == 1
+    facts = db_session.query(RawFact).filter_by(study_id=study.study_id, extraction_method="llm_text_extraction").all()
+    assert len(facts) == 1
+    assert facts[0].raw_value == "2022-01-04"
 
 
 def test_handler_raises_not_implemented_without_pmcid(db_session):

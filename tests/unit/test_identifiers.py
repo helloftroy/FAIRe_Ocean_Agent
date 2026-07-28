@@ -23,6 +23,8 @@ from fair_ocean_agent.identity.identifiers import (
         ("http://dx.doi.org/10.1234/abc.def", "10.1234/abc.def"),
         ("doi:10.1234/abc.def", "10.1234/abc.def"),
         ("  10.1234/abc.def  ", "10.1234/abc.def"),
+        ("10.1128/msystems.00184-16open_in_new", "10.1128/msystems.00184-16"),
+        ("10.1128/msystems.00184-16 External Link", "10.1128/msystems.00184-16"),
     ],
 )
 def test_normalize_doi_valid(raw, expected):

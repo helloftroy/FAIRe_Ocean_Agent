@@ -23,6 +23,9 @@ DOI_URL_PREFIXES = (
     "doi:",
     "DOI:",
 )
+DOI_TRAILING_ARTIFACT_PATTERN = re.compile(
+    r"(?i)(?:open_in_new|external\s+link|external-link)$"
+)
 
 PMID_PATTERN = re.compile(r"^\d+$")
 PMCID_PATTERN = re.compile(r"^PMC\d+$", re.IGNORECASE)
@@ -53,6 +56,7 @@ def normalize_doi(raw: str) -> str:
         if value.lower().startswith(prefix.lower()):
             value = value[len(prefix):]
             break
+    value = DOI_TRAILING_ARTIFACT_PATTERN.sub("", value)
     value = value.strip().strip("/").lower()
     if not DOI_PATTERN.match(value):
         raise IdentifierError(f"Not a valid DOI: {raw!r}")

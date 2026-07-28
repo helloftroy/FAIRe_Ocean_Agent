@@ -422,13 +422,11 @@ def handle_validate_faire_completeness(session: Session, task: Task) -> None:
 
 
 def enqueue_faire_completeness_backfill(session: Session) -> int:
-    """Queues VALIDATE_FAIRE_COMPLETENESS for every study that has at least
-    one FAIRe StandardizedValue -- checking completeness before any
-    mapping has run would just report everything missing, which isn't a
-    meaningful signal."""
-    study_ids = list(
-        session.scalars(select(StandardizedValue.study_id).where(StandardizedValue.target_schema == FAIRE_TARGET_SCHEMA).distinct())
-    )
+    """Queues VALIDATE_FAIRE_COMPLETENESS for every study with raw facts.
+    Mapping may legitimately create zero real FAIRe values for a study, but
+    those blank standardized values still need explainable missingness
+    statuses after sources have been inspected."""
+    study_ids = list(session.scalars(select(RawFact.study_id).distinct()))
     for study_id in study_ids:
         enqueue_task(session, TaskType.VALIDATE_FAIRE_COMPLETENESS, study_id=study_id)
     return len(study_ids)

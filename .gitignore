@@ -9,7 +9,9 @@ dist/
 .env
 config/local.yaml
 
-data/fair_ocean.db
+data/*.db
+data/*.db-*
+data/*.db.bak*
 data/cache/*
 !data/cache/.gitkeep
 data/exports/*

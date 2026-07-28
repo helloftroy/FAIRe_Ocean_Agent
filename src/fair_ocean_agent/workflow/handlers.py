@@ -30,7 +30,8 @@ from fair_ocean_agent.extraction.sections import select_relevant_sections
 from fair_ocean_agent.extraction.text import PROMPT_VERSION, extract_facts_from_section
 from fair_ocean_agent.identity.deduplication import find_existing_study_by_identifier, merge_study_into
 from fair_ocean_agent.identity.identifiers import IdentifierError, normalize_identifier
-from fair_ocean_agent.llm.base import LLMBackend
+from fair_ocean_agent.llm.base import LLMBackend, LLMBackendError
+from fair_ocean_agent.llm.disabled import DisabledLLMBackend
 from fair_ocean_agent.llm.factory import build_llm_backend
 from fair_ocean_agent.logging_setup import get_logger
 from fair_ocean_agent.sources.base import (
@@ -629,7 +630,18 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
     session.flush()
 
     for section in sections:
-        facts, _response = extract_facts_from_section(backend, section["title"], section["text"])
+        try:
+            facts, _response = extract_facts_from_section(backend, section["title"], section["text"])
+        except LLMBackendError as exc:
+            if isinstance(backend, DisabledLLMBackend):
+                raise
+            logger.warning(
+                "text extraction failed for study %s section %r: %s",
+                study.study_id,
+                section["title"],
+                exc,
+            )
+            continue
         for fact in facts:
             session.add(
                 RawFact(
