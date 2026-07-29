@@ -7,6 +7,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+import httpx
 import pytest
 
 from fair_ocean_agent.database.enums import AccessStatus, IdentifierType
@@ -211,6 +212,41 @@ def test_bcodmo_extracts_metadata_without_downloading_data(retrieval_config):
     adapter.close()
 
 
+def test_bcodmo_extracts_jsonld_metadata_shape(retrieval_config):
+    adapter = BcoDmoAdapter(SourceConfig(name="bcodmo", enabled=True, base_url="https://www.bco-dmo.org/api"), retrieval_config)
+    raw = {
+        "@graph": [
+            {
+                "http://lod.bco-dmo.org/id/dataset/489471": {
+                    "@id": "http://lod.bco-dmo.org/id/dataset/489471",
+                    "@type": ["http://www.w3.org/ns/dcat#Dataset", "http://ocean-data.org/schema/Dataset"],
+                    "http://purl.org/dc/terms/identifier": [{"@value": "489471"}],
+                    "http://ocean-data.org/schema/datasetTitle": [{"@value": "Pteropod shell dissolution"}],
+                    "http://ocean-data.org/schema/abstract": [{"@value": "A dataset abstract"}],
+                    "http://purl.org/ontology/bibo/doi": [{"@value": "10.1575/1912/bco-dmo.489471.1"}],
+                    "http://ocean-data.org/schema/storesValuesFor": [
+                        {"@id": "http://lod.bco-dmo.org/id/dataset-parameter/489499"}
+                    ],
+                    "http://xmlns.com/foaf/0.1/homepage": [{"@id": "https://osprey.bco-dmo.org/dataset/489471"}],
+                }
+            }
+        ]
+    }
+    record = _record("bcodmo", raw, external_identifier="489471")
+
+    facts = adapter.extract_structured_facts(record)
+    related = adapter.find_related(record)
+    values = {f.fact_type_candidate: f.raw_value for f in facts}
+
+    assert values["dataset_id"] == "489471"
+    assert values["title"] == "Pteropod shell dissolution"
+    assert values["abstract"] == "A dataset abstract"
+    assert values["doi"] == "10.1575/1912/bco-dmo.489471.1"
+    assert "dataset-parameter/489499" in values["parameters"]
+    assert any(r.identifier_type == IdentifierType.DATASET_DOI for r in related)
+    adapter.close()
+
+
 def test_pangaea_extracts_jsonld_metadata_and_related_identifiers(retrieval_config):
     adapter = PangaeaAdapter(SourceConfig(name="pangaea", enabled=True, base_url="https://doi.pangaea.de"), retrieval_config)
     record = _record(
@@ -283,6 +319,32 @@ def test_obis_extracts_dataset_metadata_and_dataset_uuid(retrieval_config):
 
     assert any(f.fact_type_candidate == "records" for f in facts)
     assert related[0].identifier_type == IdentifierType.OBIS_DATASET_UUID
+    adapter.close()
+
+
+def test_obis_fetch_record_unwraps_live_dataset_result_shape(retrieval_config):
+    dataset_uuid = "11111111-2222-3333-4444-555555555555"
+    seen = []
+
+    def handler(request):
+        seen.append(request.url.path)
+        if request.url.path == f"/dataset/{dataset_uuid}":
+            return httpx.Response(200, json={"total": 1, "results": [{"id": dataset_uuid, "title": "OBIS dataset"}]})
+        if request.url.path == "/occurrence":
+            return httpx.Response(200, json={"results": []})
+        return httpx.Response(404)
+
+    adapter = ObisAdapter(
+        SourceConfig(name="obis", enabled=True, base_url="https://api.obis.org"),
+        retrieval_config,
+        transport=httpx.MockTransport(handler),
+    )
+
+    record = adapter.fetch_record(dataset_uuid)
+
+    assert record.raw["id"] == dataset_uuid
+    assert record.raw["title"] == "OBIS dataset"
+    assert record.raw["_occurrence_preview"] == {"results": []}
     adapter.close()
 
 

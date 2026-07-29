@@ -51,6 +51,11 @@ class ObisAdapter(SourceAdapter):
         payload, from_cache = self.http.get_json(f"{self.config.base_url}/dataset/{identifier}")
         if not payload:
             raise SourceRecordNotFoundError(f"No OBIS dataset record for {identifier}")
+        if isinstance(payload, dict) and isinstance(payload.get("results"), list):
+            results = payload["results"]
+            if not results:
+                raise SourceRecordNotFoundError(f"No OBIS dataset record for {identifier}")
+            payload = results[0]
         raw = dict(payload)
         raw["_occurrence_preview"] = self._fetch_occurrence_preview(identifier)
         return SourceRecord(

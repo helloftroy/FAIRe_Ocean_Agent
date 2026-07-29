@@ -26,6 +26,20 @@ from fair_ocean_agent.sources.base import (
 BCODMO_DOI_ID_RE = re.compile(r"bco-?dmo[./](\d+)", re.IGNORECASE)
 BCODMO_NUMERIC_ID_RE = re.compile(r"^\d+$")
 
+DCTERMS_TITLE = "http://purl.org/dc/terms/title"
+DCTERMS_DESCRIPTION = "http://purl.org/dc/terms/description"
+DCTERMS_IDENTIFIER = "http://purl.org/dc/terms/identifier"
+DCTERMS_RIGHTS = "http://purl.org/dc/terms/rights"
+DCTERMS_BIBLIOGRAPHIC_CITATION = "http://purl.org/dc/terms/bibliographicCitation"
+BIBO_DOI = "http://purl.org/ontology/bibo/doi"
+FOAF_HOMEPAGE = "http://xmlns.com/foaf/0.1/homepage"
+ODO_DATASET_TITLE = "http://ocean-data.org/schema/datasetTitle"
+ODO_ABSTRACT = "http://ocean-data.org/schema/abstract"
+ODO_HAS_AWARD = "http://ocean-data.org/schema/hasAward"
+ODO_FROM_INSTRUMENT = "http://ocean-data.org/schema/fromInstrument"
+ODO_STORES_VALUES_FOR = "http://ocean-data.org/schema/storesValuesFor"
+ODO_HAS_AGENT_WITH_ROLE = "http://ocean-data.org/schema/hasAgentWithRole"
+
 
 def _stringify(value) -> str:
     return value if isinstance(value, str) else json.dumps(value, default=str)
@@ -47,6 +61,45 @@ def _first_present(raw: dict, *fields: str):
     return None
 
 
+def _jsonld_dataset_node(raw: dict) -> dict:
+    graph = raw.get("@graph")
+    if not isinstance(graph, list):
+        return {}
+    for item in graph:
+        if not isinstance(item, dict):
+            continue
+        for node in item.values():
+            if not isinstance(node, dict):
+                continue
+            node_types = node.get("@type") or []
+            if isinstance(node_types, str):
+                node_types = [node_types]
+            if (
+                "http://www.w3.org/ns/dcat#Dataset" in node_types
+                or "http://ocean-data.org/schema/Dataset" in node_types
+            ):
+                return node
+    return {}
+
+
+def _jsonld_values(node: dict, field: str):
+    values = node.get(field)
+    if values in (None, "", [], {}):
+        return None
+    if not isinstance(values, list):
+        values = [values]
+    flattened = []
+    for value in values:
+        if isinstance(value, dict):
+            flattened.append(value.get("@value") or value.get("@id") or value)
+        else:
+            flattened.append(value)
+    flattened = [value for value in flattened if value not in (None, "", [], {})]
+    if not flattened:
+        return None
+    return flattened[0] if len(flattened) == 1 else flattened
+
+
 class BcoDmoAdapter(SourceAdapter):
     name = "bcodmo"
 
@@ -55,10 +108,15 @@ class BcoDmoAdapter(SourceAdapter):
         payload, from_cache = self.http.get_json(f"{self.config.base_url}/dataset/{dataset_id}")
         if not payload:
             raise SourceRecordNotFoundError(f"No BCO-DMO dataset record for {identifier}")
+        jsonld_node = _jsonld_dataset_node(payload)
         return SourceRecord(
             source_name=self.name,
             external_identifier=dataset_id,
-            url=_first_present(payload, "url", "infoUrl") or f"https://www.bco-dmo.org/dataset/{dataset_id}",
+            url=(
+                _first_present(payload, "url", "infoUrl")
+                or _jsonld_values(jsonld_node, FOAF_HOMEPAGE)
+                or f"https://www.bco-dmo.org/dataset/{dataset_id}"
+            ),
             raw=payload,
             retrieved_at=utcnow(),
             content_hash=hash_payload(payload),
@@ -126,6 +184,24 @@ class BcoDmoAdapter(SourceAdapter):
         }
         for fact_type, aliases in field_aliases.items():
             add(fact_type, _first_present(raw, *aliases))
+
+        jsonld_node = _jsonld_dataset_node(raw)
+        jsonld_fields = {
+            "dataset_id": DCTERMS_IDENTIFIER,
+            "title": ODO_DATASET_TITLE,
+            "short_title": DCTERMS_TITLE,
+            "doi": BIBO_DOI,
+            "license": DCTERMS_RIGHTS,
+            "abstract": ODO_ABSTRACT,
+            "description": DCTERMS_DESCRIPTION,
+            "citation": DCTERMS_BIBLIOGRAPHIC_CITATION,
+            "projects": ODO_HAS_AWARD,
+            "instruments": ODO_FROM_INSTRUMENT,
+            "parameters": ODO_STORES_VALUES_FOR,
+            "people": ODO_HAS_AGENT_WITH_ROLE,
+        }
+        for fact_type, jsonld_field in jsonld_fields.items():
+            add(fact_type, _jsonld_values(jsonld_node, jsonld_field), locator=f"bcodmo.jsonld.{jsonld_field}")
         return facts
 
     def find_related(self, record: SourceRecord) -> list[RelatedIdentifier]:
@@ -137,7 +213,7 @@ class BcoDmoAdapter(SourceAdapter):
                 source=self.name,
             )
         ]
-        doi = _first_present(record.raw, "doi", "DOI")
+        doi = _first_present(record.raw, "doi", "DOI") or _jsonld_values(_jsonld_dataset_node(record.raw), BIBO_DOI)
         if doi:
             related.append(
                 RelatedIdentifier(

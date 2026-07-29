@@ -338,6 +338,93 @@ def test_obis_only_study_resolves_via_obis_dataset_uuid(db_session, monkeypatch)
     assert db_session.query(Entity).filter_by(study_id=study.study_id).count() == 0
 
 
+def test_bcodmo_only_study_resolves_via_bcodmo_dataset_id(db_session, monkeypatch):
+    study = _seeded_dataset_study(db_session, IdentifierType.BCODMO_DATASET_ID, "765432")
+    task = _task_for(db_session, study)
+
+    bcodmo_adapter = FakeAdapter(
+        "bcodmo",
+        record=_make_record("bcodmo", external_identifier="765432", raw={"title": "BCO-DMO dataset"}),
+        facts=[
+            RawFactCandidate(
+                entity_level=EntityLevel.PROJECT,
+                fact_type_candidate="parameters",
+                raw_field_name="parameters",
+                raw_value='[{"name": "temperature"}]',
+                source_locator="bcodmo.dataset.parameters",
+            )
+        ],
+    )
+    monkeypatch.setattr(handlers, "_build_enabled_adapters", lambda: {"bcodmo": bcodmo_adapter})
+
+    handlers.handle_discover_identifiers(db_session, task)
+    db_session.commit()
+
+    source = db_session.query(Source).filter_by(study_id=study.study_id).one()
+    assert source.source_name == "bcodmo"
+    assert source.external_identifier == "765432"
+    assert db_session.query(RawFact).filter_by(study_id=study.study_id, fact_type_candidate="parameters").count() == 1
+
+
+def test_pangaea_only_study_resolves_via_pangaea_id(db_session, monkeypatch):
+    study = _seeded_dataset_study(db_session, IdentifierType.PANGAEA_ID, "923577")
+    task = _task_for(db_session, study)
+
+    pangaea_adapter = FakeAdapter(
+        "pangaea",
+        record=_make_record("pangaea", external_identifier="10.1594/PANGAEA.923577", raw={"name": "PANGAEA dataset"}),
+        facts=[
+            RawFactCandidate(
+                entity_level=EntityLevel.PROJECT,
+                fact_type_candidate="spatialCoverage",
+                raw_field_name="spatialCoverage",
+                raw_value='{"geo": {"latitude": 54.0, "longitude": 10.0}}',
+                source_locator="pangaea.jsonld.spatialCoverage",
+            )
+        ],
+    )
+    monkeypatch.setattr(handlers, "_build_enabled_adapters", lambda: {"pangaea": pangaea_adapter})
+
+    handlers.handle_discover_identifiers(db_session, task)
+    db_session.commit()
+
+    source = db_session.query(Source).filter_by(study_id=study.study_id).one()
+    assert source.source_name == "pangaea"
+    assert source.external_identifier == "923577"
+    assert db_session.get(Study, study.study_id).title == "PANGAEA dataset"
+    assert db_session.query(RawFact).filter_by(study_id=study.study_id, fact_type_candidate="spatialCoverage").count() == 1
+
+
+def test_gbif_only_study_resolves_via_gbif_dataset_key(db_session, monkeypatch):
+    dataset_key = "11111111-2222-3333-4444-555555555555"
+    study = _seeded_dataset_study(db_session, IdentifierType.GBIF_DATASET_KEY, dataset_key)
+    task = _task_for(db_session, study)
+
+    gbif_adapter = FakeAdapter(
+        "gbif",
+        record=_make_record("gbif", external_identifier=dataset_key, raw={"title": "GBIF dataset"}),
+        facts=[
+            RawFactCandidate(
+                entity_level=EntityLevel.PROJECT,
+                fact_type_candidate="recordCount",
+                raw_field_name="recordCount",
+                raw_value="321",
+                source_locator="gbif.dataset.recordCount",
+            )
+        ],
+    )
+    monkeypatch.setattr(handlers, "_build_enabled_adapters", lambda: {"gbif": gbif_adapter})
+
+    handlers.handle_discover_identifiers(db_session, task)
+    db_session.commit()
+
+    source = db_session.query(Source).filter_by(study_id=study.study_id).one()
+    assert source.source_name == "gbif"
+    assert source.external_identifier == dataset_key
+    assert db_session.get(Study, study.study_id).title == "GBIF dataset"
+    assert db_session.query(RawFact).filter_by(study_id=study.study_id, fact_type_candidate="recordCount").count() == 1
+
+
 def test_repository_related_identifier_merges_into_existing_study(db_session, monkeypatch):
     study = _seeded_study(db_session, bioproject_accession="PRJNA1425045")
     other_study = Study(title="Found earlier by BioSample accession")

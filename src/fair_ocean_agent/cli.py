@@ -1,10 +1,10 @@
 """Command-line interface (section 18). init-db, ingest-seeds,
 enqueue-seed-backfill, worker, status, export-raw-facts, report-run,
-benchmark-models, and validate (Milestone 5: data-asset inventory + logical/
-evidence/cross-source validation) are fully implemented. Commands that
-still depend on unbuilt layers (keyword `discover`, the full per-study
-`run-study` pipeline, FAIRe/BeBOP export, weekly update) are present as
-explicit stubs -- they raise typer.Exit(1) with a clear "not yet
+benchmark-models, discover, FAIRe export, weekly update, and validate
+(Milestone 5: data-asset inventory + logical/evidence/cross-source
+validation) are fully implemented. Commands that still depend on unbuilt
+layers (the full per-study `run-study` pipeline and BeBOP export) are
+present as explicit stubs -- they raise typer.Exit(1) with a clear "not yet
 implemented" message rather than silently no-oping.
 """
 from __future__ import annotations
@@ -29,6 +29,7 @@ from fair_ocean_agent.llm.benchmark import export_report, load_gold_cases, run_b
 from fair_ocean_agent.llm.factory import build_benchmark_backend
 from fair_ocean_agent.logging_setup import setup_logging
 from fair_ocean_agent.scheduling.weekly import run_weekly_update
+from fair_ocean_agent.sources.base import SearchQuery
 from fair_ocean_agent.standards.registry import write_registry
 from fair_ocean_agent.workflow.task_queue import count_tasks_by_status, release_stale_claims
 from fair_ocean_agent.workflow.worker import run_worker
@@ -150,15 +151,35 @@ def run_study_command(study_id: str = typer.Argument(...)) -> None:
 
 @app.command("discover")
 def discover_command(
-    source: str = typer.Option(..., help="Adapter name, e.g. europe-pmc"),
-    limit: int = typer.Option(100),
+    source: str = typer.Option(..., help="Adapter name, e.g. datacite, gbif, obis, bcodmo, pangaea"),
+    query: str = typer.Option(..., help="Search query to send to the selected adapter"),
+    limit: int = typer.Option(20, help="Maximum records to print"),
 ) -> None:
-    console.print(
-        f"[yellow]Not yet implemented:[/yellow] the '{source}' source adapter "
-        "lands in Milestone 2/3. config/sources.yaml already defines its "
-        "rate limit and priority."
-    )
-    raise typer.Exit(1)
+    """Run a bounded live search against one enabled source adapter and
+    print returned records. This is an API smoke/discovery command only; use
+    `ingest-seeds` + `enqueue-seed-backfill` + `worker` to persist sources
+    and raw_facts for studies."""
+    adapter_name = source.replace("-", "_").lower()
+    adapters = fair_ocean_agent.workflow.handlers._build_enabled_adapters()
+    adapter = adapters.get(adapter_name)
+    if adapter is None:
+        available = ", ".join(sorted(adapters))
+        console.print(f"[red]Source adapter '{source}' is not enabled. Available: {available}[/red]")
+        raise typer.Exit(1)
+
+    try:
+        page = adapter.search(SearchQuery(query=query, limit=limit))
+    finally:
+        fair_ocean_agent.workflow.handlers.reset_adapter_cache()
+
+    table = Table(title=f"{adapter_name} search: {query}")
+    for column in ("source", "identifier", "url"):
+        table.add_column(column)
+    for record in page.records:
+        table.add_row(record.source_name, record.external_identifier, record.url or "")
+    console.print(table)
+    total = page.total_count if page.total_count is not None else len(page.records)
+    console.print(f"Returned {len(page.records)} record(s); total reported: {total}.")
 
 
 @app.command("validate")
