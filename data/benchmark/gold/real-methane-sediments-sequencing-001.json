@@ -1,0 +1,39 @@
+{
+  "case_id": "real-methane-sediments-sequencing-001",
+  "curated_by": "codex",
+  "notes": "Real-paper gold case from STUDY-c949b1b401bb, DOI 10.1093/ismejo/wrae013, PMCID PMC10942774. Curated from stored Europe PMC full-text evidence for the methane-flux coastal sediment study.",
+  "section_title": "RNA sequencing",
+  "source_text": "The extracted RNA was delivered to SciLifeLab, Stockholm where libraries were prepared with the TruSeq Stranded mRNA kit (Illumina) excluding the poly-A selection step, that is, libraries contained total RNA. The libraries were sequenced on a NovaSeq 6000 (Illumina) S4 lane with a 2 x 150 bp setup and the output data were demultiplexed by the sequencing facility.",
+  "expected_facts": [
+    {
+      "fact_type_candidate": "sequencing_location",
+      "raw_value": "SciLifeLab, Stockholm",
+      "evidence_quote": "delivered to SciLifeLab, Stockholm"
+    },
+    {
+      "fact_type_candidate": "sequencing_kit",
+      "raw_value": "TruSeq Stranded mRNA kit",
+      "evidence_quote": "prepared with the TruSeq Stranded mRNA kit"
+    },
+    {
+      "fact_type_candidate": "sequencing_instrument",
+      "raw_value": "NovaSeq 6000",
+      "evidence_quote": "sequenced on a NovaSeq 6000"
+    },
+    {
+      "fact_type_candidate": "sequencing_platform_general",
+      "raw_value": "Illumina",
+      "evidence_quote": "NovaSeq 6000 (Illumina)"
+    },
+    {
+      "fact_type_candidate": "library_layout",
+      "raw_value": "2 x 150 bp",
+      "evidence_quote": "2 x 150 bp setup"
+    },
+    {
+      "fact_type_candidate": "demultiplexing_tool",
+      "raw_value": "sequencing facility",
+      "evidence_quote": "demultiplexed by the sequencing facility"
+    }
+  ]
+}

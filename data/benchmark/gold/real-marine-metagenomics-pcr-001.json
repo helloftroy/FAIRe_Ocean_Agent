@@ -1,0 +1,54 @@
+{
+  "case_id": "real-marine-metagenomics-pcr-001",
+  "curated_by": "codex",
+  "notes": "Real-paper gold case from STUDY-3ef53464fcdf, DOI 10.1038/s41598-023-48804-z, PMCID PMC10719357. Curated from stored Europe PMC full-text evidence for Benchmarking DNA isolation methods for marine metagenomics.",
+  "section_title": "PCR amplification",
+  "source_text": "PCR amplification for the detection of inhibitors: 16S rRNA V3-V4 region was amplified. 16S V3-V4 F CCTACGGGNGGCWGCAG 32 R GACTACHVGGGTATCTAATCC. Each PCR reaction contained 1 uL of DNA, 5 uL of Phusion High-Fidelity PCR Master Mix with HF Buffer (NEB), 0.5 uL of forward and reverse primer (final concentration of 0.5 mM), and water for final reaction volume of 10 uL. The thermal profile was 98 C for 30 s, followed by 25 cycles of 98 C for 10 s, 55 C for 20 s, and 72 C for 30 s.",
+  "expected_facts": [
+    {
+      "fact_type_candidate": "target_gene",
+      "raw_value": "16S rRNA",
+      "evidence_quote": "16S rRNA V3-V4 region was amplified"
+    },
+    {
+      "fact_type_candidate": "target_subfragment",
+      "raw_value": "V3-V4",
+      "evidence_quote": "16S rRNA V3-V4 region was amplified"
+    },
+    {
+      "fact_type_candidate": "forward_primer_sequence",
+      "raw_value": "CCTACGGGNGGCWGCAG",
+      "evidence_quote": "16S V3-V4 F CCTACGGGNGGCWGCAG"
+    },
+    {
+      "fact_type_candidate": "reverse_primer_sequence",
+      "raw_value": "GACTACHVGGGTATCTAATCC",
+      "evidence_quote": "R GACTACHVGGGTATCTAATCC"
+    },
+    {
+      "fact_type_candidate": "template_dna_volume",
+      "raw_value": "1 uL",
+      "evidence_quote": "Each PCR reaction contained 1 uL of DNA"
+    },
+    {
+      "fact_type_candidate": "commercial_master_mix",
+      "raw_value": "Phusion High-Fidelity PCR Master Mix with HF Buffer (NEB)",
+      "evidence_quote": "Phusion High-Fidelity PCR Master Mix with HF Buffer (NEB)"
+    },
+    {
+      "fact_type_candidate": "pcr_reaction_volume",
+      "raw_value": "10 uL",
+      "evidence_quote": "final reaction volume of 10 uL"
+    },
+    {
+      "fact_type_candidate": "pcr_cycle_count",
+      "raw_value": "25",
+      "evidence_quote": "followed by 25 cycles"
+    },
+    {
+      "fact_type_candidate": "annealing_temperature",
+      "raw_value": "55 C",
+      "evidence_quote": "55 C for 20 s"
+    }
+  ]
+}

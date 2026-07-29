@@ -1,0 +1,39 @@
+{
+  "case_id": "real-sponge-edna-sample-sequencing-001",
+  "curated_by": "codex",
+  "notes": "Real-paper gold case from STUDY-d7633d624b5a, DOI 10.1111/1755-0998.13677, PMCID PMC9796769. Curated from stored Europe PMC full-text evidence for the sponge eDNA persistence study.",
+  "section_title": "Sample processing and sequencing",
+  "source_text": "Each sponge was removed from the storage ethanol, blotted dry against filter paper (42.5 mm, Fisher Scientific) inside a Petri dish. Each filter capsule was opened onto a Petri dish using carpenter pliers. The filters were removed from the inner tube and torn into small pieces using metal forceps. All samples were processed using the Mu-DNA tissue protocol with an inhibitor removal step from the Mu-DNA water protocol. The libraries were sequenced on an Illumina iSeq100 using iSeq i1 Reagent version 2 (300 cycles) at Liverpool John Moores University with a final molarity of 60 pM.",
+  "expected_facts": [
+    {
+      "fact_type_candidate": "storage_conditions",
+      "raw_value": "storage ethanol",
+      "evidence_quote": "removed from the storage ethanol"
+    },
+    {
+      "fact_type_candidate": "collection_method",
+      "raw_value": "filter capsules opened and filters torn into small pieces using metal forceps",
+      "evidence_quote": "The filters were removed from the inner tube and torn into small pieces using metal forceps"
+    },
+    {
+      "fact_type_candidate": "DNA_extraction_method",
+      "raw_value": "Mu-DNA tissue protocol with an inhibitor removal step from the Mu-DNA water protocol",
+      "evidence_quote": "processed using the Mu-DNA tissue protocol with an inhibitor removal step from the Mu-DNA water protocol"
+    },
+    {
+      "fact_type_candidate": "sequencing_platform",
+      "raw_value": "Illumina iSeq100",
+      "evidence_quote": "sequenced on an Illumina iSeq100"
+    },
+    {
+      "fact_type_candidate": "sequencing_location",
+      "raw_value": "Liverpool John Moores University",
+      "evidence_quote": "at Liverpool John Moores University"
+    },
+    {
+      "fact_type_candidate": "library_concentration",
+      "raw_value": "60 pM",
+      "evidence_quote": "with a final molarity of 60 pM"
+    }
+  ]
+}

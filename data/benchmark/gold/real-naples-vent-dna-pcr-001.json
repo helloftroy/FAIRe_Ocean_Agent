@@ -1,0 +1,59 @@
+{
+  "case_id": "real-naples-vent-dna-pcr-001",
+  "curated_by": "codex",
+  "notes": "Real-paper gold case from STUDY-c47dd2ce9a62, DOI 10.3389/fmicb.2020.02023, PMCID PMC7469538. Curated from stored Europe PMC full-text evidence for the Naples shallow-water hydrothermal vent study.",
+  "section_title": "DNA extraction and PCR",
+  "source_text": "Nematodes were directly frozen at -80 C. DNA was extracted using the Qiagen DNeasy Blood & Tissue kit following manufacturer's instructions. The extraction used a spin column. Partial fragments of 18S rRNA (597 bp) and the 28S rRNA gene (654 bp) were amplified. The PCR cycles were 2 min at 94 C followed by 30 cycles of 1 min denaturation at 94 C, 1 min annealing at 55 C and 2 min extension at 72 C, with a final 10 min extension at 72 C.",
+  "expected_facts": [
+    {
+      "fact_type_candidate": "storage_conditions",
+      "raw_value": "-80 C",
+      "evidence_quote": "directly frozen at -80 C"
+    },
+    {
+      "fact_type_candidate": "dna_extraction_kit",
+      "raw_value": "Qiagen DNeasy Blood & Tissue kit",
+      "evidence_quote": "using the Qiagen DNeasy Blood & Tissue kit"
+    },
+    {
+      "fact_type_candidate": "dna_separation_method",
+      "raw_value": "spin column",
+      "evidence_quote": "The extraction used a spin column"
+    },
+    {
+      "fact_type_candidate": "target_gene",
+      "raw_value": "18S rRNA",
+      "evidence_quote": "Partial fragments of 18S rRNA"
+    },
+    {
+      "fact_type_candidate": "amplicon_size",
+      "raw_value": "597 bp",
+      "evidence_quote": "18S rRNA (597 bp)"
+    },
+    {
+      "fact_type_candidate": "target_gene",
+      "raw_value": "28S rRNA",
+      "evidence_quote": "28S rRNA gene"
+    },
+    {
+      "fact_type_candidate": "amplicon_size",
+      "raw_value": "654 bp",
+      "evidence_quote": "28S rRNA gene (654 bp)"
+    },
+    {
+      "fact_type_candidate": "pcr_cycle_count",
+      "raw_value": "30",
+      "evidence_quote": "followed by 30 cycles"
+    },
+    {
+      "fact_type_candidate": "annealing_temperature",
+      "raw_value": "55 C",
+      "evidence_quote": "1 min annealing at 55 C"
+    },
+    {
+      "fact_type_candidate": "PCR_amplification_conditions",
+      "raw_value": "2 min at 94 C followed by 30 cycles of 1 min denaturation at 94 C, 1 min annealing at 55 C and 2 min extension at 72 C, with a final 10 min extension at 72 C",
+      "evidence_quote": "The PCR cycles were 2 min at 94 C followed by 30 cycles of 1 min denaturation at 94 C, 1 min annealing at 55 C and 2 min extension at 72 C, with a final 10 min extension at 72 C"
+    }
+  ]
+}

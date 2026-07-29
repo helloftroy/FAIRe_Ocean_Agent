@@ -1,0 +1,49 @@
+{
+  "case_id": "real-amazon-plume-pcr-sequencing-001",
+  "curated_by": "codex",
+  "notes": "Real-paper gold case from STUDY-bdc279dc42dc, DOI 10.3389/fmicb.2017.01436, PMCID PMC5540951. Curated from stored Europe PMC full-text evidence for the Amazon River plume zooplankton study.",
+  "section_title": "PCR and sequencing",
+  "source_text": "The V4 hypervariable region of 16S rRNA genes was targeted with 515F and 805R primers for PCR reactions using GoTaq Green Master Mix (Promega). PCR reactions were performed as follows: an initial denaturing step for 3 min at 95 C, then 30 cycles of 30 s at 95 C, 1 min at 55 C, 1 min at 72 C, and finally at 72 C for 5 min. Amplicons were sequenced using the Ion Torrent PGM sequencer (Life Technologies).",
+  "expected_facts": [
+    {
+      "fact_type_candidate": "target_gene",
+      "raw_value": "16S rRNA",
+      "evidence_quote": "16S rRNA genes was targeted"
+    },
+    {
+      "fact_type_candidate": "target_subfragment",
+      "raw_value": "V4",
+      "evidence_quote": "The V4 hypervariable region"
+    },
+    {
+      "fact_type_candidate": "forward_primer_name",
+      "raw_value": "515F",
+      "evidence_quote": "with 515F and 805R primers"
+    },
+    {
+      "fact_type_candidate": "reverse_primer_name",
+      "raw_value": "805R",
+      "evidence_quote": "with 515F and 805R primers"
+    },
+    {
+      "fact_type_candidate": "commercial_master_mix",
+      "raw_value": "GoTaq Green Master Mix",
+      "evidence_quote": "using GoTaq Green Master Mix"
+    },
+    {
+      "fact_type_candidate": "pcr_cycle_count",
+      "raw_value": "30",
+      "evidence_quote": "then 30 cycles"
+    },
+    {
+      "fact_type_candidate": "annealing_temperature",
+      "raw_value": "55 C",
+      "evidence_quote": "1 min at 55 C"
+    },
+    {
+      "fact_type_candidate": "sequencing_platform",
+      "raw_value": "Ion Torrent PGM sequencer",
+      "evidence_quote": "sequenced using the Ion Torrent PGM sequencer"
+    }
+  ]
+}

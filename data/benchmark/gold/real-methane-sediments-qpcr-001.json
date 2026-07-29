@@ -1,0 +1,49 @@
+{
+  "case_id": "real-methane-sediments-qpcr-001",
+  "curated_by": "codex",
+  "notes": "Real-paper gold case from STUDY-c949b1b401bb, DOI 10.1093/ismejo/wrae013, PMCID PMC10942774. Curated from stored Europe PMC full-text evidence for the methane-flux coastal sediment study.",
+  "section_title": "RT-qPCR",
+  "source_text": "RNA was extracted from the samples, approximately 2 g sediment, using the RNeasy PowerSoil Total Kit (Qiagen) following the manufacturer's instructions. DNA contamination was removed with the TURBO DNA-free kit (Invitrogen). RNA samples were normalized to 10 ng uL-1. RT-qPCR reactions contained 1 uL of cDNA with 7 uL H2O, 10 uL SYBR GREEN (LightCycler 480 SYBR Green I Master kit, Roche), and 1 uL of each primer. The amplification program used 45 cycles of denaturation 95 C 30 s, annealing 60 C 30 s, and elongation 72 C for 15 s.",
+  "expected_facts": [
+    {
+      "fact_type_candidate": "sample_volume_for_extraction",
+      "raw_value": "2 g",
+      "evidence_quote": "approximately 2 g sediment"
+    },
+    {
+      "fact_type_candidate": "dna_cleanup_method",
+      "raw_value": "TURBO DNA-free kit",
+      "evidence_quote": "DNA contamination was removed with the TURBO DNA-free kit"
+    },
+    {
+      "fact_type_candidate": "template_dna_volume",
+      "raw_value": "1 uL",
+      "evidence_quote": "contained 1 uL of cDNA"
+    },
+    {
+      "fact_type_candidate": "commercial_master_mix",
+      "raw_value": "LightCycler 480 SYBR Green I Master kit",
+      "evidence_quote": "LightCycler 480 SYBR Green I Master kit"
+    },
+    {
+      "fact_type_candidate": "forward_primer_volume",
+      "raw_value": "1 uL",
+      "evidence_quote": "1 uL of each primer"
+    },
+    {
+      "fact_type_candidate": "reverse_primer_volume",
+      "raw_value": "1 uL",
+      "evidence_quote": "1 uL of each primer"
+    },
+    {
+      "fact_type_candidate": "pcr_cycle_count",
+      "raw_value": "45",
+      "evidence_quote": "45 cycles"
+    },
+    {
+      "fact_type_candidate": "annealing_temperature",
+      "raw_value": "60 C",
+      "evidence_quote": "annealing 60 C 30 s"
+    }
+  ]
+}

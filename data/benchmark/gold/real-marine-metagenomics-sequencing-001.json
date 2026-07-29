@@ -1,0 +1,34 @@
+{
+  "case_id": "real-marine-metagenomics-sequencing-001",
+  "curated_by": "codex",
+  "notes": "Real-paper gold case from STUDY-3ef53464fcdf, DOI 10.1038/s41598-023-48804-z, PMCID PMC10719357. Curated from stored Europe PMC full-text evidence for Benchmarking DNA isolation methods for marine metagenomics.",
+  "section_title": "Shotgun sequencing",
+  "source_text": "Shotgun sequencing libraries were prepared from 300-500 ng of starting DNA using MGIEasy Universal DNA Library Prep Set (MGI Tech), following the manufacturer's instructions. DNA libraries were further circularized and sequenced by a paired end sequencing using DNBSEQ-G400 with the High-throughput Sequencing Set PE100 following the manufacturer's instructions (MGI Tech). The concentration of the prepared libraries was measured using Qubit Flex (Life Technologies) with the dsDNA HS Assay Kit.",
+  "expected_facts": [
+    {
+      "fact_type_candidate": "sequencing_platform_general",
+      "raw_value": "DNBSEQ",
+      "evidence_quote": "sequenced by a paired end sequencing using DNBSEQ-G400"
+    },
+    {
+      "fact_type_candidate": "sequencing_instrument",
+      "raw_value": "DNBSEQ-G400",
+      "evidence_quote": "using DNBSEQ-G400"
+    },
+    {
+      "fact_type_candidate": "sequencing_kit",
+      "raw_value": "High-throughput Sequencing Set PE100",
+      "evidence_quote": "with the High-throughput Sequencing Set PE100"
+    },
+    {
+      "fact_type_candidate": "library_layout",
+      "raw_value": "paired end",
+      "evidence_quote": "paired end sequencing"
+    },
+    {
+      "fact_type_candidate": "library_concentration_method",
+      "raw_value": "Qubit Flex (Life Technologies) with the dsDNA HS Assay Kit",
+      "evidence_quote": "measured using Qubit Flex (Life Technologies) with the dsDNA HS Assay Kit"
+    }
+  ]
+}

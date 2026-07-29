@@ -1,0 +1,39 @@
+{
+  "case_id": "real-amazon-plume-bioinformatics-001",
+  "curated_by": "codex",
+  "notes": "Real-paper gold case from STUDY-bdc279dc42dc, DOI 10.3389/fmicb.2017.01436, PMCID PMC5540951. Curated from stored Europe PMC full-text evidence for the Amazon River plume zooplankton study.",
+  "section_title": "Bioinformatics",
+  "source_text": "The open-source bioinformatics program Mothur was used to trim and align the sequences. Chimera sequences were removed using UCHIME. Remaining sequences for each library were classified using the Greengenes database at confidence of greater than or equal to 0.80. Sequences were subsequently reclassified through the SILVAngs pipeline with the SILVA 128 reference library.",
+  "expected_facts": [
+    {
+      "fact_type_candidate": "adapter_trimming_method",
+      "raw_value": "Mothur",
+      "evidence_quote": "Mothur was used to trim and align the sequences"
+    },
+    {
+      "fact_type_candidate": "chimera_detection_method",
+      "raw_value": "UCHIME",
+      "evidence_quote": "Chimera sequences were removed using UCHIME"
+    },
+    {
+      "fact_type_candidate": "reference_database",
+      "raw_value": "Greengenes database",
+      "evidence_quote": "classified using the Greengenes database"
+    },
+    {
+      "fact_type_candidate": "taxonomic_assignment_confidence",
+      "raw_value": "0.80",
+      "evidence_quote": "confidence of greater than or equal to 0.80"
+    },
+    {
+      "fact_type_candidate": "taxonomic_assignment_method",
+      "raw_value": "SILVAngs pipeline",
+      "evidence_quote": "reclassified through the SILVAngs pipeline"
+    },
+    {
+      "fact_type_candidate": "reference_database",
+      "raw_value": "SILVA 128",
+      "evidence_quote": "with the SILVA 128 reference library"
+    }
+  ]
+}

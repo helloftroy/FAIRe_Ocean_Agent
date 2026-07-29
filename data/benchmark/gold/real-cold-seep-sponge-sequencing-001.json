@@ -1,0 +1,24 @@
+{
+  "case_id": "real-cold-seep-sponge-sequencing-001",
+  "curated_by": "codex",
+  "notes": "Real-paper gold case from STUDY-ed8edfcb5a11, DOI 10.1128/msystems.00184-16, PMCID PMC5361782. Curated from stored Europe PMC full-text evidence for the cold-seep sponge symbiont study.",
+  "section_title": "Sequencing",
+  "source_text": "The DNA samples from layers A and E were subjected to library construction and sequenced using the Illumina HiSeq2000 platform in Novegene (Beijing, China). The sponge cell- and prokaryotic cell-enriched DNA samples were subjected to library construction and sequenced using the MiSeq platform with a library size of 500 bp and an average read length of 251 bp.",
+  "expected_facts": [
+    {
+      "fact_type_candidate": "sequencing_platform",
+      "raw_value": "Illumina HiSeq2000",
+      "evidence_quote": "sequenced using the Illumina HiSeq2000 platform"
+    },
+    {
+      "fact_type_candidate": "sequencing_location",
+      "raw_value": "Novegene (Beijing, China)",
+      "evidence_quote": "in Novegene (Beijing, China)"
+    },
+    {
+      "fact_type_candidate": "sequencing_platform",
+      "raw_value": "MiSeq",
+      "evidence_quote": "sequenced using the MiSeq platform"
+    }
+  ]
+}
