@@ -1,5 +1,5 @@
-from fair_ocean_agent.database.enums import EntityLevel, IdentifierType, MissingnessStatus, SupportType, TaskType
-from fair_ocean_agent.database.models import Entity, ExternalIdentifier, RawFact, StandardizedValue, Study, Task
+from fair_ocean_agent.database.enums import EntityLevel, IdentifierType, MissingnessStatus, SourceType, SupportType, TaskType
+from fair_ocean_agent.database.models import Entity, ExternalIdentifier, RawFact, Source, StandardizedValue, Study, Task
 from fair_ocean_agent.mapping.faire import map_study_to_faire
 from fair_ocean_agent.workflow.task_queue import enqueue_task
 from fair_ocean_agent.workflow.validation_handlers import (
@@ -17,6 +17,7 @@ def test_populate_faire_missingness_flags_known_real_gaps(db_session):
     study = Study(title="Completeness check")
     db_session.add(study)
     db_session.flush()
+    db_session.add(Source(study_id=study.study_id, source_type=SourceType.REPOSITORY_API.value, source_name="ncbi_bioproject"))
     db_session.add(ExternalIdentifier(study_id=study.study_id, identifier_type=IdentifierType.BIOPROJECT_ACCESSION.value, identifier_value="PRJNA1"))
     sample = Entity(study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN1")
     db_session.add(sample)
@@ -49,6 +50,29 @@ def test_populate_faire_missingness_flags_known_real_gaps(db_session):
     # assay_name/samp_category have no rule anywhere in mapping/rules.py
     assert rows[("assay_name", sample.entity_id)] == MissingnessStatus.NOT_FOUND_IN_INSPECTED_SOURCES.value
     assert rows[("samp_category", sample.entity_id)] == MissingnessStatus.NOT_FOUND_IN_INSPECTED_SOURCES.value
+
+
+def test_populate_faire_missingness_reports_not_inspected_when_no_source_exists(db_session):
+    """Real bug found during a 100-study audit: a study whose only relevant
+    source was never actually inspected (e.g. a closed-access paper Europe
+    PMC 404s on, or a study that simply hasn't reached discovery yet) used
+    to get NOT_FOUND_IN_INSPECTED_SOURCES for every missing field -- wrongly
+    implying sources were checked and the field wasn't there. A study with
+    zero Source rows at all must get RELEVANT_SOURCE_NOT_INSPECTED instead,
+    the same distinction populate_missingness_for_study already makes for
+    core_sampling_metadata."""
+    study = Study(title="No sources inspected yet")
+    db_session.add(study)
+    db_session.commit()
+
+    populate_faire_missingness_for_study(db_session, study.study_id)
+    db_session.commit()
+
+    rows = {
+        m.target_field: m.missingness_status
+        for m in db_session.query(StandardizedValue).filter_by(study_id=study.study_id, target_schema="faire", entity_id=None).all()
+    }
+    assert rows["project_contact"] == MissingnessStatus.RELEVANT_SOURCE_NOT_INSPECTED.value
 
 
 def test_populate_faire_missingness_is_idempotent(db_session):

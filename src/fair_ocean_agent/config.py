@@ -50,6 +50,26 @@ class LLMConfig(BaseModel):
     max_retries: int = 3
     temperature: float = 0
     max_concurrency: int = 1
+    # Sent as {"options": {"num_ctx": ...}} in the request body -- an extra
+    # field most OpenAI-compatible servers simply ignore, so this stays
+    # opt-in and harmless (None matches prior behavior exactly). Found
+    # necessary during a live 100-study audit: real paper sections plus the
+    # FAIRe-aware v3 prompt's ~70-concept checklist routinely exceed 4096
+    # tokens, well past what gold-case benchmarking's short synthetic
+    # snippets ever approached. IMPORTANT, verified live against a real
+    # Ollama server: Ollama's own OpenAI-compatible endpoint
+    # (/v1/chat/completions) silently DROPS this field -- confirmed by
+    # sending an identical request straight to Ollama's *native* /api/chat
+    # endpoint with the same options, which DOES honor it (succeeds where
+    # the OpenAI-compat route still 400s with the same "exceeds context
+    # size" error). This field is still worth setting for any
+    # OpenAI-compatible server that does respect an extra options field, but
+    # for Ollama specifically the only working fix is server-level: restart
+    # Ollama with OLLAMA_CONTEXT_LENGTH set, or `ollama create` a model
+    # variant whose Modelfile sets `PARAMETER num_ctx`. Neither of those is
+    # something this project should do for you automatically (they're
+    # machine-wide Ollama configuration, not per-request).
+    num_ctx: int | None = None
 
 
 class RetrievalConfig(BaseModel):
@@ -103,6 +123,7 @@ class BenchmarkCandidateConfig(BaseModel):
     api_key_env: str | None = None
     timeout_seconds: int = 180
     max_concurrency: int = 1
+    num_ctx: int | None = None
 
 
 def load_benchmark_candidates() -> list[BenchmarkCandidateConfig]:

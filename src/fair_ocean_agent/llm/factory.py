@@ -36,6 +36,7 @@ def build_llm_backend(config: LLMConfig) -> LLMBackend:
             api_key=api_key,
             timeout_seconds=config.timeout_seconds,
             max_concurrency=config.max_concurrency,
+            num_ctx=config.num_ctx,
         )
 
     raise LLMBackendError(f"Unknown llm.provider: {config.provider!r}")
@@ -61,4 +62,5 @@ def build_benchmark_backend(candidate: BenchmarkCandidateConfig) -> LLMBackend:
         api_key=api_key,
         timeout_seconds=candidate.timeout_seconds,
         max_concurrency=candidate.max_concurrency,
+        num_ctx=candidate.num_ctx,
     )

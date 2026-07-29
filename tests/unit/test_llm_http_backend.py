@@ -83,3 +83,45 @@ def test_generate_raises_on_unexpected_response_shape():
     backend = _backend(handler)
     with pytest.raises(LLMBackendError):
         backend.generate("prompt")
+
+
+def test_num_ctx_is_omitted_by_default():
+    """Regression guard: omitting num_ctx must leave the request body exactly
+    as before this option existed -- no behavior change for anyone not using
+    it (vLLM/TGI/other OpenAI-compatible servers that don't understand an
+    "options" field)."""
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json as json_module
+
+        captured["body"] = json_module.loads(request.read())
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    backend = _backend(handler)
+    backend.generate("prompt")
+    assert "options" not in captured["body"]
+
+
+def test_num_ctx_is_sent_as_an_options_field_when_configured():
+    """Found necessary during a live 100-study audit: real paper sections
+    plus the FAIRe-aware v3 prompt's ~70-concept checklist routinely exceed
+    a small Ollama-served model's default 4096-token context, something
+    gold-case benchmarking's short synthetic snippets never approached.
+    This backend sends the option regardless -- confirmed live that
+    Ollama's *own* OpenAI-compatible endpoint silently ignores it (its
+    native /api/chat endpoint honors the identical option; ollama's
+    OpenAI-compat shim does not), so this only helps on OpenAI-compatible
+    servers that do respect an extra options field. See
+    LLMConfig.num_ctx's docstring for the real Ollama-side fix."""
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json as json_module
+
+        captured["body"] = json_module.loads(request.read())
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    backend = _backend(handler, num_ctx=8192)
+    backend.generate("prompt")
+    assert captured["body"]["options"] == {"num_ctx": 8192}

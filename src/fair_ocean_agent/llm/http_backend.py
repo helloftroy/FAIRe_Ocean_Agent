@@ -38,9 +38,11 @@ class OpenAICompatibleHTTPBackend(LLMBackend):
         timeout_seconds: float = 180,
         max_concurrency: int = 1,
         transport: httpx.BaseTransport | None = None,
+        num_ctx: int | None = None,
     ):
         self.label = label
         self.model = model
+        self._num_ctx = num_ctx
         headers = {"Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
@@ -69,6 +71,12 @@ class OpenAICompatibleHTTPBackend(LLMBackend):
         payload = {"model": self.model, "messages": messages, "temperature": temperature}
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
+        if self._num_ctx is not None:
+            # Not honored by Ollama's own OpenAI-compatible endpoint (verified
+            # live) -- see LLMConfig.num_ctx's docstring for the real fix on
+            # Ollama. Harmless no-op there; may work on other OpenAI-compatible
+            # servers that do respect an extra options field.
+            payload["options"] = {"num_ctx": self._num_ctx}
 
         requested_at = utcnow()
         start = time.monotonic()

@@ -21,6 +21,7 @@ counting independent sources here, rather than double-counting.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from sqlalchemy import select
@@ -29,15 +30,32 @@ from sqlalchemy.orm import Session
 from fair_ocean_agent.database.enums import ValidationStatus
 from fair_ocean_agent.database.models import RawFact, Source
 
+# Crossref and OpenAlex titles commonly carry inline markup (italics on a
+# species name, <scp> for small-caps, subscripts) that Europe PMC's plain-text
+# title never does -- found via a 50-study live audit where 6/7 "conflicting"
+# titles in that sample turned out to be this exact same non-content artifact,
+# not a real disagreement (the 7th was a genuine third-party OpenAlex
+# data-quality issue: a DOI resolving to a completely unrelated work).
+_MARKUP_TAG_PATTERN = re.compile(r"</?(i|b|sub|sup|scp|italic|bold)\b[^>]*>", re.IGNORECASE)
+
+# Crossref/OpenAlex titles sometimes use a Unicode en/em-dash or a
+# non-breaking hyphen where Europe PMC's plain-text title uses a plain ASCII
+# hyphen for the same word (e.g. "mass–driven" vs "mass-driven") --
+# same word, different character, found in the same audit.
+_DASH_VARIANTS_PATTERN = re.compile("[‐‑‒–—−]")
+
 
 def _normalize(value: str) -> str:
-    """Lowercase, collapse whitespace, and strip trailing sentence
+    """Lowercase, strip inline markup tags, normalize dash variants to a
+    plain hyphen, collapse whitespace, and strip trailing sentence
     punctuation. Found via live validation: Europe PMC's "title" field
     always ends in a period ("...thermal challenge."), while Crossref's and
     OpenAlex's don't -- with a naive normalize, EVERY title comparison
     across these three sources registered as "conflicting" (61/98 real
     studies), when 47 of those were this exact same non-content artifact.
     A real disagreement (different words) still won't match after this."""
+    value = _MARKUP_TAG_PATTERN.sub("", value)
+    value = _DASH_VARIANTS_PATTERN.sub("-", value)
     return " ".join(value.strip().lower().split()).rstrip(".")
 
 

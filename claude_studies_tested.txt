@@ -1,0 +1,58 @@
+# Claude studies tested
+
+Complementary 50 studies from data/seeds/studies.csv, disjoint from OpenAI_studies_tested.txt --
+together the two 50-study audits cover all 100 real seeds in one pass instead of overlapping.
+Selection date: 2026-07-28
+
+| seed_id | doi | pmid | pmcid | bioproject_accession | ena_study_accession | dataset_id | repository | notes |
+|---|---|---|---|---|---|---|---|---|
+| mdp-002 | 10.1002/ece3.6071 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-004 | 10.1002/edn3.452 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-005 | 10.1002/edn3.70039 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-007 | 10.1007/s00227-008-0915-1 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-008 | 10.1007/s00248-017-0978-y |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-010 | 10.1007/s00338-004-0436-4 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-011 | 10.1007/s00338-018-1693-y |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-012 | 10.1007/s00338-021-02133-7 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-016 | 10.1007/s12526-020-01136-x |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-021 | 10.1016/j.egg.2019.100042 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-022 | 10.1016/j.envpol.2023.122650 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-023 | 10.1016/j.hal.2022.102368 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-024 | 10.1016/j.jhazmat.2024.133878 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-026 | 10.1016/j.margen.2022.100991 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-030 | 10.1016/j.scitotenv.2019.135753 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-032 | 10.1016/j.scitotenv.2023.167956 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-036 | 10.1038/ncomms14213 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-037 | 10.1038/s41396-021-00932-y |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-040 | 10.1038/s41598-019-44017-5 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-042 | 10.1038/s41598-023-48804-z |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-045 | 10.1073/pnas.1721415116 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-046 | 10.1080/21501203.2020.1799878 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-047 | 10.1093/femsec/fiv170 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-048 | 10.1093/gbe/evaa042 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-049 | 10.1093/ismejo/wrae013 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-051 | 10.1099/acmi.0.000622.v3 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-052 | 10.1101/2022.06.17.495388 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-054 | 10.1111/1462-2920.13535 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-056 | 10.1111/1574-6941.12135 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-057 | 10.1111/1755-0998.13677 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-059 | 10.1111/gcb.16447 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-063 | 10.1111/mec.17318 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-064 | 10.1128/aem.00322-20 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-065 | 10.1128/aem.03391-16 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-066 | 10.1128/msystems.00184-16open_in_new |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-068 | 10.11626/kjeb.2023.41.4.637 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-069 | 10.1186/s40168-017-0311-5 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-072 | 10.1371/journal.pone.0062091 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-074 | 10.1371/journal.pone.0218801 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-077 | 10.2139/ssrn.4793527 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-078 | 10.25781/kaust-98x34 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-079 | 10.3354/ame01741 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-083 | 10.3389/fmars.2021.638505 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-084 | 10.3389/fmars.2022.748308 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-086 | 10.3389/fmars.2023.1308953 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-088 | 10.3389/fmicb.2017.01436 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-089 | 10.3389/fmicb.2019.00173 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-090 | 10.3389/fmicb.2020.02023 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-094 | 10.3390/jmse11010074 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |
+| mdp-098 | 10.5194/bg-22-385-2025 |  |  |  |  |  |  | from mdp_dois_links.md, Imported into Paperpile section, stride-sampled |

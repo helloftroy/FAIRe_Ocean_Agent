@@ -372,10 +372,25 @@ def populate_faire_missingness_for_study(session: Session, study_id: str) -> int
     mandatory_by_class = unconditionally_mandatory_faire_fields()
     created = 0
 
+    # Whether *any* source has been inspected for this study at all -- a
+    # missing field gets NOT_FOUND_IN_INSPECTED_SOURCES only if that's true;
+    # otherwise it's RELEVANT_SOURCE_NOT_INSPECTED, same distinction
+    # populate_missingness_for_study already makes above. Without this, a
+    # study whose only relevant source (e.g. full-text, for extraction-derived
+    # fields) was never actually inspected -- genuinely closed-access, or not
+    # yet processed -- was misreported as "not found" (implying it was looked
+    # for and absent) rather than "not inspected" (nothing has looked yet).
+    any_source_inspected = session.query(Source).filter_by(study_id=study_id).first() is not None
+
     def upsert(entity_id: str | None, target_field: str, present: bool, table_name: str, not_found_reason: str) -> None:
         nonlocal created
         existing = existing_by_key.get((entity_id, target_field))
-        status = MissingnessStatus.PRESENT.value if present else MissingnessStatus.NOT_FOUND_IN_INSPECTED_SOURCES.value
+        if present:
+            status = MissingnessStatus.PRESENT.value
+        elif any_source_inspected:
+            status = MissingnessStatus.NOT_FOUND_IN_INSPECTED_SOURCES.value
+        else:
+            status = MissingnessStatus.RELEVANT_SOURCE_NOT_INSPECTED.value
         if existing is not None:
             if existing.missingness_status is None:
                 existing.missingness_status = status
@@ -391,7 +406,11 @@ def populate_faire_missingness_for_study(session: Session, study_id: str) -> int
                 missingness_status=status,
                 reason=(
                     f"{target_field!r} is unconditionally Mandatory in FAIRe's {table_name}; "
-                    + ("found." if present else not_found_reason)
+                    + (
+                        "found." if present
+                        else not_found_reason if any_source_inspected
+                        else "no sources have been inspected for this study yet."
+                    )
                 ),
             )
         )

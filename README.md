@@ -844,6 +844,101 @@ stand, `mapping/rules.py` has zero rules that would match a
 here since it directly affects whether v3's atomic extraction output ever
 reaches a `StandardizedValue` row.
 
+## 100-study stress test: end-to-end audit against the real database
+
+Ran the full pipeline's real output (seed import through validation) against
+the real 101-study database, plus real LLM text extraction against 21 of
+`claude_studies_tested.txt`'s 50 studies (the complementary half of
+`OpenAI_studies_tested.txt`'s 50 -- together the two audits cover all 100
+real seeds instead of overlapping). Real bugs found and fixed, each verified
+against real data or a real live re-run, not assumed:
+
+1. **A stale, pre-fix DOI.** One study's DOI (`10.1128/msystems.00184-16open_in_new`)
+   still carried the copy-paste artifact a recent fix already knows how to
+   strip -- the fix was correct, the row just predated it. Re-normalized and
+   re-ran discovery live, recovering 3 real sources (crossref/europe_pmc/openalex)
+   for a study that had zero.
+2. **FAIRe completeness misreported "not found" as "not inspected."**
+   `populate_faire_missingness_for_study` always used
+   `NOT_FOUND_IN_INSPECTED_SOURCES` for a missing field, even for a study
+   with zero sources inspected at all -- misleadingly implying sources were
+   checked and the field wasn't there. Fixed to check whether any source has
+   actually been inspected first, matching the same distinction
+   `populate_missingness_for_study` already made for `core_sampling_metadata`.
+3. **Cross-source title comparison false-flagged formatting as disagreement.**
+   6 of 7 "conflicting" title checks in the 50-study sample were Crossref/OpenAlex
+   inline markup (`<i>`, `<scp>`) or Unicode dash variants that Europe PMC's
+   plain-text title never carries -- not a real disagreement. Fixed the
+   normalizer; the 7th was a genuine third-party OpenAlex data-quality bug
+   (confirmed live against OpenAlex's own API: it really does serve the wrong
+   title for that DOI), correctly still flagged rather than smoothed over.
+4. **Deleting old raw_facts orphaned the "already processed" signal.**
+   Clearing out-of-date `text-extraction-v1` data (a separate, explicitly
+   user-approved cleanup) left 38 `article_fulltext` Source rows across the
+   database claiming full text was already processed with nothing backing
+   that claim -- silently blocking every one of those studies from ever
+   re-running extraction. Removed the 38 stale rows (verified zero
+   dependents) after explicit confirmation, since it directly affects both
+   this audit and the other AI's.
+5. **Ollama's default context window silently drops real sections.** Real
+   paper sections plus the v3 taxonomy's ~70-concept checklist routinely
+   exceed 4096 tokens -- well past anything short synthetic gold-case
+   snippets ever approached -- causing real 400 "exceeds context size"
+   errors mid-run. Added an opt-in `llm.num_ctx` config option
+   (`OpenAICompatibleHTTPBackend` sends it as `{"options": {"num_ctx": ...}}`).
+   **Verified live that this does NOT fix it for Ollama specifically** --
+   Ollama's OpenAI-compatible endpoint silently ignores the field (confirmed
+   by sending the identical request to Ollama's *native* `/api/chat`
+   endpoint with the same option, which succeeds where the OpenAI-compat
+   route still 400s). The option is still worth setting for other
+   OpenAI-compatible servers that do respect it; for Ollama, the real fix is
+   server-level (`OLLAMA_CONTEXT_LENGTH` at startup, or a custom Modelfile
+   with `PARAMETER num_ctx`) -- deliberately not done automatically here,
+   since restarting someone's local Ollama server isn't this project's call
+   to make unprompted.
+
+**Verified clean, not just assumed, across the real 101-study database:**
+zero duplicate raw_facts, zero duplicate standardized_values, zero duplicate
+task idempotency keys anywhere -- confirming re-running ingestion/enqueue
+never duplicates work. `depth: "1"` (no unit) for a real BioSample record
+was checked directly against NCBI's live API and confirmed to be exactly
+what the submitter reported, not a parsing bug.
+
+**Operational resilience, tested live (not just read from code):** killed a
+worker mid-task (`kill -9`), confirmed zero partial writes from the
+in-flight task, confirmed a second worker correctly skipped the stuck task
+and finished the rest, confirmed `release-stale-claims` correctly requeues
+it with backoff, confirmed it completes on retry. Re-running the full
+ingest+enqueue batch is fully idempotent (0 new studies, 0 new tasks, 0
+duplicate facts). **Concurrent SQLite workers do race** -- reproduced live
+(two workers, one task, two `ValidationResult` rows for the same check) --
+but this is an already-documented, deliberate SQLite limitation (see
+`workflow/task_queue.py`'s `claim_next_task` docstring), not a hidden bug.
+Verified against a real local PostgreSQL 18 server that `FOR UPDATE SKIP
+LOCKED` genuinely eliminates the race: 4 concurrent workers, 20 tasks, zero
+duplicates, work evenly distributed.
+
+**A real evidence-quote limitation, surfaced by real papers (not yet
+fixed):** one `forward_primer_sequence` fact's `evidence_quote` was a real,
+verbatim substring of the paper (passing `verify_evidence_quote` correctly)
+but described primer *names* ("784F and 1061R"), not the actual sequence
+letters claimed as `raw_value` -- which, on direct inspection, genuinely
+does appear elsewhere in the same paper (not fabricated), just in a
+different sentence than the one quoted. The deterministic evidence check
+confirms a quote is real; it does not confirm a quote *supports* the
+specific value paired with it. Flagged here rather than silently
+patched -- tightening this (e.g. requiring the quote to literally contain
+the raw_value) would break many legitimately-paraphrased facts
+(`storage_conditions`-style summaries), so it needs a deliberate design
+decision, not a quick fix.
+
+**Still open, mapping-owned (already noted in "Milestone 8 follow-up"
+above, re-confirmed here after this run):** `mapping/rules.py` has no rules
+for any v3 native name yet, so none of the 222 real facts this run
+extracted (`annealing_temperature`, `pcr_reaction_volume`,
+`forward_primer_sequence`, `reference_database`, ...) currently reach a
+`StandardizedValue` row.
+
 ## Loading your own seed list
 
 Put your file at `data/seeds/studies.csv` (or `.jsonl`) -- copy
