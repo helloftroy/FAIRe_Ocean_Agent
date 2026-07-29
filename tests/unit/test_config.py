@@ -50,3 +50,26 @@ def test_llm_size_env_overrides(monkeypatch, tmp_path):
     monkeypatch.delenv("LOCAL_LLM_MAX_OUTPUT_TOKENS", raising=False)
     monkeypatch.delenv("LOCAL_LLM_EXTRACTION_MAX_CHARS_PER_CALL", raising=False)
     monkeypatch.delenv("LOCAL_LLM_NUM_CTX", raising=False)
+
+
+def test_llm_verifier_env_overrides(monkeypatch, tmp_path):
+    reset_config_cache()
+    monkeypatch.setenv("LOCAL_LLM_VERIFIER_ENABLED", "true")
+    monkeypatch.setenv("LOCAL_LLM_VERIFIER_BASE_URL", "http://localhost:11434/v1")
+    monkeypatch.setenv("LOCAL_LLM_VERIFIER_MODEL", "granite3.3:8b")
+    monkeypatch.setenv("LOCAL_LLM_VERIFIER_MAX_OUTPUT_TOKENS", "256")
+    monkeypatch.setenv("LOCAL_LLM_VERIFIER_NUM_CTX", "4096")
+    config = load_config(env_file=tmp_path / ".env")
+
+    assert config.llm_verifier.enabled is True
+    assert config.llm_verifier.base_url == "http://localhost:11434/v1"
+    assert config.llm_verifier.model == "granite3.3:8b"
+    assert config.llm_verifier.max_output_tokens == 256
+    assert config.llm_verifier.num_ctx == 4096
+
+    reset_config_cache()
+    monkeypatch.delenv("LOCAL_LLM_VERIFIER_ENABLED", raising=False)
+    monkeypatch.delenv("LOCAL_LLM_VERIFIER_BASE_URL", raising=False)
+    monkeypatch.delenv("LOCAL_LLM_VERIFIER_MODEL", raising=False)
+    monkeypatch.delenv("LOCAL_LLM_VERIFIER_MAX_OUTPUT_TOKENS", raising=False)
+    monkeypatch.delenv("LOCAL_LLM_VERIFIER_NUM_CTX", raising=False)

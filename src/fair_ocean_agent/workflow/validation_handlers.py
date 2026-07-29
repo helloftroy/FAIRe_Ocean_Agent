@@ -13,7 +13,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from fair_ocean_agent.assets.inventory import inventory_ena_run_assets
-from fair_ocean_agent.database.enums import EntityLevel, IdentifierType, MissingnessStatus, SourceType, TaskType
+from fair_ocean_agent.config import load_config
+from fair_ocean_agent.database.enums import EntityLevel, IdentifierType, MissingnessStatus, SourceType, SupportType, TaskType
 from fair_ocean_agent.database.models import (
     Entity,
     ExternalIdentifier,
@@ -25,12 +26,15 @@ from fair_ocean_agent.database.models import (
     ValidationResult,
 )
 from fair_ocean_agent.logging_setup import get_logger
+from fair_ocean_agent.llm.disabled import DisabledLLMBackend
+from fair_ocean_agent.llm.factory import build_llm_verifier_backend
 from fair_ocean_agent.mapping.faire import TARGET_SCHEMA as FAIRE_TARGET_SCHEMA
 from fair_ocean_agent.mapping.faire import TARGET_SCHEMA_VERSION as FAIRE_TARGET_SCHEMA_VERSION
 from fair_ocean_agent.mapping.faire import resolve_project_id
 from fair_ocean_agent.validation.cross_source import compare_field_across_sources
 from fair_ocean_agent.validation.evidence import check_raw_fact_evidence_consistency
 from fair_ocean_agent.validation.faire_completeness import unconditionally_mandatory_faire_fields
+from fair_ocean_agent.validation.llm_evidence import VERIFIER_VERSION, verify_fact_support_with_llm
 from fair_ocean_agent.validation.logical import (
     ValidationOutcome,
     validate_accession_format,
@@ -45,6 +49,21 @@ from fair_ocean_agent.workflow.worker import TASK_HANDLERS
 logger = get_logger(__name__)
 
 VALIDATOR_VERSION = "v1"
+_llm_verifier_backend_cache = None
+
+
+def reset_llm_verifier_backend_cache() -> None:
+    global _llm_verifier_backend_cache
+    if _llm_verifier_backend_cache is not None:
+        _llm_verifier_backend_cache.close()
+    _llm_verifier_backend_cache = None
+
+
+def _build_llm_verifier_backend_cached():
+    global _llm_verifier_backend_cache
+    if _llm_verifier_backend_cache is None:
+        _llm_verifier_backend_cache = build_llm_verifier_backend(load_config().llm_verifier)
+    return _llm_verifier_backend_cache
 
 
 def handle_inventory_data_assets(session: Session, task: Task) -> None:
@@ -111,7 +130,69 @@ def handle_validate_evidence(session: Session, task: Task) -> None:
         if created:
             flagged += 1
 
-    logger.info("evidence-validated %d fact(s) for study %s, %d flagged", len(facts), study.study_id, flagged)
+    llm_checked = _validate_llm_evidence_support(session, study, facts)
+
+    logger.info(
+        "evidence-validated %d fact(s) for study %s, %d structural flagged, %d llm-verified",
+        len(facts),
+        study.study_id,
+        flagged,
+        llm_checked,
+    )
+
+
+def _validate_llm_evidence_support(session: Session, study: Study, facts: list[RawFact]) -> int:
+    config = load_config().llm_verifier
+    if not config.enabled:
+        return 0
+
+    backend = _build_llm_verifier_backend_cached()
+    if isinstance(backend, DisabledLLMBackend):
+        return 0
+
+    checked = 0
+    validator_name = f"llm_evidence_support:{backend.label}"
+    for fact in facts:
+        if fact.support_type != SupportType.EXPLICIT.value:
+            continue
+        if fact.extraction_method != "llm_text_extraction":
+            continue
+        if not fact.evidence_quote or not fact.evidence_quote.strip():
+            continue
+        already = (
+            session.query(ValidationResult)
+            .filter_by(study_id=study.study_id, fact_id=fact.fact_id, validator_name=validator_name)
+            .first()
+        )
+        if already is not None:
+            continue
+        result = verify_fact_support_with_llm(
+            backend,
+            fact_type_candidate=fact.fact_type_candidate,
+            raw_value=fact.raw_value,
+            evidence_quote=fact.evidence_quote,
+            max_tokens=config.max_output_tokens,
+        )
+        session.add(
+            ValidationResult(
+                study_id=study.study_id,
+                fact_id=fact.fact_id,
+                validator_name=validator_name,
+                validator_version=VERIFIER_VERSION,
+                severity=result.outcome.severity,
+                status=result.outcome.status,
+                message=result.outcome.message,
+                compared_values={
+                    **(result.outcome.compared_values or {}),
+                    "fact_type_candidate": fact.fact_type_candidate,
+                    "raw_value": fact.raw_value,
+                    "evidence_quote": fact.evidence_quote,
+                    "verifier_backend_label": result.model_name,
+                },
+            )
+        )
+        checked += 1
+    return checked
 
 
 # --- VALIDATE_LOGIC ---------------------------------------------------------

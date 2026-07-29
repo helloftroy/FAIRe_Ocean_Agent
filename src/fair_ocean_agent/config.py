@@ -74,6 +74,13 @@ class LLMConfig(BaseModel):
     num_ctx: int | None = None
 
 
+class LLMVerifierConfig(LLMConfig):
+    model: str = "REPLACE_WITH_VERIFIER_MODEL_NAME"
+    api_key_env: str = "LOCAL_LLM_VERIFIER_API_KEY"
+    max_output_tokens: int | None = 512
+    max_retries: int = 2
+
+
 class RetrievalConfig(BaseModel):
     request_timeout_seconds: int = 60
     cache_enabled: bool = True
@@ -164,6 +171,7 @@ class AppConfig(BaseModel):
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     workflow: WorkflowConfig = Field(default_factory=WorkflowConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
+    llm_verifier: LLMVerifierConfig = Field(default_factory=LLMVerifierConfig)
     retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
     discovery: DiscoveryConfig = Field(default_factory=DiscoveryConfig)
     scheduling: SchedulingConfig = Field(default_factory=SchedulingConfig)
@@ -212,6 +220,26 @@ def _apply_env_overrides(raw: dict[str, Any]) -> dict[str, Any]:
     llm_num_ctx = os.environ.get("LOCAL_LLM_NUM_CTX")
     if llm_num_ctx:
         raw.setdefault("llm", {})["num_ctx"] = int(llm_num_ctx)
+
+    verifier_base_url = os.environ.get("LOCAL_LLM_VERIFIER_BASE_URL")
+    if verifier_base_url:
+        raw.setdefault("llm_verifier", {})["base_url"] = verifier_base_url
+
+    verifier_model = os.environ.get("LOCAL_LLM_VERIFIER_MODEL")
+    if verifier_model:
+        raw.setdefault("llm_verifier", {})["model"] = verifier_model
+
+    verifier_enabled = os.environ.get("LOCAL_LLM_VERIFIER_ENABLED")
+    if verifier_enabled:
+        raw.setdefault("llm_verifier", {})["enabled"] = verifier_enabled.lower() in {"1", "true", "yes", "on"}
+
+    verifier_max_output_tokens = os.environ.get("LOCAL_LLM_VERIFIER_MAX_OUTPUT_TOKENS")
+    if verifier_max_output_tokens:
+        raw.setdefault("llm_verifier", {})["max_output_tokens"] = int(verifier_max_output_tokens)
+
+    verifier_num_ctx = os.environ.get("LOCAL_LLM_VERIFIER_NUM_CTX")
+    if verifier_num_ctx:
+        raw.setdefault("llm_verifier", {})["num_ctx"] = int(verifier_num_ctx)
 
     contact_email = os.environ.get("FAIR_OCEAN_CONTACT_EMAIL")
     if contact_email:

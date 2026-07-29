@@ -1273,6 +1273,30 @@ for now, e.g. `sqlite3 data/fair_ocean.db "select task_id, task_type, last_error
 OpenAI-operated host, needs an OpenAI account, or sends data anywhere
 except your configured `base_url`.
 
+## Optional independent LLM evidence verifier
+
+Text extraction and evidence verification are deliberately decoupled. The
+primary extractor can be a faster model such as qwen3, while
+`VALIDATE_EVIDENCE` can optionally ask a separate verifier model whether a
+stored `evidence_quote` actually supports the extracted
+`fact_type_candidate` and `raw_value`.
+
+For example, to use Granite through Ollama as the verifier while keeping a
+different extractor:
+
+```bash
+LOCAL_LLM_VERIFIER_ENABLED=true
+LOCAL_LLM_VERIFIER_BASE_URL=http://localhost:11434/v1
+LOCAL_LLM_VERIFIER_MODEL=granite3.3:8b
+LOCAL_LLM_VERIFIER_MAX_OUTPUT_TOKENS=512
+```
+
+The verifier writes one `ValidationResult` per checked LLM text fact, with
+`validator_name` like `llm_evidence_support:granite3.3:8b` and status
+`supported`, `unsupported`, or `not_assessed`. The deterministic evidence
+checks still run first: facts with missing evidence quotes are flagged
+without asking the verifier.
+
 ## Model benchmarking
 
 This project doesn't pick a model -- it gives you a harness to compare

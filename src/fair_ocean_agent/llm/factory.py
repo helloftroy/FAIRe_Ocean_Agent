@@ -5,13 +5,14 @@ from __future__ import annotations
 
 import os
 
-from fair_ocean_agent.config import BenchmarkCandidateConfig, LLMConfig
+from fair_ocean_agent.config import BenchmarkCandidateConfig, LLMConfig, LLMVerifierConfig
 from fair_ocean_agent.llm.base import LLMBackend, LLMBackendError
 from fair_ocean_agent.llm.disabled import DisabledLLMBackend
 from fair_ocean_agent.llm.http_backend import OpenAICompatibleHTTPBackend
 from fair_ocean_agent.llm.mock import MockLLMBackend
 
 _PLACEHOLDER_MODEL_NAMES = {"", "REPLACE_WITH_MODEL_NAME"}
+_PLACEHOLDER_VERIFIER_MODEL_NAMES = {"", "REPLACE_WITH_VERIFIER_MODEL_NAME"}
 
 
 def build_llm_backend(config: LLMConfig) -> LLMBackend:
@@ -41,6 +42,34 @@ def build_llm_backend(config: LLMConfig) -> LLMBackend:
         )
 
     raise LLMBackendError(f"Unknown llm.provider: {config.provider!r}")
+
+
+def build_llm_verifier_backend(config: LLMVerifierConfig) -> LLMBackend:
+    if not config.enabled or config.provider == "disabled":
+        return DisabledLLMBackend()
+
+    if config.provider == "mock":
+        return MockLLMBackend(label=config.model if config.model not in _PLACEHOLDER_VERIFIER_MODEL_NAMES else "mock-verifier")
+
+    if config.provider == "openai_compatible":
+        if config.model in _PLACEHOLDER_VERIFIER_MODEL_NAMES:
+            raise LLMBackendError(
+                "llm_verifier.model is not set. Set LOCAL_LLM_VERIFIER_MODEL "
+                "(for example granite3.3:8b) or llm_verifier.model in config/local.yaml."
+            )
+        api_key = os.environ.get(config.api_key_env) if config.api_key_env else None
+        return OpenAICompatibleHTTPBackend(
+            label=config.model,
+            base_url=config.base_url,
+            model=config.model,
+            api_key=api_key,
+            timeout_seconds=config.timeout_seconds,
+            max_concurrency=config.max_concurrency,
+            num_ctx=config.num_ctx,
+            default_max_tokens=config.max_output_tokens,
+        )
+
+    raise LLMBackendError(f"Unknown llm_verifier.provider: {config.provider!r}")
 
 
 def build_benchmark_backend(candidate: BenchmarkCandidateConfig) -> LLMBackend:

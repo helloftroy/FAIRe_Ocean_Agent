@@ -1,9 +1,9 @@
 import pytest
 
-from fair_ocean_agent.config import BenchmarkCandidateConfig, LLMConfig
+from fair_ocean_agent.config import BenchmarkCandidateConfig, LLMConfig, LLMVerifierConfig
 from fair_ocean_agent.llm.base import LLMBackendError
 from fair_ocean_agent.llm.disabled import DisabledLLMBackend
-from fair_ocean_agent.llm.factory import build_benchmark_backend, build_llm_backend
+from fair_ocean_agent.llm.factory import build_benchmark_backend, build_llm_backend, build_llm_verifier_backend
 from fair_ocean_agent.llm.http_backend import OpenAICompatibleHTTPBackend
 from fair_ocean_agent.llm.mock import MockLLMBackend
 
@@ -52,6 +52,30 @@ def test_factory_builds_http_backend_with_real_model_name():
     backend = build_llm_backend(config)
     assert isinstance(backend, OpenAICompatibleHTTPBackend)
     assert backend.model == "llama-3.1-8b-instruct"
+    backend.close()
+
+
+def test_verifier_factory_returns_disabled_when_not_enabled():
+    config = LLMVerifierConfig(enabled=False, model="granite3.3:8b")
+    assert isinstance(build_llm_verifier_backend(config), DisabledLLMBackend)
+
+
+def test_verifier_factory_rejects_placeholder_model_name():
+    config = LLMVerifierConfig(enabled=True, provider="openai_compatible")
+    with pytest.raises(LLMBackendError, match="llm_verifier.model"):
+        build_llm_verifier_backend(config)
+
+
+def test_verifier_factory_builds_http_backend_with_real_model_name():
+    config = LLMVerifierConfig(
+        enabled=True,
+        provider="openai_compatible",
+        model="granite3.3:8b",
+        base_url="http://localhost:11434/v1",
+    )
+    backend = build_llm_verifier_backend(config)
+    assert isinstance(backend, OpenAICompatibleHTTPBackend)
+    assert backend.label == "granite3.3:8b"
     backend.close()
 
 

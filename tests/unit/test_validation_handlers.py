@@ -23,7 +23,9 @@ from fair_ocean_agent.database.models import (
     Study,
     ValidationResult,
 )
+from fair_ocean_agent.llm.mock import MockLLMBackend
 from fair_ocean_agent.workflow.task_queue import enqueue_task
+import fair_ocean_agent.workflow.validation_handlers as validation_handlers_module
 from fair_ocean_agent.workflow.validation_handlers import (
     CORE_SAMPLING_FIELDS,
     MISSINGNESS_TARGET_SCHEMA,
@@ -231,6 +233,75 @@ def test_handle_validate_evidence_only_flags_failures(db_session):
 
     results = db_session.query(ValidationResult).filter_by(study_id=study.study_id, validator_name="evidence_consistency").all()
     assert len(results) == 1  # only the missing-evidence-quote fact gets flagged
+
+
+def test_handle_validate_evidence_can_run_independent_llm_support_verifier(db_session, monkeypatch):
+    study = _study(db_session, title="LLM verifier")
+    source = Source(study_id=study.study_id, source_type="article_fulltext", source_name="europe_pmc_fulltext")
+    db_session.add(source)
+    db_session.flush()
+    db_session.add_all(
+        [
+            RawFact(
+                study_id=study.study_id,
+                source_id=source.source_id,
+                raw_field_name="annealing_temperature",
+                raw_value="54 C",
+                fact_type_candidate="annealing_temperature",
+                entity_level="study",
+                support_type=SupportType.EXPLICIT.value,
+                extraction_method="llm_text_extraction",
+                evidence_quote="Reactions were annealed at 54 C for 35 cycles.",
+            ),
+            RawFact(
+                study_id=study.study_id,
+                source_id=source.source_id,
+                raw_field_name="annealing_temperature",
+                raw_value="62 C",
+                fact_type_candidate="annealing_temperature",
+                entity_level="study",
+                support_type=SupportType.EXPLICIT.value,
+                extraction_method="llm_text_extraction",
+                evidence_quote="Reactions were annealed at 54 C for 35 cycles.",
+            ),
+        ]
+    )
+    db_session.commit()
+    task = _task_for(db_session, study)
+
+    class Config:
+        class Verifier:
+            enabled = True
+            max_output_tokens = 512
+
+        llm_verifier = Verifier()
+
+    verifier = MockLLMBackend(
+        label="granite3.3:8b",
+        responses=[
+            '{"supported": true, "reason": "Quote states 54 C."}',
+            '{"supported": false, "reason": "Quote states 54 C, not 62 C."}',
+        ],
+    )
+    monkeypatch.setattr(validation_handlers_module, "load_config", lambda: Config())
+    validation_handlers_module.reset_llm_verifier_backend_cache()
+    validation_handlers_module._llm_verifier_backend_cache = verifier
+
+    handle_validate_evidence(db_session, task)
+    db_session.commit()
+
+    rows = (
+        db_session.query(ValidationResult)
+        .filter_by(study_id=study.study_id, validator_name="llm_evidence_support:granite3.3:8b")
+        .order_by(ValidationResult.status)
+        .all()
+    )
+    assert {row.status for row in rows} == {ValidationStatus.SUPPORTED.value, ValidationStatus.UNSUPPORTED.value}
+    assert len(verifier.calls) == 2
+
+    handle_validate_evidence(db_session, task)
+    db_session.commit()
+    assert len(verifier.calls) == 2
 
 
 def test_handle_validate_cross_source_persists_comparison(db_session):
