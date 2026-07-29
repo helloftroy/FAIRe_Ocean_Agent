@@ -16,6 +16,7 @@ from fair_ocean_agent.sources.crossref import CrossrefAdapter
 from fair_ocean_agent.sources.datacite import DataCiteAdapter
 from fair_ocean_agent.sources.europe_pmc import EuropePmcAdapter
 from fair_ocean_agent.sources.gbif import GbifAdapter
+from fair_ocean_agent.sources.ena import EnaAdapter
 from fair_ocean_agent.sources.obis import ObisAdapter
 from fair_ocean_agent.sources.openalex import OpenAlexAdapter
 from fair_ocean_agent.sources.pangaea import PangaeaAdapter
@@ -232,6 +233,43 @@ def test_pangaea_extracts_jsonld_metadata_and_related_identifiers(retrieval_conf
     adapter.close()
 
 
+def test_ena_extracts_run_accession_and_library_construction_protocol(retrieval_config):
+    adapter = EnaAdapter(
+        SourceConfig(name="ena", enabled=True, base_url="https://www.ebi.ac.uk/ena/portal/api"),
+        retrieval_config,
+    )
+    record = _record(
+        "ena",
+        {
+            "study": {
+                "study_accession": "PRJEB1",
+                "secondary_study_accession": "ERP1",
+                "study_title": "ENA study",
+            },
+            "runs": [
+                {
+                    "run_accession": "ERR123",
+                    "sample_accession": "SAMEA1",
+                    "library_layout": "PAIRED",
+                    "library_construction_protocol": "PCR amplified the V4 region with 515F/806R primers.",
+                }
+            ],
+            "truncated": False,
+            "total_runs_seen": 1,
+        },
+        external_identifier="PRJEB1",
+    )
+
+    facts = adapter.extract_structured_facts(record)
+    values = {f.fact_type_candidate: f for f in facts}
+
+    assert values["run_accession"].raw_value == "ERR123"
+    assert values["run_accession"].entity_external_id == "ERR123"
+    assert values["library_construction_protocol"].raw_value.startswith("PCR amplified")
+    assert values["library_construction_protocol"].source_locator == "ena.read_run.ERR123.library_construction_protocol"
+    adapter.close()
+
+
 def test_obis_extracts_dataset_metadata_and_dataset_uuid(retrieval_config):
     adapter = ObisAdapter(SourceConfig(name="obis", enabled=True, base_url="https://api.obis.org"), retrieval_config)
     record = _record(
@@ -245,6 +283,43 @@ def test_obis_extracts_dataset_metadata_and_dataset_uuid(retrieval_config):
 
     assert any(f.fact_type_candidate == "records" for f in facts)
     assert related[0].identifier_type == IdentifierType.OBIS_DATASET_UUID
+    adapter.close()
+
+
+def test_obis_extracts_dna_derived_occurrence_fields(retrieval_config):
+    adapter = ObisAdapter(SourceConfig(name="obis", enabled=True, base_url="https://api.obis.org"), retrieval_config)
+    record = _record(
+        "obis",
+        {
+            "id": "11111111-2222-3333-4444-555555555555",
+            "title": "OBIS dataset",
+            "_occurrence_preview": {
+                "results": [
+                    {
+                        "associatedSequences": "ENA:ERR123",
+                        "extensions": {
+                            "dnaDerivedData": [
+                                {
+                                    "pcrPrimerForward": "GTGYCAGCMGCCGCGGTAA",
+                                    "pcrPrimerReverse": "GGACTACNVGGGTWTCTAAT",
+                                    "targetGene": "16S rRNA",
+                                }
+                            ]
+                        },
+                    }
+                ]
+            },
+        },
+        external_identifier="11111111-2222-3333-4444-555555555555",
+    )
+
+    facts = adapter.extract_structured_facts(record)
+    values = {f.fact_type_candidate: f for f in facts}
+
+    assert values["associatedSequences"].raw_value == "ENA:ERR123"
+    assert values["pcr_primer_forward"].raw_value == "GTGYCAGCMGCCGCGGTAA"
+    assert values["pcr_primer_reverse"].source_locator.endswith("pcrPrimerReverse")
+    assert values["target_gene"].raw_field_name == "targetGene"
     adapter.close()
 
 
@@ -267,4 +342,41 @@ def test_gbif_extracts_dataset_metadata_and_dataset_key(retrieval_config):
     assert any(f.fact_type_candidate == "recordCount" for f in facts)
     assert any(r.identifier_type == IdentifierType.GBIF_DATASET_KEY for r in related)
     assert any(r.identifier_type == IdentifierType.DATASET_DOI for r in related)
+    adapter.close()
+
+
+def test_gbif_extracts_dna_derived_occurrence_fields(retrieval_config):
+    adapter = GbifAdapter(SourceConfig(name="gbif", enabled=True, base_url="https://api.gbif.org/v1"), retrieval_config)
+    record = _record(
+        "gbif",
+        {
+            "key": "11111111-2222-3333-4444-555555555555",
+            "title": "GBIF dataset",
+            "_occurrence_preview": {
+                "results": [
+                    {
+                        "extensions": {
+                            "http://rs.gbif.org/terms/1.0/DNADerivedData": [
+                                {
+                                    "pcr_primer_name_forward": "515F",
+                                    "pcr_primer_name_reverse": "806R",
+                                    "annealingTemp": "55 C",
+                                    "ampliconSize": "291 bp",
+                                }
+                            ]
+                        }
+                    }
+                ]
+            },
+        },
+        external_identifier="11111111-2222-3333-4444-555555555555",
+    )
+
+    facts = adapter.extract_structured_facts(record)
+    values = {f.fact_type_candidate: f.raw_value for f in facts}
+
+    assert values["pcr_primer_name_forward"] == "515F"
+    assert values["pcr_primer_name_reverse"] == "806R"
+    assert values["annealingTemp"] == "55 C"
+    assert values["ampliconSize"] == "291 bp"
     adapter.close()

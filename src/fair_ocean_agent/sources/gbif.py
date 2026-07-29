@@ -1,15 +1,17 @@
 """GBIF dataset metadata adapter.
 
-Uses GBIF's registry dataset endpoints for dataset-level metadata. This
-records structured metadata and related identifiers only; it does not page
-through or download occurrence records.
+Uses GBIF's registry dataset endpoints for dataset-level metadata and a
+small bounded occurrence preview for Darwin Core/DNA-derived-data extension
+terms. It does not page through or download full occurrence datasets.
 """
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from fair_ocean_agent.clock import utcnow
 from fair_ocean_agent.database.enums import EntityLevel, IdentifierType, RelationshipType
+from fair_ocean_agent.logging_setup import get_logger
 from fair_ocean_agent.sources.base import (
     RawFactCandidate,
     RelatedIdentifier,
@@ -20,6 +22,11 @@ from fair_ocean_agent.sources.base import (
     SourceRecordNotFoundError,
     hash_payload,
 )
+from fair_ocean_agent.sources.dna_extension import extract_dna_derived_facts
+
+logger = get_logger(__name__)
+
+OCCURRENCE_PREVIEW_LIMIT = 50
 
 
 def _stringify(value) -> str:
@@ -29,17 +36,30 @@ def _stringify(value) -> str:
 class GbifAdapter(SourceAdapter):
     name = "gbif"
 
+    def _fetch_occurrence_preview(self, identifier: str) -> Any:
+        try:
+            payload, _ = self.http.get_json(
+                f"{self.config.base_url}/occurrence/search",
+                params={"datasetKey": identifier, "limit": OCCURRENCE_PREVIEW_LIMIT},
+            )
+            return payload
+        except Exception as exc:  # pragma: no cover - live API best effort
+            logger.warning("Could not fetch GBIF occurrence preview for %s: %s", identifier, exc)
+            return {}
+
     def fetch_record(self, identifier: str) -> SourceRecord:
         payload, from_cache = self.http.get_json(f"{self.config.base_url}/dataset/{identifier}")
         if not payload:
             raise SourceRecordNotFoundError(f"No GBIF dataset record for {identifier}")
+        raw = dict(payload)
+        raw["_occurrence_preview"] = self._fetch_occurrence_preview(identifier)
         return SourceRecord(
             source_name=self.name,
             external_identifier=identifier,
             url=payload.get("homepage") or f"https://www.gbif.org/dataset/{identifier}",
-            raw=payload,
+            raw=raw,
             retrieved_at=utcnow(),
-            content_hash=hash_payload(payload),
+            content_hash=hash_payload(raw),
             from_cache=from_cache,
         )
 
@@ -96,6 +116,7 @@ class GbifAdapter(SourceAdapter):
             "taxonomicCoverages", "recordCount",
         ):
             add(field, raw.get(field))
+        facts.extend(extract_dna_derived_facts(self.name, raw.get("_occurrence_preview")))
         return facts
 
     def find_related(self, record: SourceRecord) -> list[RelatedIdentifier]:

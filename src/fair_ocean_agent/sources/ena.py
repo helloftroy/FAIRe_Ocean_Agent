@@ -29,8 +29,8 @@ logger = get_logger(__name__)
 STUDY_FIELDS = "study_accession,secondary_study_accession,study_title,study_description,center_name,first_public"
 RUN_FIELDS = (
     "run_accession,sample_accession,library_strategy,library_source,library_selection,"
-    "library_layout,instrument_platform,instrument_model,base_count,read_count,fastq_bytes,fastq_md5,"
-    "fastq_ftp,first_public"
+    "library_layout,library_construction_protocol,instrument_platform,instrument_model,"
+    "base_count,read_count,fastq_bytes,fastq_md5,fastq_ftp,first_public"
 )
 
 # Same rationale as NCBI's MAX_SAMPLES_PER_PROJECT: bound worst-case work per
@@ -139,9 +139,9 @@ class EnaAdapter(SourceAdapter):
             if not run_accession:
                 continue
             for field in (
-                "sample_accession", "library_strategy", "library_source", "library_selection",
-                "library_layout", "instrument_platform", "instrument_model", "base_count", "read_count",
-                "fastq_bytes", "fastq_md5", "fastq_ftp", "first_public",
+                "run_accession", "sample_accession", "library_strategy", "library_source", "library_selection",
+                "library_layout", "library_construction_protocol", "instrument_platform", "instrument_model",
+                "base_count", "read_count", "fastq_bytes", "fastq_md5", "fastq_ftp", "first_public",
             ):
                 value = run.get(field)
                 if value in (None, ""):

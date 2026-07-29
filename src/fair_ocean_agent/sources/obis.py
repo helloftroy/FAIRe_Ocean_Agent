@@ -1,14 +1,17 @@
 """OBIS dataset metadata adapter.
 
-Fetches dataset-level metadata from OBIS and, when available, stores
-summary counts/coverage only. It does not download occurrence records.
+Fetches dataset-level metadata from OBIS and a small bounded occurrence
+preview for Darwin Core/DNA-derived-data extension terms. It never downloads
+large primary data files or unbounded occurrence result sets.
 """
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from fair_ocean_agent.clock import utcnow
 from fair_ocean_agent.database.enums import EntityLevel, IdentifierType, RelationshipType
+from fair_ocean_agent.logging_setup import get_logger
 from fair_ocean_agent.sources.base import (
     RawFactCandidate,
     RelatedIdentifier,
@@ -19,6 +22,11 @@ from fair_ocean_agent.sources.base import (
     SourceRecordNotFoundError,
     hash_payload,
 )
+from fair_ocean_agent.sources.dna_extension import extract_dna_derived_facts
+
+logger = get_logger(__name__)
+
+OCCURRENCE_PREVIEW_LIMIT = 50
 
 
 def _stringify(value) -> str:
@@ -28,17 +36,30 @@ def _stringify(value) -> str:
 class ObisAdapter(SourceAdapter):
     name = "obis"
 
+    def _fetch_occurrence_preview(self, identifier: str) -> Any:
+        try:
+            payload, _ = self.http.get_json(
+                f"{self.config.base_url}/occurrence",
+                params={"datasetid": identifier, "size": OCCURRENCE_PREVIEW_LIMIT},
+            )
+            return payload
+        except Exception as exc:  # pragma: no cover - live API best effort
+            logger.warning("Could not fetch OBIS occurrence preview for %s: %s", identifier, exc)
+            return {}
+
     def fetch_record(self, identifier: str) -> SourceRecord:
         payload, from_cache = self.http.get_json(f"{self.config.base_url}/dataset/{identifier}")
         if not payload:
             raise SourceRecordNotFoundError(f"No OBIS dataset record for {identifier}")
+        raw = dict(payload)
+        raw["_occurrence_preview"] = self._fetch_occurrence_preview(identifier)
         return SourceRecord(
             source_name=self.name,
             external_identifier=identifier,
             url=payload.get("url") or f"https://obis.org/dataset/{identifier}",
-            raw=payload,
+            raw=raw,
             retrieved_at=utcnow(),
-            content_hash=hash_payload(payload),
+            content_hash=hash_payload(raw),
             from_cache=from_cache,
         )
 
@@ -89,6 +110,7 @@ class ObisAdapter(SourceAdapter):
             "temporalCoverage", "eml",
         ):
             add(field, raw.get(field))
+        facts.extend(extract_dna_derived_facts(self.name, raw.get("_occurrence_preview")))
         return facts
 
     def find_related(self, record: SourceRecord) -> list[RelatedIdentifier]:

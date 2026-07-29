@@ -244,6 +244,71 @@ def test_maps_citation_from_any_repository_adapter_to_bibliographic_citation(db_
     assert row.standardized_value == "Smith et al. 2024. Dataset X. OBIS."
 
 
+def test_maps_repository_dna_derived_fields_to_faire_without_llm_review_flag(db_session):
+    study = _study(db_session, title="DNA-derived repository facts")
+    for field, value in {
+        "associatedSequences": "ENA:ERR123",
+        "target_gene": "16S rRNA",
+        "pcr_primer_forward": "GTGYCAGCMGCCGCGGTAA",
+        "pcr_primer_reverse": "GGACTACNVGGGTWTCTAAT",
+        "pcr_primer_name_forward": "515F",
+        "pcr_primer_name_reverse": "806R",
+        "annealingTemp": "55 C",
+        "ampliconSize": "291 bp",
+        "assay_name": "16S V4 metabarcoding",
+    }.items():
+        _fact(db_session, study, field=field, value=value, entity_level="project")
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    values = {
+        sv.target_field: sv
+        for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id)
+    }
+    assert values["associatedSequences"].target_field == "associatedSequences"
+    assert values["target_gene"].standardized_value == "16S rRNA"
+    assert values["pcr_primer_forward"].standardized_value == "GTGYCAGCMGCCGCGGTAA"
+    assert values["pcr_primer_reverse"].standardized_value == "GGACTACNVGGGTWTCTAAT"
+    assert values["pcr_primer_name_forward"].standardized_value == "515F"
+    assert values["pcr_primer_name_reverse"].standardized_value == "806R"
+    assert values["annealingTemp"].standardized_value == "55 C"
+    assert values["ampliconSize"].standardized_value == "291 bp"
+    assert values["assay_name"].standardized_value == "16S V4 metabarcoding"
+    assert not values["pcr_primer_forward"].review_required
+
+
+def test_maps_ena_run_accession_and_library_construction_protocol(db_session):
+    study = _study(db_session, title="ENA protocol facts")
+    run = Entity(study_id=study.study_id, entity_level=EntityLevel.SEQUENCING_RUN.value, external_identifier="ERR123")
+    db_session.add(run)
+    db_session.flush()
+    _fact(db_session, study, entity=run, entity_level="sequencing_run", field="run_accession", value="ERR123")
+    _fact(
+        db_session,
+        study,
+        entity=run,
+        entity_level="sequencing_run",
+        field="library_construction_protocol",
+        value="PCR amplified the V4 region with 515F/806R primers.",
+    )
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    values = {
+        sv.target_field: sv
+        for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id)
+    }
+    assert values["associatedSequences"].entity_id == run.entity_id
+    assert values["associatedSequences"].standardized_value == "ERR123"
+    assert values["pcr_method_additional"].entity_id is None
+    assert values["pcr_method_additional"].review_required is True
+    assert values["pcr_method_additional"].standardized_value.startswith("PCR amplified")
+
+
 def test_dedups_identical_project_wide_facts_across_many_runs(db_session):
     """Real data has this exact shape: 500 sequencing_run raw_facts all
     reporting the same instrument_platform for one study. Must collapse to

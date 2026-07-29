@@ -159,7 +159,7 @@ def test_ena_extract_structured_facts_splits_project_and_run_level(ena_adapter):
     }
     assert all(f.entity_external_id == "SRR1" for f in run_facts)
     assert {f.fact_type_candidate for f in run_facts} == {
-        "sample_accession", "library_strategy", "library_source", "fastq_ftp", "fastq_bytes",
+        "run_accession", "sample_accession", "library_strategy", "library_source", "fastq_ftp", "fastq_bytes",
     }
 
 

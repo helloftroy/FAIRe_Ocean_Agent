@@ -36,6 +36,14 @@ adding a new mapped field should only ever mean adding a rule here.
   `center_name`.
 - `citation` (OBIS/GBIF/PANGAEA, all three emit this exact field name at
   the project level) -> FAIRe's `bibliographicCitation`.
+- Repository DNA/assay facts from bounded OBIS/GBIF occurrence previews:
+  exact Darwin Core/GBIF DNA-derived-data terms such as
+  `associatedSequences`, `target_gene`, `pcr_primer_forward`,
+  `pcr_primer_reverse`, primer names/references, `annealingTemp`,
+  `ampliconSize`, `pcr_cond`, `assay_type`, and `assay_name`.
+- ENA run-level identifiers/protocol text: `run_accession` becomes
+  FAIRe `associatedSequences`, and `library_construction_protocol` is
+  retained as PCR/library-method narrative text for review.
 
 ## What's deliberately mapped conservatively
 
@@ -63,17 +71,10 @@ adding a new mapped field should only ever mean adding a rule here.
   `publisher`, ...): FAIRe is a molecular/sample metadata checklist, not a
   publication metadata standard -- these were never in scope for FAIRe
   mapping.
-- **Not yet possible -- no adapter produces the source fact at all**, so no
-  rule exists for these even though a real FAIRe field wants one:
-  `associatedSequences` (no adapter surfaces genetic-sequence identifiers
-  as their own fact); OBIS/GBIF's `target_gene`/primer/PCR/annealing-temp/
-  amplicon-size fields (checked directly against `sources/obis.py`/
-  `sources/gbif.py`: neither adapter's current API calls fetch anything
-  but basic dataset/occurrence metadata -- OBIS's DNA-derived-data/MIxS
-  extension, which can carry these, isn't queried by the current adapter);
-  ENA's `LIBRARY_CONSTRUCTION_PROTOCOL` (not in `sources/ena.py`'s
-  `RUN_FIELDS` at all). Each needs real adapter-side work before a mapping
-  rule here would do anything.
+- Still not mapped automatically: normalized/similar labels from repository
+  extension blobs. OBIS/GBIF fields only map when the adapter sees exact
+  FAIRe/GBIF DNA-derived-data names or explicit camelCase aliases; similar
+  labels remain review candidates, not deterministic facts.
 
 `project_id`, `samp_name`, and `seq_id` (FAIRe join keys linking rows
 across tables) are NOT produced from this rules table at all -- see
@@ -237,6 +238,10 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
                 MappingMethod.DETERMINISTIC_SYNONYM.value, transform=_constant_md5, enum_name="checksum_method_enum"),
     MappingRule("library_layout", EntityLevel.SEQUENCING_RUN.value, "projectMetadata", "lib_layout",
                 MappingMethod.DETERMINISTIC_SYNONYM.value, transform=_normalize_lib_layout, enum_name="lib_layout_enum"),
+    MappingRule("run_accession", EntityLevel.SEQUENCING_RUN.value, "experimentRunMetadata", "associatedSequences",
+                MappingMethod.DETERMINISTIC_SYNONYM.value),
+    MappingRule("library_construction_protocol", EntityLevel.SEQUENCING_RUN.value, "projectMetadata",
+                "pcr_method_additional", MappingMethod.DETERMINISTIC_SYNONYM.value, review_required=True),
 
     # --- Project-level facts (ENA/BioProject) ---
     MappingRule("study_title", EntityLevel.PROJECT.value, "projectMetadata", "project_name",
@@ -245,6 +250,36 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
                 MappingMethod.DETERMINISTIC_SYNONYM.value),
     MappingRule("citation", EntityLevel.PROJECT.value, "projectMetadata", "bibliographicCitation",
                 MappingMethod.DETERMINISTIC_SYNONYM.value),
+
+    # --- OBIS/GBIF DNA-derived-data / Darwin Core occurrence terms ---
+    MappingRule("associatedSequences", EntityLevel.PROJECT.value, "experimentRunMetadata", "associatedSequences",
+                MappingMethod.EXACT_LABEL.value),
+    MappingRule("target_gene", EntityLevel.PROJECT.value, "projectMetadata", "target_gene",
+                MappingMethod.EXACT_LABEL.value, enum_name="target_gene_enum"),
+    MappingRule("target_subfragment", EntityLevel.PROJECT.value, "projectMetadata", "target_subfragment",
+                MappingMethod.EXACT_LABEL.value),
+    MappingRule("pcr_primer_forward", EntityLevel.PROJECT.value, "projectMetadata", "pcr_primer_forward",
+                MappingMethod.EXACT_LABEL.value),
+    MappingRule("pcr_primer_reverse", EntityLevel.PROJECT.value, "projectMetadata", "pcr_primer_reverse",
+                MappingMethod.EXACT_LABEL.value),
+    MappingRule("pcr_primer_name_forward", EntityLevel.PROJECT.value, "projectMetadata", "pcr_primer_name_forward",
+                MappingMethod.EXACT_LABEL.value),
+    MappingRule("pcr_primer_name_reverse", EntityLevel.PROJECT.value, "projectMetadata", "pcr_primer_name_reverse",
+                MappingMethod.EXACT_LABEL.value),
+    MappingRule("pcr_primer_reference_forward", EntityLevel.PROJECT.value, "projectMetadata",
+                "pcr_primer_reference_forward", MappingMethod.EXACT_LABEL.value),
+    MappingRule("pcr_primer_reference_reverse", EntityLevel.PROJECT.value, "projectMetadata",
+                "pcr_primer_reference_reverse", MappingMethod.EXACT_LABEL.value),
+    MappingRule("annealingTemp", EntityLevel.PROJECT.value, "projectMetadata", "annealingTemp",
+                MappingMethod.EXACT_LABEL.value),
+    MappingRule("ampliconSize", EntityLevel.PROJECT.value, "projectMetadata", "ampliconSize",
+                MappingMethod.EXACT_LABEL.value),
+    MappingRule("pcr_cond", EntityLevel.PROJECT.value, "projectMetadata", "pcr_cond",
+                MappingMethod.EXACT_LABEL.value),
+    MappingRule("assay_type", EntityLevel.PROJECT.value, "projectMetadata", "assay_type",
+                MappingMethod.EXACT_LABEL.value, enum_name="assay_type_enum"),
+    MappingRule("assay_name", EntityLevel.PROJECT.value, "projectMetadata", "assay_name",
+                MappingMethod.EXACT_LABEL.value),
 
     # --- LLM-extracted free text (study-level): best-effort, always flagged for review ---
     MappingRule("DNA_extraction_method", EntityLevel.STUDY.value, "sampleMetadata",
