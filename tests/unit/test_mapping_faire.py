@@ -8,7 +8,7 @@ from fair_ocean_agent.database.enums import EntityLevel, IdentifierType, Support
 from fair_ocean_agent.database.models import Entity, ExternalIdentifier, RawFact, StandardizedValue, Study
 from fair_ocean_agent.extraction.faire_fields import native_name_to_faire_hint
 from fair_ocean_agent.mapping.faire import map_study_to_faire, resolve_project_id
-from fair_ocean_agent.mapping.rules import RULES, rules_for
+from fair_ocean_agent.mapping.rules import _ADDITIONAL_ENVIRONMENTAL_SAMPLE_ATTRIBUTES, RULES, rules_for
 
 
 def _study(session, **kwargs) -> Study:
@@ -98,6 +98,61 @@ def test_maps_sample_level_biosample_attributes_not_previously_covered(db_sessio
     assert values["salinity"] == "35"
     assert values["ph"] == "8.1"
     assert values["diss_oxygen"] == "6.2"
+
+
+def test_every_faire_environment_field_has_a_sample_level_rule():
+    """Systematic guard: every FAIRe field tagged in_subset: Environment in
+    the vendored schema (70 total) must be reachable *as a target_field* by
+    some SAMPLE-level rule -- either an explicit rule above
+    (minimumDepthInMeters/maximumDepthInMeters via "depth", elev/temp/
+    salinity/ph/diss_oxygen via their own name) or the generated
+    _ADDITIONAL_ENVIRONMENTAL_SAMPLE_ATTRIBUTES batch. Catches a future
+    schema update silently adding a new environmental field this table
+    never learns about."""
+    import yaml
+
+    from fair_ocean_agent.database.enums import EntityLevel as _EntityLevel
+
+    with open("schemas/faire/schema.yaml") as f:
+        schema = yaml.safe_load(f)
+    env_fields = {
+        name for name, defn in schema.get("slots", {}).items() if defn and "Environment" in (defn.get("in_subset") or [])
+    }
+    sample_level_target_fields = {
+        rule.target_field for rule in RULES
+        if rule.source_entity_level == _EntityLevel.SAMPLE.value
+    }
+    missing = env_fields - sample_level_target_fields
+    assert not missing, f"FAIRe Environment fields with no SAMPLE-level rule: {sorted(missing)}"
+
+
+def test_maps_a_sample_of_the_generated_environmental_attributes(db_session):
+    study = _study(db_session, title="Additional environmental attributes")
+    sample = Entity(study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN1")
+    db_session.add(sample)
+    db_session.flush()
+    _fact(db_session, study, entity=sample, field="turbidity", value="4.2 NTU", entity_level="sample")
+    _fact(db_session, study, entity=sample, field="chlorophyll", value="0.8 mg/m3", entity_level="sample")
+    _fact(db_session, study, entity=sample, field="host_species", value="Thunnus albacares", entity_level="sample")
+    _fact(db_session, study, entity=sample, field="tot_nitro_unit", value="mg/L", entity_level="sample")
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    values = {
+        sv.target_field: sv.standardized_value
+        for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id, entity_id=sample.entity_id)
+    }
+    assert values["turbidity"] == "4.2 NTU"
+    assert values["chlorophyll"] == "0.8 mg/m3"
+    assert values["host_species"] == "Thunnus albacares"
+    assert values["tot_nitro_unit"] == "mg/L"
+
+
+def test_generated_environmental_attribute_names_have_no_duplicates():
+    names = [field for field, _ in _ADDITIONAL_ENVIRONMENTAL_SAMPLE_ATTRIBUTES]
+    assert len(names) == len(set(names))
 
 
 def test_maps_run_level_fastq_and_checksum_and_lib_layout(db_session):

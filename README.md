@@ -1140,6 +1140,77 @@ taxonomy, not before -- tested and confirmed correct in isolation
 (`tests/unit/test_extraction_text.py`, `tests/unit/test_handlers_text_extraction.py`)
 regardless.
 
+## Diagnosing qwen3-4b-instruct's real-paper JSON failures: input overflow, confirmed live
+
+15 of 39 real papers failed outright for qwen3-4b-instruct in the model
+comparison above. Before accepting any fix, reproduced a sample of these
+failures directly against the real Ollama endpoint (not guessed) to
+distinguish three real candidate causes: input overflow (prompt exceeds
+context, needs chunking), output truncation (response cut off mid-JSON,
+needs a higher token cap), or an Ollama-specific context-window default.
+
+Reproduced 4 of the 15 failures by rebuilding the exact original prompt
+(cached full text + the pre-chunking `build_prompt`) and POSTing it
+directly to `qwen3:4b-instruct`. All 4 came back **HTTP 400** in
+0.13-0.19s -- consistent with all 15 real logged latencies (0.13-0.47s,
+vs. 20-280s for every real generation) -- with an identical body:
+`"exceed_context_size_error"`, `n_prompt_tokens` 4386-5742 vs.
+`n_ctx: 4096`. This is unambiguous: **input overflow caused by Ollama's
+default context window**, not output truncation (which would show real
+generation time before failing, not near-zero latency) and not a
+mysterious model hiccup. Also confirmed directly that setting `num_ctx` in
+the request body does **not** change this via Ollama's OpenAI-compatible
+endpoint -- `llm/http_backend.py` already documents this; the config knob
+in `config/benchmark_models.yaml` is inert there by design, a genuine fix
+needs `OLLAMA_CONTEXT_LENGTH` set server-side or chunking on this
+pipeline's side.
+
+Verified the chunking + focused-topic-pass rewrite (`extraction/text.py`
+v4-v6: `split_segments_for_calls`, `DEFAULT_MAX_SECTION_CHARS_PER_CALL`,
+per-topic focuses) actually fixes this rather than assuming it does: the
+same section that 400'd instantly under the old single-shot prompt now
+keeps every individual call under ~2,100 tokens (measured directly:
+2 chunks x 4 topic focuses = 8 calls, max single-call prompt 8,508 chars),
+and re-running the exact same previously-failing case through the new
+pipeline against the same live model produced **32 real extracted facts,
+zero errors** (took 277s, vs. an instant failure before -- a real latency
+cost from many more, smaller calls, worth knowing about before assuming
+the fix is free).
+
+## Mapping expansion: the rest of FAIRe's Environment section
+
+Beyond the 8 BioSample attributes already mapped (elev/samp_collect_device/
+samp_size/samp_size_unit/temp/salinity/ph/diss_oxygen), checked the
+vendored schema systematically for every other field tagged
+`in_subset: Environment` (70 total) and added the remaining 63 --
+`chlorophyll`, `turbidity`, `nitrate`/`nitrite`, the `host_*` fields
+(for host-associated samples), `tidal_stage`, `wind_speed`, and each of
+their `_unit`/method companions -- all via the same generic NCBI BioSample
+`Attributes/Attribute` passthrough as everything else in this table, all
+`EXACT_LABEL` (BioSample MIxS attribute name == FAIRe field name). A new
+regression test (`test_every_faire_environment_field_has_a_sample_level_rule`)
+checks this stays true against the vendored schema directly, so a future
+schema update that adds a new Environment field gets caught rather than
+silently missed.
+
+Checked honestly, not assumed: **re-ran the mapping backfill against the
+real 101-study database and confirmed zero new rows** from this batch --
+no BioSample record in this corpus has reported any of these 63 attributes
+yet (same as the original 8 before them). The rules are correct and
+inert until a real source has the attribute.
+
+**Still open, checked but not implemented:** PANGAEA's `variableMeasured`
+JSON-LD field (which could carry temp/salinity/ph-like environmental
+variables the same way BioSample attributes do) is currently captured as
+one coarse blob per dataset, not decomposed into individually-named
+facts. Real PANGAEA-sourced studies in the current database don't have
+this field populated at all (checked directly: 0 real rows), so there's
+no real payload to inspect the actual shape against -- guessing at a
+decomposition without real data to validate it against risks writing
+code for a shape that doesn't match reality. Needs either a real PANGAEA
+dataset with `variableMeasured` populated, or direct research into
+PANGAEA's JSON-LD `variableMeasured` shape, before this is implemented.
+
 ## Loading your own seed list
 
 Put your file at `data/seeds/studies.csv` (or `.jsonl`) -- copy

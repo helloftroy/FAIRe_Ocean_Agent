@@ -17,11 +17,15 @@ adding a new mapped field should only ever mean adding a rule here.
   `collection_date`, `depth`, `env_broad_scale`, `env_local_scale`,
   `env_medium`, `geo_loc_name`, `lat_lon`, `collection_method`,
   `elev`, `samp_collect_device`, `samp_size`, `samp_size_unit`, `temp`,
-  `salinity`, `ph`, `diss_oxygen`. The last 8 only produce a
-  StandardizedValue for a given sample if that sample's real BioSample
-  record actually reported that attribute -- a rule existing here does not
-  mean every sample gets a value, only that one is captured when the
-  source has it.
+  `salinity`, `ph`, `diss_oxygen`, plus every other FAIRe field tagged
+  `in_subset: Environment` in the vendored schema (63 more --
+  `_ADDITIONAL_ENVIRONMENTAL_SAMPLE_ATTRIBUTES`: `chlorophyll`, `turbidity`,
+  `nitrate`/`nitrite`, `host_species`/`host_length`/`host_tot_mass`/...,
+  `tidal_stage`, `wind_speed`, and all their `_unit`/method companions).
+  None of these -- not even the original 8 -- produce a StandardizedValue
+  for a given sample unless that sample's real BioSample record actually
+  reported that attribute; a rule existing here only means one is captured
+  when the source has it, not that every sample gets a value.
 - Sequencing-run-level structured facts from ENA: `instrument_platform`,
   `instrument_model`, `sample_accession`, `read_count` (-> FAIRe's
   `input_read_count`), `fastq_ftp`/`fastq_md5` (-> FAIRe's
@@ -357,6 +361,96 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
 )
 
 
+# Every FAIRe field tagged in_subset: Environment in the vendored schema,
+# minus the ones already given an explicit rule above (elev, temp,
+# salinity, ph, diss_oxygen, minimumDepthInMeters/maximumDepthInMeters).
+# All 63 arrive through the exact same NCBI BioSample Attributes/Attribute
+# passthrough as everything else in this table -- a real BioSample MIxS
+# submission's attribute name is expected to equal the FAIRe field name
+# exactly (same assumption geo_loc_name/env_broad_scale/elev/etc. already
+# make). None of these produce a real StandardizedValue today (checked
+# directly against the real database: no BioSample record in this corpus
+# has reported any of them yet) -- the rules are correct and inert until a
+# real source has the attribute, same as elev/temp/salinity/ph/diss_oxygen
+# were before this. A tuple of (field, enum_name_or_None) rather than a
+# flat name list since about half of these have a closed-vocabulary
+# `_unit`/`_enum` companion; `enum_name` is safe to pass even if a name
+# here turns out wrong (mapping/vocabularies.check_value treats an unknown
+# enum as "not checked", never a crash or false failure).
+_ADDITIONAL_ENVIRONMENTAL_SAMPLE_ATTRIBUTES: tuple[tuple[str, str | None], ...] = (
+    ("alt", None),
+    ("chlorophyll", None),
+    ("diss_inorg_carb", None),
+    ("diss_inorg_carb_unit", "diss_inorg_carb_unit_enum"),
+    ("diss_inorg_nitro", None),
+    ("diss_inorg_nitro_unit", "diss_inorg_nitro_unit_enum"),
+    ("diss_org_carb", None),
+    ("diss_org_carb_unit", "diss_org_carb_unit_enum"),
+    ("diss_org_nitro", None),
+    ("diss_org_nitro_unit", "diss_org_nitro_unit_enum"),
+    ("diss_oxygen_unit", "diss_oxygen_unit_enum"),
+    ("host_height", None),
+    ("host_height_unit", "host_height_unit_enum"),
+    ("host_length", None),
+    ("host_length_unit", "host_length_unit_enum"),
+    ("host_life_stage", "host_life_stage_enum"),
+    ("host_species", None),
+    ("host_tot_mass", None),
+    ("host_tot_mass_unit", "host_tot_mass_unit_enum"),
+    ("humidity", None),
+    ("light_intensity", None),
+    ("nitrate", None),
+    ("nitrate_unit", "nitrate_unit_enum"),
+    ("nitrite", None),
+    ("nitrite_unit", "nitrite_unit_enum"),
+    ("nitro", None),
+    ("nitro_unit", "nitro_unit_enum"),
+    ("org_carb", None),
+    ("org_carb_unit", "org_carb_unit_enum"),
+    ("org_matter", None),
+    ("org_matter_unit", "org_matter_unit_enum"),
+    ("org_nitro", None),
+    ("org_nitro_unit", "org_nitro_unit_enum"),
+    ("part_org_carb", None),
+    ("part_org_carb_unit", "part_org_carb_unit_enum"),
+    ("part_org_nitro", None),
+    ("part_org_nitro_unit", "part_org_nitro_unit_enum"),
+    ("ph_meth", None),
+    ("samp_weather", None),
+    ("solar_irradiance", None),
+    ("suspend_part_matter", None),
+    ("tidal_stage", None),
+    ("tot_carb", None),
+    ("tot_carb_unit", "tot_carb_unit_enum"),
+    ("tot_depth_water_col", None),
+    ("tot_diss_nitro", None),
+    ("tot_diss_nitro_unit", "tot_diss_nitro_unit_enum"),
+    ("tot_inorg_nitro", None),
+    ("tot_inorg_nitro_unit", "tot_inorg_nitro_unit_enum"),
+    ("tot_nitro", None),
+    ("tot_nitro_cont_meth", None),
+    ("tot_nitro_content", None),
+    ("tot_nitro_content_unit", "tot_nitro_content_unit_enum"),
+    ("tot_nitro_unit", "tot_nitro_unit_enum"),
+    ("tot_org_c_meth", None),
+    ("tot_org_carb", None),
+    ("tot_org_carb_unit", "tot_org_carb_unit_enum"),
+    ("tot_part_carb", None),
+    ("tot_part_carb_unit", "tot_part_carb_unit_enum"),
+    ("turbidity", None),
+    ("water_current", None),
+    ("wind_direction", None),
+    ("wind_speed", None),
+)
+
+
+def _generated_environmental_sample_rules() -> tuple[MappingRule, ...]:
+    return tuple(
+        MappingRule(field, EntityLevel.SAMPLE.value, "sampleMetadata", field, MappingMethod.EXACT_LABEL.value, enum_name=enum_name)
+        for field, enum_name in _ADDITIONAL_ENVIRONMENTAL_SAMPLE_ATTRIBUTES
+    )
+
+
 # FAIRe fields can appear in multiple checklist classes. A model-extracted
 # study-level fact has no assay/taxon/run entity model yet, so choose the
 # class that preserves the most useful provenance today; exports for the
@@ -448,7 +542,9 @@ def _generated_v3_llm_rules() -> tuple[MappingRule, ...]:
     return tuple(generated)
 
 
-RULES: tuple[MappingRule, ...] = _EXPLICIT_RULES + _generated_v3_llm_rules()
+RULES: tuple[MappingRule, ...] = (
+    _EXPLICIT_RULES + _generated_environmental_sample_rules() + _generated_v3_llm_rules()
+)
 
 
 def rules_for(fact_type: str, entity_level: str | None) -> list[MappingRule]:
