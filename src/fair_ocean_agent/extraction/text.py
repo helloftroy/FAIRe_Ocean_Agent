@@ -43,44 +43,91 @@ test for the hint staying truly optional.
 caller (for RawFact.prompt_version) rather than inferred from the template
 text -- so a future prompt change is a visible version bump, not a silent
 behavior change under the same version string.
+
+**Structured-first extraction (v3.1):** before ever asking the LLM about a
+study, `resolved_faire_fields_for_study` checks which FAIRe fields already
+have a real, present value from a prior `MAP_FAIRE` pass over that study's
+*structured* facts (NCBI/ENA/PANGAEA/... adapters, never LLM output --
+`workflow/handlers.py` computes this once and passes it down as
+`exclude_faire_hints`). Those concepts are dropped from the checklist
+entirely: a shorter prompt (less of the context-window ceiling found
+during model benchmarking spent on questions that don't need asking),
+fewer things the model can hallucinate an answer for, and no risk of a
+weaker LLM guess *conflicting* with an already-resolved structured value.
+This only ever narrows what's asked, never fabricates or skips a
+genuinely-needed fact -- if MAP_FAIRE hasn't run yet for a study (e.g. text
+extraction run before structured mapping), `exclude_faire_hints` is simply
+empty and every concept is still asked about, exactly as before this
+existed.
 """
 from __future__ import annotations
 
-from fair_ocean_agent.database.enums import EntityLevel, SupportType
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from fair_ocean_agent.database.enums import EntityLevel, MissingnessStatus, SupportType
+from fair_ocean_agent.database.models import StandardizedValue
 from fair_ocean_agent.extraction.evidence import verify_evidence_quote
 from fair_ocean_agent.extraction.faire_fields import render_field_reference
 from fair_ocean_agent.llm.base import LLMBackend, LLMResponse
+from fair_ocean_agent.mapping.faire import TARGET_SCHEMA
 from fair_ocean_agent.sources.base import RawFactCandidate
 
 PROMPT_VERSION = "text-extraction-v3-native-with-hints"
 
-EXTRACTION_INSTRUCTIONS = (
-    "Extract facts about marine eDNA/molecular sampling, PCR/assay setup, "
-    "sequencing, and bioinformatics methodology that are EXPLICITLY stated in "
-    "the text below. Only extract what is explicitly stated -- do not infer "
-    "standard laboratory practice, do not fill in expected or typical values, "
-    "and do not use any knowledge beyond this text.\n\n"
-    "For each fact, set fact_type_candidate to the EXACT concept name from the "
-    "checklist below whenever the fact matches one of those concepts -- do "
-    "not paraphrase or invent a variant spelling of a listed name. If an "
-    "explicitly stated, clearly relevant fact does not match any listed "
-    "concept, you may still report it using a short, descriptive "
-    "fact_type_candidate of your own choosing rather than skip it.\n\n"
-    "Checklist of concepts to look for (grouped by topic; a concept's example, "
-    "if given, only illustrates the expected shape of an answer -- never "
-    "copy an example itself into raw_value; a bracketed \"[FAIRe hint: ...]\" "
-    "is only a suggestion for the OPTIONAL candidate_standard_fields output "
-    "below, never something to put in fact_type_candidate):\n\n"
-    f"{render_field_reference()}\n\n"
-    "IMPORTANT: the lines above ending in a colon (e.g. \"PCR / assay "
-    "setup:\") are topic headings for your own reference only -- NEVER use "
-    "one of them as fact_type_candidate. Each bullet's concept name (the "
-    "single word/identifier immediately after \"- \" and before its own "
-    "colon, e.g. \"annealing_temperature\" in \"- annealing_temperature: PCR "
-    "annealing temperature\") is what fact_type_candidate must be set to, one "
-    "concept per fact -- never combine a concept name and its value into one "
-    "string."
-)
+
+def resolved_faire_fields_for_study(session: Session, study_id: str) -> frozenset[str]:
+    """FAIRe target_field names that already have a real (`missingness_status
+    == "present"`), non-LLM-derived value for this study -- i.e. a prior
+    MAP_FAIRE pass already resolved them from a structured source. Returns
+    an empty set (never raises) if MAP_FAIRE hasn't run for this study yet,
+    which is exactly the "ask about everything" behavior this pipeline had
+    before this function existed."""
+    rows = session.execute(
+        select(StandardizedValue.target_field)
+        .where(
+            StandardizedValue.study_id == study_id,
+            StandardizedValue.target_schema == TARGET_SCHEMA,
+            StandardizedValue.missingness_status == MissingnessStatus.PRESENT.value,
+        )
+        .distinct()
+    )
+    return frozenset(row[0] for row in rows)
+
+
+def build_extraction_instructions(exclude_faire_hints: frozenset[str] = frozenset()) -> str:
+    return (
+        "Extract facts about marine eDNA/molecular sampling, PCR/assay setup, "
+        "sequencing, and bioinformatics methodology that are EXPLICITLY stated in "
+        "the text below. Only extract what is explicitly stated -- do not infer "
+        "standard laboratory practice, do not fill in expected or typical values, "
+        "and do not use any knowledge beyond this text.\n\n"
+        "For each fact, set fact_type_candidate to the EXACT concept name from the "
+        "checklist below whenever the fact matches one of those concepts -- do "
+        "not paraphrase or invent a variant spelling of a listed name. If an "
+        "explicitly stated, clearly relevant fact does not match any listed "
+        "concept, you may still report it using a short, descriptive "
+        "fact_type_candidate of your own choosing rather than skip it.\n\n"
+        "Checklist of concepts to look for (grouped by topic; a concept's example, "
+        "if given, only illustrates the expected shape of an answer -- never "
+        "copy an example itself into raw_value; a bracketed \"[FAIRe hint: ...]\" "
+        "is only a suggestion for the OPTIONAL candidate_standard_fields output "
+        "below, never something to put in fact_type_candidate):\n\n"
+        f"{render_field_reference(exclude_faire_hints)}\n\n"
+        "IMPORTANT: the lines above ending in a colon (e.g. \"PCR / assay "
+        "setup:\") are topic headings for your own reference only -- NEVER use "
+        "one of them as fact_type_candidate. Each bullet's concept name (the "
+        "single word/identifier immediately after \"- \" and before its own "
+        "colon, e.g. \"annealing_temperature\" in \"- annealing_temperature: PCR "
+        "annealing temperature\") is what fact_type_candidate must be set to, one "
+        "concept per fact -- never combine a concept name and its value into one "
+        "string."
+    )
+
+
+# Backward-compatible default (no exclusions) -- anything importing this
+# constant directly still sees the full, unfiltered checklist.
+EXTRACTION_INSTRUCTIONS = build_extraction_instructions()
 
 PROMPT_TEMPLATE = """{instructions}
 
@@ -103,20 +150,29 @@ Source text:
 """
 
 
-def build_prompt(section_title: str, section_text: str) -> str:
-    return PROMPT_TEMPLATE.format(
-        instructions=EXTRACTION_INSTRUCTIONS, section_title=section_title, section_text=section_text
+def build_prompt(section_title: str, section_text: str, exclude_faire_hints: frozenset[str] = frozenset()) -> str:
+    instructions = (
+        EXTRACTION_INSTRUCTIONS if not exclude_faire_hints else build_extraction_instructions(exclude_faire_hints)
     )
+    return PROMPT_TEMPLATE.format(instructions=instructions, section_title=section_title, section_text=section_text)
 
 
 def extract_facts_from_section(
-    backend: LLMBackend, section_title: str, section_text: str
+    backend: LLMBackend,
+    section_title: str,
+    section_text: str,
+    exclude_faire_hints: frozenset[str] = frozenset(),
 ) -> tuple[list[RawFactCandidate], LLMResponse | None]:
     """Returns (verified facts, the last LLMResponse -- for latency/token
     bookkeeping by the caller). An empty fact list can mean either "the
     model found nothing" or "the model's output didn't parse/verify" --
-    callers that need to distinguish those should inspect the response."""
-    prompt = build_prompt(section_title, section_text)
+    callers that need to distinguish those should inspect the response.
+
+    `exclude_faire_hints` (see resolved_faire_fields_for_study) drops those
+    concepts from the checklist entirely -- a caller with nothing resolved
+    yet passes the default empty set and gets the exact same behavior as
+    before this parameter existed."""
+    prompt = build_prompt(section_title, section_text, exclude_faire_hints)
     parsed, response = backend.generate_json(prompt, temperature=0)
     if parsed is None:
         return [], response

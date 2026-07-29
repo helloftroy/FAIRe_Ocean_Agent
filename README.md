@@ -1021,6 +1021,58 @@ to actually run depends on whether an unattended batch job values recall
    pipeline can request a larger context window but cannot force Ollama to
    grant one over its own wire protocol.
 
+## Structured-first extraction: skip asking the LLM about already-resolved fields
+
+Prompted by the model comparison above showing hallucination and context-
+window pressure as real, live problems: every extra concept in the prompt
+is both more prompt to fit under a model's context ceiling and one more
+opportunity for a weaker model to fabricate an answer instead of reporting
+"not found." Since structured sources (NCBI/ENA/PANGAEA/...) resolve many
+fields deterministically with no hallucination risk at all, there's no
+reason to also ask an LLM about a field a structured source already
+answered.
+
+`extraction/text.py`'s new `resolved_faire_fields_for_study(session,
+study_id)` queries `standardized_values` for every FAIRe `target_field`
+already carrying a real value (`missingness_status == "present"`) for that
+study -- i.e. whatever a prior `MAP_FAIRE` pass already resolved from
+structured facts. `workflow/handlers.py`'s `handle_extract_text_facts`
+computes this once per study, before any section's LLM call, and passes it
+as `extract_facts_from_section`'s new `exclude_faire_hints` parameter;
+`extraction/faire_fields.py`'s `render_field_reference` then omits every
+checklist entry whose FAIRe hint is in that set (dropping a group's
+heading entirely if every entry in it gets excluded). If `MAP_FAIRE` hasn't
+run yet for a study, the resolved set is simply empty and every section's
+prompt is exactly as before this existed -- this can only narrow the
+checklist, never skip a genuinely-unresolved concept or fabricate a value.
+
+**For this to actually shrink a prompt, `enqueue-mapping-backfill` (+ a
+`MAP_FAIRE`-only worker pass) needs to run against a study's structured
+facts *before* `enqueue-text-extraction-backfill`** -- the reverse of
+either running independently, which is how both already worked (neither is
+auto-chained from the other, see "Assumptions and placeholders"). Worth
+stating plainly rather than assuming: checked live against the real
+101-study database, and **today this has zero measurable effect** --
+`mapping/rules.py`'s current rules only ever resolve `eventDate`,
+`geo_loc_name`, `samp_name`, and `project_id` from structured sources
+(907 real `present` rows, 4 distinct fields, none of them PCR/assay/qPCR/
+sequencing/bioinformatics/taxonomy concepts). That's an accurate reflection
+of what NCBI/ENA/PANGAEA structured metadata actually contains, not a bug
+in this mechanism -- those repositories generally don't report primer
+sequences, PCR conditions, or qPCR standards at all, only sample/project-
+level Darwin-Core-style fields. The one place this pipeline's structured
+sources *do* overlap the extraction taxonomy is sequencing
+platform/instrument (`mapping/rules.py` already has `instrument_platform`/
+`instrument_model`/`sequencing_platform` rules targeting FAIRe's `platform`/
+`instrument`, matching this taxonomy's `sequencing_platform_general`/
+`sequencing_instrument` hints) -- but no study in the current database has
+had those specific rules produce a `present` row yet either. This
+mechanism will start paying off exactly as fast as `mapping/rules.py`'s
+structured-source coverage grows to overlap more of the extraction
+taxonomy, not before -- tested and confirmed correct in isolation
+(`tests/unit/test_extraction_text.py`, `tests/unit/test_handlers_text_extraction.py`)
+regardless.
+
 ## Loading your own seed list
 
 Put your file at `data/seeds/studies.csv` (or `.jsonl`) -- copy

@@ -27,7 +27,11 @@ from fair_ocean_agent.database.enums import (
 )
 from fair_ocean_agent.database.models import Entity, ExternalIdentifier, RawFact, Source, Study, Task
 from fair_ocean_agent.extraction.sections import select_relevant_sections
-from fair_ocean_agent.extraction.text import PROMPT_VERSION, extract_facts_from_section
+from fair_ocean_agent.extraction.text import (
+    PROMPT_VERSION,
+    extract_facts_from_section,
+    resolved_faire_fields_for_study,
+)
 from fair_ocean_agent.identity.deduplication import find_existing_study_by_identifier, merge_study_into
 from fair_ocean_agent.identity.identifiers import IdentifierError, normalize_identifier
 from fair_ocean_agent.llm.base import LLMBackend, LLMBackendError
@@ -629,9 +633,19 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
     session.add(source)
     session.flush()
 
+    # Computed once per study, before any section's LLM call: FAIRe fields
+    # already resolved from structured sources (NCBI/ENA/PANGAEA/... via a
+    # prior MAP_FAIRE pass) are dropped from every section's checklist --
+    # less prompt, fewer questions, no chance of the LLM contradicting an
+    # already-resolved structured value. Empty if MAP_FAIRE hasn't run yet
+    # for this study, which leaves every section's prompt exactly as before.
+    already_resolved = resolved_faire_fields_for_study(session, study.study_id)
+
     for section in sections:
         try:
-            facts, _response = extract_facts_from_section(backend, section["title"], section["text"])
+            facts, _response = extract_facts_from_section(
+                backend, section["title"], section["text"], exclude_faire_hints=already_resolved
+            )
         except LLMBackendError as exc:
             if isinstance(backend, DisabledLLMBackend):
                 raise

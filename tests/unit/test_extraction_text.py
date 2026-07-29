@@ -1,9 +1,17 @@
 import json
 
-from fair_ocean_agent.database.enums import SupportType
+from fair_ocean_agent.database.enums import MissingnessStatus, SupportType
+from fair_ocean_agent.database.models import StandardizedValue, Study
 from fair_ocean_agent.extraction.faire_fields import all_field_names
-from fair_ocean_agent.extraction.text import EXTRACTION_INSTRUCTIONS, PROMPT_VERSION, build_prompt, extract_facts_from_section
+from fair_ocean_agent.extraction.text import (
+    EXTRACTION_INSTRUCTIONS,
+    PROMPT_VERSION,
+    build_prompt,
+    extract_facts_from_section,
+    resolved_faire_fields_for_study,
+)
 from fair_ocean_agent.llm.mock import MockLLMBackend
+from fair_ocean_agent.mapping.faire import TARGET_SCHEMA, TARGET_SCHEMA_VERSION
 
 SECTION_TEXT = "Samples were collected on 4 January 2022 at a depth of 5 meters near the reef."
 
@@ -144,3 +152,90 @@ def test_omitted_candidate_standard_fields_hint_leaves_a_valid_fact():
     assert len(facts) == 1
     assert facts[0].fact_type_candidate == "annealing_temperature"
     assert facts[0].confidence_metadata is None
+
+
+# --- Structured-first extraction: skip asking about already-resolved
+# FAIRe fields (see extraction/text.py's module docstring and
+# resolved_faire_fields_for_study) -----------------------------------------
+
+
+def _standardized_value(session, study, *, target_field, missingness_status, value=None):
+    sv = StandardizedValue(
+        study_id=study.study_id,
+        target_schema=TARGET_SCHEMA,
+        target_schema_version=TARGET_SCHEMA_VERSION,
+        target_field=target_field,
+        standardized_value=value,
+        missingness_status=missingness_status,
+    )
+    session.add(sv)
+    session.flush()
+    return sv
+
+
+def test_resolved_faire_fields_for_study_returns_only_present_values(db_session):
+    study = Study(title="structured-first test")
+    db_session.add(study)
+    db_session.flush()
+
+    _standardized_value(db_session, study, target_field="annealingTemp", missingness_status=MissingnessStatus.PRESENT.value, value="55C")
+    _standardized_value(db_session, study, target_field="pcr_cycles", missingness_status=MissingnessStatus.NOT_FOUND_IN_INSPECTED_SOURCES.value)
+    _standardized_value(db_session, study, target_field="otu_db", missingness_status=MissingnessStatus.MAPPING_UNRESOLVED.value)
+
+    resolved = resolved_faire_fields_for_study(db_session, study.study_id)
+    assert resolved == frozenset({"annealingTemp"})
+
+
+def test_resolved_faire_fields_for_study_is_empty_when_map_faire_never_ran(db_session):
+    """No StandardizedValue rows at all for a study (MAP_FAIRE hasn't run
+    yet) must return an empty set, not raise -- callers get the exact
+    "ask about everything" behavior this pipeline had before this existed."""
+    study = Study(title="never mapped")
+    db_session.add(study)
+    db_session.flush()
+
+    assert resolved_faire_fields_for_study(db_session, study.study_id) == frozenset()
+
+
+def test_resolved_faire_fields_for_study_ignores_other_studies_and_schemas(db_session):
+    study_a = Study(title="a")
+    study_b = Study(title="b")
+    db_session.add_all([study_a, study_b])
+    db_session.flush()
+
+    _standardized_value(db_session, study_a, target_field="annealingTemp", missingness_status=MissingnessStatus.PRESENT.value, value="55C")
+    _standardized_value(db_session, study_b, target_field="otu_db", missingness_status=MissingnessStatus.PRESENT.value, value="SILVA 138")
+    # A non-FAIRe schema row for study_a must never leak into the result.
+    other_schema = StandardizedValue(
+        study_id=study_a.study_id,
+        target_schema="bebop",
+        target_schema_version="1.0",
+        target_field="annealingTemp",
+        standardized_value="55C",
+        missingness_status=MissingnessStatus.PRESENT.value,
+    )
+    db_session.add(other_schema)
+    db_session.flush()
+
+    assert resolved_faire_fields_for_study(db_session, study_a.study_id) == frozenset({"annealingTemp"})
+    assert resolved_faire_fields_for_study(db_session, study_b.study_id) == frozenset({"otu_db"})
+
+
+def test_build_prompt_excludes_resolved_faire_hint_fields():
+    # "reference_database" (unlike "annealing_temperature") never appears in
+    # the instructions' own static illustrative text, so its absence here
+    # unambiguously means the checklist entry was actually filtered out.
+    prompt_full = build_prompt("PCR", SECTION_TEXT)
+    prompt_filtered = build_prompt("PCR", SECTION_TEXT, exclude_faire_hints=frozenset({"otu_db"}))
+
+    assert "reference_database" in prompt_full
+    assert "reference_database" not in prompt_filtered
+    assert len(prompt_filtered) < len(prompt_full)
+
+
+def test_extract_facts_from_section_passes_exclusions_into_the_prompt():
+    """Integration-level check that exclude_faire_hints actually reaches
+    the prompt the backend receives, not just build_prompt in isolation."""
+    backend = MockLLMBackend(responses=["[]"])
+    extract_facts_from_section(backend, "PCR", SECTION_TEXT, exclude_faire_hints=frozenset({"otu_db"}))
+    assert "reference_database" not in backend.calls[-1]["prompt"]

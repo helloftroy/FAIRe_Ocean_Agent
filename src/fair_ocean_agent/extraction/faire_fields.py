@@ -195,18 +195,32 @@ def native_name_to_faire_hint() -> dict[str, str]:
     return {f.native_name: f.faire_hint for fields in FIELD_GROUPS.values() for f in fields if f.faire_hint}
 
 
-def render_field_reference() -> str:
+def render_field_reference(exclude_faire_hints: frozenset[str] = frozenset()) -> str:
     """Renders FIELD_GROUPS + FALLBACK_NARRATIVE_FIELDS as the itemized,
     group-headed checklist `extraction/text.py`'s prompt embeds -- one
     source of truth, so the taxonomy a maintainer edits here is exactly
     what the model is shown. Each line shows the native_name (what
     fact_type_candidate must be set to) and, in parentheses, which FAIRe
     field it hints at (what candidate_standard_fields may suggest) --
-    clearly two different things, never merged into one name."""
+    clearly two different things, never merged into one name.
+
+    `exclude_faire_hints` drops any FIELD_GROUPS entry whose faire_hint is
+    already in that set -- used to skip asking the model about concepts
+    already resolved from structured sources (NCBI/ENA/PANGAEA/...) for a
+    given study, before ever calling the LLM (see
+    extraction/text.py's resolved_faire_fields_for_study). An entry with no
+    faire_hint can never match and always stays; FALLBACK_NARRATIVE_FIELDS
+    (no faire_hint at all, by design) are never filtered by this -- there's
+    no structured-field correspondence to check them against. A group left
+    with zero remaining entries after filtering is omitted entirely rather
+    than rendered as an empty heading."""
     lines: list[str] = []
     for group_name, fields in FIELD_GROUPS.items():
+        remaining = [f for f in fields if f.faire_hint not in exclude_faire_hints]
+        if not remaining:
+            continue
         lines.append(f"{group_name}:")
-        for f in fields:
+        for f in remaining:
             example = f" (e.g. \"{f.example}\")" if f.example else ""
             hint_note = f" [FAIRe hint: {f.faire_hint}]" if f.faire_hint else ""
             lines.append(f"- {f.native_name}: {f.hint}{example}{hint_note}")

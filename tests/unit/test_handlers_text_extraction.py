@@ -204,3 +204,57 @@ def test_handler_raises_llm_backend_error_when_llm_disabled(db_session, monkeypa
 
     with pytest.raises(LLMBackendError):
         handlers.handle_extract_text_facts(db_session, task)
+
+
+def test_handler_excludes_faire_fields_already_resolved_from_structured_sources(db_session, monkeypatch):
+    """Structured-first extraction: a FAIRe field already resolved (e.g. by
+    a prior MAP_FAIRE pass over NCBI/ENA/PANGAEA facts) must be dropped
+    from the checklist the LLM actually sees -- less prompt, and no chance
+    of the LLM guessing a value that could contradict the already-resolved
+    one."""
+    from fair_ocean_agent.database.models import StandardizedValue
+    from fair_ocean_agent.database.enums import MissingnessStatus
+    from fair_ocean_agent.mapping.faire import TARGET_SCHEMA, TARGET_SCHEMA_VERSION
+
+    study = _seeded_study_with_pmcid(db_session)
+    db_session.add(
+        StandardizedValue(
+            study_id=study.study_id,
+            target_schema=TARGET_SCHEMA,
+            target_schema_version=TARGET_SCHEMA_VERSION,
+            target_field="otu_db",
+            standardized_value="SILVA 138",
+            missingness_status=MissingnessStatus.PRESENT.value,
+        )
+    )
+    db_session.flush()
+    task = _task_for(db_session, study)
+
+    backend = MockLLMBackend(responses=["[]"])
+    handlers._llm_backend_cache = backend
+    monkeypatch.setattr(handlers, "_build_enabled_adapters", lambda: {"europe_pmc": FakeEuropePmcAdapter()})
+
+    handlers.handle_extract_text_facts(db_session, task)
+    db_session.commit()
+
+    assert backend.calls, "expected at least one LLM call"
+    for call in backend.calls:
+        assert "reference_database" not in call["prompt"]
+
+
+def test_handler_asks_about_everything_when_nothing_resolved_yet(db_session, monkeypatch):
+    """No StandardizedValue rows at all (MAP_FAIRE hasn't run) must leave
+    the checklist fully intact -- the exact behavior before this feature
+    existed."""
+    study = _seeded_study_with_pmcid(db_session)
+    task = _task_for(db_session, study)
+
+    backend = MockLLMBackend(responses=["[]"])
+    handlers._llm_backend_cache = backend
+    monkeypatch.setattr(handlers, "_build_enabled_adapters", lambda: {"europe_pmc": FakeEuropePmcAdapter()})
+
+    handlers.handle_extract_text_facts(db_session, task)
+    db_session.commit()
+
+    assert backend.calls
+    assert "reference_database" in backend.calls[0]["prompt"]

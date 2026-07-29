@@ -102,3 +102,42 @@ def test_native_name_to_faire_hint_round_trips_a_known_field():
     mapping = native_name_to_faire_hint()
     assert mapping["annealing_temperature"] == "annealingTemp"
     assert mapping["standard_curve_r_squared"] == "r2"
+
+
+# --- Structured-first extraction: excluding already-resolved FAIRe fields ---
+# (structured sources like NCBI/ENA/PANGAEA get a chance to resolve a field
+# before the LLM is ever asked about it -- see extraction/text.py's
+# resolved_faire_fields_for_study and workflow/handlers.py's wiring)
+
+
+def test_render_field_reference_omits_excluded_faire_hints():
+    rendered = render_field_reference(exclude_faire_hints=frozenset({"annealingTemp"}))
+    assert "annealing_temperature" not in rendered
+    assert "annealingTemp" not in rendered
+    # An unrelated concept in the same group must still be present.
+    assert "target_gene" in rendered
+
+
+def test_render_field_reference_omits_group_left_empty_by_exclusion():
+    """DNA extraction's every faire_hint, if all excluded, must drop the
+    whole group heading too -- an empty "DNA extraction:" heading with no
+    bullets under it would confuse the model, not help it."""
+    dna_hints = frozenset(f.faire_hint for f in FIELD_GROUPS["DNA extraction"])
+    rendered = render_field_reference(exclude_faire_hints=dna_hints)
+    assert "DNA extraction:" not in rendered
+    # A different, non-excluded group must still render.
+    assert "PCR / assay setup:" in rendered
+
+
+def test_render_field_reference_never_drops_fallback_fields():
+    """FALLBACK_NARRATIVE_FIELDS have no faire_hint by design (see
+    test_fallback_fields_have_no_faire_hint) -- excluding every real hint
+    must still leave the open-ended fallback section intact."""
+    rendered = render_field_reference(exclude_faire_hints=all_faire_hints())
+    assert "General narrative fallback" in rendered
+    for f in FALLBACK_NARRATIVE_FIELDS:
+        assert f.native_name in rendered
+
+
+def test_render_field_reference_with_no_exclusions_matches_default():
+    assert render_field_reference(exclude_faire_hints=frozenset()) == render_field_reference()
