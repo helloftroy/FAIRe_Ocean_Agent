@@ -6,7 +6,9 @@ free text.
 """
 from fair_ocean_agent.database.enums import EntityLevel, IdentifierType, SupportType
 from fair_ocean_agent.database.models import Entity, ExternalIdentifier, RawFact, StandardizedValue, Study
+from fair_ocean_agent.extraction.faire_fields import native_name_to_faire_hint
 from fair_ocean_agent.mapping.faire import map_study_to_faire, resolve_project_id
+from fair_ocean_agent.mapping.rules import RULES
 
 
 def _study(session, **kwargs) -> Study:
@@ -227,6 +229,43 @@ def test_llm_atomic_assay_facts_map_to_faire_protocol_fields_with_review(db_sess
     assert values["pcr_primer_reverse"].standardized_value == "1406r"
     assert values["thermocycler"].standardized_value == "Veriti Thermal Cycler (Applied Biosystems)"
     assert values["bioinfo_method_additional"].standardized_value == "DADA2 (v1.16) in R"
+    assert all(row.review_required is True for row in values.values())
+
+
+def test_all_v3_extraction_hints_have_mapping_rules():
+    rule_names = {rule.source_fact_type for rule in RULES}
+    missing = set(native_name_to_faire_hint()) - rule_names
+    assert not missing
+
+
+def test_v3_native_atomic_facts_map_through_faire_hints_with_review(db_session):
+    study = _study(db_session, title="v3 atomic facts")
+    for field, value in {
+        "dna_extraction_kit": "DNeasy PowerWater Kit",
+        "assay_name": "16S-V4",
+        "target_gene": "16S rRNA",
+        "denoising_tool": "DADA2 v1.16",
+        "reference_database": "SILVA 138",
+        "standard_curve_r_squared": "0.997",
+        "scientific_name": "Acropora cervicornis",
+    }.items():
+        _fact(db_session, study, field=field, value=value, entity_level="study", support=SupportType.EXPLICIT)
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    values = {
+        sv.target_field: sv
+        for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id)
+    }
+    assert values["nucl_acid_ext_kit"].standardized_value == "DNeasy PowerWater Kit"
+    assert values["assay_name"].standardized_value == "16S-V4"
+    assert values["target_gene"].standardized_value == "16S rRNA"
+    assert values["error_rate_tool"].standardized_value == "DADA2 v1.16"
+    assert values["otu_db"].standardized_value == "SILVA 138"
+    assert values["r2"].standardized_value == "0.997"
+    assert values["scientificName"].standardized_value == "Acropora cervicornis"
     assert all(row.review_required is True for row in values.values())
 
 

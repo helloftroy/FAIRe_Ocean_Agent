@@ -18,24 +18,15 @@ adding a new mapped field should only ever mean adding a rule here.
 - A few unambiguous project-level facts from ENA/BioProject: `study_title`,
   `center_name`.
 
-## What's deliberately NOT mapped here, and why
+## What's deliberately mapped conservatively
 
-- **LLM-extracted free-text facts** (`DNA_extraction_method`,
-  `PCR_amplification_conditions`, `storage_conditions`,
-  `sequencing_platform`) ARE mapped, but only to FAIRe's own
-  `*_method_additional` free-text fallback fields (or, for
-  `sequencing_platform`, to the enum field with `review_required=True`
-  flagged) -- never forced into the atomic fields FAIRe actually wants
-  (`pcr_primer_forward`, `pcr_cond`, `pcr_cycles`, `annealingTemp`,
-  `nucl_acid_ext_kit`, ...). The current extraction prompt (Milestone 4)
-  produces one coarse blob per concept, not FAIRe's atomic granularity, so
-  a rule that split it up would be inventing structure the source text
-  doesn't actually give deterministic evidence for. Getting full atomic
-  coverage here needs a FAIRe-aware extraction prompt. Where the current
-  LLM already emitted an atomic-looking fact (for example
-  `PCR_forward_primer_sequence`), the value is mapped to the matching FAIRe
-  field but still flagged `review_required=True` because those facts came
-  from an open-vocabulary prompt rather than a FAIRe-constrained extractor.
+- **LLM-extracted v3 native facts** from `extraction/faire_fields.py` map
+  through that taxonomy's optional FAIRe hints. These mappings are
+  intentionally marked `review_required=True`: the raw fact has passed
+  evidence verification, but it still came from a model reading prose, not
+  from a structured repository field. This gives downstream exports and
+  completeness checks real coverage without pretending the mapping is a
+  human-final curation decision.
 - `environmental_context` (LLM-extracted): genuinely ambiguous which of
   `env_broad_scale` / `env_local_scale` / `env_medium` it corresponds to
   without per-case judgement -- mapping it to any single one would risk
@@ -52,18 +43,23 @@ adding a new mapped field should only ever mean adding a rule here.
   publication metadata standard -- these were never in scope for FAIRe
   mapping.
 
-`project_id`, `samp_name`, `assay_name`, and `seq_id` (the FAIRe join keys
-linking rows across tables) are NOT produced from this rules table at all
--- see `mapping/faire.py` for why they're derived from `ExternalIdentifier`/
-`Entity` instead of treated as ordinary mapped facts.
+`project_id`, `samp_name`, and `seq_id` (FAIRe join keys linking rows
+across tables) are NOT produced from this rules table at all -- see
+`mapping/faire.py` for why they're derived from `ExternalIdentifier`/
+`Entity` instead of treated as ordinary mapped facts. `assay_name` can now
+be mapped from a v3 text-extracted native fact when the paper explicitly
+names the assay, but no assay Entity/table-row model exists yet.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Callable
 
 from fair_ocean_agent.database.enums import EntityLevel, MappingMethod
+from fair_ocean_agent.extraction.faire_fields import native_name_to_faire_hint
 from fair_ocean_agent.mapping.units import to_iso_event_date, to_meters
+from fair_ocean_agent.standards.faire_registry import build_faire_registry
 
 
 def _lat_only(value: str) -> str | None:
@@ -96,7 +92,7 @@ class MappingRule:
     review_required: bool = False
 
 
-RULES: tuple[MappingRule, ...] = (
+_EXPLICIT_RULES: tuple[MappingRule, ...] = (
     # --- Sample-level structured facts (NCBI BioSample / ENA) ---
     MappingRule("collection_date", EntityLevel.SAMPLE.value, "sampleMetadata", "eventDate",
                 MappingMethod.DETERMINISTIC_SYNONYM.value, transform=to_iso_event_date),
@@ -209,6 +205,85 @@ RULES: tuple[MappingRule, ...] = (
     MappingRule("sequencing_methodology", EntityLevel.STUDY.value, "projectMetadata",
                 "seq_method_additional", MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
 )
+
+
+# FAIRe fields can appear in multiple checklist classes. A model-extracted
+# study-level fact has no assay/taxon/run entity model yet, so choose the
+# class that preserves the most useful provenance today; exports for the
+# non-project/sample classes are still header-only until those entity
+# models exist.
+_TARGET_TABLE_OVERRIDES = {
+    "assay_name": "projectMetadata",
+    "quantificationCycle": "ampData",
+    "estimatedNumberOfCopies": "ampData",
+    "estimatedNumberOfCopies_unit": "ampData",
+    "scientificName": "taxaRaw",
+    "taxonRank": "taxaRaw",
+    "kingdom": "taxaRaw",
+    "phylum": "taxaRaw",
+    "class": "taxaRaw",
+    "order": "taxaRaw",
+    "family": "taxaRaw",
+    "genus": "taxaRaw",
+    "specificEpithet": "taxaRaw",
+    "percent_match": "taxaRaw",
+    "percent_query_cover": "taxaRaw",
+    "confidence_score": "taxaRaw",
+}
+
+_PREFERRED_TABLES = (
+    "projectMetadata",
+    "sampleMetadata",
+    "ampData",
+    "stdData",
+    "experimentRunMetadata",
+    "eLowQuantData",
+    "taxaRaw",
+    "taxaFinal",
+)
+
+
+@lru_cache(maxsize=1)
+def _faire_field_classes() -> dict[str, tuple[str, ...]]:
+    return {
+        term["upstream_field_name"]: tuple(term.get("data_type") or ())
+        for term in build_faire_registry()
+    }
+
+
+def _target_table_for_faire_field(faire_field: str) -> str:
+    override = _TARGET_TABLE_OVERRIDES.get(faire_field)
+    if override:
+        return override
+    classes = _faire_field_classes().get(faire_field, ())
+    for class_name in _PREFERRED_TABLES:
+        if class_name in classes:
+            return class_name
+    # Defensive fallback for a future taxonomy hint added before the schema
+    # resolver is updated. The tests below guard current hints.
+    return "projectMetadata"
+
+
+def _generated_v3_llm_rules() -> tuple[MappingRule, ...]:
+    explicit_names = {rule.source_fact_type for rule in _EXPLICIT_RULES}
+    generated: list[MappingRule] = []
+    for native_name, faire_field in sorted(native_name_to_faire_hint().items()):
+        if native_name in explicit_names:
+            continue
+        generated.append(
+            MappingRule(
+                native_name,
+                EntityLevel.STUDY.value,
+                _target_table_for_faire_field(faire_field),
+                faire_field,
+                MappingMethod.SUGGESTED_SEMANTIC.value,
+                review_required=True,
+            )
+        )
+    return tuple(generated)
+
+
+RULES: tuple[MappingRule, ...] = _EXPLICIT_RULES + _generated_v3_llm_rules()
 
 
 def rules_for(fact_type: str, entity_level: str | None) -> list[MappingRule]:
