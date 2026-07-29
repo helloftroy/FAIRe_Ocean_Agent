@@ -195,10 +195,29 @@ def native_name_to_faire_hint() -> dict[str, str]:
     return {f.native_name: f.faire_hint for fields in FIELD_GROUPS.values() for f in fields if f.faire_hint}
 
 
+def field_names_for_reference(
+    exclude_faire_hints: frozenset[str] = frozenset(),
+    include_group_names: frozenset[str] | None = None,
+    include_fallback_names: frozenset[str] | None = None,
+) -> frozenset[str]:
+    names: set[str] = set()
+    for group_name, fields in FIELD_GROUPS.items():
+        if include_group_names is not None and group_name not in include_group_names:
+            continue
+        names.update(f.native_name for f in fields if f.faire_hint not in exclude_faire_hints)
+    names.update(
+        f.native_name
+        for f in FALLBACK_NARRATIVE_FIELDS
+        if include_fallback_names is None or f.native_name in include_fallback_names
+    )
+    return frozenset(names)
+
+
 def render_field_reference(
     exclude_faire_hints: frozenset[str] = frozenset(),
     include_group_names: frozenset[str] | None = None,
     include_fallback_names: frozenset[str] | None = None,
+    include_native_names: frozenset[str] | None = None,
 ) -> str:
     """Renders FIELD_GROUPS + FALLBACK_NARRATIVE_FIELDS as the itemized,
     group-headed checklist `extraction/text.py`'s prompt embeds -- one
@@ -227,7 +246,12 @@ def render_field_reference(
     for group_name, fields in FIELD_GROUPS.items():
         if include_group_names is not None and group_name not in include_group_names:
             continue
-        remaining = [f for f in fields if f.faire_hint not in exclude_faire_hints]
+        remaining = [
+            f
+            for f in fields
+            if f.faire_hint not in exclude_faire_hints
+            and (include_native_names is None or f.native_name in include_native_names)
+        ]
         if not remaining:
             continue
         lines.append(f"{group_name}:")
@@ -239,6 +263,7 @@ def render_field_reference(
         f
         for f in FALLBACK_NARRATIVE_FIELDS
         if include_fallback_names is None or f.native_name in include_fallback_names
+        if include_native_names is None or f.native_name in include_native_names
     ]
     if fallback_fields:
         lines.append("General narrative fallback (use only if no concept above applies; no FAIRe hint):")

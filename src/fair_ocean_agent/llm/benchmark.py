@@ -27,7 +27,13 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from fair_ocean_agent.dates import try_parse_date
-from fair_ocean_agent.extraction.text import EXTRACTION_FOCUSES, build_prompt, segment_source_text, segments_for_focus
+from fair_ocean_agent.extraction.text import (
+    EXTRACTION_FOCUSES,
+    build_prompt,
+    recall_missing_fact_types,
+    segment_source_text,
+    segments_for_focus,
+)
 from fair_ocean_agent.llm.base import LLMBackend, LLMBackendError
 
 
@@ -141,6 +147,11 @@ def _facts_with_verified_segment_ids(returned_facts: list[dict], segment_lookup:
     return verified
 
 
+def _parsed_facts(parsed) -> list[dict]:
+    facts = parsed if isinstance(parsed, list) else (parsed.get("facts", []) if isinstance(parsed, dict) else [])
+    return [fact for fact in facts if isinstance(fact, dict)]
+
+
 @dataclass
 class CaseResult:
     case_id: str
@@ -187,9 +198,38 @@ def run_case(backend: LLMBackend, case: GoldCase) -> CaseResult:
             latency_seconds += response.latency_seconds
         if parsed is None:
             json_valid = False
+            parsed_facts = []
+        else:
+            parsed_facts = _parsed_facts(parsed)
+            returned_facts.extend(parsed_facts)
+
+        verified_first_pass = _facts_with_verified_segment_ids(parsed_facts, segment_lookup)
+        accepted_fact_types = {
+            str(fact.get("fact_type_candidate"))
+            for fact in verified_first_pass
+            if fact.get("fact_type_candidate")
+        }
+        missing_types = recall_missing_fact_types(focus, frozenset(), accepted_fact_types, focused_segments)
+        if not missing_types:
             continue
-        parsed_facts = parsed if isinstance(parsed, list) else (parsed.get("facts", []) if isinstance(parsed, dict) else [])
-        returned_facts.extend(f for f in parsed_facts if isinstance(f, dict))
+        recall_prompt = build_prompt(
+            f"{case.section_title} [{focus.name}] [recall]",
+            case.source_text,
+            segments=focused_segments,
+            focus=focus,
+            include_native_names=missing_types,
+            recall_pass=True,
+        )
+        try:
+            parsed, response = backend.generate_json(recall_prompt, temperature=0)
+        except LLMBackendError:
+            continue
+        if response is not None:
+            latency_seconds += response.latency_seconds
+        if parsed is None:
+            json_valid = False
+            continue
+        returned_facts.extend(_parsed_facts(parsed))
 
     if not json_valid and not returned_facts:
         return CaseResult(

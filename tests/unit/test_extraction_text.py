@@ -10,6 +10,7 @@ from fair_ocean_agent.extraction.text import (
     build_prompt,
     extract_facts_from_section,
     resolved_faire_fields_for_study,
+    recall_missing_fact_types,
     segment_source_text,
     segments_for_focus,
     split_section_text,
@@ -99,16 +100,83 @@ def test_extract_facts_from_section_chunks_long_text_and_merges_facts():
     )
 
     assert [fact.fact_type_candidate for fact in facts] == ["collection_date", "forward_primer_name"]
-    assert len(backend.calls) == 2
+    assert len(backend.calls) == 4
     assert all(call["max_tokens"] == 2048 for call in backend.calls)
     assert "METHODS.P001:" in backend.calls[0]["prompt"]
-    assert "METHODS.P002:" in backend.calls[1]["prompt"]
+    assert "METHODS.P002:" in backend.calls[2]["prompt"]
     assert facts[0].evidence_quote == first
     assert facts[1].evidence_quote == second
 
 
 def test_prompt_version_is_stable_constant():
-    assert PROMPT_VERSION == "text-extraction-v5-focused-segment-evidence-ids"
+    assert PROMPT_VERSION == "text-extraction-v6-focused-recall-segment-evidence-ids"
+
+
+def test_recall_second_pass_asks_only_for_missing_fact_types_and_merges_new_facts():
+    section_text = "PCR reactions used MiFish-U-F and MiFish-U-R primers at 54 C."
+
+    def respond(prompt):
+        if "[recall]" in prompt:
+            assert "forward_primer_name" not in prompt
+            assert "reverse_primer_name" in prompt
+            return json.dumps(
+                [{"fact_type_candidate": "reverse_primer_name", "raw_value": "MiFish-U-R", "evidence_id": "PCR.P001"}]
+            )
+        return json.dumps(
+            [{"fact_type_candidate": "forward_primer_name", "raw_value": "MiFish-U-F", "evidence_id": "PCR.P001"}]
+        )
+
+    backend = MockLLMBackend(responses=respond)
+    facts, _ = extract_facts_from_section(backend, "PCR", section_text)
+
+    assert [fact.fact_type_candidate for fact in facts] == ["forward_primer_name", "reverse_primer_name"]
+    assert len(backend.calls) == 2
+    assert "This is a recall-focused second pass" in backend.calls[1]["prompt"]
+
+
+def test_recall_second_pass_dedupes_repeated_first_pass_facts():
+    section_text = "PCR reactions used MiFish-U-F primers."
+    response = json.dumps(
+        [{"fact_type_candidate": "forward_primer_name", "raw_value": "MiFish-U-F", "evidence_id": "PCR.P001"}]
+    )
+    backend = MockLLMBackend(responses=[response])
+
+    facts, _ = extract_facts_from_section(backend, "PCR", section_text)
+
+    assert [fact.fact_type_candidate for fact in facts] == ["forward_primer_name"]
+
+
+def test_recall_second_pass_failure_preserves_first_pass_facts():
+    from fair_ocean_agent.llm.base import LLMBackendError
+
+    class RecallFailsBackend(MockLLMBackend):
+        def generate(self, *args, **kwargs):
+            if self.calls:
+                raise LLMBackendError("recall failed")
+            return super().generate(*args, **kwargs)
+
+    response = json.dumps(
+        [{"fact_type_candidate": "forward_primer_name", "raw_value": "MiFish-U-F", "evidence_id": "PCR.P001"}]
+    )
+    backend = RecallFailsBackend(responses=[response])
+
+    facts, _ = extract_facts_from_section(backend, "PCR", "PCR reactions used MiFish-U-F primers.")
+
+    assert [fact.fact_type_candidate for fact in facts] == ["forward_primer_name"]
+
+
+def test_recall_missing_fact_types_skips_primer_sequences_without_nucleotide_text():
+    primer_focus = next(focus for focus in EXTRACTION_FOCUSES if focus.name == "primer_pcr_assay")
+    name_only_segments = segment_source_text("PCR", "PCR used MiFish-U-F and MiFish-U-R primers.")
+    sequence_segments = segment_source_text("PCR", "PCR used primers GTGYCAGCMGCCGCGGTAA and GGACTACNVGGGTWTCTAAT.")
+
+    name_only_missing = recall_missing_fact_types(primer_focus, frozenset(), set(), name_only_segments)
+    sequence_missing = recall_missing_fact_types(primer_focus, frozenset(), set(), sequence_segments)
+
+    assert "forward_primer_sequence" not in name_only_missing
+    assert "reverse_primer_sequence" not in name_only_missing
+    assert "forward_primer_sequence" in sequence_missing
+    assert "reverse_primer_sequence" in sequence_missing
 
 
 # --- FAIRe-aware taxonomy regression tests (Milestone 8, corrected in v3) ---

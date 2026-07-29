@@ -27,6 +27,7 @@ from fair_ocean_agent.extraction.text import (
     DEFAULT_MAX_SECTION_CHARS_PER_CALL,
     EXTRACTION_FOCUSES,
     build_prompt,
+    recall_missing_fact_types,
     segment_source_text,
     segments_for_focus,
     split_segments_for_calls,
@@ -174,6 +175,11 @@ def _score_facts(parsed, segment_lookup: dict[str, str]) -> tuple[int, int, int,
     return len(returned), len(verified), mappable_facts, sorted(target_fields), invalid_hints, empty_hints
 
 
+def _parsed_facts(parsed) -> list[dict]:
+    returned = parsed if isinstance(parsed, list) else (parsed.get("facts", []) if isinstance(parsed, dict) else [])
+    return [fact for fact in returned if isinstance(fact, dict)]
+
+
 def _result_key(result: SectionResult) -> tuple[str, str, str]:
     return (result.candidate_label, result.pmcid, result.section_title)
 
@@ -309,8 +315,41 @@ def run(args: argparse.Namespace) -> None:
                                 if parsed is None:
                                     chunk_error = f"invalid JSON in chunk {index + 1}/{len(chunks)} focus {focus.name}"
                                     break
-                                returned = parsed if isinstance(parsed, list) else (parsed.get("facts", []) if isinstance(parsed, dict) else [])
-                                parsed_chunks.extend(fact for fact in returned if isinstance(fact, dict))
+                                returned = _parsed_facts(parsed)
+                                parsed_chunks.extend(returned)
+                                verified_first_pass = [
+                                    fact
+                                    for fact in returned
+                                    if _candidate_evidence_ids(fact)
+                                    and all(evidence_id in segment_lookup for evidence_id in _candidate_evidence_ids(fact))
+                                ]
+                                accepted_fact_types = {
+                                    str(fact.get("fact_type_candidate"))
+                                    for fact in verified_first_pass
+                                    if fact.get("fact_type_candidate")
+                                }
+                                missing_types = recall_missing_fact_types(
+                                    focus,
+                                    frozenset(),
+                                    accepted_fact_types,
+                                    focused_segments,
+                                )
+                                if not missing_types:
+                                    continue
+                                recall_prompt = build_prompt(
+                                    f"{chunk_title} [{focus.name}] [recall]",
+                                    "",
+                                    segments=focused_segments,
+                                    focus=focus,
+                                    include_native_names=missing_types,
+                                    recall_pass=True,
+                                )
+                                response = backend.generate(recall_prompt, temperature=0)
+                                parsed = _try_parse_json(response.text)
+                                if parsed is None:
+                                    chunk_error = f"invalid JSON in chunk {index + 1}/{len(chunks)} focus {focus.name} recall"
+                                    break
+                                parsed_chunks.extend(_parsed_facts(parsed))
                             if chunk_error is not None:
                                 break
                     except LLMBackendError as exc:

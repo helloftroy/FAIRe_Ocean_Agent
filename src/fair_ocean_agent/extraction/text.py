@@ -11,7 +11,9 @@ v5 splits each section chunk into focused topic passes (sample/DNA,
 primer/PCR, sequencing/library, bioinformatics/taxonomy) and skips any pass
 whose source segments do not contain cues for that topic. This gives small
 local models a shorter, less ambiguous checklist per call rather than one
-broad "find everything" prompt.
+broad "find everything" prompt. v6 adds a recall pass after each
+first-pass topic extraction: the second prompt lists only the in-topic fact
+types not returned by the first pass and asks whether any were missed.
 
 **Why "FAIRe-aware" matters (v1 -> v2):** v1's prompt was fully open-
 vocabulary -- "extract whatever facts you find, name them however you
@@ -76,12 +78,12 @@ from sqlalchemy.orm import Session
 
 from fair_ocean_agent.database.enums import EntityLevel, MissingnessStatus, SupportType
 from fair_ocean_agent.database.models import StandardizedValue
-from fair_ocean_agent.extraction.faire_fields import render_field_reference
-from fair_ocean_agent.llm.base import LLMBackend, LLMResponse
+from fair_ocean_agent.extraction.faire_fields import field_names_for_reference, render_field_reference
+from fair_ocean_agent.llm.base import LLMBackend, LLMBackendError, LLMResponse
 from fair_ocean_agent.mapping.faire import TARGET_SCHEMA
 from fair_ocean_agent.sources.base import RawFactCandidate
 
-PROMPT_VERSION = "text-extraction-v5-focused-segment-evidence-ids"
+PROMPT_VERSION = "text-extraction-v6-focused-recall-segment-evidence-ids"
 DEFAULT_MAX_SECTION_CHARS_PER_CALL = 1600
 
 
@@ -238,16 +240,26 @@ def resolved_faire_fields_for_study(session: Session, study_id: str) -> frozense
 def build_extraction_instructions(
     exclude_faire_hints: frozenset[str] = frozenset(),
     focus: ExtractionFocus | None = None,
+    include_native_names: frozenset[str] | None = None,
+    recall_pass: bool = False,
 ) -> str:
     field_reference = render_field_reference(
         exclude_faire_hints,
         include_group_names=focus.group_names if focus else None,
         include_fallback_names=focus.fallback_names if focus else None,
+        include_native_names=include_native_names,
     )
     focus_sentence = (
         f"This focused pass is only for {focus.description}. "
         "Ignore explicitly-stated facts outside that focus; another pass will handle them.\n\n"
         if focus
+        else ""
+    )
+    recall_sentence = (
+        "This is a recall-focused second pass. A first extraction pass already ran over this same text. "
+        "Check whether it missed any of the fact types in the checklist below. Return only newly found facts "
+        "whose fact_type_candidate is one of the listed missing types; do not repeat facts that were already extracted.\n\n"
+        if recall_pass
         else ""
     )
     return (
@@ -257,6 +269,7 @@ def build_extraction_instructions(
         "standard laboratory practice, do not fill in expected or typical values, "
         "and do not use any knowledge beyond this text.\n\n"
         f"{focus_sentence}"
+        f"{recall_sentence}"
         "For each fact, set fact_type_candidate to the EXACT concept name from the "
         "checklist below whenever the fact matches one of those concepts -- do "
         "not paraphrase or invent a variant spelling of a listed name. If an "
@@ -355,8 +368,10 @@ def build_prompt(
     exclude_faire_hints: frozenset[str] = frozenset(),
     segments: list[SourceSegment] | None = None,
     focus: ExtractionFocus | None = None,
+    include_native_names: frozenset[str] | None = None,
+    recall_pass: bool = False,
 ) -> str:
-    instructions = build_extraction_instructions(exclude_faire_hints, focus)
+    instructions = build_extraction_instructions(exclude_faire_hints, focus, include_native_names, recall_pass)
     source_segments = segments if segments is not None else segment_source_text(section_title, section_text)
     return PROMPT_TEMPLATE.format(
         instructions=instructions,
@@ -459,6 +474,43 @@ def segments_for_focus(
     ]
 
 
+def fact_type_names_for_focus(
+    focus: ExtractionFocus,
+    exclude_faire_hints: frozenset[str] = frozenset(),
+) -> frozenset[str]:
+    return field_names_for_reference(
+        exclude_faire_hints,
+        include_group_names=focus.group_names,
+        include_fallback_names=focus.fallback_names,
+    )
+
+
+def _source_has_nucleotide_sequence(segments: list[SourceSegment]) -> bool:
+    text = " ".join(segment.text for segment in segments)
+    return any(
+        len(match.group(0)) >= 8
+        for match in re.finditer(r"\b[ACGTRYSWKMBDHVNacgtryswkmbdhvn]{8,}\b", text)
+    )
+
+
+def recall_missing_fact_types(
+    focus: ExtractionFocus,
+    exclude_faire_hints: frozenset[str],
+    accepted_fact_types: set[str],
+    segments: list[SourceSegment],
+) -> frozenset[str]:
+    missing_types = set(fact_type_names_for_focus(focus, exclude_faire_hints) - accepted_fact_types)
+
+    # Small models often confuse primer names (e.g. MiFish-U-F) with primer
+    # sequences on a recall pass. Only ask for sequence fields when the text
+    # contains a nucleotide-like token long enough to plausibly be a primer.
+    if not _source_has_nucleotide_sequence(segments):
+        missing_types.discard("forward_primer_sequence")
+        missing_types.discard("reverse_primer_sequence")
+
+    return frozenset(missing_types)
+
+
 def extract_facts_from_section(
     backend: LLMBackend,
     section_title: str,
@@ -467,6 +519,7 @@ def extract_facts_from_section(
     max_section_chars_per_call: int = DEFAULT_MAX_SECTION_CHARS_PER_CALL,
     max_output_tokens: int | None = None,
     focuses: tuple[ExtractionFocus, ...] = EXTRACTION_FOCUSES,
+    recall_second_pass: bool = True,
 ) -> tuple[list[RawFactCandidate], LLMResponse | None]:
     """Returns (verified facts, the last LLMResponse -- for latency/token
     bookkeeping by the caller). An empty fact list can mean either "the
@@ -504,11 +557,42 @@ def extract_facts_from_section(
             )
             parsed, response = backend.generate_json(prompt, temperature=0, max_tokens=max_output_tokens)
             last_response = response
-            if parsed is None:
+            candidates = []
+            accepted_facts: list[RawFactCandidate] = []
+            if parsed is not None:
+                candidates = parsed if isinstance(parsed, list) else (parsed.get("facts", []) if isinstance(parsed, dict) else [])
+                accepted_facts = _facts_from_candidates(candidates, segment_lookup, focused_title, seen)
+                facts.extend(accepted_facts)
+
+            if not recall_second_pass:
                 continue
 
+            missing_types = recall_missing_fact_types(
+                focus,
+                exclude_faire_hints,
+                {fact.fact_type_candidate for fact in accepted_facts},
+                focused_segments,
+            )
+            if not missing_types:
+                continue
+            recall_prompt = build_prompt(
+                f"{focused_title} [recall]",
+                "",
+                exclude_faire_hints,
+                segments=focused_segments,
+                focus=focus,
+                include_native_names=missing_types,
+                recall_pass=True,
+            )
+            try:
+                parsed, response = backend.generate_json(recall_prompt, temperature=0, max_tokens=max_output_tokens)
+            except LLMBackendError:
+                continue
+            last_response = response
+            if parsed is None:
+                continue
             candidates = parsed if isinstance(parsed, list) else (parsed.get("facts", []) if isinstance(parsed, dict) else [])
-            facts.extend(_facts_from_candidates(candidates, segment_lookup, focused_title, seen))
+            facts.extend(_facts_from_candidates(candidates, segment_lookup, f"{focused_title} [recall]", seen))
     return facts, last_response
 
 
