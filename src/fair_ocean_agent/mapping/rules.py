@@ -10,13 +10,32 @@ adding a new mapped field should only ever mean adding a rule here.
 ## observed raw_facts vocabulary -- see the Milestone 6 section of
 ## README.md for the query that produced this list)
 
-- Sample-level structured facts from NCBI BioSample / ENA: `collection_date`,
-  `depth`, `env_broad_scale`, `env_local_scale`, `env_medium`,
-  `geo_loc_name`, `lat_lon`, `collection_method`.
+- Sample-level structured facts from NCBI BioSample / ENA -- all of these
+  arrive through the exact same mechanism (`sources/ncbi.py`'s generic
+  `Attributes/Attribute` passthrough: `fact_type_candidate` is literally
+  whatever MIxS/INSDC attribute name a real BioSample XML record carries):
+  `collection_date`, `depth`, `env_broad_scale`, `env_local_scale`,
+  `env_medium`, `geo_loc_name`, `lat_lon`, `collection_method`,
+  `elev`, `samp_collect_device`, `samp_size`, `samp_size_unit`, `temp`,
+  `salinity`, `ph`, `diss_oxygen`. The last 8 only produce a
+  StandardizedValue for a given sample if that sample's real BioSample
+  record actually reported that attribute -- a rule existing here does not
+  mean every sample gets a value, only that one is captured when the
+  source has it.
 - Sequencing-run-level structured facts from ENA: `instrument_platform`,
-  `instrument_model`, `sample_accession`.
+  `instrument_model`, `sample_accession`, `read_count` (-> FAIRe's
+  `input_read_count`), `fastq_ftp`/`fastq_md5` (-> FAIRe's
+  `filename`/`filename2`/`checksum_filename`/`checksum_filename2`, split on
+  ENA's `;`-joined forward/reverse pairing), and (whenever `fastq_md5` is
+  present) a deterministic `checksum_method` = "MD5" -- ENA's read_run
+  report only ever gives MD5 checksums, never states the algorithm
+  explicitly, so this is inferred rather than read verbatim, but no less
+  deterministic for it. `library_layout` (added to `sources/ena.py`'s
+  `RUN_FIELDS` alongside this) -> FAIRe's `lib_layout`.
 - A few unambiguous project-level facts from ENA/BioProject: `study_title`,
   `center_name`.
+- `citation` (OBIS/GBIF/PANGAEA, all three emit this exact field name at
+  the project level) -> FAIRe's `bibliographicCitation`.
 
 ## What's deliberately mapped conservatively
 
@@ -35,13 +54,26 @@ adding a new mapped field should only ever mean adding a rule here.
   FAIRe field asks for these; `assay_type_enum` (targeted | metabarcoding |
   other) is adjacent but not a deterministic function of these ENA
   values -- would need per-case judgement, not a rule.
-- `base_count`, `read_count`, `fastq_ftp`, `fastq_bytes`, `fastq_md5`: these
-  already flow into `DataAsset` via `assets/inventory.py` (Milestone 5);
-  duplicating them as `standardized_values` would be redundant.
+- `base_count`, `fastq_bytes`: no FAIRe field asks for either (checked
+  directly against the vendored schema's field list) -- these two, unlike
+  `read_count`/`fastq_ftp`/`fastq_md5` above, genuinely have nowhere to
+  map. Still flow into `DataAsset` via `assets/inventory.py` (Milestone 5)
+  regardless.
 - Publication bibliographic facts (`title`, `authorships`, `license`,
   `publisher`, ...): FAIRe is a molecular/sample metadata checklist, not a
   publication metadata standard -- these were never in scope for FAIRe
   mapping.
+- **Not yet possible -- no adapter produces the source fact at all**, so no
+  rule exists for these even though a real FAIRe field wants one:
+  `associatedSequences` (no adapter surfaces genetic-sequence identifiers
+  as their own fact); OBIS/GBIF's `target_gene`/primer/PCR/annealing-temp/
+  amplicon-size fields (checked directly against `sources/obis.py`/
+  `sources/gbif.py`: neither adapter's current API calls fetch anything
+  but basic dataset/occurrence metadata -- OBIS's DNA-derived-data/MIxS
+  extension, which can carry these, isn't queried by the current adapter);
+  ENA's `LIBRARY_CONSTRUCTION_PROTOCOL` (not in `sources/ena.py`'s
+  `RUN_FIELDS` at all). Each needs real adapter-side work before a mapping
+  rule here would do anything.
 
 `project_id`, `samp_name`, and `seq_id` (FAIRe join keys linking rows
 across tables) are NOT produced from this rules table at all -- see
@@ -77,6 +109,57 @@ def _lon_only(value: str) -> str | None:
 
 
 def _identity(value: str) -> str | None:
+    return value
+
+
+def _semicolon_parts(value: str) -> list[str]:
+    """ENA's read_run report joins per-read-direction values (fastq_ftp,
+    fastq_md5) with ';' -- one entry for single-end, two for paired-end
+    (forward;reverse, in that order). Never more than two in practice
+    (this pipeline only ever asks for standard short-read Illumina/ONT/
+    PacBio single or paired layouts)."""
+    return [part for part in value.split(";") if part]
+
+
+def _fastq_filename_forward(value: str) -> str | None:
+    parts = _semicolon_parts(value)
+    return parts[0].rsplit("/", 1)[-1] if parts else None
+
+
+def _fastq_filename_reverse(value: str) -> str | None:
+    parts = _semicolon_parts(value)
+    return parts[1].rsplit("/", 1)[-1] if len(parts) >= 2 else None
+
+
+def _fastq_checksum_forward(value: str) -> str | None:
+    parts = _semicolon_parts(value)
+    return parts[0] if parts else None
+
+
+def _fastq_checksum_reverse(value: str) -> str | None:
+    parts = _semicolon_parts(value)
+    return parts[1] if len(parts) >= 2 else None
+
+
+def _constant_md5(_value: str) -> str:
+    """ENA's read_run report only ever reports an MD5 digest in
+    fastq_md5 -- it never states the algorithm, but there's nothing to
+    disambiguate: whenever fastq_md5 is present at all, the algorithm was
+    MD5. A deterministic constant, not a read-through of the source
+    value."""
+    return "MD5"
+
+
+def _normalize_lib_layout(value: str) -> str:
+    """ENA's read_run report gives PAIRED/SINGLE; FAIRe's lib_layout_enum
+    wants "paired end"/"single end". Falls back to the raw value
+    unrecognized -- mapping/faire.py's enum check then flags it for review
+    rather than silently guessing."""
+    normalized = value.strip().upper()
+    if normalized == "PAIRED":
+        return "paired end"
+    if normalized == "SINGLE":
+        return "single end"
     return value
 
 
@@ -116,6 +199,22 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
                 MappingMethod.DETERMINISTIC_SYNONYM.value, transform=_lon_only),
     MappingRule("collection_method", EntityLevel.SAMPLE.value, "sampleMetadata", "samp_collect_method",
                 MappingMethod.DETERMINISTIC_SYNONYM.value),
+    MappingRule("elev", EntityLevel.SAMPLE.value, "sampleMetadata", "elev",
+                MappingMethod.EXACT_LABEL.value),
+    MappingRule("samp_collect_device", EntityLevel.SAMPLE.value, "sampleMetadata", "samp_collect_device",
+                MappingMethod.EXACT_LABEL.value),
+    MappingRule("samp_size", EntityLevel.SAMPLE.value, "sampleMetadata", "samp_size",
+                MappingMethod.EXACT_LABEL.value),
+    MappingRule("samp_size_unit", EntityLevel.SAMPLE.value, "sampleMetadata", "samp_size_unit",
+                MappingMethod.EXACT_LABEL.value, enum_name="samp_size_unit_enum"),
+    MappingRule("temp", EntityLevel.SAMPLE.value, "sampleMetadata", "temp",
+                MappingMethod.EXACT_LABEL.value),
+    MappingRule("salinity", EntityLevel.SAMPLE.value, "sampleMetadata", "salinity",
+                MappingMethod.EXACT_LABEL.value),
+    MappingRule("ph", EntityLevel.SAMPLE.value, "sampleMetadata", "ph",
+                MappingMethod.EXACT_LABEL.value),
+    MappingRule("diss_oxygen", EntityLevel.SAMPLE.value, "sampleMetadata", "diss_oxygen",
+                MappingMethod.EXACT_LABEL.value),
 
     # --- Sequencing-run-level structured facts (ENA) ---
     MappingRule("instrument_platform", EntityLevel.SEQUENCING_RUN.value, "projectMetadata", "platform",
@@ -124,11 +223,27 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
                 MappingMethod.DETERMINISTIC_SYNONYM.value, enum_name="instrument_enum", review_required=True),
     MappingRule("sample_accession", EntityLevel.SEQUENCING_RUN.value, "sampleMetadata", "materialSampleID",
                 MappingMethod.DETERMINISTIC_SYNONYM.value),
+    MappingRule("read_count", EntityLevel.SEQUENCING_RUN.value, "experimentRunMetadata", "input_read_count",
+                MappingMethod.DETERMINISTIC_SYNONYM.value),
+    MappingRule("fastq_ftp", EntityLevel.SEQUENCING_RUN.value, "experimentRunMetadata", "filename",
+                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=_fastq_filename_forward),
+    MappingRule("fastq_ftp", EntityLevel.SEQUENCING_RUN.value, "experimentRunMetadata", "filename2",
+                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=_fastq_filename_reverse),
+    MappingRule("fastq_md5", EntityLevel.SEQUENCING_RUN.value, "experimentRunMetadata", "checksum_filename",
+                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=_fastq_checksum_forward),
+    MappingRule("fastq_md5", EntityLevel.SEQUENCING_RUN.value, "experimentRunMetadata", "checksum_filename2",
+                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=_fastq_checksum_reverse),
+    MappingRule("fastq_md5", EntityLevel.SEQUENCING_RUN.value, "projectMetadata", "checksum_method",
+                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=_constant_md5, enum_name="checksum_method_enum"),
+    MappingRule("library_layout", EntityLevel.SEQUENCING_RUN.value, "projectMetadata", "lib_layout",
+                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=_normalize_lib_layout, enum_name="lib_layout_enum"),
 
     # --- Project-level facts (ENA/BioProject) ---
     MappingRule("study_title", EntityLevel.PROJECT.value, "projectMetadata", "project_name",
                 MappingMethod.DETERMINISTIC_SYNONYM.value),
     MappingRule("center_name", EntityLevel.PROJECT.value, "projectMetadata", "institution",
+                MappingMethod.DETERMINISTIC_SYNONYM.value),
+    MappingRule("citation", EntityLevel.PROJECT.value, "projectMetadata", "bibliographicCitation",
                 MappingMethod.DETERMINISTIC_SYNONYM.value),
 
     # --- LLM-extracted free text (study-level): best-effort, always flagged for review ---
@@ -265,10 +380,25 @@ def _target_table_for_faire_field(faire_field: str) -> str:
 
 
 def _generated_v3_llm_rules() -> tuple[MappingRule, ...]:
-    explicit_names = {rule.source_fact_type for rule in _EXPLICIT_RULES}
+    """Every generated rule here is scoped to EntityLevel.STUDY -- so only
+    an _EXPLICIT_RULES entry that also applies at STUDY level (its own
+    source_entity_level is STUDY, or None for "any level") should suppress
+    one. A structured-source rule scoped to a *different* entity level
+    (e.g. ENA's "library_layout" at SEQUENCING_RUN) must never suppress
+    this taxonomy's own "library_layout" native_name (a genuinely different
+    fact, coincidentally sharing a name with an ENA field) at STUDY level --
+    a real regression this exact check caught: adding the ENA rule
+    silently stopped every LLM-extracted STUDY-level "library_layout" fact
+    from mapping at all, since the old check only compared fact_type
+    strings, ignoring entity_level entirely."""
+    explicit_at_study_level = {
+        rule.source_fact_type
+        for rule in _EXPLICIT_RULES
+        if rule.source_entity_level in (None, EntityLevel.STUDY.value)
+    }
     generated: list[MappingRule] = []
     for native_name, faire_field in sorted(native_name_to_faire_hint().items()):
-        if native_name in explicit_names:
+        if native_name in explicit_at_study_level:
             continue
         generated.append(
             MappingRule(

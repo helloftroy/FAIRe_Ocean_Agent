@@ -89,7 +89,18 @@ def _resolve_entity_id(session: Session, study_id: str, fact: RawFact, rule: Map
         return sample.entity_id if sample else None
     if rule.target_table == "projectMetadata":
         return None
-    if fact.entity_level == EntityLevel.SAMPLE.value:
+    if fact.entity_level in (EntityLevel.SAMPLE.value, EntityLevel.SEQUENCING_RUN.value):
+        # A run-level fact (e.g. ENA's per-run fastq_ftp/fastq_md5/read_count,
+        # mapped onto experimentRunMetadata's filename/checksum_filename/
+        # input_read_count) genuinely differs run to run -- unlike
+        # instrument_platform/instrument_model, which map onto
+        # projectMetadata and are expected to agree across a study's runs
+        # (see the target_table check above), so those still correctly
+        # collapse to one project-wide row. Before this, every
+        # SEQUENCING_RUN-level rule targeting a *per-entity* table (not
+        # projectMetadata) fell through to the study-wide broadcast default
+        # below, silently discarding all but one run's value the first time
+        # a real per-run field (rather than platform/instrument) was mapped.
         return fact.entity_id
     return None  # study-wide fact mapped onto a sample-scoped field: broadcast default
 

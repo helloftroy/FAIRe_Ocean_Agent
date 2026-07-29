@@ -8,7 +8,7 @@ from fair_ocean_agent.database.enums import EntityLevel, IdentifierType, Support
 from fair_ocean_agent.database.models import Entity, ExternalIdentifier, RawFact, StandardizedValue, Study
 from fair_ocean_agent.extraction.faire_fields import native_name_to_faire_hint
 from fair_ocean_agent.mapping.faire import map_study_to_faire, resolve_project_id
-from fair_ocean_agent.mapping.rules import RULES
+from fair_ocean_agent.mapping.rules import RULES, rules_for
 
 
 def _study(session, **kwargs) -> Study:
@@ -62,6 +62,186 @@ def test_maps_sample_level_structured_facts(db_session):
     assert values["decimalLatitude"].standardized_value == "38.030000"
     assert values["decimalLongitude"].standardized_value == "-122.151667"
     assert created == len(values)
+
+
+def test_maps_sample_level_biosample_attributes_not_previously_covered(db_session):
+    """elev/samp_collect_device/samp_size/samp_size_unit/temp/salinity/ph/
+    diss_oxygen all arrive through the exact same NCBI BioSample
+    Attributes/Attribute passthrough as collection_date/depth/geo_loc_name
+    above (sources/ncbi.py) -- these rules just hadn't been added yet."""
+    study = _study(db_session, title="More BioSample attributes")
+    sample = Entity(study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN1")
+    db_session.add(sample)
+    db_session.flush()
+    _fact(db_session, study, entity=sample, field="elev", value="1200", entity_level="sample")
+    _fact(db_session, study, entity=sample, field="samp_collect_device", value="Niskin bottle", entity_level="sample")
+    _fact(db_session, study, entity=sample, field="samp_size", value="500", entity_level="sample")
+    _fact(db_session, study, entity=sample, field="samp_size_unit", value="mL", entity_level="sample")
+    _fact(db_session, study, entity=sample, field="temp", value="18.5", entity_level="sample")
+    _fact(db_session, study, entity=sample, field="salinity", value="35", entity_level="sample")
+    _fact(db_session, study, entity=sample, field="ph", value="8.1", entity_level="sample")
+    _fact(db_session, study, entity=sample, field="diss_oxygen", value="6.2", entity_level="sample")
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    values = {
+        sv.target_field: sv.standardized_value
+        for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id, entity_id=sample.entity_id)
+    }
+    assert values["elev"] == "1200"
+    assert values["samp_collect_device"] == "Niskin bottle"
+    assert values["samp_size"] == "500"
+    assert values["samp_size_unit"] == "mL"
+    assert values["temp"] == "18.5"
+    assert values["salinity"] == "35"
+    assert values["ph"] == "8.1"
+    assert values["diss_oxygen"] == "6.2"
+
+
+def test_maps_run_level_fastq_and_checksum_and_lib_layout(db_session):
+    """ENA's fastq_ftp/fastq_md5 (';'-joined forward;reverse pairs) split
+    into FAIRe's filename/filename2/checksum_filename/checksum_filename2;
+    checksum_method is inferred as a constant ("MD5" -- ENA never reports
+    another algorithm); library_layout normalizes ENA's PAIRED/SINGLE into
+    FAIRe's lib_layout_enum spelling."""
+    study = _study(db_session, title="Run-level file facts")
+    run = Entity(study_id=study.study_id, entity_level=EntityLevel.SEQUENCING_RUN.value, external_identifier="SRR1")
+    db_session.add(run)
+    db_session.flush()
+    _fact(
+        db_session, study, entity=run, entity_level="sequencing_run", field="fastq_ftp",
+        value="ftp.sra.ebi.ac.uk/vol1/fastq/SRR001/SRR1_1.fastq.gz;ftp.sra.ebi.ac.uk/vol1/fastq/SRR001/SRR1_2.fastq.gz",
+    )
+    _fact(
+        db_session, study, entity=run, entity_level="sequencing_run", field="fastq_md5",
+        value="aaa111;bbb222",
+    )
+    _fact(db_session, study, entity=run, entity_level="sequencing_run", field="read_count", value="1000000")
+    _fact(db_session, study, entity=run, entity_level="sequencing_run", field="library_layout", value="PAIRED")
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    values = {sv.target_field: sv for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id)}
+    assert values["filename"].standardized_value == "SRR1_1.fastq.gz"
+    assert values["filename2"].standardized_value == "SRR1_2.fastq.gz"
+    assert values["checksum_filename"].standardized_value == "aaa111"
+    assert values["checksum_filename2"].standardized_value == "bbb222"
+    assert values["checksum_method"].standardized_value == "MD5"
+    assert not values["checksum_method"].review_required
+    assert values["input_read_count"].standardized_value == "1000000"
+    assert values["lib_layout"].standardized_value == "paired end"
+    assert not values["lib_layout"].review_required
+
+
+def test_single_end_run_gets_no_filename2_or_checksum_filename2(db_session):
+    """A single-end run's fastq_ftp/fastq_md5 has only one ';'-free entry --
+    filename2/checksum_filename2 must not be fabricated from nothing."""
+    study = _study(db_session, title="Single-end run")
+    run = Entity(study_id=study.study_id, entity_level=EntityLevel.SEQUENCING_RUN.value, external_identifier="SRR1")
+    db_session.add(run)
+    db_session.flush()
+    _fact(db_session, study, entity=run, entity_level="sequencing_run", field="fastq_ftp",
+          value="ftp.sra.ebi.ac.uk/vol1/fastq/SRR001/SRR1.fastq.gz")
+    _fact(db_session, study, entity=run, entity_level="sequencing_run", field="fastq_md5", value="ccc333")
+    _fact(db_session, study, entity=run, entity_level="sequencing_run", field="library_layout", value="SINGLE")
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    values = {sv.target_field: sv.standardized_value for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id)}
+    assert values["filename"] == "SRR1.fastq.gz"
+    assert "filename2" not in values
+    assert values["checksum_filename"] == "ccc333"
+    assert "checksum_filename2" not in values
+    assert values["lib_layout"] == "single end"
+
+
+def test_run_level_file_facts_get_one_row_per_run_not_collapsed(db_session):
+    """Regression guard for a real bug this exact change surfaced:
+    _resolve_entity_id only ever resolved a real entity_id for SAMPLE-level
+    facts -- every SEQUENCING_RUN-level fact fell through to the study-wide
+    broadcast default (entity_id=None), which is correct for
+    instrument_platform/instrument_model (expected to agree across a
+    study's runs, mapped onto projectMetadata) but was silently discarding
+    500 of 500 real runs' distinct filenames down to one row the moment a
+    genuinely per-run field (filename/checksum_filename/input_read_count,
+    mapped onto experimentRunMetadata) got its first mapping rule. Checked
+    directly against the real 101-study database before this fix: only 1
+    filename/checksum_filename/input_read_count row existed total, despite
+    500 real per-run fastq_ftp/fastq_md5/read_count facts."""
+    study = _study(db_session, title="Two distinct runs")
+    run_a = Entity(study_id=study.study_id, entity_level=EntityLevel.SEQUENCING_RUN.value, external_identifier="SRR_A")
+    run_b = Entity(study_id=study.study_id, entity_level=EntityLevel.SEQUENCING_RUN.value, external_identifier="SRR_B")
+    db_session.add_all([run_a, run_b])
+    db_session.flush()
+    _fact(db_session, study, entity=run_a, entity_level="sequencing_run", field="fastq_ftp", value="host/SRR_A.fastq.gz")
+    _fact(db_session, study, entity=run_a, entity_level="sequencing_run", field="read_count", value="1000")
+    _fact(db_session, study, entity=run_b, entity_level="sequencing_run", field="fastq_ftp", value="host/SRR_B.fastq.gz")
+    _fact(db_session, study, entity=run_b, entity_level="sequencing_run", field="read_count", value="2000")
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    filenames = {
+        sv.entity_id: sv.standardized_value
+        for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id, target_field="filename")
+    }
+    read_counts = {
+        sv.entity_id: sv.standardized_value
+        for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id, target_field="input_read_count")
+    }
+    assert filenames == {run_a.entity_id: "SRR_A.fastq.gz", run_b.entity_id: "SRR_B.fastq.gz"}
+    assert read_counts == {run_a.entity_id: "1000", run_b.entity_id: "2000"}
+
+
+def test_run_level_checksum_method_and_lib_layout_still_collapse_project_wide(db_session):
+    """Unlike filename/checksum_filename/input_read_count above,
+    checksum_method and lib_layout map onto projectMetadata (not
+    experimentRunMetadata) -- these are expected to agree across a study's
+    runs (ENA always reports MD5; a study's runs are consistently
+    paired-end or single-end), so they should still collapse to one
+    project-wide row, same as instrument_platform always has."""
+    study = _study(db_session, title="Two runs, same layout")
+    run_a = Entity(study_id=study.study_id, entity_level=EntityLevel.SEQUENCING_RUN.value, external_identifier="SRR_A")
+    run_b = Entity(study_id=study.study_id, entity_level=EntityLevel.SEQUENCING_RUN.value, external_identifier="SRR_B")
+    db_session.add_all([run_a, run_b])
+    db_session.flush()
+    _fact(db_session, study, entity=run_a, entity_level="sequencing_run", field="fastq_md5", value="aaa")
+    _fact(db_session, study, entity=run_a, entity_level="sequencing_run", field="library_layout", value="PAIRED")
+    _fact(db_session, study, entity=run_b, entity_level="sequencing_run", field="fastq_md5", value="bbb")
+    _fact(db_session, study, entity=run_b, entity_level="sequencing_run", field="library_layout", value="PAIRED")
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    checksum_method_rows = db_session.query(StandardizedValue).filter_by(study_id=study.study_id, target_field="checksum_method").all()
+    lib_layout_rows = db_session.query(StandardizedValue).filter_by(study_id=study.study_id, target_field="lib_layout").all()
+    assert len(checksum_method_rows) == 1
+    assert checksum_method_rows[0].entity_id is None
+    assert len(lib_layout_rows) == 1
+    assert lib_layout_rows[0].entity_id is None
+
+
+def test_maps_citation_from_any_repository_adapter_to_bibliographic_citation(db_session):
+    """OBIS, GBIF, and PANGAEA all emit this exact field name ("citation")
+    at project level -- one rule covers whichever adapter a study
+    actually resolved through."""
+    study = _study(db_session, title="Repository citation")
+    _fact(db_session, study, field="citation", value="Smith et al. 2024. Dataset X. OBIS.", entity_level="project")
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    row = db_session.query(StandardizedValue).filter_by(study_id=study.study_id, target_field="bibliographicCitation").one()
+    assert row.standardized_value == "Smith et al. 2024. Dataset X. OBIS."
 
 
 def test_dedups_identical_project_wide_facts_across_many_runs(db_session):
@@ -236,6 +416,24 @@ def test_all_v3_extraction_hints_have_mapping_rules():
     rule_names = {rule.source_fact_type for rule in RULES}
     missing = set(native_name_to_faire_hint()) - rule_names
     assert not missing
+
+
+def test_all_v3_extraction_hints_have_a_study_level_rule_specifically():
+    """Regression guard for a real bug: a native_name string existing
+    *somewhere* in RULES (checked above) is not the same as it being
+    reachable at EntityLevel.STUDY, which is the only level LLM-extracted
+    v3 facts are ever persisted at. Adding an _EXPLICIT_RULES entry for a
+    structured-source fact that happens to share a name with a v3
+    native_name (e.g. ENA's "library_layout" at SEQUENCING_RUN vs this
+    taxonomy's own "library_layout" native_name) used to silently delete
+    the STUDY-level rule for every such name, because
+    _generated_v3_llm_rules only checked fact_type strings, never
+    entity_level, before excluding one from generation."""
+    for native_name in native_name_to_faire_hint():
+        assert rules_for(native_name, EntityLevel.STUDY.value), (
+            f"{native_name!r} has no rule reachable at EntityLevel.STUDY -- "
+            "an LLM-extracted fact with this name would never map"
+        )
 
 
 def test_v3_native_atomic_facts_map_through_faire_hints_with_review(db_session):

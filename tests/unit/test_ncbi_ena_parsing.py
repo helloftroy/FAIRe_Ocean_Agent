@@ -163,6 +163,21 @@ def test_ena_extract_structured_facts_splits_project_and_run_level(ena_adapter):
     }
 
 
+def test_ena_extract_structured_facts_includes_library_layout(ena_adapter):
+    """library_layout (PAIRED/SINGLE) feeds mapping/rules.py's lib_layout
+    rule -- added alongside that rule since neither did anything without
+    the other."""
+    raw = {
+        "study": {"study_accession": "PRJNA1", "study_title": "t"},
+        "runs": [{"run_accession": "SRR1", "sample_accession": "SAMN1", "library_layout": "PAIRED"}],
+        "truncated": False,
+        "total_runs_seen": 1,
+    }
+    facts = ena_adapter.extract_structured_facts(_record("ena", raw))
+    run_facts = {f.fact_type_candidate: f.raw_value for f in facts if f.entity_level == EntityLevel.SEQUENCING_RUN}
+    assert run_facts["library_layout"] == "PAIRED"
+
+
 def test_ena_find_related_disambiguates_secondary_accession_type(ena_adapter):
     raw = {
         "study": {

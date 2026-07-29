@@ -29,7 +29,7 @@ logger = get_logger(__name__)
 STUDY_FIELDS = "study_accession,secondary_study_accession,study_title,study_description,center_name,first_public"
 RUN_FIELDS = (
     "run_accession,sample_accession,library_strategy,library_source,library_selection,"
-    "instrument_platform,instrument_model,base_count,read_count,fastq_bytes,fastq_md5,"
+    "library_layout,instrument_platform,instrument_model,base_count,read_count,fastq_bytes,fastq_md5,"
     "fastq_ftp,first_public"
 )
 
@@ -140,7 +140,7 @@ class EnaAdapter(SourceAdapter):
                 continue
             for field in (
                 "sample_accession", "library_strategy", "library_source", "library_selection",
-                "instrument_platform", "instrument_model", "base_count", "read_count",
+                "library_layout", "instrument_platform", "instrument_model", "base_count", "read_count",
                 "fastq_bytes", "fastq_md5", "fastq_ftp", "first_public",
             ):
                 value = run.get(field)

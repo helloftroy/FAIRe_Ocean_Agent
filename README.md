@@ -493,6 +493,73 @@ effect on FAIRe export completeness has been made concrete. Revisiting
 this milestone but worth knowing about before treating any single large
 study's FAIRe export as complete.
 
+## Mapping expansion: more structured-source fields, ordered by what's real today
+
+Prompted by a direct review of what NCBI/ENA/OBIS/GBIF/PANGAEA structured
+data actually contains vs. what `mapping/rules.py` mapped: many real,
+already-fetched structured facts had no rule at all, not because they're
+hard to map but because nobody had added the rule yet. Checked adapter
+code directly (not assumed) before writing any rule, in three groups:
+
+1. **Immediately real, added now**: `elev`, `samp_collect_device`,
+   `samp_size`, `samp_size_unit`, `temp`, `salinity`, `ph`, `diss_oxygen`
+   (NCBI BioSample's generic `Attributes/Attribute` passthrough --
+   `sources/ncbi.py` already captures *any* named attribute a real
+   BioSample record has; these 8 just had no rule yet, same mechanism as
+   the already-mapped `geo_loc_name`/`env_broad_scale`/etc.); ENA's
+   `read_count`/`fastq_ftp`/`fastq_md5` (already-fetched, previously
+   thought "redundant with `DataAsset`" -- true for `base_count`/
+   `fastq_bytes`, which really have no FAIRe field, but wrong for these
+   three, which map onto real fields: `input_read_count`, `filename`/
+   `filename2`, `checksum_filename`/`checksum_filename2`, plus an inferred
+   constant `checksum_method` = "MD5" since ENA never reports another
+   algorithm); `library_layout` (added to `sources/ena.py`'s `RUN_FIELDS` --
+   the one genuinely new small adapter addition here -- mapped to FAIRe's
+   `lib_layout`); `citation` (OBIS/GBIF/PANGAEA all already emit this exact
+   field) -> `bibliographicCitation`.
+2. **Checked, not real yet**: `associatedSequences` -- no adapter surfaces
+   genetic-sequence identifiers as their own fact at all.
+3. **Checked, contradicts the assumption that OBIS/GBIF already cover
+   this**: `target_gene`/primer sequences/PCR conditions/annealing temp/
+   amplicon size are **not** in `sources/obis.py` or `sources/gbif.py`'s
+   current API calls -- both only fetch basic dataset/occurrence metadata.
+   OBIS does have a DNA-derived-data/MIxS extension that can carry these
+   fields, but the current adapter doesn't query it. Flagged rather than
+   written as dead rules for facts that don't exist yet.
+4. **Checked, contradicts the assumption it exists at all**: ENA's
+   `LIBRARY_CONSTRUCTION_PROTOCOL` field isn't in `sources/ena.py`'s
+   `RUN_FIELDS`. Same as (2) -- needs real adapter work first.
+
+**A real bug this surfaced, not introduced by carelessness but caught by
+checking live rather than assuming success:** `mapping/faire.py`'s
+`_resolve_entity_id` only ever resolved a real per-entity `entity_id` for
+SAMPLE-level facts -- every SEQUENCING_RUN-level fact fell through to the
+study-wide broadcast default (`entity_id=None`). Harmless for the two
+pre-existing run-level rules (`instrument_platform`/`instrument_model`,
+which really are expected to agree across a study's runs and map onto
+`projectMetadata`), but the moment a genuinely *per-run* field
+(`filename`/`checksum_filename`/`input_read_count`, mapped onto
+`experimentRunMetadata`) got its first rule, it silently collapsed all but
+one run's value into a single row. Checked directly against the real
+101-study database before fixing: only 1 `filename` row existed despite
+500 real per-run `fastq_ftp` facts. Fixed `_resolve_entity_id` to also
+resolve `SEQUENCING_RUN`-level facts to their own entity; re-ran the
+mapping backfill against the real database and confirmed 500 `filename`,
+500 `checksum_filename`, and 500 `input_read_count` rows, one per real
+run, while `checksum_method`/`lib_layout` (mapped onto `projectMetadata`)
+correctly still collapse to one project-wide row each.
+
+Also worth being honest about: **the 8 new BioSample-attribute fields
+(`elev`, `temp`, `salinity`, `ph`, `diss_oxygen`, `samp_collect_device`,
+`samp_size`, `samp_size_unit`) and `bibliographicCitation` currently
+produce zero real rows** against the actual 101-study database -- no
+BioSample record in this corpus has reported those specific MIxS
+attributes yet, and no OBIS/GBIF/PANGAEA-resolved study has a `citation`
+fact captured yet either. The rules are correct and will engage the
+moment a study's real source data has them; they just don't today. See
+`tests/unit/test_mapping_faire.py` for coverage of every new rule with
+synthetic data, and the real-data counts above for what's live right now.
+
 ## Milestone 6b validation: the standards registry against real vendored schemas
 
 Unlike every other validation section in this README, there's no synthetic
