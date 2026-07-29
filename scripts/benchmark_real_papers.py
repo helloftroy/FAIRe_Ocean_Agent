@@ -25,8 +25,10 @@ from fair_ocean_agent.extraction.sections import select_relevant_sections
 from fair_ocean_agent.extraction.faire_fields import all_faire_hints
 from fair_ocean_agent.extraction.text import (
     DEFAULT_MAX_SECTION_CHARS_PER_CALL,
+    EXTRACTION_FOCUSES,
     build_prompt,
     segment_source_text,
+    segments_for_focus,
     split_segments_for_calls,
 )
 from fair_ocean_agent.llm.base import LLMBackendError
@@ -138,6 +140,7 @@ def _score_facts(parsed, segment_lookup: dict[str, str]) -> tuple[int, int, int,
     returned = [fact for fact in returned if isinstance(fact, dict)]
     valid_hints = all_faire_hints()
     verified = []
+    seen: set[tuple[str, str, str]] = set()
     invalid_hints = 0
     empty_hints = 0
     target_fields: set[str] = set()
@@ -153,6 +156,15 @@ def _score_facts(parsed, segment_lookup: dict[str, str]) -> tuple[int, int, int,
         evidence_ids = _candidate_evidence_ids(fact)
         if not evidence_ids or any(evidence_id not in segment_lookup for evidence_id in evidence_ids):
             continue
+        quote = "\n".join(segment_lookup[evidence_id] for evidence_id in evidence_ids)
+        dedupe_key = (
+            str(fact.get("fact_type_candidate", "")),
+            str(fact.get("raw_value", "")),
+            quote,
+        )
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
         verified.append(fact)
         rules = rules_for(str(fact.get("fact_type_candidate", "")), "study")
         if rules:
@@ -282,14 +294,25 @@ def run(args: argparse.Namespace) -> None:
                         response = None
                         for index, chunk_segments in enumerate(chunks):
                             chunk_title = section["title"] if len(chunks) == 1 else f"{section['title']} [chunk {index + 1}/{len(chunks)}]"
-                            prompt = build_prompt(chunk_title, "", segments=chunk_segments)
-                            response = backend.generate(prompt, temperature=0)
-                            parsed = _try_parse_json(response.text)
-                            if parsed is None:
-                                chunk_error = f"invalid JSON in chunk {index + 1}/{len(chunks)}"
+                            for focus in EXTRACTION_FOCUSES:
+                                focused_segments = segments_for_focus(section["title"], chunk_segments, focus)
+                                if not focused_segments:
+                                    continue
+                                prompt = build_prompt(
+                                    f"{chunk_title} [{focus.name}]",
+                                    "",
+                                    segments=focused_segments,
+                                    focus=focus,
+                                )
+                                response = backend.generate(prompt, temperature=0)
+                                parsed = _try_parse_json(response.text)
+                                if parsed is None:
+                                    chunk_error = f"invalid JSON in chunk {index + 1}/{len(chunks)} focus {focus.name}"
+                                    break
+                                returned = parsed if isinstance(parsed, list) else (parsed.get("facts", []) if isinstance(parsed, dict) else [])
+                                parsed_chunks.extend(fact for fact in returned if isinstance(fact, dict))
+                            if chunk_error is not None:
                                 break
-                            returned = parsed if isinstance(parsed, list) else (parsed.get("facts", []) if isinstance(parsed, dict) else [])
-                            parsed_chunks.extend(fact for fact in returned if isinstance(fact, dict))
                     except LLMBackendError as exc:
                         result = SectionResult(
                             doi=paper.doi,

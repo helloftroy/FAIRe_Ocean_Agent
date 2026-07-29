@@ -1,11 +1,17 @@
 """LLM-based text fact extraction (section 12), made FAIRe-aware in v2 and
-corrected in v3/v4. In v4 the model no longer writes evidence text from
+corrected in v3/v4/v5. In v4 the model no longer writes evidence text from
 memory: Python assigns stable IDs to source segments, the model returns
 which segment ID(s) support each fact, and Python copies the authoritative
 segment text into `evidence_quote`. Candidates with unknown/missing segment
 IDs are dropped before persistence. The model only ever sees bounded,
 already-selected text (see extraction/sections.py); this module never lets
 it browse further or pull in outside knowledge.
+
+v5 splits each section chunk into focused topic passes (sample/DNA,
+primer/PCR, sequencing/library, bioinformatics/taxonomy) and skips any pass
+whose source segments do not contain cues for that topic. This gives small
+local models a shorter, less ambiguous checklist per call rather than one
+broad "find everything" prompt.
 
 **Why "FAIRe-aware" matters (v1 -> v2):** v1's prompt was fully open-
 vocabulary -- "extract whatever facts you find, name them however you
@@ -75,7 +81,7 @@ from fair_ocean_agent.llm.base import LLMBackend, LLMResponse
 from fair_ocean_agent.mapping.faire import TARGET_SCHEMA
 from fair_ocean_agent.sources.base import RawFactCandidate
 
-PROMPT_VERSION = "text-extraction-v4-segment-evidence-ids"
+PROMPT_VERSION = "text-extraction-v5-focused-segment-evidence-ids"
 DEFAULT_MAX_SECTION_CHARS_PER_CALL = 1600
 
 
@@ -83,6 +89,131 @@ DEFAULT_MAX_SECTION_CHARS_PER_CALL = 1600
 class SourceSegment:
     segment_id: str
     text: str
+
+
+@dataclass(frozen=True)
+class ExtractionFocus:
+    name: str
+    description: str
+    group_names: frozenset[str]
+    keywords: frozenset[str]
+    fallback_names: frozenset[str] = frozenset()
+
+
+EXTRACTION_FOCUSES: tuple[ExtractionFocus, ...] = (
+    ExtractionFocus(
+        name="sample_collection_dna",
+        description="sample collection, sample handling/storage, environmental context, and DNA extraction facts",
+        group_names=frozenset({"DNA extraction"}),
+        keywords=frozenset(
+            {
+                "sample",
+                "sampling",
+                "collected",
+                "collection",
+                "filtered",
+                "filter",
+                "water",
+                "sediment",
+                "depth",
+                "latitude",
+                "longitude",
+                "coordinate",
+                "stored",
+                "storage",
+                "preserved",
+                "dna",
+                "extracted",
+                "extraction",
+                "kit",
+                "lysis",
+            }
+        ),
+        fallback_names=frozenset(
+            {"DNA_extraction_method", "storage_conditions", "collection_method", "environmental_context"}
+        ),
+    ),
+    ExtractionFocus(
+        name="primer_pcr_assay",
+        description="assay, target marker, primer, PCR condition, qPCR, control, and replicate facts",
+        group_names=frozenset({"PCR / assay setup", "Controls & replicates", "qPCR / standard curve"}),
+        keywords=frozenset(
+            {
+                "assay",
+                "target",
+                "marker",
+                "primer",
+                "pcr",
+                "qpcr",
+                "anneal",
+                "cycle",
+                "thermocycler",
+                "amplicon",
+                "master mix",
+                "control",
+                "replicate",
+                "standard curve",
+                "lod",
+                "loq",
+            }
+        ),
+        fallback_names=frozenset({"PCR_amplification_conditions"}),
+    ),
+    ExtractionFocus(
+        name="sequencing_library",
+        description="library preparation, sequencing platform/instrument, sequencing chemistry, adapter, and facility facts",
+        group_names=frozenset({"Sequencing / library prep"}),
+        keywords=frozenset(
+            {
+                "sequenc",
+                "illumina",
+                "miseq",
+                "hiseq",
+                "nextseq",
+                "novaseq",
+                "ion torrent",
+                "pacbio",
+                "nanopore",
+                "minion",
+                "library",
+                "adapter",
+                "paired-end",
+                "single-end",
+                "phix",
+                "facility",
+            }
+        ),
+        fallback_names=frozenset({"sequencing_platform"}),
+    ),
+    ExtractionFocus(
+        name="bioinformatics_taxonomy",
+        description="bioinformatics workflow, sequence processing, reference database, and taxonomic assignment facts",
+        group_names=frozenset({"Bioinformatics workflow", "Taxonomic assignment output"}),
+        keywords=frozenset(
+            {
+                "bioinformatic",
+                "demultiplex",
+                "trim",
+                "merge",
+                "denois",
+                "chimera",
+                "cluster",
+                "otu",
+                "asv",
+                "qiime",
+                "dada2",
+                "mothur",
+                "blast",
+                "silva",
+                "greengenes",
+                "midori",
+                "reference database",
+                "taxonom",
+                "classifier",
+            }
+        ),
+    ),
+)
 
 
 def resolved_faire_fields_for_study(session: Session, study_id: str) -> frozenset[str]:
@@ -104,13 +235,28 @@ def resolved_faire_fields_for_study(session: Session, study_id: str) -> frozense
     return frozenset(row[0] for row in rows)
 
 
-def build_extraction_instructions(exclude_faire_hints: frozenset[str] = frozenset()) -> str:
+def build_extraction_instructions(
+    exclude_faire_hints: frozenset[str] = frozenset(),
+    focus: ExtractionFocus | None = None,
+) -> str:
+    field_reference = render_field_reference(
+        exclude_faire_hints,
+        include_group_names=focus.group_names if focus else None,
+        include_fallback_names=focus.fallback_names if focus else None,
+    )
+    focus_sentence = (
+        f"This focused pass is only for {focus.description}. "
+        "Ignore explicitly-stated facts outside that focus; another pass will handle them.\n\n"
+        if focus
+        else ""
+    )
     return (
         "Extract facts about marine eDNA/molecular sampling, PCR/assay setup, "
         "sequencing, and bioinformatics methodology that are EXPLICITLY stated in "
         "the text below. Only extract what is explicitly stated -- do not infer "
         "standard laboratory practice, do not fill in expected or typical values, "
         "and do not use any knowledge beyond this text.\n\n"
+        f"{focus_sentence}"
         "For each fact, set fact_type_candidate to the EXACT concept name from the "
         "checklist below whenever the fact matches one of those concepts -- do "
         "not paraphrase or invent a variant spelling of a listed name. If an "
@@ -122,7 +268,7 @@ def build_extraction_instructions(exclude_faire_hints: frozenset[str] = frozense
         "copy an example itself into raw_value; a bracketed \"[FAIRe hint: ...]\" "
         "is only a suggestion for the OPTIONAL candidate_standard_fields output "
         "below, never something to put in fact_type_candidate):\n\n"
-        f"{render_field_reference(exclude_faire_hints)}\n\n"
+        f"{field_reference}\n\n"
         "IMPORTANT: the lines above ending in a colon (e.g. \"PCR / assay "
         "setup:\") are topic headings for your own reference only -- NEVER use "
         "one of them as fact_type_candidate. Each bullet's concept name (the "
@@ -208,10 +354,9 @@ def build_prompt(
     section_text: str,
     exclude_faire_hints: frozenset[str] = frozenset(),
     segments: list[SourceSegment] | None = None,
+    focus: ExtractionFocus | None = None,
 ) -> str:
-    instructions = (
-        EXTRACTION_INSTRUCTIONS if not exclude_faire_hints else build_extraction_instructions(exclude_faire_hints)
-    )
+    instructions = build_extraction_instructions(exclude_faire_hints, focus)
     source_segments = segments if segments is not None else segment_source_text(section_title, section_text)
     return PROMPT_TEMPLATE.format(
         instructions=instructions,
@@ -296,6 +441,24 @@ def split_segments_for_calls(
     return chunks
 
 
+def _text_matches_focus(text: str, focus: ExtractionFocus) -> bool:
+    folded = text.lower()
+    return any(keyword in folded for keyword in focus.keywords)
+
+
+def segments_for_focus(
+    section_title: str,
+    segments: list[SourceSegment],
+    focus: ExtractionFocus,
+) -> list[SourceSegment]:
+    title_matches = _text_matches_focus(section_title, focus)
+    return [
+        segment
+        for segment in segments
+        if title_matches or _text_matches_focus(segment.text, focus)
+    ]
+
+
 def extract_facts_from_section(
     backend: LLMBackend,
     section_title: str,
@@ -303,6 +466,7 @@ def extract_facts_from_section(
     exclude_faire_hints: frozenset[str] = frozenset(),
     max_section_chars_per_call: int = DEFAULT_MAX_SECTION_CHARS_PER_CALL,
     max_output_tokens: int | None = None,
+    focuses: tuple[ExtractionFocus, ...] = EXTRACTION_FOCUSES,
 ) -> tuple[list[RawFactCandidate], LLMResponse | None]:
     """Returns (verified facts, the last LLMResponse -- for latency/token
     bookkeeping by the caller). An empty fact list can mean either "the
@@ -322,17 +486,29 @@ def extract_facts_from_section(
     seen: set[tuple[str, str, str]] = set()
     last_response: LLMResponse | None = None
 
+    active_focuses = focuses or EXTRACTION_FOCUSES
     for index, chunk_segments in enumerate(segment_chunks):
         chunk_title = section_title if len(segment_chunks) == 1 else f"{section_title} [chunk {index + 1}/{len(segment_chunks)}]"
-        segment_lookup = {segment.segment_id: segment.text for segment in chunk_segments}
-        prompt = build_prompt(chunk_title, "", exclude_faire_hints, segments=chunk_segments)
-        parsed, response = backend.generate_json(prompt, temperature=0, max_tokens=max_output_tokens)
-        last_response = response
-        if parsed is None:
-            continue
+        for focus in active_focuses:
+            focused_segments = segments_for_focus(section_title, chunk_segments, focus)
+            if not focused_segments:
+                continue
+            segment_lookup = {segment.segment_id: segment.text for segment in focused_segments}
+            focused_title = f"{chunk_title} [{focus.name}]"
+            prompt = build_prompt(
+                focused_title,
+                "",
+                exclude_faire_hints,
+                segments=focused_segments,
+                focus=focus,
+            )
+            parsed, response = backend.generate_json(prompt, temperature=0, max_tokens=max_output_tokens)
+            last_response = response
+            if parsed is None:
+                continue
 
-        candidates = parsed if isinstance(parsed, list) else (parsed.get("facts", []) if isinstance(parsed, dict) else [])
-        facts.extend(_facts_from_candidates(candidates, segment_lookup, chunk_title, seen))
+            candidates = parsed if isinstance(parsed, list) else (parsed.get("facts", []) if isinstance(parsed, dict) else [])
+            facts.extend(_facts_from_candidates(candidates, segment_lookup, focused_title, seen))
     return facts, last_response
 
 

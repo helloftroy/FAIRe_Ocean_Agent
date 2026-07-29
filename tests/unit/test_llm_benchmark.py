@@ -53,8 +53,9 @@ def test_run_case_uses_the_real_production_prompt(monkeypatch):
     backend = MockLLMBackend(responses=["[]"])
     benchmark_module.run_case(backend, CASE)
 
-    assert captured["section_title"] == CASE.section_title
+    assert captured["section_title"].startswith(CASE.section_title)
     assert captured["section_text"] == CASE.source_text
+    assert len(backend.calls) == 1
 
 
 def test_gold_cases_use_native_taxonomy_names_or_a_documented_fallback():
@@ -85,7 +86,10 @@ def test_run_benchmark_perfect_model_gets_perfect_scores():
             {"fact_type_candidate": "sampling_depth", "raw_value": "5 meters", "evidence_id": "METHODS.P001"},
         ]
     )
-    backend = MockLLMBackend(label="perfect", responses=[response])
+    backend = MockLLMBackend(
+        label="perfect",
+        responses=lambda prompt: response if "sample_collection_dna" in prompt else "[]",
+    )
     report = run_benchmark([backend], [CASE])
 
     metrics, results = report["perfect"]

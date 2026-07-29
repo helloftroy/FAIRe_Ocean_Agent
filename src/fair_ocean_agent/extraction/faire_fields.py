@@ -195,7 +195,11 @@ def native_name_to_faire_hint() -> dict[str, str]:
     return {f.native_name: f.faire_hint for fields in FIELD_GROUPS.values() for f in fields if f.faire_hint}
 
 
-def render_field_reference(exclude_faire_hints: frozenset[str] = frozenset()) -> str:
+def render_field_reference(
+    exclude_faire_hints: frozenset[str] = frozenset(),
+    include_group_names: frozenset[str] | None = None,
+    include_fallback_names: frozenset[str] | None = None,
+) -> str:
     """Renders FIELD_GROUPS + FALLBACK_NARRATIVE_FIELDS as the itemized,
     group-headed checklist `extraction/text.py`'s prompt embeds -- one
     source of truth, so the taxonomy a maintainer edits here is exactly
@@ -213,9 +217,16 @@ def render_field_reference(exclude_faire_hints: frozenset[str] = frozenset()) ->
     (no faire_hint at all, by design) are never filtered by this -- there's
     no structured-field correspondence to check them against. A group left
     with zero remaining entries after filtering is omitted entirely rather
-    than rendered as an empty heading."""
+    than rendered as an empty heading.
+
+    `include_group_names` and `include_fallback_names` let extraction/text.py
+    render smaller topic-focused checklists for local 4B models while still
+    drawing every concept from this same taxonomy.
+    """
     lines: list[str] = []
     for group_name, fields in FIELD_GROUPS.items():
+        if include_group_names is not None and group_name not in include_group_names:
+            continue
         remaining = [f for f in fields if f.faire_hint not in exclude_faire_hints]
         if not remaining:
             continue
@@ -224,7 +235,13 @@ def render_field_reference(exclude_faire_hints: frozenset[str] = frozenset()) ->
             example = f" (e.g. \"{f.example}\")" if f.example else ""
             hint_note = f" [FAIRe hint: {f.faire_hint}]" if f.faire_hint else ""
             lines.append(f"- {f.native_name}: {f.hint}{example}{hint_note}")
-    lines.append("General narrative fallback (use only if no concept above applies; no FAIRe hint):")
-    for f in FALLBACK_NARRATIVE_FIELDS:
+    fallback_fields = [
+        f
+        for f in FALLBACK_NARRATIVE_FIELDS
+        if include_fallback_names is None or f.native_name in include_fallback_names
+    ]
+    if fallback_fields:
+        lines.append("General narrative fallback (use only if no concept above applies; no FAIRe hint):")
+    for f in fallback_fields:
         lines.append(f"- {f.native_name}: {f.hint}")
     return "\n".join(lines)

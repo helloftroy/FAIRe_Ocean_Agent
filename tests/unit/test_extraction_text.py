@@ -5,11 +5,13 @@ from fair_ocean_agent.database.models import StandardizedValue, Study
 from fair_ocean_agent.extraction.faire_fields import all_field_names
 from fair_ocean_agent.extraction.text import (
     EXTRACTION_INSTRUCTIONS,
+    EXTRACTION_FOCUSES,
     PROMPT_VERSION,
     build_prompt,
     extract_facts_from_section,
     resolved_faire_fields_for_study,
     segment_source_text,
+    segments_for_focus,
     split_section_text,
 )
 from fair_ocean_agent.llm.mock import MockLLMBackend
@@ -106,7 +108,7 @@ def test_extract_facts_from_section_chunks_long_text_and_merges_facts():
 
 
 def test_prompt_version_is_stable_constant():
-    assert PROMPT_VERSION == "text-extraction-v4-segment-evidence-ids"
+    assert PROMPT_VERSION == "text-extraction-v5-focused-segment-evidence-ids"
 
 
 # --- FAIRe-aware taxonomy regression tests (Milestone 8, corrected in v3) ---
@@ -143,6 +145,28 @@ def test_prompt_embeds_faire_hints_as_hints_not_identity():
     assert "candidate_standard_fields" in prompt
     assert "evidence_id" in prompt
     assert "evidence_quote" not in prompt
+
+
+def test_focused_prompt_only_embeds_requested_topic_checklist():
+    primer_focus = next(focus for focus in EXTRACTION_FOCUSES if focus.name == "primer_pcr_assay")
+    prompt = build_prompt("PCR", SECTION_TEXT, focus=primer_focus)
+
+    assert "This focused pass is only for assay, target marker, primer" in prompt
+    assert "annealing_temperature" in prompt
+    assert "reference_database" not in prompt
+    assert "sequencing_instrument" not in prompt
+
+
+def test_segments_for_focus_skips_unrelated_topic_prompts():
+    segments = segment_source_text(
+        "Methods",
+        "PCR reactions used MiFish-U-F and MiFish-U-R primers.\n\nLibraries were sequenced on an Illumina MiSeq.",
+    )
+    primer_focus = next(focus for focus in EXTRACTION_FOCUSES if focus.name == "primer_pcr_assay")
+    sequencing_focus = next(focus for focus in EXTRACTION_FOCUSES if focus.name == "sequencing_library")
+
+    assert [segment.segment_id for segment in segments_for_focus("Methods", segments, primer_focus)] == ["METHODS.P001"]
+    assert [segment.segment_id for segment in segments_for_focus("Methods", segments, sequencing_focus)] == ["METHODS.P002"]
 
 
 def test_every_native_field_name_appears_in_instructions():

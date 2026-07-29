@@ -27,7 +27,7 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from fair_ocean_agent.dates import try_parse_date
-from fair_ocean_agent.extraction.text import build_prompt, segment_source_text
+from fair_ocean_agent.extraction.text import EXTRACTION_FOCUSES, build_prompt, segment_source_text, segments_for_focus
 from fair_ocean_agent.llm.base import LLMBackend, LLMBackendError
 
 
@@ -121,12 +121,22 @@ def _candidate_evidence_ids(candidate: dict) -> list[str]:
 
 def _facts_with_verified_segment_ids(returned_facts: list[dict], segment_lookup: dict[str, str]) -> list[dict]:
     verified = []
+    seen: set[tuple[str, str, str]] = set()
     for fact in returned_facts:
         evidence_ids = _candidate_evidence_ids(fact)
         if not evidence_ids or any(evidence_id not in segment_lookup for evidence_id in evidence_ids):
             continue
+        quote = "\n".join(segment_lookup[evidence_id] for evidence_id in evidence_ids)
+        dedupe_key = (
+            str(fact.get("fact_type_candidate", "")),
+            str(fact.get("raw_value", "")),
+            quote,
+        )
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
         normalized = dict(fact)
-        normalized["evidence_quote"] = "\n".join(segment_lookup[evidence_id] for evidence_id in evidence_ids)
+        normalized["evidence_quote"] = quote
         verified.append(normalized)
     return verified
 
@@ -148,38 +158,56 @@ class CaseResult:
 def run_case(backend: LLMBackend, case: GoldCase) -> CaseResult:
     segments = segment_source_text(case.section_title, case.source_text)
     segment_lookup = {segment.segment_id: segment.text for segment in segments}
-    prompt = build_prompt(case.section_title, case.source_text, segments=segments)
-    try:
-        parsed, response = backend.generate_json(prompt, temperature=0)
-    except LLMBackendError as exc:
+    returned_facts: list[dict] = []
+    latency_seconds = 0.0
+    json_valid = True
+
+    for focus in EXTRACTION_FOCUSES:
+        focused_segments = segments_for_focus(case.section_title, segments, focus)
+        if not focused_segments:
+            continue
+        prompt = build_prompt(
+            f"{case.section_title} [{focus.name}]",
+            case.source_text,
+            segments=focused_segments,
+            focus=focus,
+        )
+        try:
+            parsed, response = backend.generate_json(prompt, temperature=0)
+        except LLMBackendError as exc:
+            return CaseResult(
+                case_id=case.case_id,
+                candidate_label=backend.label,
+                json_valid=False,
+                latency_seconds=latency_seconds,
+                false_negatives=len(case.expected_facts),
+                error=str(exc),
+            )
+        if response is not None:
+            latency_seconds += response.latency_seconds
+        if parsed is None:
+            json_valid = False
+            continue
+        parsed_facts = parsed if isinstance(parsed, list) else (parsed.get("facts", []) if isinstance(parsed, dict) else [])
+        returned_facts.extend(f for f in parsed_facts if isinstance(f, dict))
+
+    if not json_valid and not returned_facts:
         return CaseResult(
             case_id=case.case_id,
             candidate_label=backend.label,
             json_valid=False,
-            latency_seconds=0.0,
-            false_negatives=len(case.expected_facts),
-            error=str(exc),
-        )
-
-    if parsed is None:
-        return CaseResult(
-            case_id=case.case_id,
-            candidate_label=backend.label,
-            json_valid=False,
-            latency_seconds=response.latency_seconds if response else 0.0,
+            latency_seconds=latency_seconds,
             false_negatives=len(case.expected_facts),
         )
 
-    returned_facts = parsed if isinstance(parsed, list) else (parsed.get("facts", []) if isinstance(parsed, dict) else [])
-    returned_facts = [f for f in returned_facts if isinstance(f, dict)]
     verified_facts = _facts_with_verified_segment_ids(returned_facts, segment_lookup)
 
     tp, fp, fn = _score_case(case, verified_facts)
     return CaseResult(
         case_id=case.case_id,
         candidate_label=backend.label,
-        json_valid=True,
-        latency_seconds=response.latency_seconds,
+        json_valid=json_valid,
+        latency_seconds=latency_seconds,
         returned_facts=returned_facts,
         verified_facts=verified_facts,
         true_positives=tp,

@@ -46,8 +46,12 @@ class FakeEuropePmcAdapter:
 
 
 class SecondCallFailsBackend(MockLLMBackend):
+    def __init__(self, *args, fail_after_calls=1, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._fail_after_calls = fail_after_calls
+
     def generate(self, *args, **kwargs):
-        if len(self.calls) == 1:
+        if len(self.calls) >= self._fail_after_calls:
             raise LLMBackendError("simulated section timeout")
         return super().generate(*args, **kwargs)
 
@@ -140,7 +144,7 @@ def test_handler_preserves_successful_sections_when_later_section_times_out(db_s
     response = json.dumps(
         [{"fact_type_candidate": "collection_date", "raw_value": "2022-01-04", "evidence_id": "SAMPLING.P001"}]
     )
-    handlers._llm_backend_cache = SecondCallFailsBackend(label="flaky-model", responses=[response])
+    handlers._llm_backend_cache = SecondCallFailsBackend(label="flaky-model", responses=[response], fail_after_calls=1)
     monkeypatch.setattr(
         handlers,
         "_build_enabled_adapters",
@@ -245,8 +249,8 @@ def test_handler_excludes_faire_fields_already_resolved_from_structured_sources(
 
 def test_handler_asks_about_everything_when_nothing_resolved_yet(db_session, monkeypatch):
     """No StandardizedValue rows at all (MAP_FAIRE hasn't run) must leave
-    the checklist fully intact -- the exact behavior before this feature
-    existed."""
+    the relevant focused checklist intact -- the exact structured-first
+    behavior before topic-focused prompts existed."""
     study = _seeded_study_with_pmcid(db_session)
     task = _task_for(db_session, study)
 
@@ -258,4 +262,4 @@ def test_handler_asks_about_everything_when_nothing_resolved_yet(db_session, mon
     db_session.commit()
 
     assert backend.calls
-    assert "reference_database" in backend.calls[0]["prompt"]
+    assert any("dna_extraction_kit" in call["prompt"] for call in backend.calls)
