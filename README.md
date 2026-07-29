@@ -939,6 +939,88 @@ extracted (`annealing_temperature`, `pcr_reaction_volume`,
 `forward_primer_sequence`, `reference_database`, ...) currently reach a
 `StandardizedValue` row.
 
+## Model comparison: all 6 installed local models, gold cases + 39 real papers
+
+Ran `fair-ocean benchmark-models`-equivalent comparison of every locally
+installed Ollama candidate (qwen2.5:3b, qwen3:4b-instruct, gemma3:4b,
+phi4-mini, llama3.2, granite3.3:8b) against two real, complementary test
+sets: the 6 curated gold cases (real precision/recall/F1 against
+hand-labeled truth) and, separately, one representative section from every
+one of the 39 real papers in the database with fetchable full text (real
+paper length and complexity, no ground truth -- scored instead on JSON
+validity, evidence-verification rate, schema adherence, and latency).
+Launched as a detached background job so it could run unattended for
+hours without live monitoring; raw results in
+`data/exports/model_benchmark_100/` (gitignored, local only).
+
+**Gold cases (precision/recall/F1):**
+
+| candidate | precision | recall | f1 | mean latency (s) |
+|---|---|---|---|---|
+| qwen2.5-3b | 0.40 | 0.08 | 0.14 | 35.2 |
+| qwen3-4b-instruct | 0.72 | 0.73 | 0.73 | 38.0 |
+| llama3.2-3b | 0.25 | 0.14 | 0.18 | 26.5 |
+| phi4-mini-3.8b | 0.20 | 0.02 | 0.04 | 8.1 |
+| gemma3-4b | 0.42 | 0.31 | 0.35 | 37.5 |
+| granite3.3-8b | 0.59 | 0.41 | 0.48 | 107.9 |
+
+**39 real papers (no ground truth -- JSON validity, evidence verification,
+schema adherence, and reliability under real paper length instead):**
+
+| candidate | json_valid | evidence_verif | schema_adherence | mean latency (s) | timeouts | other errors |
+|---|---|---|---|---|---|---|
+| qwen2.5-3b | 1.00 | 0.64 | 0.82 | 23.3 | 0 | 0 |
+| qwen3-4b-instruct | 0.62 | 0.57 | 0.76 | 43.8 | 0 | 15 |
+| llama3.2-3b | 0.92 | 0.28 | 0.56 | 46.1 | 3 | 0 |
+| phi4-mini-3.8b | 0.92 | 0.09 | 0.40 | 14.8 | 1 | 1 |
+| gemma3-4b | 0.44 | 0.62 | 0.80 | 116.0 | 22 | 0 |
+| granite3.3-8b | 0.72 | 0.75 | 0.57 | 90.8 | 10 | 0 |
+
+Two pictures that don't fully agree, and both are real: **qwen3-4b-instruct
+is the clear gold-case winner** (highest F1 by a wide margin) but its
+real-paper `json_valid` rate drops to 0.62 -- the "other errors" column
+(15/39) explains why (see bug #1 below). **qwen2.5-3b, the weakest gold-case
+performer, is the most *reliable* one on real papers** (1.00 json_valid, 0
+timeouts, 0 other errors, fastest) -- it just extracts fewer facts per
+section (2.5 returned vs qwen3's 4.1), consistent with the smallest model
+being conservative rather than broken. **gemma3-4b and granite3.3-8b pay a
+real latency tax on real paper length** (116s and 91s mean, vs 35-40s on
+short gold-case snippets), and both hit the 180s per-request timeout
+double-digit times (22 and 10 of 39 respectively) -- a real paper section
+is often 5-10x longer than a gold-case snippet, and these two models don't
+scale to that gracefully. Net: no single model wins both axes; which one
+to actually run depends on whether an unattended batch job values recall
+(qwen3-4b-instruct, tolerate the failure rate and retry) or reliability
+(qwen2.5-3b, accept a lower per-section yield) more.
+
+**Two real bugs found and fixed during this run:**
+
+1. **`OpenAICompatibleHTTPBackend` swallowed the real reason for every 4xx
+   failure.** `httpx.HTTPStatusError`'s own `str()` is just the status
+   line, never the response body -- every one of qwen3-4b-instruct's 15
+   real-paper failures logged as an identical, generic "400 Bad Request"
+   with no way to tell *why* short of a separate manual reproduction
+   script. Root-caused by hand once: Ollama's default context window
+   (4096 tokens, regardless of a model's real trained context length --
+   qwen3-4b-instruct supports up to 262144) is smaller than many real
+   paper sections plus the v3 taxonomy's full checklist. Fixed
+   `llm/http_backend.py` to include `response.text` (truncated to 500
+   chars) in the raised `LLMBackendError` so this is visible immediately
+   next time, for any model or any 4xx cause -- covered by a new
+   regression test (`test_generate_error_includes_response_body_for_4xx`).
+2. **Ollama's context ceiling has no fix from this pipeline's side.** Added
+   an optional `LLMConfig.num_ctx` / per-candidate config knob that sends
+   `{"options": {"num_ctx": N}}` -- confirmed live that Ollama's
+   OpenAI-compatible endpoint (`/v1/chat/completions`) does **not** honor
+   it (verified directly: an oversized prompt still 400s at the same
+   4096-token ceiling with `num_ctx` set). The real fix has to happen on
+   the Ollama side, outside this pipeline's config: either the
+   `OLLAMA_CONTEXT_LENGTH` server environment variable, or a per-model
+   `PARAMETER num_ctx <N>` in a custom Modelfile. Left as a documented,
+   known operational constraint rather than a false "fixed" claim -- this
+   pipeline can request a larger context window but cannot force Ollama to
+   grant one over its own wire protocol.
+
 ## Loading your own seed list
 
 Put your file at `data/seeds/studies.csv` (or `.jsonl`) -- copy

@@ -84,6 +84,17 @@ class OpenAICompatibleHTTPBackend(LLMBackend):
             try:
                 response = self._client.post("/chat/completions", json=payload)
                 response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                # httpx.HTTPStatusError's own str() is just the status line --
+                # never the response body, which is where a server actually
+                # says *why* (e.g. Ollama's 400s report "exceeds the available
+                # context size" here). Found during a live benchmark run where
+                # every real-paper-length prompt failure looked identical and
+                # generic until the body was inspected directly.
+                raise LLMBackendError(
+                    f"{self.label}: request to {self._client.base_url}/chat/completions failed: "
+                    f"{exc} -- body: {exc.response.text[:500]}"
+                ) from exc
             except httpx.HTTPError as exc:
                 raise LLMBackendError(
                     f"{self.label}: request to {self._client.base_url}/chat/completions failed: {exc}"

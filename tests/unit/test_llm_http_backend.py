@@ -76,6 +76,21 @@ def test_generate_raises_llm_backend_error_on_http_failure():
         backend.generate("prompt")
 
 
+def test_generate_error_includes_response_body_for_4xx():
+    """Regression guard: found live during model benchmarking that every
+    context-window-overflow 400 from Ollama looked identical and generic
+    (httpx.HTTPStatusError's own str() never includes the response body) --
+    the real reason ("exceeds the available context size") was invisible
+    without a separate manual reproduction. The body must be surfaced in
+    the raised error so this doesn't require re-diagnosing by hand."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"error": {"message": "exceeds the available context size"}})
+
+    backend = _backend(handler)
+    with pytest.raises(LLMBackendError, match="exceeds the available context size"):
+        backend.generate("prompt")
+
+
 def test_generate_raises_on_unexpected_response_shape():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"unexpected": "shape"})
