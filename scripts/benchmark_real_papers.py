@@ -118,7 +118,7 @@ def _try_parse_json(text_value: str):
         return None
 
 
-def _score_facts(parsed, section_text: str) -> tuple[int, int, int, list[str]]:
+def _score_facts(parsed, section_text: str) -> tuple[int, int, int, list[str], int, int]:
     returned = parsed if isinstance(parsed, list) else (parsed.get("facts", []) if isinstance(parsed, dict) else [])
     returned = [fact for fact in returned if isinstance(fact, dict)]
     valid_hints = all_faire_hints()
@@ -146,6 +146,58 @@ def _score_facts(parsed, section_text: str) -> tuple[int, int, int, list[str]]:
     return len(returned), len(verified), mappable_facts, sorted(target_fields), invalid_hints, empty_hints
 
 
+def _result_key(result: SectionResult) -> tuple[str, str, str]:
+    return (result.candidate_label, result.pmcid, result.section_title)
+
+
+def _csv_row(result: SectionResult) -> dict:
+    row = asdict(result)
+    row["unique_target_fields"] = "|".join(result.unique_target_fields)
+    return row
+
+
+def _read_existing_results(path: Path) -> list[SectionResult]:
+    if not path.exists():
+        return []
+    with path.open(newline="") as f:
+        rows = list(csv.DictReader(f))
+
+    results = []
+    for row in rows:
+        results.append(
+            SectionResult(
+                doi=row["doi"],
+                pmcid=row["pmcid"],
+                candidate_label=row["candidate_label"],
+                section_title=row["section_title"],
+                section_chars=int(row["section_chars"]),
+                json_valid=row["json_valid"] == "True",
+                latency_seconds=float(row["latency_seconds"]),
+                returned_facts=int(row["returned_facts"]),
+                verified_facts=int(row["verified_facts"]),
+                mappable_facts=int(row["mappable_facts"]),
+                unique_target_fields=[v for v in row["unique_target_fields"].split("|") if v],
+                invalid_faire_hints=int(row["invalid_faire_hints"]),
+                empty_faire_hints=int(row["empty_faire_hints"]),
+                error=row["error"] or None,
+            )
+        )
+    return results
+
+
+def _append_result(output_dir: Path, result: SectionResult) -> None:
+    csv_path = output_dir / "section_results.csv"
+    write_header = not csv_path.exists()
+    with csv_path.open("a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(SectionResult.__dataclass_fields__))
+        if write_header:
+            writer.writeheader()
+        writer.writerow(_csv_row(result))
+
+    with (output_dir / "detail.jsonl").open("a") as f:
+        f.write(json.dumps(asdict(result), default=str) + "\n")
+
+
 def run(args: argparse.Namespace) -> None:
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -162,7 +214,17 @@ def run(args: argparse.Namespace) -> None:
         wanted = set(args.models)
         candidates = [candidate for candidate in candidates if candidate.model in wanted or candidate.label in wanted]
 
-    section_results: list[SectionResult] = []
+    _write_papers(output_dir, papers, sections_by_pmcid)
+    if not args.resume:
+        for path in (output_dir / "section_results.csv", output_dir / "detail.jsonl", output_dir / "detail.json", output_dir / "summary.csv"):
+            if path.exists():
+                path.unlink()
+
+    section_results: list[SectionResult] = _read_existing_results(output_dir / "section_results.csv") if args.resume else []
+    completed = {_result_key(result) for result in section_results}
+    if section_results:
+        _write_summary(output_dir, section_results)
+
     backends = []
     try:
         for candidate in candidates:
@@ -171,84 +233,96 @@ def run(args: argparse.Namespace) -> None:
             for paper in papers:
                 sections = sections_by_pmcid.get(paper.pmcid, [])[: args.sections_per_paper]
                 if not sections:
-                    section_results.append(
-                        SectionResult(
-                            doi=paper.doi,
-                            pmcid=paper.pmcid,
-                            candidate_label=backend.label,
-                            section_title="<no fulltext sections>",
-                            section_chars=0,
-                            json_valid=False,
-                            latency_seconds=0.0,
-                            returned_facts=0,
-                            verified_facts=0,
-                            mappable_facts=0,
-                            error="no open-access full text sections selected",
-                        )
+                    result = SectionResult(
+                        doi=paper.doi,
+                        pmcid=paper.pmcid,
+                        candidate_label=backend.label,
+                        section_title="<no fulltext sections>",
+                        section_chars=0,
+                        json_valid=False,
+                        latency_seconds=0.0,
+                        returned_facts=0,
+                        verified_facts=0,
+                        mappable_facts=0,
+                        error="no open-access full text sections selected",
                     )
+                    if _result_key(result) not in completed:
+                        section_results.append(result)
+                        completed.add(_result_key(result))
+                        _append_result(output_dir, result)
+                        _write_summary(output_dir, section_results)
                     continue
                 for section in sections:
+                    key = (backend.label, paper.pmcid, section["title"])
+                    if key in completed:
+                        continue
                     prompt = build_prompt(section["title"], section["text"])
                     start = time.monotonic()
                     try:
                         response = backend.generate(prompt, temperature=0)
                     except LLMBackendError as exc:
-                        section_results.append(
-                            SectionResult(
-                                doi=paper.doi,
-                                pmcid=paper.pmcid,
-                                candidate_label=backend.label,
-                                section_title=section["title"],
-                                section_chars=len(section["text"]),
-                                json_valid=False,
-                                latency_seconds=time.monotonic() - start,
-                                returned_facts=0,
-                                verified_facts=0,
-                                mappable_facts=0,
-                                error=str(exc),
-                            )
-                        )
-                        continue
-
-                    parsed = _try_parse_json(response.text)
-                    if parsed is None:
-                        section_results.append(
-                            SectionResult(
-                                doi=paper.doi,
-                                pmcid=paper.pmcid,
-                                candidate_label=backend.label,
-                                section_title=section["title"],
-                                section_chars=len(section["text"]),
-                                json_valid=False,
-                                latency_seconds=response.latency_seconds,
-                                returned_facts=0,
-                                verified_facts=0,
-                                mappable_facts=0,
-                                error="invalid JSON",
-                            )
-                        )
-                        continue
-
-                    returned, verified, mappable, targets, invalid_hints, empty_hints = _score_facts(
-                        parsed, section["text"]
-                    )
-                    section_results.append(
-                        SectionResult(
+                        result = SectionResult(
                             doi=paper.doi,
                             pmcid=paper.pmcid,
                             candidate_label=backend.label,
                             section_title=section["title"],
                             section_chars=len(section["text"]),
-                            json_valid=True,
-                            latency_seconds=response.latency_seconds,
-                            returned_facts=returned,
-                            verified_facts=verified,
-                            mappable_facts=mappable,
-                            unique_target_fields=targets,
-                            invalid_faire_hints=invalid_hints,
-                            empty_faire_hints=empty_hints,
+                            json_valid=False,
+                            latency_seconds=time.monotonic() - start,
+                            returned_facts=0,
+                            verified_facts=0,
+                            mappable_facts=0,
+                            error=str(exc),
                         )
+                        section_results.append(result)
+                        completed.add(_result_key(result))
+                        _append_result(output_dir, result)
+                        _write_summary(output_dir, section_results)
+                        continue
+
+                    parsed = _try_parse_json(response.text)
+                    if parsed is None:
+                        result = SectionResult(
+                            doi=paper.doi,
+                            pmcid=paper.pmcid,
+                            candidate_label=backend.label,
+                            section_title=section["title"],
+                            section_chars=len(section["text"]),
+                            json_valid=False,
+                            latency_seconds=response.latency_seconds,
+                            returned_facts=0,
+                            verified_facts=0,
+                            mappable_facts=0,
+                            error="invalid JSON",
+                        )
+                        section_results.append(result)
+                        completed.add(_result_key(result))
+                        _append_result(output_dir, result)
+                        _write_summary(output_dir, section_results)
+                        continue
+
+                    returned, verified, mappable, targets, invalid_hints, empty_hints = _score_facts(
+                        parsed, section["text"]
                     )
+                    result = SectionResult(
+                        doi=paper.doi,
+                        pmcid=paper.pmcid,
+                        candidate_label=backend.label,
+                        section_title=section["title"],
+                        section_chars=len(section["text"]),
+                        json_valid=True,
+                        latency_seconds=response.latency_seconds,
+                        returned_facts=returned,
+                        verified_facts=verified,
+                        mappable_facts=mappable,
+                        unique_target_fields=targets,
+                        invalid_faire_hints=invalid_hints,
+                        empty_faire_hints=empty_hints,
+                    )
+                    section_results.append(result)
+                    completed.add(_result_key(result))
+                    _append_result(output_dir, result)
+                    _write_summary(output_dir, section_results)
     finally:
         for backend in backends:
             backend.close()
@@ -256,12 +330,7 @@ def run(args: argparse.Namespace) -> None:
     _write_outputs(output_dir, papers, sections_by_pmcid, section_results)
 
 
-def _write_outputs(
-    output_dir: Path,
-    papers: list[Paper],
-    sections_by_pmcid: dict[str, list[dict]],
-    section_results: list[SectionResult],
-) -> None:
+def _write_papers(output_dir: Path, papers: list[Paper], sections_by_pmcid: dict[str, list[dict]]) -> None:
     (output_dir / "papers.json").write_text(
         json.dumps(
             [
@@ -278,6 +347,15 @@ def _write_outputs(
             indent=2,
         )
     )
+
+
+def _write_outputs(
+    output_dir: Path,
+    papers: list[Paper],
+    sections_by_pmcid: dict[str, list[dict]],
+    section_results: list[SectionResult],
+) -> None:
+    _write_papers(output_dir, papers, sections_by_pmcid)
     (output_dir / "detail.json").write_text(json.dumps([asdict(result) for result in section_results], indent=2))
 
     with (output_dir / "section_results.csv").open("w", newline="") as f:
@@ -285,10 +363,12 @@ def _write_outputs(
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for result in section_results:
-            row = asdict(result)
-            row["unique_target_fields"] = "|".join(result.unique_target_fields)
-            writer.writerow(row)
+            writer.writerow(_csv_row(result))
 
+    _write_summary(output_dir, section_results)
+
+
+def _write_summary(output_dir: Path, section_results: list[SectionResult]) -> None:
     by_candidate: dict[str, list[SectionResult]] = {}
     for result in section_results:
         by_candidate.setdefault(result.candidate_label, []).append(result)
@@ -356,6 +436,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-chars", type=int, default=20000)
     parser.add_argument("--output", default="data/exports/benchmark/real_papers_10")
     parser.add_argument("--models", nargs="*", default=None)
+    parser.add_argument("--resume", action="store_true", help="Skip section results already present in section_results.csv")
     return parser.parse_args()
 
 
