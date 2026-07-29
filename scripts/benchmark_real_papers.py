@@ -21,7 +21,7 @@ from sqlalchemy import create_engine, text
 from fair_ocean_agent.config import load_benchmark_candidates, load_config, load_sources_config
 from fair_ocean_agent.extraction.evidence import verify_evidence_quote
 from fair_ocean_agent.extraction.sections import select_relevant_sections
-from fair_ocean_agent.extraction.text import build_prompt
+from fair_ocean_agent.extraction.text import DEFAULT_MAX_SECTION_CHARS_PER_CALL, build_prompt, split_section_text
 from fair_ocean_agent.extraction.faire_fields import all_faire_hints
 from fair_ocean_agent.llm.base import LLMBackendError
 from fair_ocean_agent.llm.factory import build_benchmark_backend
@@ -256,10 +256,22 @@ def run(args: argparse.Namespace) -> None:
                     key = (backend.label, paper.pmcid, section["title"])
                     if key in completed:
                         continue
-                    prompt = build_prompt(section["title"], section["text"])
                     start = time.monotonic()
+                    parsed_chunks = []
+                    chunk_error = None
                     try:
-                        response = backend.generate(prompt, temperature=0)
+                        chunks = split_section_text(section["text"], args.extraction_max_chars_per_call)
+                        response = None
+                        for index, chunk_text in enumerate(chunks):
+                            chunk_title = section["title"] if len(chunks) == 1 else f"{section['title']} [chunk {index + 1}/{len(chunks)}]"
+                            prompt = build_prompt(chunk_title, chunk_text)
+                            response = backend.generate(prompt, temperature=0)
+                            parsed = _try_parse_json(response.text)
+                            if parsed is None:
+                                chunk_error = f"invalid JSON in chunk {index + 1}/{len(chunks)}"
+                                break
+                            returned = parsed if isinstance(parsed, list) else (parsed.get("facts", []) if isinstance(parsed, dict) else [])
+                            parsed_chunks.extend(fact for fact in returned if isinstance(fact, dict))
                     except LLMBackendError as exc:
                         result = SectionResult(
                             doi=paper.doi,
@@ -280,8 +292,7 @@ def run(args: argparse.Namespace) -> None:
                         _write_summary(output_dir, section_results)
                         continue
 
-                    parsed = _try_parse_json(response.text)
-                    if parsed is None:
+                    if chunk_error is not None:
                         result = SectionResult(
                             doi=paper.doi,
                             pmcid=paper.pmcid,
@@ -289,11 +300,11 @@ def run(args: argparse.Namespace) -> None:
                             section_title=section["title"],
                             section_chars=len(section["text"]),
                             json_valid=False,
-                            latency_seconds=response.latency_seconds,
+                            latency_seconds=time.monotonic() - start,
                             returned_facts=0,
                             verified_facts=0,
                             mappable_facts=0,
-                            error="invalid JSON",
+                            error=chunk_error,
                         )
                         section_results.append(result)
                         completed.add(_result_key(result))
@@ -302,7 +313,7 @@ def run(args: argparse.Namespace) -> None:
                         continue
 
                     returned, verified, mappable, targets, invalid_hints, empty_hints = _score_facts(
-                        parsed, section["text"]
+                        parsed_chunks, section["text"]
                     )
                     result = SectionResult(
                         doi=paper.doi,
@@ -311,7 +322,7 @@ def run(args: argparse.Namespace) -> None:
                         section_title=section["title"],
                         section_chars=len(section["text"]),
                         json_valid=True,
-                        latency_seconds=response.latency_seconds,
+                        latency_seconds=time.monotonic() - start,
                         returned_facts=returned,
                         verified_facts=verified,
                         mappable_facts=mappable,
@@ -434,6 +445,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--papers", type=int, default=10)
     parser.add_argument("--sections-per-paper", type=int, default=3)
     parser.add_argument("--max-chars", type=int, default=20000)
+    parser.add_argument("--extraction-max-chars-per-call", type=int, default=DEFAULT_MAX_SECTION_CHARS_PER_CALL)
     parser.add_argument("--output", default="data/exports/benchmark/real_papers_10")
     parser.add_argument("--models", nargs="*", default=None)
     parser.add_argument("--resume", action="store_true", help="Skip section results already present in section_results.csv")

@@ -49,6 +49,8 @@ class LLMConfig(BaseModel):
     timeout_seconds: int = 180
     max_retries: int = 3
     temperature: float = 0
+    max_output_tokens: int | None = None
+    extraction_max_chars_per_call: int = 1600
     max_concurrency: int = 1
     # Sent as {"options": {"num_ctx": ...}} in the request body -- an extra
     # field most OpenAI-compatible servers simply ignore, so this stays
@@ -124,6 +126,7 @@ class BenchmarkCandidateConfig(BaseModel):
     timeout_seconds: int = 180
     max_concurrency: int = 1
     num_ctx: int | None = None
+    max_output_tokens: int | None = None
 
 
 def load_benchmark_candidates() -> list[BenchmarkCandidateConfig]:
@@ -197,6 +200,18 @@ def _apply_env_overrides(raw: dict[str, Any]) -> dict[str, Any]:
     llm_model = os.environ.get("LOCAL_LLM_MODEL")
     if llm_model:
         raw.setdefault("llm", {})["model"] = llm_model
+
+    llm_max_output_tokens = os.environ.get("LOCAL_LLM_MAX_OUTPUT_TOKENS")
+    if llm_max_output_tokens:
+        raw.setdefault("llm", {})["max_output_tokens"] = int(llm_max_output_tokens)
+
+    llm_extraction_max_chars = os.environ.get("LOCAL_LLM_EXTRACTION_MAX_CHARS_PER_CALL")
+    if llm_extraction_max_chars:
+        raw.setdefault("llm", {})["extraction_max_chars_per_call"] = int(llm_extraction_max_chars)
+
+    llm_num_ctx = os.environ.get("LOCAL_LLM_NUM_CTX")
+    if llm_num_ctx:
+        raw.setdefault("llm", {})["num_ctx"] = int(llm_num_ctx)
 
     contact_email = os.environ.get("FAIR_OCEAN_CONTACT_EMAIL")
     if contact_email:

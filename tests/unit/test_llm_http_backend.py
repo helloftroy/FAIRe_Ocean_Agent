@@ -140,3 +140,31 @@ def test_num_ctx_is_sent_as_an_options_field_when_configured():
     backend = _backend(handler, num_ctx=8192)
     backend.generate("prompt")
     assert captured["body"]["options"] == {"num_ctx": 8192}
+
+
+def test_default_max_tokens_is_sent_when_call_does_not_override():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json as json_module
+
+        captured["body"] = json_module.loads(request.read())
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    backend = _backend(handler, default_max_tokens=2048)
+    backend.generate("prompt")
+    assert captured["body"]["max_tokens"] == 2048
+
+
+def test_call_max_tokens_overrides_backend_default():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json as json_module
+
+        captured["body"] = json_module.loads(request.read())
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    backend = _backend(handler, default_max_tokens=2048)
+    backend.generate("prompt", max_tokens=512)
+    assert captured["body"]["max_tokens"] == 512

@@ -39,10 +39,12 @@ class OpenAICompatibleHTTPBackend(LLMBackend):
         max_concurrency: int = 1,
         transport: httpx.BaseTransport | None = None,
         num_ctx: int | None = None,
+        default_max_tokens: int | None = None,
     ):
         self.label = label
         self.model = model
         self._num_ctx = num_ctx
+        self._default_max_tokens = default_max_tokens
         headers = {"Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
@@ -69,8 +71,9 @@ class OpenAICompatibleHTTPBackend(LLMBackend):
         messages.append({"role": "user", "content": prompt})
 
         payload = {"model": self.model, "messages": messages, "temperature": temperature}
-        if max_tokens is not None:
-            payload["max_tokens"] = max_tokens
+        effective_max_tokens = max_tokens if max_tokens is not None else self._default_max_tokens
+        if effective_max_tokens is not None:
+            payload["max_tokens"] = effective_max_tokens
         if self._num_ctx is not None:
             # Not honored by Ollama's own OpenAI-compatible endpoint (verified
             # live) -- see LLMConfig.num_ctx's docstring for the real fix on

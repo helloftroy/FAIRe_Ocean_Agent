@@ -640,11 +640,17 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
     # already-resolved structured value. Empty if MAP_FAIRE hasn't run yet
     # for this study, which leaves every section's prompt exactly as before.
     already_resolved = resolved_faire_fields_for_study(session, study.study_id)
+    llm_config = load_config().llm
 
     for section in sections:
         try:
             facts, _response = extract_facts_from_section(
-                backend, section["title"], section["text"], exclude_faire_hints=already_resolved
+                backend,
+                section["title"],
+                section["text"],
+                exclude_faire_hints=already_resolved,
+                max_section_chars_per_call=llm_config.extraction_max_chars_per_call,
+                max_output_tokens=llm_config.max_output_tokens,
             )
         except LLMBackendError as exc:
             if isinstance(backend, DisabledLLMBackend):

@@ -21,7 +21,17 @@ llm:
   timeout_seconds: 180
   max_retries: 3
   temperature: 0
+  # Keep qwen3:4b-instruct under Ollama's common 4096-token default context:
+  # the FAIRe-aware prompt/checklist is already large before section text.
+  extraction_max_chars_per_call: 1600
+  # Optional generation cap. Set LOCAL_LLM_MAX_OUTPUT_TOKENS=2048+ if a
+  # model's JSON is cut off mid-array.
+  max_output_tokens:
   max_concurrency: 1
+  # Optional request/context hint for compatible servers. Ollama's
+  # OpenAI-compatible endpoint may ignore this; use OLLAMA_CONTEXT_LENGTH or
+  # a Modelfile PARAMETER num_ctx for Ollama itself.
+  num_ctx:
 
 retrieval:
   request_timeout_seconds: 60

@@ -33,3 +33,20 @@ def test_env_override_wins_over_yaml(monkeypatch, tmp_path):
     assert config.database.url == "sqlite:///override.db"
     reset_config_cache()
     monkeypatch.delenv("FAIR_OCEAN_DATABASE_URL", raising=False)
+
+
+def test_llm_size_env_overrides(monkeypatch, tmp_path):
+    reset_config_cache()
+    monkeypatch.setenv("LOCAL_LLM_MAX_OUTPUT_TOKENS", "2048")
+    monkeypatch.setenv("LOCAL_LLM_EXTRACTION_MAX_CHARS_PER_CALL", "1200")
+    monkeypatch.setenv("LOCAL_LLM_NUM_CTX", "8192")
+
+    config = load_config(env_file=tmp_path / "does-not-exist.env")
+
+    assert config.llm.max_output_tokens == 2048
+    assert config.llm.extraction_max_chars_per_call == 1200
+    assert config.llm.num_ctx == 8192
+    reset_config_cache()
+    monkeypatch.delenv("LOCAL_LLM_MAX_OUTPUT_TOKENS", raising=False)
+    monkeypatch.delenv("LOCAL_LLM_EXTRACTION_MAX_CHARS_PER_CALL", raising=False)
+    monkeypatch.delenv("LOCAL_LLM_NUM_CTX", raising=False)

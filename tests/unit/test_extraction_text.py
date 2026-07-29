@@ -9,6 +9,7 @@ from fair_ocean_agent.extraction.text import (
     build_prompt,
     extract_facts_from_section,
     resolved_faire_fields_for_study,
+    split_section_text,
 )
 from fair_ocean_agent.llm.mock import MockLLMBackend
 from fair_ocean_agent.mapping.faire import TARGET_SCHEMA, TARGET_SCHEMA_VERSION
@@ -50,6 +51,47 @@ def test_invalid_json_response_yields_no_facts():
     facts, response = extract_facts_from_section(backend, "Methods", SECTION_TEXT)
     assert facts == []
     assert response is not None
+
+
+def test_valid_json_scalar_response_yields_no_facts_not_crash():
+    backend = MockLLMBackend(responses=["42"])
+    facts, response = extract_facts_from_section(backend, "Methods", SECTION_TEXT)
+    assert facts == []
+    assert response is not None
+
+
+def test_split_section_text_bounds_long_sections():
+    text = "First sentence about sampling. " * 20
+    chunks = split_section_text(text, max_chars=120)
+
+    assert len(chunks) > 1
+    assert all(len(chunk) <= 120 for chunk in chunks)
+    assert "First sentence about sampling" in chunks[0]
+
+
+def test_extract_facts_from_section_chunks_long_text_and_merges_facts():
+    first = "Water samples were collected on 4 January 2022."
+    second = "PCR used primers 515F and 806R."
+    section_text = f"{first}\n\n{second}"
+    responses = [
+        json.dumps([{"fact_type_candidate": "collection_date", "raw_value": "2022-01-04", "evidence_quote": first}]),
+        json.dumps([{"fact_type_candidate": "forward_primer_name", "raw_value": "515F", "evidence_quote": second}]),
+    ]
+    backend = MockLLMBackend(responses=responses)
+
+    facts, _ = extract_facts_from_section(
+        backend,
+        "Methods",
+        section_text,
+        max_section_chars_per_call=len(first) + 1,
+        max_output_tokens=2048,
+    )
+
+    assert [fact.fact_type_candidate for fact in facts] == ["collection_date", "forward_primer_name"]
+    assert len(backend.calls) == 2
+    assert all(call["max_tokens"] == 2048 for call in backend.calls)
+    assert first in backend.calls[0]["prompt"]
+    assert second in backend.calls[1]["prompt"]
 
 
 def test_prompt_version_is_stable_constant():

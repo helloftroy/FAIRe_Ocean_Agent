@@ -74,6 +74,7 @@ from fair_ocean_agent.mapping.faire import TARGET_SCHEMA
 from fair_ocean_agent.sources.base import RawFactCandidate
 
 PROMPT_VERSION = "text-extraction-v3-native-with-hints"
+DEFAULT_MAX_SECTION_CHARS_PER_CALL = 1600
 
 
 def resolved_faire_fields_for_study(session: Session, study_id: str) -> frozenset[str]:
@@ -157,11 +158,64 @@ def build_prompt(section_title: str, section_text: str, exclude_faire_hints: fro
     return PROMPT_TEMPLATE.format(instructions=instructions, section_title=section_title, section_text=section_text)
 
 
+def split_section_text(section_text: str, max_chars: int = DEFAULT_MAX_SECTION_CHARS_PER_CALL) -> list[str]:
+    """Split long selected paper sections into bounded extraction calls.
+
+    The split is character-based so it works without a model-specific
+    tokenizer. The default is conservative for qwen3 under Ollama's common
+    4096-token context: the FAIRe-aware checklist already consumes most of
+    the prompt before source text is added.
+    """
+    text = section_text.strip()
+    if not text:
+        return []
+    if max_chars <= 0 or len(text) <= max_chars:
+        return [text]
+
+    chunks: list[str] = []
+    current = ""
+    paragraphs = [part.strip() for part in text.split("\n\n") if part.strip()]
+    for paragraph in paragraphs:
+        if len(paragraph) > max_chars:
+            if current:
+                chunks.append(current)
+                current = ""
+            start = 0
+            while start < len(paragraph):
+                end = min(len(paragraph), start + max_chars)
+                if end < len(paragraph):
+                    split_at = max(
+                        paragraph.rfind(". ", start, end),
+                        paragraph.rfind("; ", start, end),
+                        paragraph.rfind(", ", start, end),
+                        paragraph.rfind(" ", start, end),
+                    )
+                    if split_at > start + max_chars // 2:
+                        end = split_at + 1
+                chunks.append(paragraph[start:end].strip())
+                start = end
+            continue
+
+        candidate = f"{current}\n\n{paragraph}" if current else paragraph
+        if len(candidate) <= max_chars:
+            current = candidate
+            continue
+        if current:
+            chunks.append(current)
+        current = paragraph
+
+    if current:
+        chunks.append(current)
+    return chunks
+
+
 def extract_facts_from_section(
     backend: LLMBackend,
     section_title: str,
     section_text: str,
     exclude_faire_hints: frozenset[str] = frozenset(),
+    max_section_chars_per_call: int = DEFAULT_MAX_SECTION_CHARS_PER_CALL,
+    max_output_tokens: int | None = None,
 ) -> tuple[list[RawFactCandidate], LLMResponse | None]:
     """Returns (verified facts, the last LLMResponse -- for latency/token
     bookkeeping by the caller). An empty fact list can mean either "the
@@ -172,12 +226,33 @@ def extract_facts_from_section(
     concepts from the checklist entirely -- a caller with nothing resolved
     yet passes the default empty set and gets the exact same behavior as
     before this parameter existed."""
-    prompt = build_prompt(section_title, section_text, exclude_faire_hints)
-    parsed, response = backend.generate_json(prompt, temperature=0)
-    if parsed is None:
-        return [], response
+    chunks = split_section_text(section_text, max_section_chars_per_call)
+    if not chunks:
+        return [], None
 
-    candidates = parsed if isinstance(parsed, list) else parsed.get("facts", [])
+    facts: list[RawFactCandidate] = []
+    seen: set[tuple[str, str, str]] = set()
+    last_response: LLMResponse | None = None
+
+    for index, chunk_text in enumerate(chunks):
+        chunk_title = section_title if len(chunks) == 1 else f"{section_title} [chunk {index + 1}/{len(chunks)}]"
+        prompt = build_prompt(chunk_title, chunk_text, exclude_faire_hints)
+        parsed, response = backend.generate_json(prompt, temperature=0, max_tokens=max_output_tokens)
+        last_response = response
+        if parsed is None:
+            continue
+
+        candidates = parsed if isinstance(parsed, list) else (parsed.get("facts", []) if isinstance(parsed, dict) else [])
+        facts.extend(_facts_from_candidates(candidates, chunk_text, chunk_title, seen))
+    return facts, last_response
+
+
+def _facts_from_candidates(
+    candidates,
+    section_text: str,
+    section_title: str,
+    seen: set[tuple[str, str, str]],
+) -> list[RawFactCandidate]:
     facts: list[RawFactCandidate] = []
     for candidate in candidates:
         if not isinstance(candidate, dict):
@@ -189,6 +264,10 @@ def extract_facts_from_section(
         raw_value = candidate.get("raw_value")
         if not fact_type or raw_value in (None, ""):
             continue
+        dedupe_key = (str(fact_type), str(raw_value), quote)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
         hints = candidate.get("candidate_standard_fields")
         confidence_metadata = (
             {"candidate_standard_fields": hints} if isinstance(hints, dict) and hints else None
@@ -205,4 +284,4 @@ def extract_facts_from_section(
                 confidence_metadata=confidence_metadata,
             )
         )
-    return facts, response
+    return facts

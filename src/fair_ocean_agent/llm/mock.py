@@ -30,7 +30,7 @@ class MockLLMBackend(LLMBackend):
     def generate(
         self, prompt: str, *, system: str | None = None, temperature: float = 0, max_tokens: int | None = None
     ) -> LLMResponse:
-        self.calls.append({"prompt": prompt, "system": system, "temperature": temperature})
+        self.calls.append({"prompt": prompt, "system": system, "temperature": temperature, "max_tokens": max_tokens})
         if self._simulated_latency:
             time.sleep(self._simulated_latency)
 

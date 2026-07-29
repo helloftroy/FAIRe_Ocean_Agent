@@ -26,6 +26,11 @@ candidates:
     api_key_env: "LOCAL_LLM_API_KEY"
     timeout_seconds: 180
     max_concurrency: 1
+    # Debug/default target: keep output from truncating mid-JSON and ask
+    # compatible servers for a larger context. For Ollama's OpenAI route,
+    # set OLLAMA_CONTEXT_LENGTH=8192 or use a Modelfile PARAMETER num_ctx.
+    max_output_tokens: 2048
+    num_ctx: 8192
 
   - label: "gemma3-4b-ollama"
     base_url: "http://localhost:11434/v1"
