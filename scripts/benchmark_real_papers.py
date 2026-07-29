@@ -5,6 +5,8 @@ This is not a gold-standard precision/recall benchmark. It measures the
 operational signals that matter before launching a large extraction run:
 latency, JSON validity, evidence verification, section timeout/error rate,
 fact yield, and whether extracted native fact names are mappable to FAIRe.
+For LLM-derived facts, evidence verification means the model cited a source
+segment ID that Python provided in the prompt; Python owns the literal quote.
 """
 from __future__ import annotations
 
@@ -19,10 +21,14 @@ from pathlib import Path
 from sqlalchemy import create_engine, text
 
 from fair_ocean_agent.config import load_benchmark_candidates, load_config, load_sources_config
-from fair_ocean_agent.extraction.evidence import verify_evidence_quote
 from fair_ocean_agent.extraction.sections import select_relevant_sections
-from fair_ocean_agent.extraction.text import DEFAULT_MAX_SECTION_CHARS_PER_CALL, build_prompt, split_section_text
 from fair_ocean_agent.extraction.faire_fields import all_faire_hints
+from fair_ocean_agent.extraction.text import (
+    DEFAULT_MAX_SECTION_CHARS_PER_CALL,
+    build_prompt,
+    segment_source_text,
+    split_segments_for_calls,
+)
 from fair_ocean_agent.llm.base import LLMBackendError
 from fair_ocean_agent.llm.factory import build_benchmark_backend
 from fair_ocean_agent.mapping.rules import rules_for
@@ -118,7 +124,16 @@ def _try_parse_json(text_value: str):
         return None
 
 
-def _score_facts(parsed, section_text: str) -> tuple[int, int, int, list[str], int, int]:
+def _candidate_evidence_ids(candidate: dict) -> list[str]:
+    value = candidate.get("evidence_id", candidate.get("evidence_ids"))
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return []
+
+
+def _score_facts(parsed, segment_lookup: dict[str, str]) -> tuple[int, int, int, list[str], int, int]:
     returned = parsed if isinstance(parsed, list) else (parsed.get("facts", []) if isinstance(parsed, dict) else [])
     returned = [fact for fact in returned if isinstance(fact, dict)]
     valid_hints = all_faire_hints()
@@ -135,7 +150,8 @@ def _score_facts(parsed, section_text: str) -> tuple[int, int, int, list[str], i
         if isinstance(hints, dict) and hints.get("faire") and hints["faire"] not in valid_hints:
             invalid_hints += 1
 
-        if not verify_evidence_quote(fact.get("evidence_quote", ""), section_text):
+        evidence_ids = _candidate_evidence_ids(fact)
+        if not evidence_ids or any(evidence_id not in segment_lookup for evidence_id in evidence_ids):
             continue
         verified.append(fact)
         rules = rules_for(str(fact.get("fact_type_candidate", "")), "study")
@@ -260,11 +276,13 @@ def run(args: argparse.Namespace) -> None:
                     parsed_chunks = []
                     chunk_error = None
                     try:
-                        chunks = split_section_text(section["text"], args.extraction_max_chars_per_call)
+                        segments = segment_source_text(section["title"], section["text"])
+                        segment_lookup = {segment.segment_id: segment.text for segment in segments}
+                        chunks = split_segments_for_calls(segments, args.extraction_max_chars_per_call)
                         response = None
-                        for index, chunk_text in enumerate(chunks):
+                        for index, chunk_segments in enumerate(chunks):
                             chunk_title = section["title"] if len(chunks) == 1 else f"{section['title']} [chunk {index + 1}/{len(chunks)}]"
-                            prompt = build_prompt(chunk_title, chunk_text)
+                            prompt = build_prompt(chunk_title, "", segments=chunk_segments)
                             response = backend.generate(prompt, temperature=0)
                             parsed = _try_parse_json(response.text)
                             if parsed is None:
@@ -313,7 +331,7 @@ def run(args: argparse.Namespace) -> None:
                         continue
 
                     returned, verified, mappable, targets, invalid_hints, empty_hints = _score_facts(
-                        parsed_chunks, section["text"]
+                        parsed_chunks, segment_lookup
                     )
                     result = SectionResult(
                         doi=paper.doi,

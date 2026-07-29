@@ -1,17 +1,18 @@
 """Structural evidence-consistency checks (section 16) over already-
 persisted RawFacts.
 
-Section 16's "evidence quote exists in source text" is only checkable at
-extraction time -- extraction/evidence.py's verify_evidence_quote already
-does exactly that, before a fact is ever persisted (extraction/text.py
-drops anything that fails). Source text itself isn't retained after
-extraction (section 1: the source document may remain ephemeral), so a
-RawFact already in the database can't be re-checked against its original
-text. What *can* be re-checked, as an audit: does every fact's evidence
-bookkeeping match what its support_type promises -- an EXPLICIT fact
-should carry a non-blank evidence_quote, a STRUCTURED_SOURCE fact should
-carry a non-blank source_locator. A failure here means a bug in an
-adapter/extractor, not bad input data.
+Section 16's "evidence quote exists in source text" is only fully checkable
+at extraction time. For LLM-derived facts, extraction/text.py now provides
+numbered source segments to the model, requires an evidence_id back, and
+copies the segment text into evidence_quote itself; candidates with unknown
+or missing IDs are dropped before persistence. Source text itself isn't
+retained after extraction (section 1: the source document may remain
+ephemeral), so a RawFact already in the database can't be re-checked
+against its original text. What *can* be re-checked, as an audit: does
+every fact's evidence bookkeeping match what its support_type promises --
+an EXPLICIT fact should carry a non-blank evidence_quote, a
+STRUCTURED_SOURCE fact should carry a non-blank source_locator. A failure
+here means a bug in an adapter/extractor, not bad input data.
 """
 from __future__ import annotations
 

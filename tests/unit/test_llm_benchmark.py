@@ -44,10 +44,10 @@ def test_run_case_uses_the_real_production_prompt(monkeypatch):
     captured = {}
     real_build_prompt = benchmark_module.build_prompt
 
-    def spy(section_title, section_text):
+    def spy(section_title, section_text, **kwargs):
         captured["section_title"] = section_title
         captured["section_text"] = section_text
-        return real_build_prompt(section_title, section_text)
+        return real_build_prompt(section_title, section_text, **kwargs)
 
     monkeypatch.setattr(benchmark_module, "build_prompt", spy)
     backend = MockLLMBackend(responses=["[]"])
@@ -81,8 +81,8 @@ def test_gold_cases_use_native_taxonomy_names_or_a_documented_fallback():
 def test_run_benchmark_perfect_model_gets_perfect_scores():
     response = json.dumps(
         [
-            {"fact_type_candidate": "collection_date", "raw_value": "2022-01-04", "evidence_quote": "collected on 4 January 2022"},
-            {"fact_type_candidate": "sampling_depth", "raw_value": "5 meters", "evidence_quote": "depth of 5 meters"},
+            {"fact_type_candidate": "collection_date", "raw_value": "2022-01-04", "evidence_id": "METHODS.P001"},
+            {"fact_type_candidate": "sampling_depth", "raw_value": "5 meters", "evidence_id": "METHODS.P001"},
         ]
     )
     backend = MockLLMBackend(label="perfect", responses=[response])
@@ -97,8 +97,8 @@ def test_run_benchmark_perfect_model_gets_perfect_scores():
     assert len(results) == 1
 
 
-def test_run_benchmark_hallucinated_fact_is_caught_by_evidence_verification():
-    response = json.dumps([{"fact_type_candidate": "made_up", "raw_value": "x", "evidence_quote": "not present anywhere"}])
+def test_run_benchmark_unknown_evidence_id_is_caught_by_evidence_verification():
+    response = json.dumps([{"fact_type_candidate": "made_up", "raw_value": "x", "evidence_id": "METHODS.P999"}])
     backend = MockLLMBackend(label="hallucinator", responses=[response])
     report = run_benchmark([backend], [CASE])
 

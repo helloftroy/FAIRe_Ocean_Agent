@@ -9,6 +9,7 @@ from fair_ocean_agent.extraction.text import (
     build_prompt,
     extract_facts_from_section,
     resolved_faire_fields_for_study,
+    segment_source_text,
     split_section_text,
 )
 from fair_ocean_agent.llm.mock import MockLLMBackend
@@ -17,22 +18,24 @@ from fair_ocean_agent.mapping.faire import TARGET_SCHEMA, TARGET_SCHEMA_VERSION
 SECTION_TEXT = "Samples were collected on 4 January 2022 at a depth of 5 meters near the reef."
 
 
-def test_verified_fact_is_kept_with_evidence_quote():
+def test_segment_id_fact_is_kept_with_python_copied_evidence_quote():
     response = json.dumps(
-        [{"fact_type_candidate": "collection_date", "raw_value": "2022-01-04", "evidence_quote": "Samples were collected on 4 January 2022"}]
+        [{"fact_type_candidate": "collection_date", "raw_value": "2022-01-04", "evidence_id": "METHODS.P001"}]
     )
     backend = MockLLMBackend(responses=[response])
     facts, _ = extract_facts_from_section(backend, "Methods", SECTION_TEXT)
 
     assert len(facts) == 1
     assert facts[0].fact_type_candidate == "collection_date"
-    assert facts[0].evidence_quote == "Samples were collected on 4 January 2022"
+    assert facts[0].evidence_quote == SECTION_TEXT
+    assert facts[0].source_locator.endswith("METHODS.P001")
+    assert facts[0].confidence_metadata == {"evidence_ids": ["METHODS.P001"]}
     assert facts[0].support_type == SupportType.EXPLICIT
 
 
-def test_fabricated_quote_is_dropped():
+def test_missing_or_unknown_evidence_id_is_dropped():
     response = json.dumps(
-        [{"fact_type_candidate": "fake", "raw_value": "x", "evidence_quote": "this sentence is not in the source"}]
+        [{"fact_type_candidate": "fake", "raw_value": "x", "evidence_id": "METHODS.P999"}]
     )
     backend = MockLLMBackend(responses=[response])
     facts, _ = extract_facts_from_section(backend, "Methods", SECTION_TEXT)
@@ -40,7 +43,7 @@ def test_fabricated_quote_is_dropped():
 
 
 def test_missing_fields_are_skipped_not_crashed_on():
-    response = json.dumps([{"evidence_quote": "Samples were collected on 4 January 2022"}])  # no fact_type/raw_value
+    response = json.dumps([{"evidence_id": "METHODS.P001"}])  # no fact_type/raw_value
     backend = MockLLMBackend(responses=[response])
     facts, _ = extract_facts_from_section(backend, "Methods", SECTION_TEXT)
     assert facts == []
@@ -60,6 +63,12 @@ def test_valid_json_scalar_response_yields_no_facts_not_crash():
     assert response is not None
 
 
+def test_segment_source_text_assigns_stable_ids():
+    segments = segment_source_text("PCR", "PCR reactions used primers.\n\nReactions were annealed at 54 C.")
+    assert [segment.segment_id for segment in segments] == ["PCR.P001", "PCR.P002"]
+    assert segments[1].text == "Reactions were annealed at 54 C."
+
+
 def test_split_section_text_bounds_long_sections():
     text = "First sentence about sampling. " * 20
     chunks = split_section_text(text, max_chars=120)
@@ -74,8 +83,8 @@ def test_extract_facts_from_section_chunks_long_text_and_merges_facts():
     second = "PCR used primers 515F and 806R."
     section_text = f"{first}\n\n{second}"
     responses = [
-        json.dumps([{"fact_type_candidate": "collection_date", "raw_value": "2022-01-04", "evidence_quote": first}]),
-        json.dumps([{"fact_type_candidate": "forward_primer_name", "raw_value": "515F", "evidence_quote": second}]),
+        json.dumps([{"fact_type_candidate": "collection_date", "raw_value": "2022-01-04", "evidence_id": "METHODS.P001"}]),
+        json.dumps([{"fact_type_candidate": "forward_primer_name", "raw_value": "515F", "evidence_id": "METHODS.P002"}]),
     ]
     backend = MockLLMBackend(responses=responses)
 
@@ -90,12 +99,14 @@ def test_extract_facts_from_section_chunks_long_text_and_merges_facts():
     assert [fact.fact_type_candidate for fact in facts] == ["collection_date", "forward_primer_name"]
     assert len(backend.calls) == 2
     assert all(call["max_tokens"] == 2048 for call in backend.calls)
-    assert first in backend.calls[0]["prompt"]
-    assert second in backend.calls[1]["prompt"]
+    assert "METHODS.P001:" in backend.calls[0]["prompt"]
+    assert "METHODS.P002:" in backend.calls[1]["prompt"]
+    assert facts[0].evidence_quote == first
+    assert facts[1].evidence_quote == second
 
 
 def test_prompt_version_is_stable_constant():
-    assert PROMPT_VERSION == "text-extraction-v3-native-with-hints"
+    assert PROMPT_VERSION == "text-extraction-v4-segment-evidence-ids"
 
 
 # --- FAIRe-aware taxonomy regression tests (Milestone 8, corrected in v3) ---
@@ -130,6 +141,8 @@ def test_prompt_embeds_faire_hints_as_hints_not_identity():
     prompt = build_prompt("PCR", SECTION_TEXT)
     assert "[FAIRe hint: annealingTemp]" in prompt
     assert "candidate_standard_fields" in prompt
+    assert "evidence_id" in prompt
+    assert "evidence_quote" not in prompt
 
 
 def test_every_native_field_name_appears_in_instructions():
@@ -147,10 +160,10 @@ def test_extracting_an_atomic_native_field_by_exact_name():
             {
                 "fact_type_candidate": "annealing_temperature",
                 "raw_value": "57C",
-                "evidence_quote": "an annealing temperature of 57C",
+                "evidence_id": "PCR.P001",
                 "candidate_standard_fields": {"faire": "annealingTemp"},
             },
-            {"fact_type_candidate": "pcr_cycle_count", "raw_value": "35", "evidence_quote": "for 35 cycles"},
+            {"fact_type_candidate": "pcr_cycle_count", "raw_value": "35", "evidence_id": "PCR.P001"},
         ]
     )
     backend = MockLLMBackend(responses=[response])
@@ -170,7 +183,7 @@ def test_candidate_standard_fields_hint_is_stored_in_confidence_metadata():
             {
                 "fact_type_candidate": "annealing_temperature",
                 "raw_value": "57C",
-                "evidence_quote": "an annealing temperature of 57C",
+                "evidence_id": "PCR.P001",
                 "candidate_standard_fields": {"faire": "annealingTemp"},
             }
         ]
@@ -180,20 +193,23 @@ def test_candidate_standard_fields_hint_is_stored_in_confidence_metadata():
 
     assert len(facts) == 1
     assert facts[0].fact_type_candidate == "annealing_temperature"
-    assert facts[0].confidence_metadata == {"candidate_standard_fields": {"faire": "annealingTemp"}}
+    assert facts[0].confidence_metadata == {
+        "evidence_ids": ["PCR.P001"],
+        "candidate_standard_fields": {"faire": "annealingTemp"},
+    }
 
 
 def test_omitted_candidate_standard_fields_hint_leaves_a_valid_fact():
     section_text = "PCR was performed with an annealing temperature of 57C."
     response = json.dumps(
-        [{"fact_type_candidate": "annealing_temperature", "raw_value": "57C", "evidence_quote": "an annealing temperature of 57C"}]
+        [{"fact_type_candidate": "annealing_temperature", "raw_value": "57C", "evidence_id": "PCR.P001"}]
     )
     backend = MockLLMBackend(responses=[response])
     facts, _ = extract_facts_from_section(backend, "PCR", section_text)
 
     assert len(facts) == 1
     assert facts[0].fact_type_candidate == "annealing_temperature"
-    assert facts[0].confidence_metadata is None
+    assert facts[0].confidence_metadata == {"evidence_ids": ["PCR.P001"]}
 
 
 # --- Structured-first extraction: skip asking about already-resolved

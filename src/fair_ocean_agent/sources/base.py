@@ -85,10 +85,11 @@ class RawFactCandidate(BaseModel):
     # (study-wide fact, same as every Milestone 2 adapter).
     entity_external_id: str | None = None
     entity_label: str | None = None
-    # Verbatim quote from the source text, required for LLM-derived facts
-    # (extraction/text.py) and verified by extraction/evidence.py before
-    # persistence; left None for structured API/XML facts, where
-    # source_locator (a JSON/XML path) already pins down the evidence.
+    # Verbatim quote from the source text, required for LLM-derived facts.
+    # extraction/text.py now obtains this by asking the model for source
+    # segment ID(s), then copying the segment text itself before persistence;
+    # left None for structured API/XML facts, where source_locator (a
+    # JSON/XML path) already pins down the evidence.
     evidence_quote: str | None = None
     # Optional, non-authoritative metadata about this fact -- currently used
     # by extraction/text.py to carry a candidate_standard_fields hint (e.g.

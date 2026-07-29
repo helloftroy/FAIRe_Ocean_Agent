@@ -1,11 +1,11 @@
 """LLM-based text fact extraction (section 12), made FAIRe-aware in v2 and
-corrected in v3: every candidate fact the model returns must carry an
-evidence_quote that extraction.evidence confirms is present verbatim in the
-exact section text it was extracted from -- candidates that fail
-verification are dropped here, before they ever reach persistence, never
-persisted as a fact and never surfaced to a caller. The model only ever
-sees bounded, already-selected text (see extraction/sections.py); this
-module never lets it browse further or pull in outside knowledge.
+corrected in v3/v4. In v4 the model no longer writes evidence text from
+memory: Python assigns stable IDs to source segments, the model returns
+which segment ID(s) support each fact, and Python copies the authoritative
+segment text into `evidence_quote`. Candidates with unknown/missing segment
+IDs are dropped before persistence. The model only ever sees bounded,
+already-selected text (see extraction/sections.py); this module never lets
+it browse further or pull in outside knowledge.
 
 **Why "FAIRe-aware" matters (v1 -> v2):** v1's prompt was fully open-
 vocabulary -- "extract whatever facts you find, name them however you
@@ -62,19 +62,27 @@ existed.
 """
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from fair_ocean_agent.database.enums import EntityLevel, MissingnessStatus, SupportType
 from fair_ocean_agent.database.models import StandardizedValue
-from fair_ocean_agent.extraction.evidence import verify_evidence_quote
 from fair_ocean_agent.extraction.faire_fields import render_field_reference
 from fair_ocean_agent.llm.base import LLMBackend, LLMResponse
 from fair_ocean_agent.mapping.faire import TARGET_SCHEMA
 from fair_ocean_agent.sources.base import RawFactCandidate
 
-PROMPT_VERSION = "text-extraction-v3-native-with-hints"
+PROMPT_VERSION = "text-extraction-v4-segment-evidence-ids"
 DEFAULT_MAX_SECTION_CHARS_PER_CALL = 1600
+
+
+@dataclass(frozen=True)
+class SourceSegment:
+    segment_id: str
+    text: str
 
 
 def resolved_faire_fields_for_study(session: Session, study_id: str) -> frozenset[str]:
@@ -135,27 +143,81 @@ PROMPT_TEMPLATE = """{instructions}
 Return ONLY a JSON array of objects, each with these fields:
 - fact_type_candidate (string, required -- an exact concept name from the checklist above when one applies)
 - raw_value (string, required)
-- evidence_quote (string, required -- copied verbatim from the source text below)
+- evidence_id (string, required -- one of the source segment IDs below that explicitly supports this fact)
 - candidate_standard_fields (object, OPTIONAL -- only include this if the checklist gave a "[FAIRe hint: ...]" for the concept you used; set it to {{"faire": "<that exact hint>"}}. Omit this field entirely rather than guess a hint that wasn't given.)
 
 If nothing in the source text supports a fact, return an empty array. Do
-not paraphrase evidence_quote -- it must be an exact substring of the
-source text.
+not reproduce or paraphrase source text. Your evidence_id must point to a
+listed segment that explicitly supports the fact.
 
 Section: {section_title}
 
-Source text:
-\"\"\"
-{section_text}
-\"\"\"
+Source segments:
+{source_segments}
 """
 
 
-def build_prompt(section_title: str, section_text: str, exclude_faire_hints: frozenset[str] = frozenset()) -> str:
+def _segment_prefix(section_title: str) -> str:
+    words = re.findall(r"[A-Za-z0-9]+", section_title.upper())
+    return "_".join(words[:3]) or "SECTION"
+
+
+def segment_source_text(section_title: str, section_text: str) -> list[SourceSegment]:
+    """Assign stable IDs to sentence-ish source segments for model citation.
+
+    Paragraphs are preserved when they are short; long paragraphs are split
+    on sentence boundaries. This makes the model choose an ID rather than
+    regenerate evidence text, while keeping Python in charge of the exact
+    quote stored downstream.
+    """
+    text = section_text.strip()
+    if not text:
+        return []
+
+    raw_segments: list[str] = []
+    for paragraph in [part.strip() for part in re.split(r"\n\s*\n", text) if part.strip()]:
+        if len(paragraph) <= 700:
+            raw_segments.append(paragraph)
+            continue
+        sentence_parts = re.split(r"(?<=[.!?])\s+", paragraph)
+        current = ""
+        for sentence in [part.strip() for part in sentence_parts if part.strip()]:
+            candidate = f"{current} {sentence}".strip() if current else sentence
+            if len(candidate) <= 700:
+                current = candidate
+            else:
+                if current:
+                    raw_segments.append(current)
+                current = sentence
+        if current:
+            raw_segments.append(current)
+
+    prefix = _segment_prefix(section_title)
+    return [
+        SourceSegment(segment_id=f"{prefix}.P{index:03d}", text=segment)
+        for index, segment in enumerate(raw_segments, start=1)
+    ]
+
+
+def _render_source_segments(segments: list[SourceSegment]) -> str:
+    return "\n".join(f"{segment.segment_id}: {segment.text}" for segment in segments)
+
+
+def build_prompt(
+    section_title: str,
+    section_text: str,
+    exclude_faire_hints: frozenset[str] = frozenset(),
+    segments: list[SourceSegment] | None = None,
+) -> str:
     instructions = (
         EXTRACTION_INSTRUCTIONS if not exclude_faire_hints else build_extraction_instructions(exclude_faire_hints)
     )
-    return PROMPT_TEMPLATE.format(instructions=instructions, section_title=section_title, section_text=section_text)
+    source_segments = segments if segments is not None else segment_source_text(section_title, section_text)
+    return PROMPT_TEMPLATE.format(
+        instructions=instructions,
+        section_title=section_title,
+        source_segments=_render_source_segments(source_segments),
+    )
 
 
 def split_section_text(section_text: str, max_chars: int = DEFAULT_MAX_SECTION_CHARS_PER_CALL) -> list[str]:
@@ -209,6 +271,31 @@ def split_section_text(section_text: str, max_chars: int = DEFAULT_MAX_SECTION_C
     return chunks
 
 
+def split_segments_for_calls(
+    segments: list[SourceSegment],
+    max_chars: int = DEFAULT_MAX_SECTION_CHARS_PER_CALL,
+) -> list[list[SourceSegment]]:
+    if not segments:
+        return []
+    if max_chars <= 0:
+        return [segments]
+
+    chunks: list[list[SourceSegment]] = []
+    current: list[SourceSegment] = []
+    current_chars = 0
+    for segment in segments:
+        rendered_len = len(segment.segment_id) + len(segment.text) + 2
+        if current and current_chars + rendered_len > max_chars:
+            chunks.append(current)
+            current = []
+            current_chars = 0
+        current.append(segment)
+        current_chars += rendered_len
+    if current:
+        chunks.append(current)
+    return chunks
+
+
 def extract_facts_from_section(
     backend: LLMBackend,
     section_title: str,
@@ -226,30 +313,32 @@ def extract_facts_from_section(
     concepts from the checklist entirely -- a caller with nothing resolved
     yet passes the default empty set and gets the exact same behavior as
     before this parameter existed."""
-    chunks = split_section_text(section_text, max_section_chars_per_call)
-    if not chunks:
+    segments = segment_source_text(section_title, section_text)
+    segment_chunks = split_segments_for_calls(segments, max_section_chars_per_call)
+    if not segment_chunks:
         return [], None
 
     facts: list[RawFactCandidate] = []
     seen: set[tuple[str, str, str]] = set()
     last_response: LLMResponse | None = None
 
-    for index, chunk_text in enumerate(chunks):
-        chunk_title = section_title if len(chunks) == 1 else f"{section_title} [chunk {index + 1}/{len(chunks)}]"
-        prompt = build_prompt(chunk_title, chunk_text, exclude_faire_hints)
+    for index, chunk_segments in enumerate(segment_chunks):
+        chunk_title = section_title if len(segment_chunks) == 1 else f"{section_title} [chunk {index + 1}/{len(segment_chunks)}]"
+        segment_lookup = {segment.segment_id: segment.text for segment in chunk_segments}
+        prompt = build_prompt(chunk_title, "", exclude_faire_hints, segments=chunk_segments)
         parsed, response = backend.generate_json(prompt, temperature=0, max_tokens=max_output_tokens)
         last_response = response
         if parsed is None:
             continue
 
         candidates = parsed if isinstance(parsed, list) else (parsed.get("facts", []) if isinstance(parsed, dict) else [])
-        facts.extend(_facts_from_candidates(candidates, chunk_text, chunk_title, seen))
+        facts.extend(_facts_from_candidates(candidates, segment_lookup, chunk_title, seen))
     return facts, last_response
 
 
 def _facts_from_candidates(
     candidates,
-    section_text: str,
+    segment_lookup: dict[str, str],
     section_title: str,
     seen: set[tuple[str, str, str]],
 ) -> list[RawFactCandidate]:
@@ -257,9 +346,10 @@ def _facts_from_candidates(
     for candidate in candidates:
         if not isinstance(candidate, dict):
             continue
-        quote = candidate.get("evidence_quote", "")
-        if not verify_evidence_quote(quote, section_text):
+        evidence_ids = _candidate_evidence_ids(candidate)
+        if not evidence_ids or any(evidence_id not in segment_lookup for evidence_id in evidence_ids):
             continue
+        quote = "\n".join(segment_lookup[evidence_id] for evidence_id in evidence_ids)
         fact_type = candidate.get("fact_type_candidate")
         raw_value = candidate.get("raw_value")
         if not fact_type or raw_value in (None, ""):
@@ -269,19 +359,28 @@ def _facts_from_candidates(
             continue
         seen.add(dedupe_key)
         hints = candidate.get("candidate_standard_fields")
-        confidence_metadata = (
-            {"candidate_standard_fields": hints} if isinstance(hints, dict) and hints else None
-        )
+        confidence_metadata = {"evidence_ids": evidence_ids}
+        if isinstance(hints, dict) and hints:
+            confidence_metadata["candidate_standard_fields"] = hints
         facts.append(
             RawFactCandidate(
                 entity_level=EntityLevel.STUDY,
                 fact_type_candidate=str(fact_type),
                 raw_field_name=str(fact_type),
                 raw_value=str(raw_value),
-                source_locator=f"llm_text_extraction.{section_title}",
+                source_locator=f"llm_text_extraction.{section_title}.{'|'.join(evidence_ids)}",
                 support_type=SupportType.EXPLICIT,
                 evidence_quote=quote,
                 confidence_metadata=confidence_metadata,
             )
         )
     return facts
+
+
+def _candidate_evidence_ids(candidate: dict) -> list[str]:
+    value = candidate.get("evidence_id", candidate.get("evidence_ids"))
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return []

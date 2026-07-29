@@ -79,7 +79,7 @@ def test_handler_extracts_and_persists_verified_facts(db_session, monkeypatch):
     task = _task_for(db_session, study)
 
     response = json.dumps(
-        [{"fact_type_candidate": "collection_date", "raw_value": "2022-01-04", "evidence_quote": "collected on 4 January 2022"}]
+        [{"fact_type_candidate": "collection_date", "raw_value": "2022-01-04", "evidence_id": "SAMPLING.P001"}]
     )
     handlers._llm_backend_cache = MockLLMBackend(label="mock-model", responses=[response])
     monkeypatch.setattr(handlers, "_build_enabled_adapters", lambda: {"europe_pmc": FakeEuropePmcAdapter()})
@@ -92,7 +92,8 @@ def test_handler_extracts_and_persists_verified_facts(db_session, monkeypatch):
 
     facts = db_session.query(RawFact).filter_by(study_id=study.study_id, extraction_method="llm_text_extraction").all()
     assert len(facts) == 1
-    assert facts[0].evidence_quote == "collected on 4 January 2022"
+    assert facts[0].evidence_quote == "Sampling Water samples were collected on 4 January 2022 at a depth of 5 meters."
+    assert facts[0].confidence_metadata == {"evidence_ids": ["SAMPLING.P001"]}
     assert facts[0].model_name == "mock-model"
 
 
@@ -100,7 +101,7 @@ def test_handler_drops_facts_with_fabricated_evidence(db_session, monkeypatch):
     study = _seeded_study_with_pmcid(db_session)
     task = _task_for(db_session, study)
 
-    response = json.dumps([{"fact_type_candidate": "fake", "raw_value": "x", "evidence_quote": "not in the source at all"}])
+    response = json.dumps([{"fact_type_candidate": "fake", "raw_value": "x", "evidence_id": "SAMPLING.P999"}])
     handlers._llm_backend_cache = MockLLMBackend(responses=[response])
     monkeypatch.setattr(handlers, "_build_enabled_adapters", lambda: {"europe_pmc": FakeEuropePmcAdapter()})
 
@@ -118,7 +119,7 @@ def test_handler_is_idempotent_on_retry(db_session, monkeypatch):
     task = _task_for(db_session, study)
 
     response = json.dumps(
-        [{"fact_type_candidate": "collection_date", "raw_value": "2022-01-04", "evidence_quote": "collected on 4 January 2022"}]
+        [{"fact_type_candidate": "collection_date", "raw_value": "2022-01-04", "evidence_id": "SAMPLING.P001"}]
     )
     handlers._llm_backend_cache = MockLLMBackend(responses=[response, response])
     monkeypatch.setattr(handlers, "_build_enabled_adapters", lambda: {"europe_pmc": FakeEuropePmcAdapter()})
@@ -137,7 +138,7 @@ def test_handler_preserves_successful_sections_when_later_section_times_out(db_s
     task = _task_for(db_session, study)
 
     response = json.dumps(
-        [{"fact_type_candidate": "collection_date", "raw_value": "2022-01-04", "evidence_quote": "collected on 4 January 2022"}]
+        [{"fact_type_candidate": "collection_date", "raw_value": "2022-01-04", "evidence_id": "SAMPLING.P001"}]
     )
     handlers._llm_backend_cache = SecondCallFailsBackend(label="flaky-model", responses=[response])
     monkeypatch.setattr(

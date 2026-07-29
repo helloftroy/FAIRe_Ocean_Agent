@@ -1,6 +1,6 @@
 """Benchmark harness: run every configured candidate model against a fixed
 set of gold-standard extraction cases and report comparable metrics --
-JSON-validity rate, evidence-quote verification rate, precision/recall/F1
+JSON-validity rate, evidence-ID verification rate, precision/recall/F1
 against gold, and latency -- suitable for reporting in a paper.
 
 This module has no opinion about which model is "best"; it only measures.
@@ -27,8 +27,7 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from fair_ocean_agent.dates import try_parse_date
-from fair_ocean_agent.extraction.evidence import verify_evidence_quote
-from fair_ocean_agent.extraction.text import build_prompt
+from fair_ocean_agent.extraction.text import build_prompt, segment_source_text
 from fair_ocean_agent.llm.base import LLMBackend, LLMBackendError
 
 
@@ -111,6 +110,27 @@ def _score_case(case: GoldCase, verified_facts: list[dict]) -> tuple[int, int, i
     return true_positives, false_positives, false_negatives
 
 
+def _candidate_evidence_ids(candidate: dict) -> list[str]:
+    value = candidate.get("evidence_id", candidate.get("evidence_ids"))
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return []
+
+
+def _facts_with_verified_segment_ids(returned_facts: list[dict], segment_lookup: dict[str, str]) -> list[dict]:
+    verified = []
+    for fact in returned_facts:
+        evidence_ids = _candidate_evidence_ids(fact)
+        if not evidence_ids or any(evidence_id not in segment_lookup for evidence_id in evidence_ids):
+            continue
+        normalized = dict(fact)
+        normalized["evidence_quote"] = "\n".join(segment_lookup[evidence_id] for evidence_id in evidence_ids)
+        verified.append(normalized)
+    return verified
+
+
 @dataclass
 class CaseResult:
     case_id: str
@@ -126,7 +146,9 @@ class CaseResult:
 
 
 def run_case(backend: LLMBackend, case: GoldCase) -> CaseResult:
-    prompt = build_prompt(case.section_title, case.source_text)
+    segments = segment_source_text(case.section_title, case.source_text)
+    segment_lookup = {segment.segment_id: segment.text for segment in segments}
+    prompt = build_prompt(case.section_title, case.source_text, segments=segments)
     try:
         parsed, response = backend.generate_json(prompt, temperature=0)
     except LLMBackendError as exc:
@@ -148,9 +170,9 @@ def run_case(backend: LLMBackend, case: GoldCase) -> CaseResult:
             false_negatives=len(case.expected_facts),
         )
 
-    returned_facts = parsed if isinstance(parsed, list) else parsed.get("facts", [])
+    returned_facts = parsed if isinstance(parsed, list) else (parsed.get("facts", []) if isinstance(parsed, dict) else [])
     returned_facts = [f for f in returned_facts if isinstance(f, dict)]
-    verified_facts = [f for f in returned_facts if verify_evidence_quote(f.get("evidence_quote", ""), case.source_text)]
+    verified_facts = _facts_with_verified_segment_ids(returned_facts, segment_lookup)
 
     tp, fp, fn = _score_case(case, verified_facts)
     return CaseResult(
