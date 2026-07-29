@@ -11,6 +11,7 @@ from fair_ocean_agent.llm.benchmark import (
     load_gold_cases,
     run_benchmark,
 )
+from fair_ocean_agent.llm.base import LLMBackendError
 from fair_ocean_agent.llm.mock import MockLLMBackend
 
 CASE = GoldCase(
@@ -110,9 +111,25 @@ def test_run_benchmark_invalid_json_model_scores_zero_validity():
     backend = MockLLMBackend(label="broken", responses=["not json"] * 5)
     report = run_benchmark([backend], [CASE])
 
-    metrics, _ = report["broken"]
+    metrics, results = report["broken"]
     assert metrics.json_validity_rate == 0.0
     assert metrics.errors == 0  # invalid JSON isn't a backend error, just an unparseable response
+    assert results[0].false_negatives == len(CASE.expected_facts)
+    assert metrics.recall == 0.0
+
+
+def test_run_benchmark_backend_error_counts_gold_facts_as_missed():
+    class BrokenBackend(MockLLMBackend):
+        def generate(self, *args, **kwargs):
+            raise LLMBackendError("simulated timeout")
+
+    report = run_benchmark([BrokenBackend(label="timeout-model")], [CASE])
+
+    metrics, results = report["timeout-model"]
+    assert metrics.json_validity_rate == 0.0
+    assert metrics.errors == 1
+    assert results[0].false_negatives == len(CASE.expected_facts)
+    assert metrics.recall == 0.0
 
 
 def test_run_benchmark_raises_with_no_gold_cases():

@@ -131,7 +131,12 @@ def run_case(backend: LLMBackend, case: GoldCase) -> CaseResult:
         parsed, response = backend.generate_json(prompt, temperature=0)
     except LLMBackendError as exc:
         return CaseResult(
-            case_id=case.case_id, candidate_label=backend.label, json_valid=False, latency_seconds=0.0, error=str(exc)
+            case_id=case.case_id,
+            candidate_label=backend.label,
+            json_valid=False,
+            latency_seconds=0.0,
+            false_negatives=len(case.expected_facts),
+            error=str(exc),
         )
 
     if parsed is None:
@@ -140,6 +145,7 @@ def run_case(backend: LLMBackend, case: GoldCase) -> CaseResult:
             candidate_label=backend.label,
             json_valid=False,
             latency_seconds=response.latency_seconds if response else 0.0,
+            false_negatives=len(case.expected_facts),
         )
 
     returned_facts = parsed if isinstance(parsed, list) else parsed.get("facts", [])
