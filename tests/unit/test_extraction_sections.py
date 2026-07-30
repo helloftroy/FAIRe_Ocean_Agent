@@ -95,6 +95,27 @@ def test_matches_new_topic_specific_section_titles():
         assert [s["title"] for s in sections] == [title], f"{title!r} was not recognized as relevant"
 
 
+def test_matches_real_audit_section_titles_that_were_previously_dropped():
+    """Regression guard from a hand audit of cached Europe PMC papers:
+    several FAIRe-relevant method sections used headings outside the
+    original selector vocabulary. These headings contain sample/site
+    context, DNA handling, storage/fixation, concentration/purity methods,
+    and bioinformatics workflows."""
+    for title in (
+        "Study sites",
+        "Study Area",
+        "DNA degradation experiment",
+        "DNA quantification and quality assessment",
+        "Nematode Sorting and Fixation",
+        "16S data analysis",
+        "Microbiome data analysis",
+        "Transcriptomic data analyses",
+    ):
+        xml = f"<article><body><sec><title>{title}</title><p>Relevant text.</p></sec></body></article>"
+        sections = select_relevant_sections(xml)
+        assert [s["title"] for s in sections] == [title], f"{title!r} was not recognized as relevant"
+
+
 def test_default_max_chars_is_raised_for_the_expanded_taxonomy():
     """Regression guard: the original 20000-char default risked truncating
     away exactly the later sections (bioinformatics/taxonomy) this

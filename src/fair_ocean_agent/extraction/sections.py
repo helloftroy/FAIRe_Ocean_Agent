@@ -22,9 +22,18 @@ RELEVANT_SECTION_TITLE_PATTERNS = [
                        # section "Experimental Procedures" instead of "Methods" --
                        # found via live validation against a real paper (PMC7820986)
                        # that this pattern list previously missed entirely.
+        r"\bdna\b",  # method subsections such as "DNA degradation experiment" and
+                     # "DNA quantification and quality assessment" carry sample
+                     # storage, extraction-input, concentration, and purity facts
+                     # even when the heading does not say "extraction".
         r"sampl",
+        r"study (area|site)",  # common location/environment methods headings
+                               # containing station ranges, depth ranges, cruise
+                               # context, and collection platform details.
         r"environmental",
         r"extraction",
+        r"fixation",
+        r"sorting",
         r"pcr",
         r"qpcr",
         r"quantitative pcr",
@@ -35,6 +44,10 @@ RELEVANT_SECTION_TITLE_PATTERNS = [
                     # in many papers, and this taxonomy's atomic lib_conc/adapter
                     # fields specifically live there, not under "sequencing".
         r"sequenc",
+        r"data analys",  # e.g. "16S data analysis", "Microbiome data analysis",
+                         # "Transcriptomic data analyses": where trimming,
+                         # ASV/OTU inference, read mapping, and databases are
+                         # often reported without "bioinformatics" in the title.
         r"bioinformatic",
         r"taxonom",  # "Taxonomic assignment"/"Taxonomy" -- where otu_db/tax_assign_cat/
                      # scientificName-level facts are reported, distinct from the
