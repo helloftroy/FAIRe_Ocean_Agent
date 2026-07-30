@@ -194,6 +194,19 @@ class RateLimitedClient:
             cache_path.write_text(text)
         return text, False
 
+    def get_binary(self, url: str, params: dict | None = None) -> tuple[bytes, bool]:
+        """Same contract as get_json/get_text but for genuinely binary
+        payloads (e.g. Europe PMC's {pmcid}/supplementaryFiles zip bundle) --
+        never decoded as text, cached on disk as raw bytes."""
+        cache_path = self._cache_path(url, params, "bin") if self._cache_enabled else None
+        if cache_path is not None and cache_path.exists():
+            return cache_path.read_bytes(), True
+
+        content = self._get_bytes(url, params)
+        if cache_path is not None:
+            cache_path.write_bytes(content)
+        return content, False
+
     def clear_cache(self) -> int:
         """Deletes every cached response file for this adapter instance.
         The on-disk cache (see get_json/get_text above) never expires on

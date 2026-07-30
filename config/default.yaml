@@ -52,6 +52,15 @@ retrieval:
   cache_dir: "data/cache"
   user_agent: "fair-ocean-agent/0.1 (contact: REPLACE_WITH_CONTACT_EMAIL)"
 
+supplements:
+  enabled: true
+  # Checked against the *already-known* size of each referenced supplement
+  # file (from the main article XML) before ever downloading Europe PMC's
+  # single all-files-bundled zip -- see SupplementConfig's docstring.
+  max_bundle_bytes: 50000000
+  max_member_bytes: 10000000
+  lightweight_inspection_of_large_assets: false
+
 discovery:
   citation_expansion_max_depth: 1
   keyword_search_enabled: false

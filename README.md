@@ -192,9 +192,19 @@ same `build_prompt` production code calls, instead of gold cases each
 carrying their own free-form `instructions` field that could silently
 drift from the real prompt -- see "Model benchmarking" below.
 
-**What it does not do yet:** OBIS/GBIF/BCO-DMO/PANGAEA/DataCite (no
-adapter yet -- a study with none of DOI/BioProject/ENA accession raises
-`NotImplementedError` from the handler), BeBOP/MIOP raw_fact mapping (see
+**Supplementary-material and structured-table retrieval layer:**
+`DISCOVER_SUPPLEMENTS`/`RETRIEVE_SUPPLEMENTS` task handlers
+(`workflow/supplement_handlers.py`) discover `<supplementary-material>`
+references in a paper's already-cached JATS XML, fetch Europe PMC's single
+supplementary-files zip bundle when the known total size is under a
+config cap, and deterministically parse CSV/TSV/XLSX/XLS/JSON/XML members
+(`sources/supplement_parsing.py`) into the same provenance-aware
+`raw_facts` shape as any structured-API fact -- with TXT/MD/PDF routed
+through the existing LLM extraction path instead. See "Supplementary-
+material and structured-table retrieval layer" below for the full design
+and what real live validation against PMC7469538 found (and fixed).
+
+**What it does not do yet:** BeBOP/MIOP raw_fact mapping (see
 above), or discovering brand-new studies via keyword search/citation
 expansion (`DiscoveryConfig.keyword_search_enabled`/
 `citation_expansion_max_depth` exist but are unbuilt --  Milestone 7 only
@@ -1218,6 +1228,116 @@ per-sample measured values themselves. They should inform source discovery,
 review, and later tabular-data retrieval, but they are not automatically
 mapped as present FAIRe sample values until the adapter also fetches and
 parses the PANGAEA textfile rows.
+
+## Supplementary-material and structured-table retrieval layer
+
+Until now, the pipeline only ever read a paper's main JATS full-text body --
+`<supplementary-material>` references (linked tables, spreadsheets, or
+externally-hosted repository files) were visible in the XML but never
+retrieved or parsed, so real per-sample/environmental data sitting in a
+paper's own supplementary tables was invisible. Two new task types close
+this gap, run in the recommended order **structured APIs -> discover
+supplements -> retrieve/parse supplements -> re-run FAIRe mapping -> LLM
+extraction (now only over unresolved fields) -> validation**:
+
+- `DISCOVER_SUPPLEMENTS` (`fair-ocean enqueue-supplement-discovery-backfill`)
+  parses `<supplementary-material>` tags out of the already-cached article
+  XML (no new network call), deduplicating by filename (real articles
+  repeat the same list verbatim under two different sections). Creates one
+  `Source` row (`source_type=supplement`, created once with a terminal
+  status, same convention as every other Source-creation call site) plus
+  one companion `DataAsset` row per distinct file. Externally-hosted
+  repository supplements (an `<ext-link>` DOI rather than a Europe-PMC-
+  hosted `<media>` element) are surfaced as `RelatedIdentifier`s, so the
+  *existing* `DISCOVER_IDENTIFIERS` -> structured-adapter pipeline picks
+  them up automatically -- no separate fetch/parse path needed for that
+  case.
+- `RETRIEVE_SUPPLEMENTS` (`fair-ocean enqueue-supplement-retrieval-backfill`)
+  fetches Europe PMC's single `{pmcid}/supplementaryFiles` zip bundle (there
+  is no per-file fetch API) once the summed *already-known* size (from the
+  XML's own `<?size?>` values, never a guess) is under `supplements.
+  max_bundle_bytes` -- otherwise every pending file is marked
+  `not_accessible` and the bundle is never downloaded. Each member is then
+  routed by extension: CSV/TSV/XLSX/XLS go through deterministic table
+  parsers (`sources/supplement_parsing.py`), JSON/XML through a structured
+  walk, TXT/MD/PDF through the existing LLM extraction path
+  (`extraction/text.py`, tagged `"Supplementary Methods (<file>)"`), and
+  anything else (DOCX, nested archives) is inventoried only. A member over
+  `supplements.max_member_bytes` stays available-but-unparsed rather than
+  read into memory. One file's parse failure is caught and recorded on
+  that file's own `DataAsset` row -- it never aborts the rest of the task.
+
+**The user's 6 named states (referenced/available/retrieved/parsed/
+inaccessible/parse_failed) live entirely on the companion `DataAsset`
+row's existing `access_status`/`inspection_level` columns** (+
+`description` disambiguating `retrieved` vs `parse_failed`, which share
+the same status/level pair) -- zero new DB columns or migrations. `Source`
+itself is set once at creation and never mutated again, matching every
+other existing call site (`validation_handlers.py` already treats "a
+Source row exists" as a proxy for "inspected"; mutating it per retrieval
+attempt would have silently broken that).
+
+Table/JSON/XML parsing only ever alias-matches a small, curated set of
+known headers (`collection_date`, `depth`, `temp`, `salinity`, `ph`,
+`diss_oxygen`, `samp_collect_device`, `samp_size`, `latitude`/`longitude`,
+...) onto this pipeline's own existing native names -- never one `RawFact`
+per raw, uncontrolled column header. A recognized identifier-like column
+(`sample_id`, `run_accession`, ...) binds that row's facts to a
+SAMPLE/SEQUENCING_RUN `Entity`; otherwise facts bind at the study level.
+Unrecognized columns are reported (name + count) in the `DataAsset`
+description for a human to see, never turned into facts. `source_locator`
+carries full cell-level provenance, e.g.
+`supplement.Supplementary_Table_2.xlsx#sample_metadata!H42` -- the exact
+same provenance-aware shape as any API-derived `raw_facts` row. Because
+supplement-derived facts are ordinary `RawFactCandidate`s flowing through
+the normal `mapping/rules.py` path, `resolved_faire_fields_for_study()`
+(built for structured-first extraction, see below) already shrinks the
+LLM's checklist once a supplement resolves a field -- no changes needed to
+`extraction/text.py` itself.
+
+**Missingness now distinguishes "referenced but not yet inspected" from
+"actually absent."** `populate_missingness_for_study` and
+`populate_faire_missingness_for_study` previously decided
+`not_found_in_inspected_sources` vs. `relevant_source_not_inspected` using
+only "does any `Source` row exist" -- never checking whether a referenced
+supplement had actually been parsed. A study with a supplement `DataAsset`
+still below `inspection_level=full` now gets `source_not_accessible`
+(if `access_status=not_accessible`) or `relevant_source_not_inspected`
+instead of wrongly reporting `not_found_in_inspected_sources` for a field
+the supplement might still resolve.
+
+**Live validation against a real article already in the database**
+(`STUDY-c47dd2ce9a62` / PMC7469538) surfaced two real bugs, both fixed
+before this was called done:
+
+1. The real bundle summed to ~32.5MB (4 small XLSX tables + one unrelated
+   32MB dataset) -- over the initial `max_bundle_bytes` default of 25MB,
+   which would have blocked the whole bundle (including the small, useful
+   tables) from ever being downloaded. Raised the default to 50MB so a
+   bundle shaped like this real one downloads fine, while
+   `max_member_bytes` (10MB, unchanged) still correctly keeps the 32MB
+   member itself inventory-only rather than parsed.
+2. Real supplementary XLSX exports commonly carry a caption/title row
+   (`"Supplementary Table S5. Accession Number."`) above the actual header
+   row. The parser originally read row 1 unconditionally as the header,
+   silently misaligning every column against the real header+data one row
+   down. Fixed by skipping leading rows with fewer than 2 non-blank cells
+   before selecting the header row (a real header names >=2 columns; a
+   caption has exactly one).
+
+After both fixes, the run against PMC7469538 correctly discovered 9
+distinct files (deduped from 18 raw tags across two repeated sections),
+marked the 4 DOCX files `retrieved`/not-parsed (unsupported type), parsed
+all 4 XLSX files without error, and marked the 32MB dataset
+`available`/not-retrieved (over the per-member cap) -- exactly the shape
+the design predicted. Zero facts were extracted from this particular
+paper's XLSX tables, and that's the honest, correct outcome: inspection
+showed `Table_5.xlsx` is a taxa-by-sample OTU abundance matrix (samples as
+*columns*, not the per-row-per-sample shape this parser targets) and
+`Table_6`-`8.xlsx` are statistical comparison tables -- neither shape
+contains alias-matchable per-sample metadata, so reporting "0 recognized
+columns" rather than fabricating or misaligning values is the correct
+behavior, not a bug.
 
 ## Loading your own seed list
 

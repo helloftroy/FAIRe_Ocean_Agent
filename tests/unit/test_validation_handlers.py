@@ -103,6 +103,111 @@ def test_populate_missingness_reports_not_found_when_sources_inspected_but_field
     assert row.missingness_status == MissingnessStatus.NOT_FOUND_IN_INSPECTED_SOURCES.value
 
 
+def test_populate_missingness_prefers_relevant_source_not_inspected_over_supplement(db_session):
+    """Real fix for a real gap: before this, a study with *any* Source row
+    at all (even an unrelated one, like a publication-metadata source) got
+    NOT_FOUND_IN_INSPECTED_SOURCES for a missing field -- even if the one
+    source that could plausibly have reported it (a discovered-but-not-yet-
+    retrieved supplementary file) was never actually inspected. A
+    supplement Source/DataAsset pair below "full" inspection must win over
+    that fallback."""
+    study = _study(db_session, title="Supplement referenced but not retrieved")
+    db_session.add(Source(study_id=study.study_id, source_type="publication_api", source_name="crossref"))
+    supplement_source = Source(
+        study_id=study.study_id,
+        source_type="supplement",
+        source_name="europe_pmc_supplement",
+        external_identifier="Table_5.xlsx",
+        inspection_status="inspected",
+        inspection_level="metadata_only",
+    )
+    db_session.add(supplement_source)
+    db_session.flush()
+    db_session.add(
+        DataAsset(
+            study_id=study.study_id,
+            asset_type="supplementary_spreadsheet",
+            file_name="Table_5.xlsx",
+            access_status="unknown",
+            inspection_level="metadata_only",  # referenced/available, not yet retrieved
+            source_id=supplement_source.source_id,
+        )
+    )
+    db_session.commit()
+
+    populate_missingness_for_study(db_session, study.study_id)
+    db_session.commit()
+
+    row = _missingness_query(db_session, study.study_id, target_field="depth").one()
+    assert row.missingness_status == MissingnessStatus.RELEVANT_SOURCE_NOT_INSPECTED.value
+
+
+def test_populate_missingness_reports_source_not_accessible_for_inaccessible_supplement(db_session):
+    study = _study(db_session, title="Supplement inaccessible")
+    supplement_source = Source(
+        study_id=study.study_id,
+        source_type="supplement",
+        source_name="europe_pmc_supplement",
+        external_identifier="Data_Sheet_1.zip",
+        inspection_status="inspected",
+        inspection_level="metadata_only",
+    )
+    db_session.add(supplement_source)
+    db_session.flush()
+    db_session.add(
+        DataAsset(
+            study_id=study.study_id,
+            asset_type="other",
+            file_name="Data_Sheet_1.zip",
+            access_status="not_accessible",
+            inspection_level="metadata_only",
+            source_id=supplement_source.source_id,
+        )
+    )
+    db_session.commit()
+
+    populate_missingness_for_study(db_session, study.study_id)
+    db_session.commit()
+
+    row = _missingness_query(db_session, study.study_id, target_field="depth").one()
+    assert row.missingness_status == MissingnessStatus.SOURCE_NOT_ACCESSIBLE.value
+
+
+def test_populate_missingness_ignores_fully_parsed_supplements(db_session):
+    """A supplement that reached inspection_level="full" must not suppress
+    the normal not-found/not-inspected logic -- its content was genuinely
+    already looked at."""
+    study = _study(db_session, title="Supplement fully parsed")
+    db_session.add(Source(study_id=study.study_id, source_type="publication_api", source_name="crossref"))
+    supplement_source = Source(
+        study_id=study.study_id,
+        source_type="supplement",
+        source_name="europe_pmc_supplement",
+        external_identifier="Table_5.xlsx",
+        inspection_status="inspected",
+        inspection_level="metadata_only",
+    )
+    db_session.add(supplement_source)
+    db_session.flush()
+    db_session.add(
+        DataAsset(
+            study_id=study.study_id,
+            asset_type="supplementary_spreadsheet",
+            file_name="Table_5.xlsx",
+            access_status="open",
+            inspection_level="full",
+            source_id=supplement_source.source_id,
+        )
+    )
+    db_session.commit()
+
+    populate_missingness_for_study(db_session, study.study_id)
+    db_session.commit()
+
+    row = _missingness_query(db_session, study.study_id, target_field="depth").one()
+    assert row.missingness_status == MissingnessStatus.NOT_FOUND_IN_INSPECTED_SOURCES.value
+
+
 def test_populate_missingness_reports_source_not_inspected_when_no_sources_at_all(db_session):
     study = _study(db_session, title="Nothing attempted yet")
     db_session.commit()

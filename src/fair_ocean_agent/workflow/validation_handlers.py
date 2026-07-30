@@ -14,8 +14,18 @@ from sqlalchemy.orm import Session
 
 from fair_ocean_agent.assets.inventory import inventory_ena_run_assets
 from fair_ocean_agent.config import load_config
-from fair_ocean_agent.database.enums import EntityLevel, IdentifierType, MissingnessStatus, SourceType, SupportType, TaskType
+from fair_ocean_agent.database.enums import (
+    AccessStatus,
+    EntityLevel,
+    IdentifierType,
+    InspectionLevel,
+    MissingnessStatus,
+    SourceType,
+    SupportType,
+    TaskType,
+)
 from fair_ocean_agent.database.models import (
+    DataAsset,
     Entity,
     ExternalIdentifier,
     RawFact,
@@ -345,6 +355,38 @@ CORE_SAMPLING_FIELDS = ("collection_date", "lat_lon", "depth")
 MISSINGNESS_TARGET_SCHEMA = "core_sampling_metadata"
 
 
+def _unresolved_supplement_status(session: Session, study_id: str) -> str | None:
+    """Real fix for a real gap: before this, a missing field's status was
+    decided purely from "does any Source row exist for this study" --
+    never whether a *relevant* source was ever actually inspected. A
+    supplementary-material file that's been discovered (DISCOVER_SUPPLEMENTS)
+    but not yet retrieved/parsed (RETRIEVE_SUPPLEMENTS hasn't run, the
+    bundle was too large, or parsing failed) must never let a still-missing
+    field be reported as NOT_FOUND_IN_INSPECTED_SOURCES -- that status
+    means "looked and it wasn't there," which isn't true yet.
+
+    Returns SOURCE_NOT_ACCESSIBLE if any of the study's supplement
+    DataAssets are marked not_accessible (and none reached "full"),
+    RELEVANT_SOURCE_NOT_INSPECTED if any exist below "full" for any other
+    reason (not yet retrieved, retrieved but not parseable, parse failed),
+    or None if there are no supplement DataAssets at all, or every one of
+    them already reached "full" -- in either case the caller's existing
+    any-source-inspected fallback logic still applies unchanged."""
+    supplement_source_ids = session.scalars(
+        select(Source.source_id).where(Source.study_id == study_id, Source.source_type == SourceType.SUPPLEMENT.value)
+    ).all()
+    if not supplement_source_ids:
+        return None
+
+    assets = session.scalars(select(DataAsset).where(DataAsset.source_id.in_(supplement_source_ids))).all()
+    unparsed = [asset for asset in assets if asset.inspection_level != InspectionLevel.FULL.value]
+    if not unparsed:
+        return None
+    if any(asset.access_status == AccessStatus.NOT_ACCESSIBLE.value for asset in unparsed):
+        return MissingnessStatus.SOURCE_NOT_ACCESSIBLE.value
+    return MissingnessStatus.RELEVANT_SOURCE_NOT_INSPECTED.value
+
+
 def populate_missingness_for_study(session: Session, study_id: str) -> int:
     """Presence-only check -- unlike a mapped StandardizedValue,
     `standardized_value` here is always null (this predates any real
@@ -368,6 +410,7 @@ def populate_missingness_for_study(session: Session, study_id: str) -> int:
     sources_inspected = list(
         session.scalars(select(Source.source_name).where(Source.study_id == study_id).distinct()).all()
     )
+    unresolved_supplement_status = _unresolved_supplement_status(session, study_id)
 
     created = 0
     for field_name in CORE_SAMPLING_FIELDS:
@@ -376,6 +419,9 @@ def populate_missingness_for_study(session: Session, study_id: str) -> int:
         if field_name in present_fields:
             status = MissingnessStatus.PRESENT.value
             reason = f"Found at least one {field_name!r} raw_fact."
+        elif unresolved_supplement_status is not None:
+            status = unresolved_supplement_status
+            reason = f"{field_name!r} not found yet, but a referenced supplementary file hasn't been fully inspected."
         elif sources_inspected:
             status = MissingnessStatus.NOT_FOUND_IN_INSPECTED_SOURCES.value
             reason = f"{field_name!r} not reported by any of the sources inspected for this study."
@@ -462,12 +508,19 @@ def populate_faire_missingness_for_study(session: Session, study_id: str) -> int
     # yet processed -- was misreported as "not found" (implying it was looked
     # for and absent) rather than "not inspected" (nothing has looked yet).
     any_source_inspected = session.query(Source).filter_by(study_id=study_id).first() is not None
+    # Real fix for a real gap (see _unresolved_supplement_status's own
+    # docstring): a referenced-but-not-yet-parsed supplementary file must
+    # never let a missing field fall through to NOT_FOUND_IN_INSPECTED_SOURCES
+    # just because *some* Source row exists for the study.
+    unresolved_supplement_status = _unresolved_supplement_status(session, study_id)
 
     def upsert(entity_id: str | None, target_field: str, present: bool, table_name: str, not_found_reason: str) -> None:
         nonlocal created
         existing = existing_by_key.get((entity_id, target_field))
         if present:
             status = MissingnessStatus.PRESENT.value
+        elif unresolved_supplement_status is not None:
+            status = unresolved_supplement_status
         elif any_source_inspected:
             status = MissingnessStatus.NOT_FOUND_IN_INSPECTED_SOURCES.value
         else:
@@ -476,6 +529,14 @@ def populate_faire_missingness_for_study(session: Session, study_id: str) -> int
             if existing.missingness_status is None:
                 existing.missingness_status = status
             return
+        if present:
+            reason_suffix = "found."
+        elif unresolved_supplement_status is not None:
+            reason_suffix = "a referenced supplementary file hasn't been fully inspected yet."
+        elif any_source_inspected:
+            reason_suffix = not_found_reason
+        else:
+            reason_suffix = "no sources have been inspected for this study yet."
         session.add(
             StandardizedValue(
                 study_id=study_id,
@@ -485,14 +546,7 @@ def populate_faire_missingness_for_study(session: Session, study_id: str) -> int
                 target_field=target_field,
                 standardized_value=None,
                 missingness_status=status,
-                reason=(
-                    f"{target_field!r} is unconditionally Mandatory in FAIRe's {table_name}; "
-                    + (
-                        "found." if present
-                        else not_found_reason if any_source_inspected
-                        else "no sources have been inspected for this study yet."
-                    )
-                ),
+                reason=f"{target_field!r} is unconditionally Mandatory in FAIRe's {table_name}; {reason_suffix}",
             )
         )
         created += 1

@@ -10,11 +10,14 @@ decimalLatitude/decimalLongitude/minimumDepthInMeters/maximumDepthInMeters.
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime
 
 from dateutil import parser as date_parser
 
 from fair_ocean_agent.validation.logical import parse_depth_meters, parse_lat_lon
+
+_SINGLE_COORDINATE_PATTERN = re.compile(r"^\s*(-?\d+(?:\.\d+)?)\s*([NSEW])?\s*$", re.IGNORECASE)
 
 # Two distinct, deliberately-wrong anchors: whichever date fields agree
 # between parses against both anchors were actually present in the input;
@@ -36,6 +39,35 @@ def to_decimal_lat_lon(value: str) -> tuple[str, str] | None:
         return None
     lat, lon = parsed
     return f"{lat:.6f}", f"{lon:.6f}"
+
+
+def to_decimal_latitude(value: str) -> str | None:
+    """Returns a single latitude value (e.g. a supplementary table's own
+    "Latitude" column, reported separately from longitude, unlike MIxS's
+    combined lat_lon convention) as a FAIRe-ready signed decimal string, or
+    None if unparseable. Accepts a plain signed decimal or one with a
+    trailing N/S hemisphere letter."""
+    match = _SINGLE_COORDINATE_PATTERN.match(value)
+    if not match:
+        return None
+    magnitude, hemisphere = match.groups()
+    lat = float(magnitude)
+    if hemisphere and hemisphere.upper() == "S":
+        lat = -abs(lat)
+    return f"{lat:.6f}"
+
+
+def to_decimal_longitude(value: str) -> str | None:
+    """Same contract as to_decimal_latitude, for a standalone longitude
+    value with an optional trailing E/W hemisphere letter."""
+    match = _SINGLE_COORDINATE_PATTERN.match(value)
+    if not match:
+        return None
+    magnitude, hemisphere = match.groups()
+    lon = float(magnitude)
+    if hemisphere and hemisphere.upper() == "W":
+        lon = -abs(lon)
+    return f"{lon:.6f}"
 
 
 def to_meters(value: str) -> str | None:

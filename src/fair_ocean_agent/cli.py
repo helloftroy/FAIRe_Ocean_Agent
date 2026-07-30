@@ -36,6 +36,7 @@ from fair_ocean_agent.workflow.worker import run_worker
 import fair_ocean_agent.workflow.handlers  # noqa: F401 -- side effect: registers TASK_HANDLERS
 import fair_ocean_agent.workflow.mapping_handlers  # noqa: F401 -- side effect: registers TASK_HANDLERS
 import fair_ocean_agent.workflow.refresh_handlers  # noqa: F401 -- side effect: registers TASK_HANDLERS
+import fair_ocean_agent.workflow.supplement_handlers  # noqa: F401 -- side effect: registers TASK_HANDLERS
 import fair_ocean_agent.workflow.validation_handlers  # noqa: F401 -- side effect: registers TASK_HANDLERS
 
 app = typer.Typer(add_completion=False, help="FAIR ocean eDNA metadata curation pipeline")
@@ -92,6 +93,30 @@ def enqueue_text_extraction_backfill_command() -> None:
     with session_scope() as session:
         count = fair_ocean_agent.workflow.handlers.enqueue_text_extraction_backfill(session)
     console.print(f"Queued EXTRACT_TEXT_FACTS for {count} stud(y/ies) with a known PMCID.")
+
+
+@app.command("enqueue-supplement-discovery-backfill")
+def enqueue_supplement_discovery_backfill_command() -> None:
+    """Queue DISCOVER_SUPPLEMENTS for every study with a known PMCID --
+    parses <supplementary-material> references out of the (cached) main
+    article XML; no new network call. Run before
+    enqueue-supplement-retrieval-backfill."""
+    with session_scope() as session:
+        count = fair_ocean_agent.workflow.supplement_handlers.enqueue_supplement_discovery_backfill(session)
+    console.print(f"Queued DISCOVER_SUPPLEMENTS for {count} stud(y/ies) with a known PMCID.")
+
+
+@app.command("enqueue-supplement-retrieval-backfill")
+def enqueue_supplement_retrieval_backfill_command() -> None:
+    """Queue RETRIEVE_SUPPLEMENTS for every study with at least one
+    discovered supplement (run enqueue-supplement-discovery-backfill
+    first). Fetches Europe PMC's supplementary-files bundle (size-capped)
+    and deterministically parses CSV/TSV/XLSX/XLS/JSON/XML members; PDF/TXT/MD
+    go through the existing LLM extraction path; anything else is
+    inventoried only."""
+    with session_scope() as session:
+        count = fair_ocean_agent.workflow.supplement_handlers.enqueue_supplement_retrieval_backfill(session)
+    console.print(f"Queued RETRIEVE_SUPPLEMENTS for {count} stud(y/ies) with a discovered supplement.")
 
 
 @app.command("enqueue-validation-backfill")

@@ -95,7 +95,7 @@ from typing import Callable
 
 from fair_ocean_agent.database.enums import EntityLevel, MappingMethod
 from fair_ocean_agent.extraction.faire_fields import native_name_to_faire_hint
-from fair_ocean_agent.mapping.units import to_iso_event_date, to_meters
+from fair_ocean_agent.mapping.units import to_decimal_latitude, to_decimal_longitude, to_iso_event_date, to_meters
 from fair_ocean_agent.standards.faire_registry import build_faire_registry
 
 
@@ -202,6 +202,14 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
                 MappingMethod.DETERMINISTIC_SYNONYM.value, transform=_lat_only),
     MappingRule("lat_lon", EntityLevel.SAMPLE.value, "sampleMetadata", "decimalLongitude",
                 MappingMethod.DETERMINISTIC_SYNONYM.value, transform=_lon_only),
+    # Separate latitude/longitude columns (common in supplementary tables,
+    # unlike MIxS's combined lat_lon convention) -- "latitude"/"longitude"
+    # are this pipeline's own standard-agnostic native names (see
+    # sources/supplement_parsing.py), never FAIRe's own field spelling.
+    MappingRule("latitude", EntityLevel.SAMPLE.value, "sampleMetadata", "decimalLatitude",
+                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=to_decimal_latitude),
+    MappingRule("longitude", EntityLevel.SAMPLE.value, "sampleMetadata", "decimalLongitude",
+                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=to_decimal_longitude),
     MappingRule("collection_method", EntityLevel.SAMPLE.value, "sampleMetadata", "samp_collect_method",
                 MappingMethod.DETERMINISTIC_SYNONYM.value),
     MappingRule("elev", EntityLevel.SAMPLE.value, "sampleMetadata", "elev",

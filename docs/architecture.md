@@ -554,6 +554,39 @@ for a candidate this taxonomy was never going to work well with in the
 first place, at a real cost (a longer, more hedged prompt) paid by every
 other candidate.
 
+## Why supplement retrieval state lives on DataAsset, not Source (supplementary-material layer)
+
+`DISCOVER_SUPPLEMENTS` creates one `Source` row per referenced
+supplementary file, but that row is set once at creation
+(`inspection_status=inspected`, `inspection_level=metadata_only`) and never
+mutated again -- matching every other `Source`-creation call site in this
+codebase. This was a deliberate constraint, not an oversight: other code
+(`validation_handlers.py`) already treats "a `Source` row exists for this
+study" as a proxy for "this source was inspected." If a not-yet-retrieved
+supplement's `Source` row were created the same way and only *later*
+mutated to reflect real progress, every existing call site relying on that
+proxy would start silently misreporting supplements that are merely
+*referenced* as fully inspected.
+
+Instead, the six retrieval states the design calls for (referenced /
+available / retrieved / parsed / inaccessible / parse_failed) live on a
+companion `DataAsset` row (`source_id` FK to the `Source` row) using
+columns that already existed for exactly this purpose --
+`DataAsset.access_status` and `DataAsset.inspection_level` -- decoupled
+from `Source`'s own, intentionally-static fields. `retrieved` and
+`parse_failed` happen to share the same `(access_status, inspection_level)`
+pair; `DataAsset.description` (a pre-existing free-text column)
+disambiguates them. Net result: the full 6-state model needed zero new
+database columns and zero migrations.
+
+`populate_missingness_for_study`/`populate_faire_missingness_for_study`
+read this same `DataAsset.inspection_level`/`access_status` pair to decide
+`relevant_source_not_inspected` vs. `source_not_accessible` vs. falling
+through to `not_found_in_inspected_sources` -- the first real consumer of
+`InspectionLevel` for missingness purposes; before this, the enum existed
+on both `Source` and `DataAsset` but nothing actually read it when
+computing missingness.
+
 ## Task queue
 
 See `workflow/task_queue.py` docstrings for the idempotency-key scheme and
@@ -576,3 +609,4 @@ README.md's "Assumptions and placeholders" section.
 | 7: Refresh known studies, watermarks, retry/rediscovery cadences, weekly updates | Done -- validated against the real 101-study database and live Crossref/OpenAlex/Europe PMC/NCBI/ENA (found/fixed 2 real bugs: a monkeypatch-escaping import in scheduling/weekly.py, and a naive/aware datetime subtraction in is_rediscovery_due). Brand-new-study discovery via keyword search/citation expansion remains unbuilt (`DiscoveryConfig.keyword_search_enabled`/`citation_expansion_max_depth`). |
 | 7 continued: schema simplification (missingness -> standardized_values, publications -> sources) | Done -- migration `0fc0bf2bf46a` applied to the real database (1,845 missingness rows + 99 publication rows carried forward, not discarded); see README's "Schema simplification". |
 | 8: FAIRe-aware extraction (raw fact taxonomy, targeted prompt, benchmark harness alignment) | Done, corrected to v3 -- see README's "Milestone 8 validation" for the original real multi-model benchmark run, and "Milestone 8 follow-up" for the v2 -> v3 architecture correction (native, standard-agnostic `fact_type_candidate` names + optional `candidate_standard_fields` hints, replacing v2's direct use of FAIRe's own field spellings). |
+| 9: Supplementary-material and structured-table retrieval layer | Done -- validated against the real PMC7469538 article (9 deduped supplementary files discovered from 18 raw tags; 4 XLSX deterministically parsed with no errors, 4 DOCX inventoried, 1 32MB dataset correctly kept inventory-only); found/fixed 2 real bugs (an under-sized `max_bundle_bytes` default that would have blocked this exact real bundle, and a caption-row-above-header misalignment in the table parser). See README's "Supplementary-material and structured-table retrieval layer". |

@@ -1,5 +1,5 @@
 from fair_ocean_agent.database.enums import EntityLevel, IdentifierType, MissingnessStatus, SourceType, SupportType, TaskType
-from fair_ocean_agent.database.models import Entity, ExternalIdentifier, RawFact, Source, StandardizedValue, Study, Task
+from fair_ocean_agent.database.models import DataAsset, Entity, ExternalIdentifier, RawFact, Source, StandardizedValue, Study, Task
 from fair_ocean_agent.mapping.faire import map_study_to_faire
 from fair_ocean_agent.workflow.task_queue import enqueue_task
 from fair_ocean_agent.workflow.validation_handlers import (
@@ -63,6 +63,48 @@ def test_populate_faire_missingness_reports_not_inspected_when_no_source_exists(
     core_sampling_metadata."""
     study = Study(title="No sources inspected yet")
     db_session.add(study)
+    db_session.commit()
+
+    populate_faire_missingness_for_study(db_session, study.study_id)
+    db_session.commit()
+
+    rows = {
+        m.target_field: m.missingness_status
+        for m in db_session.query(StandardizedValue).filter_by(study_id=study.study_id, target_schema="faire", entity_id=None).all()
+    }
+    assert rows["project_contact"] == MissingnessStatus.RELEVANT_SOURCE_NOT_INSPECTED.value
+
+
+def test_populate_faire_missingness_prefers_supplement_status_over_not_found(db_session):
+    """Same real fix as populate_missingness_for_study's own version: a
+    study with an unrelated Source (e.g. a publication-metadata source)
+    plus a referenced-but-not-yet-parsed supplementary file must not report
+    NOT_FOUND_IN_INSPECTED_SOURCES for a missing field -- the supplement
+    might still resolve it once RETRIEVE_SUPPLEMENTS actually runs."""
+    study = Study(title="Supplement referenced, not yet parsed")
+    db_session.add(study)
+    db_session.flush()
+    db_session.add(Source(study_id=study.study_id, source_type=SourceType.PUBLICATION_API.value, source_name="crossref"))
+    supplement_source = Source(
+        study_id=study.study_id,
+        source_type=SourceType.SUPPLEMENT.value,
+        source_name="europe_pmc_supplement",
+        external_identifier="Table_5.xlsx",
+        inspection_status="inspected",
+        inspection_level="metadata_only",
+    )
+    db_session.add(supplement_source)
+    db_session.flush()
+    db_session.add(
+        DataAsset(
+            study_id=study.study_id,
+            asset_type="supplementary_spreadsheet",
+            file_name="Table_5.xlsx",
+            access_status="unknown",
+            inspection_level="metadata_only",
+            source_id=supplement_source.source_id,
+        )
+    )
     db_session.commit()
 
     populate_faire_missingness_for_study(db_session, study.study_id)

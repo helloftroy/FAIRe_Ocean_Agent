@@ -88,6 +88,26 @@ class RetrievalConfig(BaseModel):
     user_agent: str = "fair-ocean-agent/0.1 (contact: REPLACE_WITH_CONTACT_EMAIL)"
 
 
+class SupplementConfig(BaseModel):
+    """Governs DISCOVER_SUPPLEMENTS/RETRIEVE_SUPPLEMENTS (section:
+    supplementary-material and structured-table retrieval). Europe PMC has
+    no per-file fetch API -- `{pmcid}/supplementaryFiles` returns one zip
+    bundling every supplementary file for the article together (confirmed
+    live: a real article's bundle was 33MB for 4 small XLSX tables plus one
+    unrelated 32MB dataset). max_bundle_bytes is checked against the sum of
+    each file's real, already-known size (from the main article XML's own
+    `<?size N?>` processing instructions) *before* ever downloading the
+    bundle -- this pipeline never has to guess. max_member_bytes bounds
+    which individual files *within* an already-fetched bundle get
+    deterministically parsed; anything over it is inventoried only, never
+    read into memory."""
+
+    enabled: bool = True
+    max_bundle_bytes: int = 50_000_000
+    max_member_bytes: int = 10_000_000
+    lightweight_inspection_of_large_assets: bool = False
+
+
 class DiscoveryConfig(BaseModel):
     citation_expansion_max_depth: int = 1
     keyword_search_enabled: bool = False
@@ -173,6 +193,7 @@ class AppConfig(BaseModel):
     llm: LLMConfig = Field(default_factory=LLMConfig)
     llm_verifier: LLMVerifierConfig = Field(default_factory=LLMVerifierConfig)
     retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
+    supplements: SupplementConfig = Field(default_factory=SupplementConfig)
     discovery: DiscoveryConfig = Field(default_factory=DiscoveryConfig)
     scheduling: SchedulingConfig = Field(default_factory=SchedulingConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
