@@ -269,6 +269,108 @@ def test_pangaea_extracts_jsonld_metadata_and_related_identifiers(retrieval_conf
     adapter.close()
 
 
+def test_pangaea_decomposes_real_variable_measured_shape(retrieval_config):
+    """Regression fixture from real PANGAEA eDNA JSON-LD:
+    10.1594/PANGAEA.935870 exposes parameters such as DATE/TIME, DEPTH,
+    water, Water volume filtered, Sample ID, accession numbers, and OTU
+    columns via schema.org variableMeasured PropertyValue objects. These are
+    parameter definitions, not per-sample measured values, so the adapter
+    emits decomposed PANGAEA-specific raw facts rather than pretending they
+    are present FAIRe sample values."""
+    adapter = PangaeaAdapter(SourceConfig(name="pangaea", enabled=True, base_url="https://doi.pangaea.de"), retrieval_config)
+    record = _record(
+        "pangaea",
+        {
+            "@id": "https://doi.org/10.1594/PANGAEA.935870",
+            "name": "Operational taxonomic units of deep-sea fishes from environmental DNA",
+            "variableMeasured": [
+                {"@type": "PropertyValue", "name": "Sample ID"},
+                {
+                    "@type": "PropertyValue",
+                    "name": "DEPTH, water",
+                    "unitText": "m",
+                    "subjectOf": {
+                        "@type": "DefinedTermSet",
+                        "hasDefinedTerm": [
+                            {
+                                "@id": "urn:obo:pato:term:0001595",
+                                "@type": "DefinedTerm",
+                                "identifier": "urn:obo:pato:term:0001595",
+                                "name": "depth",
+                                "url": "http://purl.obolibrary.org/obo/PATO_0001595",
+                            },
+                            {
+                                "@id": "http://purl.obolibrary.org/obo/CHEBI_15377",
+                                "@type": "DefinedTerm",
+                                "identifier": "http://purl.obolibrary.org/obo/CHEBI_15377",
+                                "name": "water",
+                                "url": "http://purl.obolibrary.org/obo/CHEBI_15377",
+                            },
+                        ],
+                    },
+                },
+                {
+                    "@type": "PropertyValue",
+                    "name": "Water volume, filtered",
+                    "unitText": "m**3",
+                    "subjectOf": {
+                        "@type": "DefinedTermSet",
+                        "hasDefinedTerm": {
+                            "@id": "http://qudt.org/1.1/vocab/quantity#Volume",
+                            "@type": "DefinedTerm",
+                            "identifier": "http://qudt.org/1.1/vocab/quantity#Volume",
+                            "name": "Volume",
+                        },
+                    },
+                },
+                {
+                    "@type": "PropertyValue",
+                    "name": "Thunnus sp., operational taxonomic unit",
+                    "unitText": "#",
+                    "measurementTechnique": "Metabarcoding",
+                    "subjectOf": {
+                        "@type": "DefinedTermSet",
+                        "hasDefinedTerm": [
+                            {
+                                "@id": "urn:lsid:marinespecies.org:taxname:126065",
+                                "@type": "DefinedTerm",
+                                "identifier": "urn:lsid:marinespecies.org:taxname:126065",
+                                "name": "Thunnus",
+                                "url": "https://www.marinespecies.org/aphia.php?p=taxdetails&id=126065",
+                            },
+                            {"@type": "DefinedTerm", "name": "operational taxonomic unit", "alternateName": "OTU"},
+                        ],
+                    },
+                },
+            ],
+        },
+        external_identifier="10.1594/PANGAEA.935870",
+    )
+
+    facts = adapter.extract_structured_facts(record)
+    values_by_type = {}
+    for fact in facts:
+        values_by_type.setdefault(fact.fact_type_candidate, []).append(fact.raw_value)
+
+    assert "DEPTH, water" in values_by_type["pangaea_variable_name"]
+    assert "Water volume, filtered" in values_by_type["pangaea_variable_name"]
+    assert "Thunnus sp., operational taxonomic unit" in values_by_type["pangaea_variable_name"]
+    assert "m" in values_by_type["pangaea_variable_unit"]
+    assert "m**3" in values_by_type["pangaea_variable_unit"]
+    assert "Metabarcoding" in values_by_type["pangaea_variable_measurement_technique"]
+    assert "urn:obo:pato:term:0001595" in values_by_type["pangaea_variable_defined_term_identifier"]
+    assert "urn:lsid:marinespecies.org:taxname:126065" in values_by_type["pangaea_variable_defined_term_identifier"]
+
+    depth_fact = next(
+        fact
+        for fact in facts
+        if fact.fact_type_candidate == "pangaea_variable_unit" and fact.raw_value == "m"
+    )
+    assert depth_fact.source_locator == "pangaea.jsonld.variableMeasured[1].unitText"
+    assert depth_fact.confidence_metadata == {"variable_index": 1, "variable_name": "DEPTH, water"}
+    adapter.close()
+
+
 def test_ena_extracts_run_accession_and_library_construction_protocol(retrieval_config):
     adapter = EnaAdapter(
         SourceConfig(name="ena", enabled=True, base_url="https://www.ebi.ac.uk/ena/portal/api"),

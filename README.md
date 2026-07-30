@@ -1199,17 +1199,25 @@ no BioSample record in this corpus has reported any of these 63 attributes
 yet (same as the original 8 before them). The rules are correct and
 inert until a real source has the attribute.
 
-**Still open, checked but not implemented:** PANGAEA's `variableMeasured`
-JSON-LD field (which could carry temp/salinity/ph-like environmental
-variables the same way BioSample attributes do) is currently captured as
-one coarse blob per dataset, not decomposed into individually-named
-facts. Real PANGAEA-sourced studies in the current database don't have
-this field populated at all (checked directly: 0 real rows), so there's
-no real payload to inspect the actual shape against -- guessing at a
-decomposition without real data to validate it against risks writing
-code for a shape that doesn't match reality. Needs either a real PANGAEA
-dataset with `variableMeasured` populated, or direct research into
-PANGAEA's JSON-LD `variableMeasured` shape, before this is implemented.
+**PANGAEA `variableMeasured` is now decomposed when present.** The current
+101-study database still has no real `adapter:pangaea` facts, but live
+PANGAEA/DataCite checks found real marine/eDNA payloads with populated
+parameter metadata. In particular, `10.1594/PANGAEA.935870` ("Operational
+taxonomic units of deep-sea fishes from environmental DNA...") exposes
+`variableMeasured` entries for `DATE/TIME`, latitude/longitude, `DEPTH,
+water` (`unitText: "m"`), `Water volume, filtered` (`unitText: "m**3"`),
+`Sample ID`, genetics accessions, and OTU columns with WoRMS LSIDs. The
+PANGAEA adapter now keeps the original `variableMeasured` blob and also
+emits decomposed project-level facts such as `pangaea_variable_name`,
+`pangaea_variable_unit`, `pangaea_variable_measurement_technique`, and
+defined-term identifiers/URLs with source locators like
+`pangaea.jsonld.variableMeasured[1].unitText`.
+
+Conservative boundary: these are parameter/column definitions, not the
+per-sample measured values themselves. They should inform source discovery,
+review, and later tabular-data retrieval, but they are not automatically
+mapped as present FAIRe sample values until the adapter also fetches and
+parses the PANGAEA textfile rows.
 
 ## Loading your own seed list
 
