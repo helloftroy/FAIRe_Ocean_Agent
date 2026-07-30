@@ -18,6 +18,7 @@ from fair_ocean_agent.database.enums import (
 from fair_ocean_agent.database.models import ExternalIdentifier, RawFact, Source, Study
 from fair_ocean_agent.identity.identifiers import normalize_doi
 from fair_ocean_agent.sources.base import RawFactCandidate, RelatedIdentifier, SourceRecord, SourceRecordNotFoundError
+from fair_ocean_agent.sources.europe_pmc import EuropePmcAdapter
 from fair_ocean_agent.workflow import handlers
 from fair_ocean_agent.workflow.task_queue import enqueue_task
 from fair_ocean_agent.database.enums import TaskType
@@ -49,6 +50,39 @@ class FakeAdapter:
 
     def close(self):
         self.closed = True
+
+
+class FakeEuropePmcFullTextAdapter(EuropePmcAdapter):
+    name = "europe_pmc"
+
+    def __init__(self, fulltext_xml: str):
+        self._fulltext_xml = fulltext_xml
+        self._record = _make_record("europe_pmc")
+
+    def fetch_record(self, identifier):
+        return self._record
+
+    def fetch_fulltext_xml(self, pmcid):
+        return self._fulltext_xml
+
+    def extract_structured_facts(self, record):
+        return []
+
+    def parse_publication_fields(self, record):
+        return {"title": "DOI paper with repository IDs", "fulltext_available": True}
+
+    def find_related(self, record):
+        return [
+            RelatedIdentifier(
+                identifier_type=IdentifierType.PMCID,
+                value="PMC5000000",
+                relationship_type=RelationshipType.IS_PUBLICATION_OF,
+                source="europe_pmc",
+            )
+        ]
+
+    def close(self):
+        pass
 
 
 def _make_record(source_name: str) -> SourceRecord:
@@ -218,6 +252,52 @@ def test_handler_is_idempotent_on_retry(db_session, monkeypatch):
     assert db_session.query(RawFact).filter_by(study_id=study.study_id).count() == 1
     source = db_session.query(Source).filter_by(study_id=study.study_id).one()
     assert source.publication_year == 2021
+
+
+def test_handler_mines_fulltext_identifiers_and_resolves_repository_sources(db_session, monkeypatch):
+    study = _seeded_study_with_doi(db_session)
+    task = _task_for(db_session, study)
+
+    europe_pmc_adapter = FakeEuropePmcFullTextAdapter(
+        "<article><sec><title>Data Availability</title>"
+        "<p>Raw reads are available under BioProject PRJNA515494.</p>"
+        "</sec></article>"
+    )
+    biosample_adapter = FakeAdapter(
+        "ncbi_biosample",
+        record=_make_record("ncbi_biosample"),
+        facts=[
+            RawFactCandidate(
+                entity_level=EntityLevel.SAMPLE,
+                fact_type_candidate="collection_date",
+                raw_field_name="collection_date",
+                raw_value="2020-01",
+                source_locator="ncbi_biosample.SAMN1.collection_date",
+                entity_external_id="SAMN1",
+                entity_label="SAMN1",
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_build_enabled_adapters",
+        lambda: {"europe_pmc": europe_pmc_adapter, "ncbi_biosample": biosample_adapter},
+    )
+
+    handlers.handle_discover_identifiers(db_session, task)
+    db_session.commit()
+
+    identifiers = {
+        (ei.identifier_type, ei.identifier_value, ei.source)
+        for ei in db_session.query(ExternalIdentifier).filter_by(study_id=study.study_id).all()
+    }
+    assert (
+        IdentifierType.BIOPROJECT_ACCESSION.value,
+        "PRJNA515494",
+        "europe_pmc_fulltext_identifier_scan",
+    ) in identifiers
+    assert db_session.query(Source).filter_by(study_id=study.study_id, source_name="ncbi_biosample").count() == 1
+    assert db_session.query(Source).filter_by(study_id=study.study_id, source_name="europe_pmc_fulltext").count() == 0
 
 
 def test_handler_raises_runtime_error_when_no_adapters_enabled(db_session, monkeypatch):

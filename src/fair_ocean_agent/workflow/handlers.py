@@ -26,6 +26,10 @@ from fair_ocean_agent.database.enums import (
     TaskType,
 )
 from fair_ocean_agent.database.models import Entity, ExternalIdentifier, RawFact, Source, Study, Task
+from fair_ocean_agent.discovery.text_identifiers import (
+    extract_repository_identifiers_from_text,
+    xml_to_text,
+)
 from fair_ocean_agent.extraction.sections import select_relevant_sections
 from fair_ocean_agent.extraction.text import (
     PROMPT_VERSION,
@@ -383,6 +387,37 @@ def _resolve_publication_sources(
     return study
 
 
+def _discover_identifiers_from_fulltext(session: Session, study: Study, adapters: dict[str, SourceAdapter]) -> Study:
+    """Mine open full text for repository accessions after DOI metadata has
+    discovered a PMCID.
+
+    This deliberately does not create an `europe_pmc_fulltext` Source row:
+    that row is the idempotency marker for EXTRACT_TEXT_FACTS, and identifier
+    discovery must not cause later paper extraction to no-op.
+    """
+    europe_pmc = adapters.get("europe_pmc")
+    if not isinstance(europe_pmc, EuropePmcAdapter):
+        return study
+
+    pmcid = _identifier_value(session, study.study_id, IdentifierType.PMCID)
+    if pmcid is None:
+        return study
+
+    try:
+        fulltext_xml = europe_pmc.fetch_fulltext_xml(pmcid)
+    except SourceRecordNotFoundError:
+        logger.info("no open-access full text available for identifier scan: %s", pmcid)
+        return study
+
+    related = extract_repository_identifiers_from_text(
+        xml_to_text(fulltext_xml),
+        source_name="europe_pmc_fulltext_identifier_scan",
+    )
+    if related:
+        study = _apply_related_identifiers(session, study, related, "europe_pmc_fulltext_identifier_scan")
+    return study
+
+
 def _resolve_repository_sources(
     session: Session,
     study: Study,
@@ -438,6 +473,21 @@ def _resolve_repository_sources(
                     study.title = title
 
     return study
+
+
+def _identifier_values(session: Session, study_id: str, identifier_type: IdentifierType) -> list[str]:
+    rows = session.scalars(
+        select(ExternalIdentifier.identifier_value)
+        .where(ExternalIdentifier.study_id == study_id)
+        .where(ExternalIdentifier.identifier_type == identifier_type.value)
+        .order_by(ExternalIdentifier.created_at)
+    ).all()
+    return list(dict.fromkeys(rows))
+
+
+def _identifier_value(session: Session, study_id: str, identifier_type: IdentifierType) -> str | None:
+    values = _identifier_values(session, study_id, identifier_type)
+    return values[0] if values else None
 
 
 def _fetch_and_persist_repository_record(
@@ -523,20 +573,17 @@ def handle_discover_identifiers(session: Session, task: Task) -> None:
     if study is None:
         raise ValueError(f"Study {task.study_id} not found")
 
-    def identifier_value(identifier_type: IdentifierType) -> str | None:
-        ei = next((e for e in study.external_identifiers if e.identifier_type == identifier_type.value), None)
-        return ei.identifier_value if ei else None
+    doi = _identifier_value(session, study.study_id, IdentifierType.DOI)
+    dataset_dois = _identifier_values(session, study.study_id, IdentifierType.DATASET_DOI)
+    bioproject_accessions = _identifier_values(session, study.study_id, IdentifierType.BIOPROJECT_ACCESSION)
+    ena_accessions = _identifier_values(session, study.study_id, IdentifierType.ENA_STUDY_ACCESSION)
+    sra_accessions = _identifier_values(session, study.study_id, IdentifierType.SRA_STUDY_ACCESSION)
+    bcodmo_ids = _identifier_values(session, study.study_id, IdentifierType.BCODMO_DATASET_ID)
+    pangaea_ids = _identifier_values(session, study.study_id, IdentifierType.PANGAEA_ID)
+    obis_uuids = _identifier_values(session, study.study_id, IdentifierType.OBIS_DATASET_UUID)
+    gbif_keys = _identifier_values(session, study.study_id, IdentifierType.GBIF_DATASET_KEY)
 
-    doi = identifier_value(IdentifierType.DOI)
-    dataset_doi = identifier_value(IdentifierType.DATASET_DOI)
-    bioproject_accession = identifier_value(IdentifierType.BIOPROJECT_ACCESSION)
-    ena_accession = identifier_value(IdentifierType.ENA_STUDY_ACCESSION)
-    bcodmo_id = identifier_value(IdentifierType.BCODMO_DATASET_ID)
-    pangaea_id = identifier_value(IdentifierType.PANGAEA_ID)
-    obis_uuid = identifier_value(IdentifierType.OBIS_DATASET_UUID)
-    gbif_key = identifier_value(IdentifierType.GBIF_DATASET_KEY)
-
-    if not any((doi, dataset_doi, bioproject_accession, ena_accession, bcodmo_id, pangaea_id, obis_uuid, gbif_key)):
+    if not any((doi, dataset_dois, bioproject_accessions, ena_accessions, sra_accessions, bcodmo_ids, pangaea_ids, obis_uuids, gbif_keys)):
         raise NotImplementedError(
             "DISCOVER_IDENTIFIERS currently resolves studies with a DOI "
             "(crossref/europe_pmc/openalex), a dataset DOI "
@@ -550,16 +597,69 @@ def handle_discover_identifiers(session: Session, task: Task) -> None:
 
     if doi:
         study = _resolve_publication_sources(session, study, doi)
-    if bioproject_accession or ena_accession:
-        study = _resolve_repository_sources(session, study, bioproject_accession, ena_accession)
-    if any((dataset_doi, bcodmo_id, pangaea_id, obis_uuid, gbif_key)):
+        study = _discover_identifiers_from_fulltext(session, study, _build_enabled_adapters())
+
+    dataset_dois = _identifier_values(session, study.study_id, IdentifierType.DATASET_DOI)
+    bioproject_accessions = _identifier_values(session, study.study_id, IdentifierType.BIOPROJECT_ACCESSION)
+    ena_accessions = _identifier_values(session, study.study_id, IdentifierType.ENA_STUDY_ACCESSION)
+    sra_accessions = _identifier_values(session, study.study_id, IdentifierType.SRA_STUDY_ACCESSION)
+    bcodmo_ids = _identifier_values(session, study.study_id, IdentifierType.BCODMO_DATASET_ID)
+    pangaea_ids = _identifier_values(session, study.study_id, IdentifierType.PANGAEA_ID)
+    obis_uuids = _identifier_values(session, study.study_id, IdentifierType.OBIS_DATASET_UUID)
+    gbif_keys = _identifier_values(session, study.study_id, IdentifierType.GBIF_DATASET_KEY)
+
+    for bioproject_accession in bioproject_accessions:
+        study = _resolve_repository_sources(session, study, bioproject_accession, None)
+    for sequencing_accession in [*ena_accessions, *sra_accessions]:
+        study = _resolve_repository_sources(session, study, None, sequencing_accession)
+    for dataset_doi in dataset_dois:
         study = _resolve_dataset_sources(
             session,
             study,
             dataset_doi=dataset_doi,
+            bcodmo_id=None,
+            pangaea_id=None,
+            obis_uuid=None,
+            gbif_key=None,
+        )
+    for bcodmo_id in bcodmo_ids:
+        study = _resolve_dataset_sources(
+            session,
+            study,
+            dataset_doi=None,
             bcodmo_id=bcodmo_id,
+            pangaea_id=None,
+            obis_uuid=None,
+            gbif_key=None,
+        )
+    for pangaea_id in pangaea_ids:
+        study = _resolve_dataset_sources(
+            session,
+            study,
+            dataset_doi=None,
+            bcodmo_id=None,
             pangaea_id=pangaea_id,
+            obis_uuid=None,
+            gbif_key=None,
+        )
+    for obis_uuid in obis_uuids:
+        study = _resolve_dataset_sources(
+            session,
+            study,
+            dataset_doi=None,
+            bcodmo_id=None,
+            pangaea_id=None,
             obis_uuid=obis_uuid,
+            gbif_key=None,
+        )
+    for gbif_key in gbif_keys:
+        study = _resolve_dataset_sources(
+            session,
+            study,
+            dataset_doi=None,
+            bcodmo_id=None,
+            pangaea_id=None,
+            obis_uuid=None,
             gbif_key=gbif_key,
         )
 
