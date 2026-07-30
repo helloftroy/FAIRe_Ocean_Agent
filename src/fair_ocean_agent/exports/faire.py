@@ -10,13 +10,11 @@ onto one-CSV-per-class, and this pipeline's other exports
 consistent across the codebase rather than introducing a second format for
 one command.
 
-`ampData`, `stdData`, `experimentRunMetadata`, `eLowQuantData`, `taxaRaw`,
-and `taxaFinal` are written header-only: no source adapter or extraction
-step in this pipeline currently produces amplification/standard-curve/
-taxonomic-assignment data, and `assay_name` (the join key required by
-every one of those tables) has no real data source either, since no
-adapter models a PCR assay as its own Entity. See README.md's Milestone 6
-section for the full list of what has real coverage today.
+`ampData`, `stdData`, `eLowQuantData`, `taxaRaw`, and `taxaFinal` are
+written header-only: no source adapter or extraction step in this pipeline
+currently produces amplification/standard-curve/taxonomic-assignment data.
+`experimentRunMetadata` is populated from ENA sequencing-run facts where
+available.
 
 Alongside the per-class data files, `export_faire` also writes
 `field_reference.csv` -- one row per FAIRe field, every column that
@@ -48,7 +46,7 @@ from fair_ocean_agent.standards.faire_registry import build_faire_registry
 
 FAIRE_SCHEMA_DIR = REPO_ROOT / "schemas" / "faire"
 
-EMPTY_CLASSES = ("ampData", "stdData", "experimentRunMetadata", "eLowQuantData", "taxaRaw", "taxaFinal")
+EMPTY_CLASSES = ("ampData", "stdData", "eLowQuantData", "taxaRaw", "taxaFinal")
 
 
 @lru_cache(maxsize=1)
@@ -154,10 +152,33 @@ def export_faire(session: Session, output_dir: str | Path) -> dict[str, int]:
             sample_rows.append(row)
     counts["sampleMetadata"] = _write_csv(output_dir / "sampleMetadata.csv", sample_columns, sample_rows)
 
+    experiment_columns = class_columns("experimentRunMetadata")
+    experiment_rows = []
+    for study in studies:
+        broadcast = _study_wide_values(session, study.study_id)
+        run_entities = session.scalars(
+            select(Entity).where(
+                Entity.study_id == study.study_id,
+                Entity.entity_level == EntityLevel.SEQUENCING_RUN.value,
+            )
+        )
+        for entity in run_entities:
+            row = dict(broadcast)
+            row.update(_entity_values(session, entity.entity_id))
+            row.setdefault("seq_run_id", entity.external_identifier or entity.entity_id)
+            experiment_rows.append(row)
+    counts["experimentRunMetadata"] = _write_csv(
+        output_dir / "experimentRunMetadata.csv", experiment_columns, experiment_rows
+    )
+
     for class_name in EMPTY_CLASSES:
         counts[class_name] = _write_csv(output_dir / f"{class_name}.csv", class_columns(class_name), [])
 
-    columns_by_class = {"projectMetadata": project_columns, "sampleMetadata": sample_columns}
+    columns_by_class = {
+        "projectMetadata": project_columns,
+        "sampleMetadata": sample_columns,
+        "experimentRunMetadata": experiment_columns,
+    }
     columns_by_class.update({name: class_columns(name) for name in EMPTY_CLASSES})
     counts["field_reference"] = _write_field_reference(output_dir, columns_by_class)
 

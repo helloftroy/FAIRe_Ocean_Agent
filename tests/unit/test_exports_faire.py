@@ -12,12 +12,34 @@ def test_export_faire_writes_expected_files_and_rows(db_session, tmp_path):
     db_session.flush()
     db_session.add(ExternalIdentifier(study_id=study.study_id, identifier_type=IdentifierType.BIOPROJECT_ACCESSION.value, identifier_value="PRJNA1"))
     sample = Entity(study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN1")
-    db_session.add(sample)
+    run = Entity(study_id=study.study_id, entity_level=EntityLevel.SEQUENCING_RUN.value, external_identifier="SRR1")
+    db_session.add_all([sample, run])
     db_session.flush()
     db_session.add(
         RawFact(
             study_id=study.study_id, entity_id=sample.entity_id, raw_field_name="geo_loc_name",
             raw_value="USA: California", fact_type_candidate="geo_loc_name", entity_level="sample",
+            support_type=SupportType.STRUCTURED_SOURCE.value,
+        )
+    )
+    db_session.add(
+        RawFact(
+            study_id=study.study_id, entity_id=run.entity_id, raw_field_name="read_count",
+            raw_value="1000", fact_type_candidate="read_count", entity_level="sequencing_run",
+            support_type=SupportType.STRUCTURED_SOURCE.value,
+        )
+    )
+    db_session.add(
+        RawFact(
+            study_id=study.study_id, entity_id=run.entity_id, raw_field_name="run_accession",
+            raw_value="SRR1", fact_type_candidate="run_accession", entity_level="sequencing_run",
+            support_type=SupportType.STRUCTURED_SOURCE.value,
+        )
+    )
+    db_session.add(
+        RawFact(
+            study_id=study.study_id, entity_id=run.entity_id, raw_field_name="sample_accession",
+            raw_value="SAMN1", fact_type_candidate="sample_accession", entity_level="sequencing_run",
             support_type=SupportType.STRUCTURED_SOURCE.value,
         )
     )
@@ -29,6 +51,7 @@ def test_export_faire_writes_expected_files_and_rows(db_session, tmp_path):
 
     assert counts["projectMetadata"] == 1
     assert counts["sampleMetadata"] == 1
+    assert counts["experimentRunMetadata"] == 1
     for class_name in EMPTY_CLASSES:
         assert counts[class_name] == 0
         assert (tmp_path / f"{class_name}.csv").exists()
@@ -41,6 +64,13 @@ def test_export_faire_writes_expected_files_and_rows(db_session, tmp_path):
         rows = list(csv.DictReader(f))
     assert rows[0]["samp_name"] == "SAMN1"
     assert rows[0]["geo_loc_name"] == "USA: California"
+
+    with (tmp_path / "experimentRunMetadata.csv").open() as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["seq_run_id"] == "SRR1"
+    assert rows[0]["samp_name"] == "SAMN1"
+    assert rows[0]["associatedSequences"] == "SRR1"
+    assert rows[0]["input_read_count"] == "1000"
 
 
 def test_export_faire_column_order_matches_classes_yaml(db_session, tmp_path):

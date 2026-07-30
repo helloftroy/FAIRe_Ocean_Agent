@@ -168,6 +168,17 @@ def _normalize_lib_layout(value: str) -> str:
     return value
 
 
+def _control_sample_category(value: str) -> str | None:
+    normalized = value.strip().lower()
+    if "negative" in normalized or "blank" in normalized or "no template" in normalized or normalized == "ntc":
+        return "negative control"
+    if "positive" in normalized:
+        return "positive control"
+    if "pcr standard" in normalized or "standard curve" in normalized:
+        return "PCR standard"
+    return None
+
+
 @dataclass(frozen=True)
 class MappingRule:
     source_fact_type: str
@@ -190,6 +201,23 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
                 MappingMethod.DETERMINISTIC_SYNONYM.value, transform=to_meters),
     MappingRule("depth", EntityLevel.SAMPLE.value, "sampleMetadata", "maximumDepthInMeters",
                 MappingMethod.DETERMINISTIC_SYNONYM.value, transform=to_meters),
+    MappingRule("Depth", EntityLevel.SAMPLE.value, "sampleMetadata", "minimumDepthInMeters",
+                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=to_meters),
+    MappingRule("Depth", EntityLevel.SAMPLE.value, "sampleMetadata", "maximumDepthInMeters",
+                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=to_meters),
+    MappingRule("depth_(m)", EntityLevel.SAMPLE.value, "sampleMetadata", "minimumDepthInMeters",
+                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=to_meters),
+    MappingRule("depth_(m)", EntityLevel.SAMPLE.value, "sampleMetadata", "maximumDepthInMeters",
+                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=to_meters),
+    MappingRule("samp_category", EntityLevel.SAMPLE.value, "sampleMetadata", "samp_category",
+                MappingMethod.EXACT_LABEL.value, enum_name="samp_category_enum"),
+    MappingRule("sample_type", EntityLevel.SAMPLE.value, "sampleMetadata", "samp_category",
+                MappingMethod.SUGGESTED_SEMANTIC.value, transform=_control_sample_category,
+                enum_name="samp_category_enum", review_required=True),
+    MappingRule("neg_cont_type", EntityLevel.SAMPLE.value, "sampleMetadata", "neg_cont_type",
+                MappingMethod.EXACT_LABEL.value, enum_name="neg_cont_type_enum"),
+    MappingRule("pos_cont_type", EntityLevel.SAMPLE.value, "sampleMetadata", "pos_cont_type",
+                MappingMethod.EXACT_LABEL.value, enum_name="pos_cont_type_enum"),
     MappingRule("env_broad_scale", EntityLevel.SAMPLE.value, "sampleMetadata", "env_broad_scale",
                 MappingMethod.EXACT_LABEL.value, enum_name="env_broad_scale_enum"),
     MappingRule("env_local_scale", EntityLevel.SAMPLE.value, "sampleMetadata", "env_local_scale",
@@ -232,10 +260,38 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
     # --- Sequencing-run-level structured facts (ENA) ---
     MappingRule("instrument_platform", EntityLevel.SEQUENCING_RUN.value, "projectMetadata", "platform",
                 MappingMethod.DETERMINISTIC_SYNONYM.value, enum_name="platform_enum"),
+    MappingRule("instrument_platform", EntityLevel.SEQUENCING_RUN.value, "experimentRunMetadata", "platform",
+                MappingMethod.DETERMINISTIC_SYNONYM.value, enum_name="platform_enum"),
     MappingRule("instrument_model", EntityLevel.SEQUENCING_RUN.value, "projectMetadata", "instrument",
                 MappingMethod.DETERMINISTIC_SYNONYM.value, enum_name="instrument_enum", review_required=True),
     MappingRule("sample_accession", EntityLevel.SEQUENCING_RUN.value, "sampleMetadata", "materialSampleID",
                 MappingMethod.DETERMINISTIC_SYNONYM.value),
+    MappingRule("sample_accession", EntityLevel.SEQUENCING_RUN.value, "experimentRunMetadata", "samp_name",
+                MappingMethod.DETERMINISTIC_SYNONYM.value),
+    MappingRule("samp_name", EntityLevel.SEQUENCING_RUN.value, "experimentRunMetadata", "samp_name",
+                MappingMethod.EXACT_LABEL.value),
+    MappingRule("assay_name", EntityLevel.SEQUENCING_RUN.value, "experimentRunMetadata", "assay_name",
+                MappingMethod.EXACT_LABEL.value),
+    MappingRule("pcr_plate_id", EntityLevel.SEQUENCING_RUN.value, "experimentRunMetadata", "pcr_plate_id",
+                MappingMethod.EXACT_LABEL.value),
+    MappingRule("pcr_well_position", EntityLevel.SEQUENCING_RUN.value, "experimentRunMetadata", "pcr_well_position",
+                MappingMethod.EXACT_LABEL.value),
+    MappingRule("lib_id", EntityLevel.SEQUENCING_RUN.value, "experimentRunMetadata", "lib_id",
+                MappingMethod.EXACT_LABEL.value),
+    MappingRule("seq_run_id", EntityLevel.SEQUENCING_RUN.value, "experimentRunMetadata", "seq_run_id",
+                MappingMethod.EXACT_LABEL.value),
+    MappingRule("lib_conc", EntityLevel.SEQUENCING_RUN.value, "experimentRunMetadata", "lib_conc",
+                MappingMethod.EXACT_LABEL.value),
+    MappingRule("lib_conc_unit", EntityLevel.SEQUENCING_RUN.value, "experimentRunMetadata", "lib_conc_unit",
+                MappingMethod.EXACT_LABEL.value, enum_name="lib_conc_unit_enum"),
+    MappingRule("lib_conc_meth", EntityLevel.SEQUENCING_RUN.value, "experimentRunMetadata", "lib_conc_meth",
+                MappingMethod.EXACT_LABEL.value),
+    MappingRule("phix_perc", EntityLevel.SEQUENCING_RUN.value, "experimentRunMetadata", "phix_perc",
+                MappingMethod.EXACT_LABEL.value),
+    MappingRule("mid_forward", EntityLevel.SEQUENCING_RUN.value, "experimentRunMetadata", "mid_forward",
+                MappingMethod.EXACT_LABEL.value),
+    MappingRule("mid_reverse", EntityLevel.SEQUENCING_RUN.value, "experimentRunMetadata", "mid_reverse",
+                MappingMethod.EXACT_LABEL.value),
     MappingRule("read_count", EntityLevel.SEQUENCING_RUN.value, "experimentRunMetadata", "input_read_count",
                 MappingMethod.DETERMINISTIC_SYNONYM.value),
     MappingRule("fastq_ftp", EntityLevel.SEQUENCING_RUN.value, "experimentRunMetadata", "filename",
@@ -251,6 +307,8 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
     MappingRule("library_layout", EntityLevel.SEQUENCING_RUN.value, "projectMetadata", "lib_layout",
                 MappingMethod.DETERMINISTIC_SYNONYM.value, transform=_normalize_lib_layout, enum_name="lib_layout_enum"),
     MappingRule("run_accession", EntityLevel.SEQUENCING_RUN.value, "experimentRunMetadata", "associatedSequences",
+                MappingMethod.DETERMINISTIC_SYNONYM.value),
+    MappingRule("run_accession", EntityLevel.SEQUENCING_RUN.value, "experimentRunMetadata", "seq_run_id",
                 MappingMethod.DETERMINISTIC_SYNONYM.value),
     MappingRule("library_construction_protocol", EntityLevel.SEQUENCING_RUN.value, "projectMetadata",
                 "pcr_method_additional", MappingMethod.DETERMINISTIC_SYNONYM.value, review_required=True),

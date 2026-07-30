@@ -61,7 +61,31 @@ def test_maps_sample_level_structured_facts(db_session):
     assert values["geo_loc_name"].standardized_value == "USA: California"
     assert values["decimalLatitude"].standardized_value == "38.030000"
     assert values["decimalLongitude"].standardized_value == "-122.151667"
+    assert values["samp_name"].standardized_value == "SAMN1"
+    assert values["samp_name"].mapping_method == "exact_identifier"
     assert created == len(values)
+
+
+def test_maps_depth_aliases_and_control_sample_category(db_session):
+    study = _study(db_session, title="Depth aliases and controls")
+    sample = Entity(study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN_CONTROL")
+    db_session.add(sample)
+    db_session.flush()
+    _fact(db_session, study, entity=sample, field="Depth", value="12 m", entity_level="sample")
+    _fact(db_session, study, entity=sample, field="sample_type", value="extraction blank negative control", entity_level="sample")
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    values = {
+        sv.target_field: sv
+        for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id, entity_id=sample.entity_id)
+    }
+    assert values["minimumDepthInMeters"].standardized_value == "12"
+    assert values["maximumDepthInMeters"].standardized_value == "12"
+    assert values["samp_category"].standardized_value == "negative control"
+    assert values["samp_category"].review_required
 
 
 def test_maps_sample_level_biosample_attributes_not_previously_covered(db_session):
@@ -175,6 +199,19 @@ def test_maps_run_level_fastq_and_checksum_and_lib_layout(db_session):
     )
     _fact(db_session, study, entity=run, entity_level="sequencing_run", field="read_count", value="1000000")
     _fact(db_session, study, entity=run, entity_level="sequencing_run", field="library_layout", value="PAIRED")
+    _fact(db_session, study, entity=run, entity_level="sequencing_run", field="run_accession", value="SRR1")
+    _fact(db_session, study, entity=run, entity_level="sequencing_run", field="sample_accession", value="SAMN1")
+    _fact(db_session, study, entity=run, entity_level="sequencing_run", field="instrument_platform", value="ILLUMINA")
+    _fact(db_session, study, entity=run, entity_level="sequencing_run", field="assay_name", value="16S metabarcoding")
+    _fact(db_session, study, entity=run, entity_level="sequencing_run", field="pcr_plate_id", value="plate-1")
+    _fact(db_session, study, entity=run, entity_level="sequencing_run", field="pcr_well_position", value="A01")
+    _fact(db_session, study, entity=run, entity_level="sequencing_run", field="lib_id", value="lib-1")
+    _fact(db_session, study, entity=run, entity_level="sequencing_run", field="lib_conc", value="4.2")
+    _fact(db_session, study, entity=run, entity_level="sequencing_run", field="lib_conc_unit", value="ng/μL")
+    _fact(db_session, study, entity=run, entity_level="sequencing_run", field="lib_conc_meth", value="Qubit")
+    _fact(db_session, study, entity=run, entity_level="sequencing_run", field="phix_perc", value="15")
+    _fact(db_session, study, entity=run, entity_level="sequencing_run", field="mid_forward", value="ACGT")
+    _fact(db_session, study, entity=run, entity_level="sequencing_run", field="mid_reverse", value="TGCA")
     db_session.commit()
 
     map_study_to_faire(db_session, study.study_id)
@@ -190,6 +227,19 @@ def test_maps_run_level_fastq_and_checksum_and_lib_layout(db_session):
     assert values["input_read_count"].standardized_value == "1000000"
     assert values["lib_layout"].standardized_value == "paired end"
     assert not values["lib_layout"].review_required
+    assert values["seq_run_id"].standardized_value == "SRR1"
+    assert values["samp_name"].standardized_value == "SAMN1"
+    assert values["platform"].standardized_value == "ILLUMINA"
+    assert values["assay_name"].standardized_value == "16S metabarcoding"
+    assert values["pcr_plate_id"].standardized_value == "plate-1"
+    assert values["pcr_well_position"].standardized_value == "A01"
+    assert values["lib_id"].standardized_value == "lib-1"
+    assert values["lib_conc"].standardized_value == "4.2"
+    assert values["lib_conc_unit"].standardized_value == "ng/μL"
+    assert values["lib_conc_meth"].standardized_value == "Qubit"
+    assert values["phix_perc"].standardized_value == "15"
+    assert values["mid_forward"].standardized_value == "ACGT"
+    assert values["mid_reverse"].standardized_value == "TGCA"
 
 
 def test_single_end_run_gets_no_filename2_or_checksum_filename2(db_session):
@@ -379,12 +429,21 @@ def test_dedups_identical_project_wide_facts_across_many_runs(db_session):
     created = map_study_to_faire(db_session, study.study_id)
     db_session.commit()
 
-    rows = db_session.query(StandardizedValue).filter_by(study_id=study.study_id, target_field="platform").all()
-    assert len(rows) == 1
-    assert rows[0].entity_id is None
-    assert rows[0].standardized_value == "ILLUMINA"
-    assert not rows[0].review_required
-    assert created == 1
+    project_rows = db_session.query(StandardizedValue).filter_by(
+        study_id=study.study_id, target_field="platform", entity_id=None
+    ).all()
+    run_rows = (
+        db_session.query(StandardizedValue)
+        .filter(StandardizedValue.study_id == study.study_id)
+        .filter(StandardizedValue.target_field == "platform")
+        .filter(StandardizedValue.entity_id.is_not(None))
+        .all()
+    )
+    assert len(project_rows) == 1
+    assert len(run_rows) == 5
+    assert project_rows[0].standardized_value == "ILLUMINA"
+    assert not project_rows[0].review_required
+    assert created == 11  # 1 project platform + 5 run platforms + 5 derived seq_run_id rows
 
 
 def test_flags_review_required_on_conflicting_project_wide_facts(db_session):
@@ -400,9 +459,19 @@ def test_flags_review_required_on_conflicting_project_wide_facts(db_session):
     map_study_to_faire(db_session, study.study_id)
     db_session.commit()
 
-    rows = db_session.query(StandardizedValue).filter_by(study_id=study.study_id, target_field="platform").all()
-    assert len(rows) == 1  # first value wins, no duplicate row
-    assert rows[0].review_required is True  # but the disagreement isn't silently dropped
+    project_rows = db_session.query(StandardizedValue).filter_by(
+        study_id=study.study_id, target_field="platform", entity_id=None
+    ).all()
+    run_rows = (
+        db_session.query(StandardizedValue)
+        .filter(StandardizedValue.study_id == study.study_id)
+        .filter(StandardizedValue.target_field == "platform")
+        .filter(StandardizedValue.entity_id.is_not(None))
+        .all()
+    )
+    assert len(project_rows) == 1  # first project-wide value wins, no duplicate row
+    assert project_rows[0].review_required is True  # but the disagreement isn't silently dropped
+    assert len(run_rows) == 2  # per-run experiment metadata is still retained
 
 
 def test_flags_review_required_when_value_fails_closed_vocab_check(db_session):
@@ -416,8 +485,18 @@ def test_flags_review_required_when_value_fails_closed_vocab_check(db_session):
     map_study_to_faire(db_session, study.study_id)
     db_session.commit()
 
-    row = db_session.query(StandardizedValue).filter_by(study_id=study.study_id, target_field="platform").one()
-    assert row.review_required is True
+    project_row = db_session.query(StandardizedValue).filter_by(
+        study_id=study.study_id, target_field="platform", entity_id=None
+    ).one()
+    run_row = (
+        db_session.query(StandardizedValue)
+        .filter(StandardizedValue.study_id == study.study_id)
+        .filter(StandardizedValue.target_field == "platform")
+        .filter(StandardizedValue.entity_id.is_not(None))
+        .one()
+    )
+    assert project_row.review_required is True
+    assert run_row.review_required is True
 
 
 def test_sample_accession_redirects_to_matching_sample_entity_not_the_run(db_session):
@@ -448,8 +527,15 @@ def test_sample_accession_with_no_matching_sample_entity_is_skipped_not_fabricat
     created = map_study_to_faire(db_session, study.study_id)
     db_session.commit()
 
-    assert created == 0
-    assert db_session.query(StandardizedValue).filter_by(study_id=study.study_id).count() == 0
+    assert db_session.query(StandardizedValue).filter_by(
+        study_id=study.study_id, target_field="materialSampleID"
+    ).count() == 0
+    values = {
+        sv.target_field: sv.standardized_value
+        for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id)
+    }
+    assert values == {"samp_name": "SAMN_NONEXISTENT", "seq_run_id": "SRR1"}
+    assert created == 2
 
 
 def test_llm_blob_fact_is_broadcast_and_flagged_for_review(db_session):

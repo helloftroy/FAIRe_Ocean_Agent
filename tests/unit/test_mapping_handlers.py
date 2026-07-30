@@ -25,7 +25,11 @@ def test_handle_map_faire_wraps_map_study_to_faire(db_session):
     handle_map_faire(db_session, task)
     db_session.commit()
 
-    assert db_session.query(StandardizedValue).filter_by(study_id=study.study_id).count() == 1
+    fields = {
+        value.target_field
+        for value in db_session.query(StandardizedValue).filter_by(study_id=study.study_id)
+    }
+    assert fields == {"geo_loc_name", "samp_name"}
 
 
 def test_handle_map_faire_is_idempotent_on_retry(db_session):
@@ -51,7 +55,9 @@ def test_handle_map_faire_is_idempotent_on_retry(db_session):
     handle_map_faire(db_session, task)  # simulated retry
     db_session.commit()
 
-    assert db_session.query(StandardizedValue).filter_by(study_id=study.study_id).count() == 1
+    values = db_session.query(StandardizedValue).filter_by(study_id=study.study_id).all()
+    assert len(values) == 2
+    assert {value.target_field for value in values} == {"geo_loc_name", "samp_name"}
 
 
 def test_enqueue_mapping_backfill_queues_one_per_study_with_facts(db_session):

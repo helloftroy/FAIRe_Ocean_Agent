@@ -36,7 +36,7 @@ from __future__ import annotations
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from fair_ocean_agent.database.enums import EntityLevel
+from fair_ocean_agent.database.enums import EntityLevel, MappingMethod
 from fair_ocean_agent.database.models import (
     Entity,
     ExternalIdentifier,
@@ -163,6 +163,34 @@ def map_study_to_faire(session: Session, study_id: str) -> int:
             )
             seen[key] = standardized_value
             created += 1
+
+    for entity in session.scalars(select(Entity).where(Entity.study_id == study_id)):
+        if not entity.external_identifier:
+            continue
+        if entity.entity_level == EntityLevel.SAMPLE.value:
+            key = ("sampleMetadata", "samp_name", entity.entity_id)
+            target_field = "samp_name"
+        elif entity.entity_level == EntityLevel.SEQUENCING_RUN.value:
+            key = ("experimentRunMetadata", "seq_run_id", entity.entity_id)
+            target_field = "seq_run_id"
+        else:
+            continue
+        if key in seen:
+            continue
+        standardized_value = StandardizedValue(
+            study_id=study_id,
+            entity_id=entity.entity_id,
+            target_schema=TARGET_SCHEMA,
+            target_schema_version=TARGET_SCHEMA_VERSION,
+            target_field=target_field,
+            standardized_value=entity.external_identifier,
+            mapping_method=MappingMethod.EXACT_IDENTIFIER.value,
+            review_required=False,
+        )
+        session.add(standardized_value)
+        session.flush()
+        seen[key] = standardized_value
+        created += 1
 
     return created
 

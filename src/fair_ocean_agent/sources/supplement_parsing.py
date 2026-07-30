@@ -66,6 +66,24 @@ SUPPLEMENT_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     "env_medium": ("env_medium", "environmental_material"),
     "target_gene": ("target_gene", "gene", "marker", "markers name", "locus"),
     "target_subfragment": ("target_subfragment", "subfragment", "region", "hypervariable_region"),
+    "assay_name": ("assay_name", "assay name", "assay", "assay_id", "assay id"),
+    "pcr_plate_id": ("pcr_plate_id", "pcr plate id", "pcr_plate", "plate_id", "plate id"),
+    "pcr_well_position": ("pcr_well_position", "pcr well position", "pcr_well", "well", "well_position"),
+    "lib_id": ("lib_id", "library_id", "library id", "library", "lib name"),
+    "seq_run_id": ("seq_run_id", "sequencing_run_id", "sequencing run id", "run_accession", "run accession"),
+    "lib_conc": ("lib_conc", "library_concentration", "library concentration", "lib concentration"),
+    "lib_conc_unit": ("lib_conc_unit", "library_concentration_unit", "library concentration unit"),
+    "lib_conc_meth": ("lib_conc_meth", "library_concentration_method", "library concentration method"),
+    "phix_perc": ("phix_perc", "phix_percentage", "phix percentage", "phix", "% phix"),
+    "mid_forward": ("mid_forward", "forward_mid", "forward mid", "forward barcode", "forward index"),
+    "mid_reverse": ("mid_reverse", "reverse_mid", "reverse mid", "reverse barcode", "reverse index"),
+    "filename": ("filename", "file_name", "fastq_1", "fastq file 1", "forward_reads", "r1"),
+    "filename2": ("filename2", "file_name2", "fastq_2", "fastq file 2", "reverse_reads", "r2"),
+    "checksum_filename": ("checksum_filename", "checksum_file_1", "md5_1", "fastq_md5_1"),
+    "checksum_filename2": ("checksum_filename2", "checksum_file_2", "md5_2", "fastq_md5_2"),
+    "associatedSequences": ("associatedSequences", "associated_sequences", "associated sequences"),
+    "input_read_count": ("input_read_count", "read_count", "read count", "reads", "raw_reads", "raw read count"),
+    "platform": ("platform", "instrument_platform", "sequencing_platform", "sequencing platform"),
 }
 
 def _normalize_header(header: str) -> str:
@@ -96,7 +114,32 @@ _SAMPLE_IDENTIFIER_ALIASES = frozenset(
         )
     }
 )
-_RUN_IDENTIFIER_ALIASES = frozenset(_normalize_header(alias) for alias in ("run_accession", "run_id", "sra_run"))
+_RUN_IDENTIFIER_ALIASES = frozenset(
+    _normalize_header(alias) for alias in ("run_accession", "run accession", "run_id", "sra_run", "seq_run_id")
+)
+
+_EXPERIMENT_RUN_FACTS = frozenset(
+    {
+        "assay_name",
+        "pcr_plate_id",
+        "pcr_well_position",
+        "lib_id",
+        "seq_run_id",
+        "lib_conc",
+        "lib_conc_unit",
+        "lib_conc_meth",
+        "phix_perc",
+        "mid_forward",
+        "mid_reverse",
+        "filename",
+        "filename2",
+        "checksum_filename",
+        "checksum_filename2",
+        "associatedSequences",
+        "input_read_count",
+        "platform",
+    }
+)
 
 
 @dataclass
@@ -159,14 +202,14 @@ def _facts_from_rows(
     result.row_count = len(data_rows)
 
     column_plan: list[tuple[int, str, str | None]] = []  # (col_index, canonical, header_text)
-    identifier_col: tuple[int, EntityLevel] | None = None
+    identifier_cols: dict[EntityLevel, tuple[int, str]] = {}
     for col_index, raw_header in enumerate(header):
         if not raw_header:
             continue
         lowered = _normalize_header(raw_header)
         entity_level = _entity_binding(lowered)
-        if entity_level is not None and identifier_col is None:
-            identifier_col = (col_index, entity_level)
+        if entity_level is not None and entity_level not in identifier_cols:
+            identifier_cols[entity_level] = (col_index, raw_header)
             continue
         canonical = _ALIAS_TO_CANONICAL.get(lowered)
         if canonical:
@@ -184,15 +227,10 @@ def _facts_from_rows(
 
     for row_offset, row in enumerate(data_rows):
         row_number = header_index + row_offset + 2  # +1 for 1-indexing, +1 for the header row
-        entity_external_id = None
-        entity_label = None
-        entity_level = EntityLevel.STUDY
-        if identifier_col is not None:
-            id_index, id_level = identifier_col
+        row_identifiers: dict[EntityLevel, str] = {}
+        for id_level, (id_index, _) in identifier_cols.items():
             if id_index < len(row) and row[id_index] not in (None, ""):
-                entity_external_id = str(row[id_index]).strip()
-                entity_label = entity_external_id
-                entity_level = id_level
+                row_identifiers[id_level] = str(row[id_index]).strip()
 
         for col_index, canonical, raw_header in column_plan:
             if col_index >= len(row):
@@ -200,6 +238,17 @@ def _facts_from_rows(
             value = row[col_index]
             if value in (None, ""):
                 continue
+            entity_level = EntityLevel.STUDY
+            entity_external_id = None
+            if canonical in _EXPERIMENT_RUN_FACTS and EntityLevel.SEQUENCING_RUN in row_identifiers:
+                entity_level = EntityLevel.SEQUENCING_RUN
+                entity_external_id = row_identifiers[EntityLevel.SEQUENCING_RUN]
+            elif EntityLevel.SAMPLE in row_identifiers:
+                entity_level = EntityLevel.SAMPLE
+                entity_external_id = row_identifiers[EntityLevel.SAMPLE]
+            elif EntityLevel.SEQUENCING_RUN in row_identifiers:
+                entity_level = EntityLevel.SEQUENCING_RUN
+                entity_external_id = row_identifiers[EntityLevel.SEQUENCING_RUN]
             cell_ref = f"{_column_letter(col_index)}{row_number}"
             result.facts.append(
                 RawFactCandidate(
@@ -209,9 +258,25 @@ def _facts_from_rows(
                     raw_value=str(value).strip(),
                     source_locator=f"{locator_prefix}!{cell_ref}",
                     entity_external_id=entity_external_id,
-                    entity_label=entity_label,
+                    entity_label=entity_external_id,
                 )
             )
+        if EntityLevel.SEQUENCING_RUN in row_identifiers and EntityLevel.SAMPLE in row_identifiers:
+            sample_id = row_identifiers[EntityLevel.SAMPLE]
+            if sample_id:
+                id_index, raw_header = identifier_cols[EntityLevel.SAMPLE]
+                cell_ref = f"{_column_letter(id_index)}{row_number}"
+                result.facts.append(
+                    RawFactCandidate(
+                        entity_level=EntityLevel.SEQUENCING_RUN,
+                        fact_type_candidate="samp_name",
+                        raw_field_name=raw_header,
+                        raw_value=sample_id,
+                        source_locator=f"{locator_prefix}!{cell_ref}",
+                        entity_external_id=row_identifiers[EntityLevel.SEQUENCING_RUN],
+                        entity_label=row_identifiers[EntityLevel.SEQUENCING_RUN],
+                    )
+                )
     return result
 
 
