@@ -262,4 +262,5 @@ def test_handler_asks_about_everything_when_nothing_resolved_yet(db_session, mon
     db_session.commit()
 
     assert backend.calls
-    assert any("dna_extraction_kit" in call["prompt"] for call in backend.calls)
+    assert any("depth" in call["prompt"] for call in backend.calls)
+    assert not any("dna_extraction_kit" in call["prompt"] for call in backend.calls)

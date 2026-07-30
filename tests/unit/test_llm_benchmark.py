@@ -88,7 +88,7 @@ def test_run_benchmark_perfect_model_gets_perfect_scores():
     )
     backend = MockLLMBackend(
         label="perfect",
-        responses=lambda prompt: response if "sample_collection_dna" in prompt and "[recall]" not in prompt else "[]",
+        responses=lambda prompt: response if "sample_collection_environment" in prompt and "[recall]" not in prompt else "[]",
     )
     report = run_benchmark([backend], [CASE])
 

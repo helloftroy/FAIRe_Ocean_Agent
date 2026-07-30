@@ -155,9 +155,9 @@ class ExtractionFocus:
 
 EXTRACTION_FOCUSES: tuple[ExtractionFocus, ...] = (
     ExtractionFocus(
-        name="sample_collection_dna",
-        description="sample collection, sample handling/storage, environmental context, and DNA extraction facts",
-        group_names=frozenset({"Sample collection / environment", "DNA extraction"}),
+        name="sample_collection_environment",
+        description="sample collection, sampling depth, sample handling/storage, and environmental context facts",
+        group_names=frozenset({"Sample collection / environment"}),
         keywords=frozenset(
             {
                 "sample",
@@ -175,16 +175,29 @@ EXTRACTION_FOCUSES: tuple[ExtractionFocus, ...] = (
                 "stored",
                 "storage",
                 "preserved",
+            }
+        ),
+        fallback_names=frozenset({"storage_conditions", "collection_method", "environmental_context"}),
+    ),
+    ExtractionFocus(
+        name="dna_extraction",
+        description="DNA extraction kit, lysis, separation, cleanup, extraction input amount, and DNA concentration facts",
+        group_names=frozenset({"DNA extraction"}),
+        keywords=frozenset(
+            {
                 "dna",
                 "extracted",
                 "extraction",
                 "kit",
                 "lysis",
+                "purif",
+                "clean",
+                "concentration",
+                "qubit",
+                "nanodrop",
             }
         ),
-        fallback_names=frozenset(
-            {"DNA_extraction_method", "storage_conditions", "collection_method", "environmental_context"}
-        ),
+        fallback_names=frozenset({"DNA_extraction_method"}),
     ),
     ExtractionFocus(
         name="primer_pcr_assay",
@@ -336,9 +349,8 @@ def build_extraction_instructions(
         "For each fact, set fact_type_candidate to the EXACT concept name from the "
         "checklist below whenever the fact matches one of those concepts -- do "
         "not paraphrase or invent a variant spelling of a listed name. If an "
-        "explicitly stated, clearly relevant fact does not match any listed "
-        "concept, you may still report it using a short, descriptive "
-        "fact_type_candidate of your own choosing rather than skip it.\n\n"
+        "explicitly stated fact does not match a listed concept, skip it for "
+        "this focused pass.\n\n"
         "Checklist of concepts to look for (grouped by topic; a concept's example, "
         "if given, only illustrates the expected shape of an answer -- never "
         "copy an example itself into raw_value; a bracketed \"[FAIRe hint: ...]\" "
@@ -627,7 +639,13 @@ def extract_facts_from_section(
             accepted_facts: list[RawFactCandidate] = []
             if parsed is not None:
                 candidates = parsed if isinstance(parsed, list) else (parsed.get("facts", []) if isinstance(parsed, dict) else [])
-                accepted_facts = _facts_from_candidates(candidates, segment_lookup, focused_title, seen)
+                accepted_facts = _facts_from_candidates(
+                    candidates,
+                    segment_lookup,
+                    focused_title,
+                    seen,
+                    allowed_fact_types=fact_type_names_for_focus(focus, exclude_faire_hints),
+                )
                 facts.extend(accepted_facts)
 
             if not recall_second_pass:
@@ -658,7 +676,15 @@ def extract_facts_from_section(
             if parsed is None:
                 continue
             candidates = parsed if isinstance(parsed, list) else (parsed.get("facts", []) if isinstance(parsed, dict) else [])
-            facts.extend(_facts_from_candidates(candidates, segment_lookup, f"{focused_title} [recall]", seen))
+            facts.extend(
+                _facts_from_candidates(
+                    candidates,
+                    segment_lookup,
+                    f"{focused_title} [recall]",
+                    seen,
+                    allowed_fact_types=missing_types,
+                )
+            )
     return facts, last_response
 
 
@@ -667,6 +693,7 @@ def _facts_from_candidates(
     segment_lookup: dict[str, str],
     section_title: str,
     seen: set[tuple[str, str, str]],
+    allowed_fact_types: frozenset[str] | None = None,
 ) -> list[RawFactCandidate]:
     facts: list[RawFactCandidate] = []
     for candidate in candidates:
@@ -679,6 +706,8 @@ def _facts_from_candidates(
         fact_type = candidate.get("fact_type_candidate")
         raw_value = candidate.get("raw_value")
         if not fact_type or is_absent_raw_value(raw_value):
+            continue
+        if allowed_fact_types is not None and str(fact_type) not in allowed_fact_types:
             continue
         dedupe_key = (str(fact_type), str(raw_value), quote)
         if dedupe_key in seen:

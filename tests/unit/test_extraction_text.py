@@ -158,6 +158,21 @@ def test_recall_second_pass_asks_only_for_missing_fact_types_and_merges_new_fact
     assert "Never return placeholder absence values" in backend.calls[1]["prompt"]
 
 
+def test_extraction_filters_model_invented_fact_type_names():
+    section_text = "Surface sediment from the upper few millimeters was collected with a van Veen grab."
+    response = json.dumps(
+        [
+            {"fact_type_candidate": "depth", "raw_value": "upper few millimeters", "evidence_id": "METHODS.P001"},
+            {"fact_type_candidate": "sample_depth", "raw_value": "upper few millimeters", "evidence_id": "METHODS.P001"},
+        ]
+    )
+    backend = MockLLMBackend(responses=[response])
+
+    facts, _ = extract_facts_from_section(backend, "Methods", section_text)
+
+    assert [fact.fact_type_candidate for fact in facts] == ["depth"]
+
+
 def test_recall_second_pass_dedupes_repeated_first_pass_facts():
     section_text = "PCR reactions used MiFish-U-F primers."
     response = json.dumps(

@@ -49,7 +49,12 @@ class FaireExtractionField:
 FIELD_GROUPS: dict[str, tuple[FaireExtractionField, ...]] = {
     "Sample collection / environment": (
         FaireExtractionField("collection_date", "date or date range when samples were collected", "eventDate", "2022-01-04"),
-        FaireExtractionField("depth", "sampling depth below the water/sediment/soil surface", "minimumDepthInMeters", "5 m"),
+        FaireExtractionField(
+            "depth",
+            "sampling depth below the water/sediment/soil surface, including phrases like surface sediment, upper few millimeters, or top 2 cm",
+            "minimumDepthInMeters",
+            "upper few millimeters",
+        ),
         FaireExtractionField("coordinates", "sampling latitude/longitude or coordinate pair", "decimalLatitude", "38.03 N, 122.15 W"),
         FaireExtractionField("sample_collection_method", "how samples were physically collected", "samp_collect_method"),
         FaireExtractionField("sample_storage_conditions", "how samples were stored or preserved after collection", "samp_store_method_additional"),
