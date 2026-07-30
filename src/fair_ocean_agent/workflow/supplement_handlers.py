@@ -51,6 +51,7 @@ from fair_ocean_agent.database.enums import (
 )
 from fair_ocean_agent.database.models import DataAsset, ExternalIdentifier, RawFact, Source, Study, Task
 from fair_ocean_agent.extraction.text import PROMPT_VERSION, extract_facts_from_section, resolved_faire_fields_for_study
+from fair_ocean_agent.identity.source_linking import create_source
 from fair_ocean_agent.llm.base import LLMBackendError
 from fair_ocean_agent.logging_setup import get_logger
 from fair_ocean_agent.sources.base import RawFactCandidate, SourceRecordNotFoundError
@@ -131,22 +132,23 @@ def discover_supplements_for_study(session: Session, study: Study, europe_pmc, f
         if reference.file_name in existing_file_names:
             continue  # idempotent: already discovered on a prior run
 
-        source = Source(
-            study_id=study.study_id,
-            source_type=SourceType.SUPPLEMENT.value,
-            source_name="europe_pmc_supplement",
-            external_identifier=reference.file_name,
-            url=None,
-            retrieved_at=utcnow(),
-            content_hash=None,
-            # Created once, with a terminal status -- "we know this file is
-            # referenced and what it is" -- never mutated again, same as
-            # every other Source-creation call site in this codebase.
-            inspection_status=InspectionStatus.INSPECTED.value,
-            inspection_level=InspectionLevel.METADATA_ONLY.value,
+        source = create_source(
+            session,
+            Source(
+                study_id=study.study_id,
+                source_type=SourceType.SUPPLEMENT.value,
+                source_name="europe_pmc_supplement",
+                external_identifier=reference.file_name,
+                url=None,
+                retrieved_at=utcnow(),
+                content_hash=None,
+                # Created once, with a terminal status -- "we know this file is
+                # referenced and what it is" -- never mutated again, same as
+                # every other Source-creation call site in this codebase.
+                inspection_status=InspectionStatus.INSPECTED.value,
+                inspection_level=InspectionLevel.METADATA_ONLY.value,
+            ),
         )
-        session.add(source)
-        session.flush()
 
         extension = _extension(reference.file_name)
         session.add(

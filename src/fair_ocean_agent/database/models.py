@@ -187,6 +187,38 @@ class Source(Base, TimestampMixin):
     study: Mapped["Study"] = relationship(back_populates="sources")
 
 
+class StudySource(Base, TimestampMixin):
+    """Join table: which Study(ies) a Source belongs to, with per-link
+    confidence and relationship semantics. Added *alongside*, not instead
+    of, `Source.study_id` -- that plain FK stays the fast "home" read path
+    everywhere else in the codebase (see its own docstring), unchanged.
+    This table is what makes a Source belonging to more than one Study
+    representable at all; `identity/resolution.py`'s
+    `resolve_or_create_study()` is the only place that writes a non-"home"
+    row here (relationship_type=SHARES_ACCESSION_WITH), via
+    `identity/source_linking.py`'s `link_source_to_study`. Every Source's
+    "home" row (relationship_type=IS_HOME_OF) is written at creation time
+    by `identity/source_linking.py`'s `create_source` -- the single choke
+    point all Source-creation call sites route through.
+
+    `confidence` reuses SupportType's values (structured_source /
+    deterministically_derived / inferred) -- the same "how good is the
+    evidence that this Source belongs to this Study" axis used everywhere
+    else in this task, not a second parallel vocabulary.
+    """
+
+    __tablename__ = "study_sources"
+    __table_args__ = (UniqueConstraint("study_id", "source_id", name="uq_study_source"),)
+
+    study_source_id: Mapped[str] = mapped_column(
+        String, primary_key=True, default=lambda: new_id("STUDYSRC")
+    )
+    study_id: Mapped[str] = mapped_column(ForeignKey("studies.study_id"), index=True)
+    source_id: Mapped[str] = mapped_column(ForeignKey("sources.source_id"), index=True)
+    relationship_type: Mapped[str] = mapped_column(String)
+    confidence: Mapped[str] = mapped_column(String)
+
+
 class SourceRelationship(Base, TimestampMixin):
     __tablename__ = "source_relationships"
 

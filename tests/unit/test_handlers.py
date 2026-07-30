@@ -15,7 +15,7 @@ from fair_ocean_agent.database.enums import (
     RelationshipType,
     SupportType,
 )
-from fair_ocean_agent.database.models import DataAsset, ExternalIdentifier, RawFact, Source, Study
+from fair_ocean_agent.database.models import DataAsset, ExternalIdentifier, RawFact, Source, Study, StudySource
 from fair_ocean_agent.identity.identifiers import normalize_doi
 from fair_ocean_agent.sources.base import RawFactCandidate, RelatedIdentifier, SourceRecord, SourceRecordNotFoundError
 from fair_ocean_agent.sources.europe_pmc import EuropePmcAdapter
@@ -143,6 +143,14 @@ def test_handler_creates_source_facts_and_publication(db_session, monkeypatch):
     sources = db_session.query(Source).filter_by(study_id=study.study_id).all()
     assert len(sources) == 1 and sources[0].source_name == "crossref"
     assert sources[0].publication_year == 2020
+
+    # New Source creation always routes through identity/source_linking.py's
+    # create_source() choke point, so every Source gets a matching "home"
+    # study_sources row.
+    study_source = db_session.query(StudySource).filter_by(source_id=sources[0].source_id).one()
+    assert study_source.study_id == study.study_id
+    assert study_source.relationship_type == RelationshipType.IS_HOME_OF.value
+    assert study_source.confidence == SupportType.STRUCTURED_SOURCE.value
 
     facts = db_session.query(RawFact).filter_by(study_id=study.study_id).all()
     assert len(facts) == 1 and facts[0].raw_value == "A Fake Study Title"
@@ -278,10 +286,19 @@ def test_handler_mines_fulltext_identifiers_and_resolves_repository_sources(db_s
             )
         ],
     )
+    # Tier-2 evidence (a regex-matched accession from prose) is only trusted
+    # once verify_deterministic_identifier confirms it resolves against its
+    # own source API -- an ncbi_bioproject adapter that can fetch_record()
+    # this exact accession is what makes that verification succeed here.
+    bioproject_adapter = FakeAdapter("ncbi_bioproject", record=_make_record("ncbi_bioproject"))
     monkeypatch.setattr(
         handlers,
         "_build_enabled_adapters",
-        lambda: {"europe_pmc": europe_pmc_adapter, "ncbi_biosample": biosample_adapter},
+        lambda: {
+            "europe_pmc": europe_pmc_adapter,
+            "ncbi_biosample": biosample_adapter,
+            "ncbi_bioproject": bioproject_adapter,
+        },
     )
 
     handlers.handle_discover_identifiers(db_session, task)

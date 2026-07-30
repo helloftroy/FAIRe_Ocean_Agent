@@ -67,6 +67,21 @@ class RelatedIdentifier(BaseModel):
     value: str
     relationship_type: RelationshipType
     source: str
+    # Evidence-tier gating identity/resolution.py's resolve_or_create_study()
+    # uses to decide whether a match against a pre-existing Study is safe to
+    # auto-link or needs a consistency check first. Reuses SupportType's
+    # values as a shared confidence vocabulary (not a second parallel one):
+    # STRUCTURED_SOURCE (default) = tier 1, this adapter's own structured API
+    # relation field -- safe to auto-link. DETERMINISTICALLY_DERIVED = tier 2,
+    # a regex-matched accession, only trustworthy once confirmed against that
+    # identifier type's own source API (discovery/text_identifiers.py's
+    # verify_deterministic_identifier). INFERRED = tier 3, an LLM prose claim
+    # -- always consistency-checked, never sufficient alone even if
+    # consistent. Deliberately NOT SupportType.EXPLICIT, which already means
+    # something different in this codebase (an LLM-extracted RawFact with a
+    # verbatim evidence quote, see extraction/text.py) -- reusing it here
+    # would silently collide with that established meaning.
+    confidence: SupportType = SupportType.STRUCTURED_SOURCE
 
 
 class RawFactCandidate(BaseModel):

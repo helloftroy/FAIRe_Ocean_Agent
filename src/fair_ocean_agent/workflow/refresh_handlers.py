@@ -55,6 +55,7 @@ from fair_ocean_agent.database.enums import (
     TaskType,
 )
 from fair_ocean_agent.database.models import ExternalIdentifier, RawFact, Source, Study, Task
+from fair_ocean_agent.identity.source_linking import create_source
 from fair_ocean_agent.logging_setup import get_logger
 from fair_ocean_agent.scheduling.watermarks import record_check
 from fair_ocean_agent.sources.base import SourceAdapter, SourceRecord
@@ -94,7 +95,7 @@ def _persist_refreshed_source_and_facts(
     *,
     run_id: str | None,
     outcome: RefreshOutcome,
-) -> bool:
+) -> tuple[bool, Source]:
     latest_source = (
         session.query(Source)
         .filter_by(study_id=study.study_id, source_name=adapter.name, external_identifier=query_identifier)
@@ -109,23 +110,24 @@ def _persist_refreshed_source_and_facts(
     outcome.record(changed)
 
     if not changed:
-        return False
+        return False, latest_source
 
-    source = Source(
-        study_id=study.study_id,
-        source_type=source_type.value,
-        source_name=adapter.name,
-        external_identifier=query_identifier,
-        url=record.url,
-        access_status=AccessStatus.UNKNOWN.value,
-        retrieved_at=record.retrieved_at,
-        content_hash=record.content_hash,
-        inspection_status=InspectionStatus.INSPECTED.value,
-        inspection_level=InspectionLevel.METADATA_ONLY.value,
-        parent_source_id=latest_source.source_id if latest_source else None,
+    source = create_source(
+        session,
+        Source(
+            study_id=study.study_id,
+            source_type=source_type.value,
+            source_name=adapter.name,
+            external_identifier=query_identifier,
+            url=record.url,
+            access_status=AccessStatus.UNKNOWN.value,
+            retrieved_at=record.retrieved_at,
+            content_hash=record.content_hash,
+            inspection_status=InspectionStatus.INSPECTED.value,
+            inspection_level=InspectionLevel.METADATA_ONLY.value,
+            parent_source_id=latest_source.source_id if latest_source else None,
+        ),
     )
-    session.add(source)
-    session.flush()
 
     if source_type == SourceType.PUBLICATION_API:
         _apply_publication_fields(source, adapter.parse_publication_fields(record))
@@ -158,7 +160,7 @@ def _persist_refreshed_source_and_facts(
         study.study_id, adapter.name, query_identifier, source.source_id,
         latest_source.source_id if latest_source else None,
     )
-    return True
+    return True, source
 
 
 def refresh_study(session: Session, study: Study, *, run_id: str | None = None) -> RefreshOutcome:

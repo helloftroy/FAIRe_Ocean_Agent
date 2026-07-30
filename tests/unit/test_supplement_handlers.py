@@ -8,7 +8,7 @@ import pytest
 
 from fair_ocean_agent.config import reset_config_cache
 from fair_ocean_agent.database.enums import IdentifierType, TaskType
-from fair_ocean_agent.database.models import DataAsset, ExternalIdentifier, RawFact, Source, Study
+from fair_ocean_agent.database.models import DataAsset, ExternalIdentifier, RawFact, Source, Study, StudySource
 from fair_ocean_agent.sources.base import RelatedIdentifier, SourceRecordNotFoundError
 from fair_ocean_agent.sources.europe_pmc import SupplementReference
 from fair_ocean_agent.workflow import handlers, supplement_handlers
@@ -126,6 +126,13 @@ def test_discover_creates_source_and_dataasset_per_referenced_file(db_session, m
     assert {s.external_identifier for s in sources} == {"Table_1.csv", "Big_Data.zip"}
     assert all(s.inspection_status == "inspected" for s in sources)
     assert all(s.inspection_level == "metadata_only" for s in sources)
+
+    # Source creation here also routes through create_source(), same choke
+    # point every other Source-creation call site uses.
+    study_source_source_ids = {
+        row.source_id for row in db_session.query(StudySource).filter_by(study_id=study.study_id).all()
+    }
+    assert study_source_source_ids == {s.source_id for s in sources}
 
     assets = db_session.query(DataAsset).filter_by(study_id=study.study_id).all()
     assets_by_name = {a.file_name: a for a in assets}

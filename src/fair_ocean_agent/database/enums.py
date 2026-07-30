@@ -59,6 +59,8 @@ class RelationshipType(str, enum.Enum):
     IS_CITED_BY = "is_cited_by"
     CONTAINS_SAMPLES_FROM = "contains_samples_from"
     RELATED_TO = "related_to"
+    IS_HOME_OF = "is_home_of"
+    SHARES_ACCESSION_WITH = "shares_accession_with"
 
 
 class SourceType(str, enum.Enum):

@@ -17,12 +17,14 @@ from fair_ocean_agent.database.models import (
     RawFact,
     Source,
     StandardizedValue,
+    StudySource,
     Study,
     Task,
+    ValidationResult,
 )
 from fair_ocean_agent.identity.identifiers import normalize_identifier
 
-_STUDY_FK_MODELS = (Entity, Source, RawFact, StandardizedValue, DataAsset, Task)
+_STUDY_FK_MODELS = (Entity, Source, RawFact, StandardizedValue, DataAsset, Task, ValidationResult)
 
 
 def find_existing_study_by_identifier(
@@ -39,6 +41,25 @@ def find_existing_study_by_identifier(
     if existing is None:
         return None
     return session.get(Study, existing.study_id)
+
+
+def find_all_existing_studies_by_identifier(
+    session: Session, identifier_type: IdentifierType, raw_value: str
+) -> list[Study]:
+    """Like find_existing_study_by_identifier, but returns every distinct
+    matching Study rather than .first() -- identity/resolution.py's
+    resolve_or_create_study() needs to tell "exactly one other study claims
+    this identifier" apart from "several already do" (an umbrella that's
+    already been split, or two independent unresolved ambiguous flags),
+    which a single-result lookup can't distinguish."""
+    normalized = normalize_identifier(identifier_type, raw_value)
+    stmt = select(ExternalIdentifier).where(
+        ExternalIdentifier.identifier_type == identifier_type.value,
+        ExternalIdentifier.identifier_value == normalized,
+    )
+    study_ids = {ei.study_id for ei in session.scalars(stmt)}
+    studies = [session.get(Study, study_id) for study_id in study_ids]
+    return [study for study in studies if study is not None]
 
 
 def find_existing_study_by_any_identifier(
@@ -94,6 +115,24 @@ def merge_study_into(session: Session, absorb: Study, into: Study) -> Study:
         session.query(model).filter(model.study_id == absorb.study_id).update(
             {"study_id": into.study_id}, synchronize_session=False
         )
+
+    # StudySource isn't in _STUDY_FK_MODELS: a blanket bulk UPDATE is wrong
+    # for a join table where `into` might already have its own row for the
+    # same source_id (would violate uq_study_source) -- same drop-on-
+    # collision/re-point pattern as the ExternalIdentifier block above.
+    for study_source in list(
+        session.scalars(select(StudySource).where(StudySource.study_id == absorb.study_id))
+    ):
+        collision = (
+            session.query(StudySource)
+            .filter_by(study_id=into.study_id, source_id=study_source.source_id)
+            .first()
+        )
+        if collision is not None:
+            session.delete(study_source)
+        else:
+            study_source.study_id = into.study_id
+    session.flush()
 
     session.query(CandidateMatch).filter(CandidateMatch.study_a_id == absorb.study_id).update(
         {"study_a_id": into.study_id}, synchronize_session=False

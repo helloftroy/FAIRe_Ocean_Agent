@@ -7,7 +7,7 @@ watermark bookkeeping.
 from datetime import datetime, timezone
 
 from fair_ocean_agent.database.enums import IdentifierType, SourceType, TaskType
-from fair_ocean_agent.database.models import ExternalIdentifier, RawFact, Source, SourceWatermark, Study
+from fair_ocean_agent.database.models import ExternalIdentifier, RawFact, Source, SourceWatermark, Study, StudySource
 from fair_ocean_agent.identity.identifiers import normalize_doi
 from fair_ocean_agent.sources.base import RawFactCandidate, SourceRecord
 from fair_ocean_agent.workflow import handlers, refresh_handlers
@@ -78,6 +78,9 @@ def test_refresh_creates_new_source_and_facts_when_none_existed(db_session, monk
     assert len(sources) == 1
     assert sources[0].parent_source_id is None
     assert db_session.query(RawFact).filter_by(study_id=study.study_id).count() == 1
+
+    # Refresh's own Source creation also routes through create_source().
+    assert db_session.query(StudySource).filter_by(source_id=sources[0].source_id, study_id=study.study_id).count() == 1
 
     watermark = db_session.query(SourceWatermark).filter_by(source_name="crossref", query_identifier="10.1234/x").one()
     assert watermark.last_status == "changed"

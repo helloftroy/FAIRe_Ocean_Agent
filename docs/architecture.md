@@ -587,6 +587,55 @@ through to `not_found_in_inspected_sources` -- the first real consumer of
 on both `Source` and `DataAsset` but nothing actually read it when
 computing missingness.
 
+## Why resolve_or_create_study() reuses merge_study_into instead of replacing it (shared study resolution)
+
+`identity/resolution.py`'s `resolve_or_create_study()` is the new single
+merge-decision function both DOI-seeded and accession-seeded discovery
+call, but it deliberately does **not** reimplement `merge_study_into`'s
+own FK-reassignment machinery for the "attach" outcome (tier-1 auto-link,
+or tier-2/3 after a consistent check) -- it calls `merge_study_into`
+unchanged. That function already does exactly the right thing (full-study
+absorption, `ExternalIdentifier` reconciliation, bulk FK reassignment
+across `_STUDY_FK_MODELS`, `canonical_status=MERGED`) for a real "these
+two Study rows describe the same thing" case. `resolve_or_create_study` is
+a thin orchestration layer on top of it, adding only the NEW decision this
+task needed: whether to reach `merge_study_into` at all, or instead split
+off a sibling Study and flag for review.
+
+The genuinely new logic is the *split* case (`_create_sibling_and_flag`),
+needed because `merge_study_into`'s machinery operates on a whole absorbed
+study's worth of rows -- it has no notion of "move just this one Source's
+evidence." Two design decisions there are worth being explicit about:
+
+- **`StudySource` is deliberately excluded from `merge_study_into`'s
+  `_STUDY_FK_MODELS` tuple.** A blanket bulk `UPDATE study_id` is wrong for
+  a join table where the target `study_id` might already have its own row
+  for the same `source_id` (a unique-constraint collision `Entity`/
+  `RawFact`/etc. don't have, since those aren't unique per study). It gets
+  its own explicit drop-on-collision/re-point block instead, mirroring the
+  `ExternalIdentifier` block a few lines above it in the same function.
+- **Entity ownership on split**: `Entity` has no `source_id` column of its
+  own (only study-scoped, via `external_identifier`), so "does this Entity
+  belong with the evidence being split off" is genuinely ambiguous when an
+  Entity has facts from more than one Source. The chosen rule -- move an
+  Entity only if 100% of its RawFacts came from the one Source being
+  split off, otherwise leave it in place and rely on the flagged
+  `CandidateMatch` for a human to sort out -- trades a recoverable false
+  negative (Entity stays behind when it arguably should move) against an
+  unrecoverable false positive (silently scattering one physical sample's
+  facts across two Study rows). The asymmetry in cost is why the
+  conservative rule was chosen without much debate.
+
+`sources.study_id` itself was kept as a plain, unchanged FK rather than
+replaced by the new `study_sources` join table, specifically to avoid
+touching the ~15 files across the adapter/handler layer that read
+`Source.study_id` directly today. `study_sources` is purely additive: a
+single new choke point (`identity/source_linking.py`'s `create_source()`)
+writes both columns atomically for every new Source, and the join table's
+existence is what makes "a Source belongs to more than one Study"
+representable at all going forward -- but nothing existing had to change
+to make room for it.
+
 ## Task queue
 
 See `workflow/task_queue.py` docstrings for the idempotency-key scheme and
@@ -610,3 +659,4 @@ README.md's "Assumptions and placeholders" section.
 | 7 continued: schema simplification (missingness -> standardized_values, publications -> sources) | Done -- migration `0fc0bf2bf46a` applied to the real database (1,845 missingness rows + 99 publication rows carried forward, not discarded); see README's "Schema simplification". |
 | 8: FAIRe-aware extraction (raw fact taxonomy, targeted prompt, benchmark harness alignment) | Done, corrected to v3 -- see README's "Milestone 8 validation" for the original real multi-model benchmark run, and "Milestone 8 follow-up" for the v2 -> v3 architecture correction (native, standard-agnostic `fact_type_candidate` names + optional `candidate_standard_fields` hints, replacing v2's direct use of FAIRe's own field spellings). |
 | 9: Supplementary-material and structured-table retrieval layer | Done -- validated against the real PMC7469538 article (9 deduped supplementary files discovered from 18 raw tags; 4 XLSX deterministically parsed with no errors, 4 DOCX inventoried, 1 32MB dataset correctly kept inventory-only); found/fixed 2 real bugs (an under-sized `max_bundle_bytes` default that would have blocked this exact real bundle, and a caption-row-above-header misalignment in the table parser). See README's "Supplementary-material and structured-table retrieval layer". |
+| 10: Shared resolve_or_create_study() with confidence tiering and consistency checking | Done -- validated against the real 101-study database (migration backfilled 385 pre-existing `sources` rows 1:1 into the new `study_sources` table; a full `DISCOVER_IDENTIFIERS` re-run across all 101 studies completed with zero errors, 162 new Source rows created, `study_sources` stayed 1:1 with `sources` throughout, zero `CandidateMatch` rows -- expected for an already-correctly-resolved corpus). See README's "Shared resolve_or_create_study()". |

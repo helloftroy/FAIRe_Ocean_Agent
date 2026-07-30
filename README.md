@@ -204,6 +204,20 @@ through the existing LLM extraction path instead. See "Supplementary-
 material and structured-table retrieval layer" below for the full design
 and what real live validation against PMC7469538 found (and fixed).
 
+**Shared resolve_or_create_study() with confidence tiering:** DOI-seeded
+and accession-seeded discovery now route every ambiguous-identifier merge
+decision through one function (`identity/resolution.py`), gated by a
+three-tier evidence-confidence hierarchy (structured API relation <
+regex-matched-then-API-verified accession < LLM prose claim, reusing
+`SupportType`) and a new date/location consistency check
+(`identity/consistency.py`) before merging into a pre-existing Study --
+previously any identifier match, regardless of evidence quality, triggered
+an unconditional merge. A new additive `study_sources` join table (plus a
+single `create_source()` choke point every Source-creation call site now
+routes through) makes a Source belonging to more than one Study
+representable for the first time. See "Shared resolve_or_create_study()"
+below for the full design and the real 101-study validation run.
+
 **What it does not do yet:** BeBOP/MIOP raw_fact mapping (see
 above), or discovering brand-new studies via keyword search/citation
 expansion (`DiscoveryConfig.keyword_search_enabled`/
@@ -1357,6 +1371,132 @@ showed `Table_5.xlsx` is a taxa-by-sample OTU abundance matrix (samples as
 contains alias-matchable per-sample metadata, so reporting "0 recognized
 columns" rather than fabricating or misaligning values is the correct
 behavior, not a bug.
+
+## Shared resolve_or_create_study(): confidence-tiered merging across both discovery paths
+
+Studies get discovered two ways -- DOI-first (Crossref/Europe PMC/OpenAlex,
+then mining related repository accessions) and accession-first (a study
+seeded with just a BioProject/ENA accession, publication discovered later
+or never). A paper can be tied to many projects/samples and vice versa, so
+whenever either path discovers an identifier that already belongs to a
+*different* Study, a merge decision has to be made. Previously both paths
+funneled this into the same call (`merge_study_into`) unconditionally --
+any identifier match, regardless of evidence quality, triggered an
+immediate, irreversible merge. `identity/resolution.py`'s
+`resolve_or_create_study()` is now the single function both paths call
+(via `workflow/handlers.py`'s `_apply_related_identifiers`, now a thin
+wrapper), so DOI-led and accession-led discovery can never silently
+diverge in how they reconcile ambiguous matches.
+
+**Evidence-tier gating** reuses `SupportType` as a shared confidence
+vocabulary end to end (not a second parallel one) -- added as a new
+`confidence` field on `RelatedIdentifier` (`sources/base.py`), defaulting
+to tier 1 for every existing adapter (`ncbi.py`, `ena.py`, `pangaea.py`,
+`bcodmo.py`, `datacite.py`, `obis.py`, `gbif.py`, `europe_pmc.py`,
+`openalex.py`), all of which already surface genuinely structured-API
+evidence with zero code changes needed:
+
+- **Tier 1** (`STRUCTURED_SOURCE`) -- a structured API relation field
+  (DataCite's own `relatedIdentifiers`, Europe PMC's PMID/PMCID). Safe to
+  auto-link, no consistency check, matching every adapter's prior
+  unconditional-merge behavior exactly.
+- **Tier 2** (`DETERMINISTICALLY_DERIVED`) -- a regex-matched accession
+  pulled from prose (`discovery/text_identifiers.py`), now tagged as tier 2
+  and gated behind a brand new `verify_deterministic_identifier()` step
+  that confirms the hit actually resolves against that identifier type's
+  own source API (BioProject -> ncbi_bioproject/ena, dataset DOI ->
+  pangaea/bcodmo/datacite, filtered by the DOI's own prefix) *before* it's
+  trusted at all -- an unverifiable hit is silently dropped and logged, not
+  treated as an error. Once verified, it's still consistency-checked
+  (below) before merging into an existing Study.
+- **Tier 3** (`INFERRED`) -- an LLM-extracted prose claim ("we reused data
+  from..."). Plumbing only -- no extractor producing these exists yet.
+  Always consistency-checked and never sufficient to merge alone even when
+  consistent; it always lands a `CandidateMatch` for human review either way.
+
+**Deliberately not `SupportType.EXPLICIT`** for tier 1 -- that value
+already means something different and established in this codebase (an
+LLM-extracted `RawFact` with a verbatim evidence quote, see
+`extraction/text.py` and the two validators that branch on it) and reusing
+it here would silently collide with that meaning.
+
+**The consistency check** (`identity/consistency.py`) compares a
+pre-existing Study's recorded sampling date range and geographic extent
+against the newly-discovered evidence's own, mirroring
+`validation/logical.py`'s "unparseable is NOT_ASSESSED, never a false
+conflict" principle. Concrete, documented thresholds (same "generously
+conservative, round-number" style as `DEEPEST_OCEAN_POINT_METERS`):
+±365 days of adjacency around an existing date range (a single field
+season/cruise commonly straddles a calendar-year boundary), a 2-degree
+geographic margin (~220km, covers normal within-region sampling spread), and
+a default-conservative rule for the no-signal-either-way case -- if new
+evidence has no parseable date at all and the existing study's registered
+span already exceeds 2 years, that's treated as inconsistent by default
+(a registered span that wide looks more like an umbrella accession
+accumulating multiple deposits than one paper's actual field work).
+**Deliberately never reads assay/marker-gene/primer/target-gene fields as a
+signal** -- FAIRe's own data model treats a project running multiple
+assays (16S + 18S on the same samples) as normal single-project structure,
+not evidence of two investigations.
+
+**The hard new case**: when a match fails the consistency check (or is
+tier 3), the newly-discovered evidence must NOT be merged in --
+`resolve_or_create_study` splits off a brand-new sibling `Study`, moves
+just *that one Source's* `RawFact` rows onto it (unambiguous, since
+`RawFact.source_id` already identifies exactly which facts are new),
+links the ambiguous identifier via a new `RelationshipType.SHARES_ACCESSION_WITH`
+value, and drops a `PENDING` row in `candidate_matches` -- a table that's
+existed since Milestone 1 but had never been written to by any code path
+until now. **Entity ownership rule** for the genuinely hard sub-problem
+(`Entity` has no `source_id` of its own, only study-scoped): an `Entity`
+only moves to the sibling if *100% of its `RawFact`s* came from this one
+source; if any fact on it came from a different source under the same
+original study, it stays put and relies on the flag for a human to sort
+out -- a false negative (stays behind) is recoverable later, a false
+positive (wrongly split) would silently scatter one physical sample's
+facts across two studies, which is strictly worse.
+
+**Schema**: additive only, per an explicit design decision -- `sources.study_id`
+stays exactly as it was (every existing adapter/handler/test keeps working
+unchanged), and a new `study_sources(study_id, source_id, relationship_type,
+confidence)` join table is added *alongside* it, backfilled once via a new
+migration (`relationship_type='is_home_of'`, `confidence='structured_source'`
+for every pre-existing `Source` row -- genuinely tier-1 provenance, not a
+guess, since every existing Source came from a directly-resolved adapter
+fetch or a structurally-parsed reference). Going forward, a single new
+choke-point function, `identity/source_linking.py`'s `create_source()`,
+writes both `sources.study_id` and the `study_sources` row atomically for
+every new Source -- all four existing Source-creation call sites
+(`workflow/handlers.py`'s `_persist_source_and_facts` and its
+`europe_pmc_fulltext` Source row, `workflow/supplement_handlers.py`'s
+`discover_supplements_for_study`, `workflow/refresh_handlers.py`'s
+`_persist_refreshed_source_and_facts`) route through it now. Full removal
+of `sources.study_id` remains a future organic cleanup, not part of this
+work.
+
+**Verified against the real 101-study database**: applied the migration
+(385 pre-existing `sources` rows, each backfilled to exactly one
+`study_sources` row, confirmed via direct query), then re-ran
+`DISCOVER_IDENTIFIERS` for every one of the 101 real studies through the
+new `resolve_or_create_study`-wired pipeline -- 101/101 completed with zero
+errors, 162 new `Source` rows were created along the way (bringing the
+total to 547) and `study_sources` stayed exactly 1:1 with `sources`
+throughout (547/547 after the run, confirming `create_source`'s choke
+point held for every new row), and zero `CandidateMatch` rows were created
+(expected: a well-behaved, already-correctly-resolved real corpus
+shouldn't surface any genuine ambiguity).
+
+**Explicit non-goals**: building brand-new keyword-search discovery
+adapters (NCBI BioProject text search, OBIS/GBIF/BCO-DMO/PANGAEA search --
+confirmed unbuilt, `DiscoveryConfig.keyword_search_enabled` remains an
+unused stub) is a separate follow-up; this task wired the shared function
+into the two entry points that already exist (DOI-first and the existing
+accession-first path). Two of the confidence-tiering design's own tier-1
+examples turned out to be real, pre-existing gaps once checked against the
+live code -- NCBI's BioProject adapter doesn't implement PMID->BioProject
+elink, and BCO-DMO's adapter doesn't mine its own `dcterms:bibliographicCitation`
+field for a linkable identifier -- both flagged as natural follow-ups, not
+fixed here.
 
 ## Loading your own seed list
 

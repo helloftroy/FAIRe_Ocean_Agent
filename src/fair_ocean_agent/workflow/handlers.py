@@ -28,6 +28,7 @@ from fair_ocean_agent.database.enums import (
 from fair_ocean_agent.database.models import Entity, ExternalIdentifier, RawFact, Source, Study, Task
 from fair_ocean_agent.discovery.text_identifiers import (
     extract_repository_identifiers_from_text,
+    verify_deterministic_identifier,
     xml_to_text,
 )
 from fair_ocean_agent.extraction.sections import select_relevant_sections
@@ -36,8 +37,8 @@ from fair_ocean_agent.extraction.text import (
     extract_facts_from_section,
     resolved_faire_fields_for_study,
 )
-from fair_ocean_agent.identity.deduplication import find_existing_study_by_identifier, merge_study_into
-from fair_ocean_agent.identity.identifiers import IdentifierError, normalize_identifier
+from fair_ocean_agent.identity.resolution import resolve_or_create_study
+from fair_ocean_agent.identity.source_linking import create_source
 from fair_ocean_agent.llm.base import LLMBackend, LLMBackendError
 from fair_ocean_agent.llm.disabled import DisabledLLMBackend
 from fair_ocean_agent.llm.factory import build_llm_backend
@@ -223,7 +224,7 @@ def _get_or_create_entity(
     return entity
 
 
-PersistFn = Callable[[Session, Study, SourceAdapter, SourceType, str, SourceRecord], bool]
+PersistFn = Callable[[Session, Study, SourceAdapter, SourceType, str, SourceRecord], tuple[bool, Source]]
 
 
 def _persist_source_and_facts(
@@ -233,7 +234,7 @@ def _persist_source_and_facts(
     source_type: SourceType,
     query_identifier: str,
     record: SourceRecord,
-) -> bool:
+) -> tuple[bool, Source]:
     """Idempotency guard: skip RawFact/Entity creation if this exact
     (study, adapter, identifier) combination was already recorded by a prior
     attempt at this task. fetch_record() itself is safe (and cheap) to
@@ -249,9 +250,13 @@ def _persist_source_and_facts(
     them on retry carries none of the duplication risk the fact-persistence
     guard exists to prevent.
 
-    Returns True if a new Source/facts row was actually created (Milestone
-    7's refresh path checks this to decide whether anything needs a fresh
-    look; the normal discovery path ignores the return value)."""
+    Returns (created, source): `created` is True if a new Source/facts row
+    was actually created (Milestone 7's refresh path checks this to decide
+    whether anything needs a fresh look; the normal discovery path ignores
+    it); `source` is always the Source row for this (adapter, identifier)
+    pair, new or pre-existing -- callers thread it into
+    _apply_related_identifiers so identity/resolution.py's
+    resolve_or_create_study() knows exactly which evidence is "new"."""
     source = (
         session.query(Source)
         .filter_by(study_id=study.study_id, source_name=adapter.name, external_identifier=query_identifier)
@@ -270,20 +275,21 @@ def _persist_source_and_facts(
             already_recorded = True
 
     if source is None:
-        source = Source(
-            study_id=study.study_id,
-            source_type=source_type.value,
-            source_name=adapter.name,
-            external_identifier=query_identifier,
-            url=record.url,
-            access_status=AccessStatus.UNKNOWN.value,
-            retrieved_at=record.retrieved_at,
-            content_hash=record.content_hash,
-            inspection_status=InspectionStatus.INSPECTED.value,
-            inspection_level=InspectionLevel.METADATA_ONLY.value,
+        source = create_source(
+            session,
+            Source(
+                study_id=study.study_id,
+                source_type=source_type.value,
+                source_name=adapter.name,
+                external_identifier=query_identifier,
+                url=record.url,
+                access_status=AccessStatus.UNKNOWN.value,
+                retrieved_at=record.retrieved_at,
+                content_hash=record.content_hash,
+                inspection_status=InspectionStatus.INSPECTED.value,
+                inspection_level=InspectionLevel.METADATA_ONLY.value,
+            ),
         )
-        session.add(source)
-        session.flush()
     elif same_content_source is not None:
         logger.info(
             "source %s for study %s already recorded with same content hash via %s; "
@@ -298,7 +304,7 @@ def _persist_source_and_facts(
         _apply_publication_fields(source, adapter.parse_publication_fields(record))
 
     if already_recorded:
-        return False
+        return False, source
 
     for fact in adapter.extract_structured_facts(record):
         entity_id = None
@@ -323,50 +329,24 @@ def _persist_source_and_facts(
             )
         )
 
-    return True
+    return True, source
 
 
 def _apply_related_identifiers(
-    session: Session, study: Study, related: list[RelatedIdentifier], source_name: str
+    session: Session, study: Study, related: list[RelatedIdentifier], source_name: str, source: Source | None = None
 ) -> Study:
-    """Adds newly-discovered identifiers to the study, performing a Stage 2
-    (explicit-relationship) merge if one of them already belongs to a
-    *different* canonical study. Returns the study to keep using (may be a
-    different object than the one passed in, if a merge happened).
-
-    Existence is checked via a fresh DB query (find_existing_study_by_identifier)
-    rather than the `study.external_identifiers` ORM collection, which can go
-    stale mid-task: multiple adapters commonly discover the *same* related
-    identifier in one task (e.g. ncbi_biosample and ena both surface the same
-    BioSample accessions for a study), and rows added via session.add() in an
-    earlier iteration of this same loop -- or by a different adapter earlier
-    in _resolve_repository_sources -- don't retroactively appear in an
-    already-loaded relationship collection, so a naive "is it in
-    study.external_identifiers" check would re-attempt the same insert and
-    hit the table's unique constraint.
-    """
-    for rel in related:
-        try:
-            normalized_value = normalize_identifier(rel.identifier_type, rel.value)
-        except IdentifierError:
-            continue
-
-        existing_study = find_existing_study_by_identifier(session, rel.identifier_type, normalized_value)
-        if existing_study is None:
-            session.add(
-                ExternalIdentifier(
-                    study_id=study.study_id,
-                    identifier_type=rel.identifier_type.value,
-                    identifier_value=normalized_value,
-                    source=source_name,
-                    verified=True,
-                )
-            )
-            session.flush()
-        elif existing_study.study_id != study.study_id:
-            study = merge_study_into(session, absorb=existing_study, into=study)
-        # else: existing_study.study_id == study.study_id -- already recorded, nothing to do.
-    return study
+    """Delegates entirely to resolve_or_create_study
+    (identity/resolution.py) so DOI-seeded and accession-seeded discovery
+    never diverge in how they reconcile a newly-discovered identifier
+    against pre-existing studies. `source_name` is kept for call-site
+    signature stability but is no longer read here -- every RelatedIdentifier
+    already carries its own `.source` label, which resolve_or_create_study
+    uses directly. `source` is the Source row this evidence came from --
+    None for call sites with no single triggering Source (fulltext-mined
+    identifiers, supplement discovery), which resolve_or_create_study
+    degrades gracefully (see its own docstring)."""
+    del source_name
+    return resolve_or_create_study(session, study, related, source)
 
 
 def _resolve_publication_sources(
@@ -395,13 +375,13 @@ def _resolve_publication_sources(
             logger.info("no %s record for DOI %s", name, doi)
             continue
 
-        persist_fn(session, study, adapter, SourceType.PUBLICATION_API, doi, record)
+        _created, source = persist_fn(session, study, adapter, SourceType.PUBLICATION_API, doi, record)
 
         title = adapter.parse_publication_fields(record).get("title")
         if title and not study.title:
             study.title = title
 
-        study = _apply_related_identifiers(session, study, adapter.find_related(record), name)
+        study = _apply_related_identifiers(session, study, adapter.find_related(record), name, source)
 
     return study
 
@@ -432,8 +412,17 @@ def _discover_identifiers_from_fulltext(session: Session, study: Study, adapters
         xml_to_text(fulltext_xml),
         source_name="europe_pmc_fulltext_identifier_scan",
     )
-    if related:
-        study = _apply_related_identifiers(session, study, related, "europe_pmc_fulltext_identifier_scan")
+    verified = [r for r in related if verify_deterministic_identifier(adapters, r)]
+    for dropped in related:
+        if dropped not in verified:
+            logger.info(
+                "regex-matched %s %s could not be confirmed against its source API; discarding",
+                dropped.identifier_type.value, dropped.value,
+            )
+    if verified:
+        study = _apply_related_identifiers(
+            session, study, verified, "europe_pmc_fulltext_identifier_scan", source=None
+        )
     return study
 
 
@@ -506,8 +495,8 @@ def _resolve_repository_sources(
             except SourceRecordNotFoundError:
                 logger.info("no %s record for %s", name, bioproject_accession)
                 continue
-            persist_fn(session, study, adapter, SourceType.REPOSITORY_API, bioproject_accession, record)
-            study = _apply_related_identifiers(session, study, adapter.find_related(record), name)
+            _created, source = persist_fn(session, study, adapter, SourceType.REPOSITORY_API, bioproject_accession, record)
+            study = _apply_related_identifiers(session, study, adapter.find_related(record), name, source)
 
             # Repository-only studies (no DOI, so _resolve_publication_sources
             # never runs) would otherwise never get a study.title at all --
@@ -526,8 +515,8 @@ def _resolve_repository_sources(
         except SourceRecordNotFoundError:
             logger.info("no ena record for %s", ena_query_identifier)
         else:
-            persist_fn(session, study, ena_adapter, SourceType.REPOSITORY_API, ena_query_identifier, record)
-            study = _apply_related_identifiers(session, study, ena_adapter.find_related(record), "ena")
+            _created, source = persist_fn(session, study, ena_adapter, SourceType.REPOSITORY_API, ena_query_identifier, record)
+            study = _apply_related_identifiers(session, study, ena_adapter.find_related(record), "ena", source)
             if not study.title:
                 title = record.raw.get("study", {}).get("study_title")
                 if title:
@@ -568,8 +557,8 @@ def _fetch_and_persist_repository_record(
         logger.info("no %s record for %s", adapter_name, identifier)
         return study
 
-    persist_fn(session, study, adapter, SourceType.REPOSITORY_API, identifier, record)
-    study = _apply_related_identifiers(session, study, adapter.find_related(record), adapter_name)
+    _created, source = persist_fn(session, study, adapter, SourceType.REPOSITORY_API, identifier, record)
+    study = _apply_related_identifiers(session, study, adapter.find_related(record), adapter_name, source)
     if not study.title:
         title = (
             record.raw.get("title")
@@ -781,19 +770,20 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
 
     backend = _build_llm_backend_cached()
 
-    source = Source(
-        study_id=study.study_id,
-        source_type=SourceType.ARTICLE_FULLTEXT.value,
-        source_name="europe_pmc_fulltext",
-        external_identifier=pmcid,
-        access_status=AccessStatus.OPEN.value,
-        retrieved_at=utcnow(),
-        content_hash=hash_payload({"pmcid": pmcid, "section_titles": [s["title"] for s in sections]}),
-        inspection_status=InspectionStatus.INSPECTED.value,
-        inspection_level=InspectionLevel.FULL.value,
+    source = create_source(
+        session,
+        Source(
+            study_id=study.study_id,
+            source_type=SourceType.ARTICLE_FULLTEXT.value,
+            source_name="europe_pmc_fulltext",
+            external_identifier=pmcid,
+            access_status=AccessStatus.OPEN.value,
+            retrieved_at=utcnow(),
+            content_hash=hash_payload({"pmcid": pmcid, "section_titles": [s["title"] for s in sections]}),
+            inspection_status=InspectionStatus.INSPECTED.value,
+            inspection_level=InspectionLevel.FULL.value,
+        ),
     )
-    session.add(source)
-    session.flush()
 
     # Computed once per study, before any section's LLM call: FAIRe fields
     # already resolved from structured sources (NCBI/ENA/PANGAEA/... via a
