@@ -13,7 +13,11 @@ whose source segments do not contain cues for that topic. This gives small
 local models a shorter, less ambiguous checklist per call rather than one
 broad "find everything" prompt. v6 adds a recall pass after each
 first-pass topic extraction: the second prompt lists only the in-topic fact
-types not returned by the first pass and asks whether any were missed.
+types not returned by the first pass and asks whether any were missed. v7
+adds a deterministic absent-value guard: candidates whose value is blank,
+"none", "not specified", "not explicitly stated", etc. are dropped before
+persistence and before benchmark scoring. The prompt also tells recall not
+to return placeholder absence values.
 
 **Why "FAIRe-aware" matters (v1 -> v2):** v1's prompt was fully open-
 vocabulary -- "extract whatever facts you find, name them however you
@@ -83,8 +87,55 @@ from fair_ocean_agent.llm.base import LLMBackend, LLMBackendError, LLMResponse
 from fair_ocean_agent.mapping.faire import TARGET_SCHEMA
 from fair_ocean_agent.sources.base import RawFactCandidate
 
-PROMPT_VERSION = "text-extraction-v6-focused-recall-segment-evidence-ids"
+PROMPT_VERSION = "text-extraction-v7-focused-recall-no-absence-placeholders"
 DEFAULT_MAX_SECTION_CHARS_PER_CALL = 1600
+
+ABSENT_RAW_VALUE_STRINGS = frozenset(
+    {
+        "",
+        "-",
+        "--",
+        "n/a",
+        "na",
+        "n.a.",
+        "none",
+        "null",
+        "nil",
+        "not available",
+        "not applicable",
+        "not detected",
+        "not given",
+        "not mentioned",
+        "not provided",
+        "not reported",
+        "not specified",
+        "not stated",
+        "not explicitly mentioned",
+        "not explicitly provided",
+        "not explicitly reported",
+        "not explicitly specified",
+        "not explicitly stated",
+        "unknown",
+        "unspecified",
+    }
+)
+
+
+def is_absent_raw_value(value) -> bool:
+    """True when a model returned a placeholder for absence rather than a
+    real source value. Missingness is represented downstream as standardized
+    status, never as an extracted raw fact."""
+    if value is None:
+        return True
+    folded = " ".join(str(value).strip().lower().split())
+    if folded in ABSENT_RAW_VALUE_STRINGS:
+        return True
+    return bool(
+        re.fullmatch(
+            r"(not\s+)?(explicitly\s+)?(stated|specified|reported|provided|mentioned)(\s+in\s+(the\s+)?text)?",
+            folded,
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -257,8 +308,11 @@ def build_extraction_instructions(
     )
     recall_sentence = (
         "This is a recall-focused second pass. A first extraction pass already ran over this same text. "
-        "Check whether it missed any of the fact types in the checklist below. Return only newly found facts "
-        "whose fact_type_candidate is one of the listed missing types; do not repeat facts that were already extracted.\n\n"
+        "Check whether it missed any of the fact types in the checklist below for this same focused topic only. "
+        "Return only newly found facts whose fact_type_candidate is one of the listed missing types; do not repeat "
+        "facts that were already extracted. If the text does not explicitly state a listed missing type, omit that "
+        "type entirely. Never return placeholder absence values such as \"none\", \"not specified\", "
+        "\"not explicitly stated\", \"not reported\", \"unknown\", or an empty string.\n\n"
         if recall_pass
         else ""
     )
@@ -307,7 +361,10 @@ Return ONLY a JSON array of objects, each with these fields:
 
 If nothing in the source text supports a fact, return an empty array. Do
 not reproduce or paraphrase source text. Your evidence_id must point to a
-listed segment that explicitly supports the fact.
+listed segment that explicitly supports the fact. Never return a fact whose
+raw_value is blank or an absence placeholder such as "none", "not specified",
+"not explicitly stated", "not reported", "unknown", or "not applicable";
+omit that fact instead.
 
 Section: {section_title}
 
@@ -612,7 +669,7 @@ def _facts_from_candidates(
         quote = "\n".join(segment_lookup[evidence_id] for evidence_id in evidence_ids)
         fact_type = candidate.get("fact_type_candidate")
         raw_value = candidate.get("raw_value")
-        if not fact_type or raw_value in (None, ""):
+        if not fact_type or is_absent_raw_value(raw_value):
             continue
         dedupe_key = (str(fact_type), str(raw_value), quote)
         if dedupe_key in seen:

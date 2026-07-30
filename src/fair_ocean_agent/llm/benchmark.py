@@ -30,6 +30,7 @@ from fair_ocean_agent.dates import try_parse_date
 from fair_ocean_agent.extraction.text import (
     EXTRACTION_FOCUSES,
     build_prompt,
+    is_absent_raw_value,
     recall_missing_fact_types,
     segment_source_text,
     segments_for_focus,
@@ -129,6 +130,8 @@ def _facts_with_verified_segment_ids(returned_facts: list[dict], segment_lookup:
     verified = []
     seen: set[tuple[str, str, str]] = set()
     for fact in returned_facts:
+        if is_absent_raw_value(fact.get("raw_value")):
+            continue
         evidence_ids = _candidate_evidence_ids(fact)
         if not evidence_ids or any(evidence_id not in segment_lookup for evidence_id in evidence_ids):
             continue
@@ -149,7 +152,7 @@ def _facts_with_verified_segment_ids(returned_facts: list[dict], segment_lookup:
 
 def _parsed_facts(parsed) -> list[dict]:
     facts = parsed if isinstance(parsed, list) else (parsed.get("facts", []) if isinstance(parsed, dict) else [])
-    return [fact for fact in facts if isinstance(fact, dict)]
+    return [fact for fact in facts if isinstance(fact, dict) and not is_absent_raw_value(fact.get("raw_value"))]
 
 
 @dataclass

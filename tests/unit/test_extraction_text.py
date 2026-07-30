@@ -9,6 +9,7 @@ from fair_ocean_agent.extraction.text import (
     PROMPT_VERSION,
     build_prompt,
     extract_facts_from_section,
+    is_absent_raw_value,
     resolved_faire_fields_for_study,
     recall_missing_fact_types,
     segment_source_text,
@@ -50,6 +51,27 @@ def test_missing_fields_are_skipped_not_crashed_on():
     backend = MockLLMBackend(responses=[response])
     facts, _ = extract_facts_from_section(backend, "Methods", SECTION_TEXT)
     assert facts == []
+
+
+def test_absent_placeholder_values_are_dropped():
+    response = json.dumps(
+        [
+            {"fact_type_candidate": "collection_method", "raw_value": "not specified", "evidence_id": "METHODS.P001"},
+            {"fact_type_candidate": "storage_conditions", "raw_value": " not explicitly stated in the text ", "evidence_id": "METHODS.P001"},
+            {"fact_type_candidate": "sampling_depth", "raw_value": "", "evidence_id": "METHODS.P001"},
+            {"fact_type_candidate": "collection_date", "raw_value": "2022-01-04", "evidence_id": "METHODS.P001"},
+        ]
+    )
+    backend = MockLLMBackend(responses=[response])
+    facts, _ = extract_facts_from_section(backend, "Methods", SECTION_TEXT)
+
+    assert [(fact.fact_type_candidate, fact.raw_value) for fact in facts] == [("collection_date", "2022-01-04")]
+
+
+def test_absent_raw_value_predicate_covers_common_model_placeholders():
+    for value in (None, "", "   ", "none", "N/A", "not specified", "not explicitly stated", "not reported in the text"):
+        assert is_absent_raw_value(value)
+    assert not is_absent_raw_value("none detected in the negative control")
 
 
 def test_invalid_json_response_yields_no_facts():
@@ -109,7 +131,7 @@ def test_extract_facts_from_section_chunks_long_text_and_merges_facts():
 
 
 def test_prompt_version_is_stable_constant():
-    assert PROMPT_VERSION == "text-extraction-v6-focused-recall-segment-evidence-ids"
+    assert PROMPT_VERSION == "text-extraction-v7-focused-recall-no-absence-placeholders"
 
 
 def test_recall_second_pass_asks_only_for_missing_fact_types_and_merges_new_facts():
@@ -132,6 +154,8 @@ def test_recall_second_pass_asks_only_for_missing_fact_types_and_merges_new_fact
     assert [fact.fact_type_candidate for fact in facts] == ["forward_primer_name", "reverse_primer_name"]
     assert len(backend.calls) == 2
     assert "This is a recall-focused second pass" in backend.calls[1]["prompt"]
+    assert "same focused topic only" in backend.calls[1]["prompt"]
+    assert "Never return placeholder absence values" in backend.calls[1]["prompt"]
 
 
 def test_recall_second_pass_dedupes_repeated_first_pass_facts():

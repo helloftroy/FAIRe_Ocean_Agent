@@ -111,6 +111,23 @@ def test_run_benchmark_unknown_evidence_id_is_caught_by_evidence_verification():
     assert metrics.recall == 0.0  # nothing verified, so nothing counted toward gold
 
 
+def test_run_benchmark_filters_absence_placeholder_values_before_scoring():
+    response = json.dumps(
+        [
+            {"fact_type_candidate": "collection_date", "raw_value": "not specified", "evidence_id": "METHODS.P001"},
+            {"fact_type_candidate": "sampling_depth", "raw_value": "none", "evidence_id": "METHODS.P001"},
+        ]
+    )
+    backend = MockLLMBackend(label="placeholder-model", responses=lambda prompt: response if "[recall]" not in prompt else "[]")
+    report = run_benchmark([backend], [CASE])
+
+    metrics, results = report["placeholder-model"]
+    assert results[0].returned_facts == []
+    assert results[0].verified_facts == []
+    assert metrics.precision == 0.0
+    assert metrics.recall == 0.0
+
+
 def test_run_benchmark_invalid_json_model_scores_zero_validity():
     backend = MockLLMBackend(label="broken", responses=["not json"] * 5)
     report = run_benchmark([backend], [CASE])
