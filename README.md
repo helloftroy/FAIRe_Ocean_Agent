@@ -1267,6 +1267,25 @@ extraction (now only over unresolved fields) -> validation**:
   read into memory. One file's parse failure is caught and recorded on
   that file's own `DataAsset` row -- it never aborts the rest of the task.
 
+**Discovery (not retrieval) also runs inline during a DOI-driven
+`DISCOVER_IDENTIFIERS` pass, for free.** `_discover_supplements_from_fulltext`
+(`workflow/handlers.py`) reuses the exact same open full text already
+fetched for `_discover_identifiers_from_fulltext`'s regex-based repository-
+accession mining (a cache hit, not a second real request) and calls the
+same `discover_supplements_for_study` logic the standalone
+`DISCOVER_SUPPLEMENTS` backfill uses -- so a normal DOI-first discovery run
+against the ~3,600-paper seed list also surfaces supplementary-material
+references without any extra step. It's gated `if doi:`, matching the
+existing identifier-mining gate exactly: a study discovered via
+BioProject/ENA/dataset-DOI *first* (no DOI yet at that task's run time)
+doesn't get this inline pass until a later `DISCOVER_IDENTIFIERS` re-run
+happens with a DOI present (e.g. after a Stage 2 merge attaches one, or via
+`quarterly_full_rediscovery`) -- same as identifier mining, not a new gap.
+`RETRIEVE_SUPPLEMENTS` (the actual zip download + parsing) deliberately
+stays a separate, explicitly-enqueued backfill either way, matching
+`EXTRACT_TEXT_FACTS`'s own opt-in convention (no task type auto-chains
+into a network- or LLM-costlier one).
+
 **The user's 6 named states (referenced/available/retrieved/parsed/
 inaccessible/parse_failed) live entirely on the companion `DataAsset`
 row's existing `access_status`/`inspection_level` columns** (+

@@ -15,7 +15,7 @@ from fair_ocean_agent.database.enums import (
     RelationshipType,
     SupportType,
 )
-from fair_ocean_agent.database.models import ExternalIdentifier, RawFact, Source, Study
+from fair_ocean_agent.database.models import DataAsset, ExternalIdentifier, RawFact, Source, Study
 from fair_ocean_agent.identity.identifiers import normalize_doi
 from fair_ocean_agent.sources.base import RawFactCandidate, RelatedIdentifier, SourceRecord, SourceRecordNotFoundError
 from fair_ocean_agent.sources.europe_pmc import EuropePmcAdapter
@@ -298,6 +298,31 @@ def test_handler_mines_fulltext_identifiers_and_resolves_repository_sources(db_s
     ) in identifiers
     assert db_session.query(Source).filter_by(study_id=study.study_id, source_name="ncbi_biosample").count() == 1
     assert db_session.query(Source).filter_by(study_id=study.study_id, source_name="europe_pmc_fulltext").count() == 0
+
+
+def test_handler_discovers_supplements_inline_during_doi_driven_discovery(db_session, monkeypatch):
+    """A DOI-driven DISCOVER_IDENTIFIERS pass must also surface
+    supplementary-material references for free, not only via a separate
+    manually-triggered DISCOVER_SUPPLEMENTS backfill -- this is the same
+    open full text already being fetched for identifier mining."""
+    study = _seeded_study_with_doi(db_session)
+    task = _task_for(db_session, study)
+
+    europe_pmc_adapter = FakeEuropePmcFullTextAdapter(
+        """<article><body><sec>
+        <supplementary-material id="TS1"><media xmlns:xlink="http://www.w3.org/1999/xlink"
+        xlink:href="Table_1.csv" mimetype="text" mime-subtype="csv"><?size 40?></media></supplementary-material>
+        </sec></body></article>"""
+    )
+    monkeypatch.setattr(handlers, "_build_enabled_adapters", lambda: {"europe_pmc": europe_pmc_adapter})
+
+    handlers.handle_discover_identifiers(db_session, task)
+    db_session.commit()
+
+    sources = db_session.query(Source).filter_by(study_id=study.study_id, source_name="europe_pmc_supplement").all()
+    assert {s.external_identifier for s in sources} == {"Table_1.csv"}
+    assets = db_session.query(DataAsset).filter_by(study_id=study.study_id).all()
+    assert {a.file_name for a in assets} == {"Table_1.csv"}
 
 
 def test_handler_raises_runtime_error_when_no_adapters_enabled(db_session, monkeypatch):

@@ -418,6 +418,48 @@ def _discover_identifiers_from_fulltext(session: Session, study: Study, adapters
     return study
 
 
+def _discover_supplements_from_fulltext(session: Session, study: Study, adapters: dict[str, SourceAdapter]) -> Study:
+    """Discovers <supplementary-material> references (and any externally-
+    hosted repository supplement DOIs) from the same open full text used
+    for identifier mining above, so a DOI-driven DISCOVER_IDENTIFIERS pass
+    also surfaces supplement metadata for free.
+
+    Deliberately mirrors _discover_identifiers_from_fulltext's own
+    fetch-fulltext-again-if-needed shape rather than threading the XML
+    through from that function -- fetch_fulltext_xml is disk-cached
+    (RetrievalConfig.cache_enabled, on by default), so this is a cache hit,
+    not a second real request.
+
+    This only *discovers* supplements (pure XML parsing, no extra network
+    call or LLM invocation) -- RETRIEVE_SUPPLEMENTS (the actual zip
+    download + parsing) stays a separate, explicitly-enqueued backfill,
+    matching EXTRACT_TEXT_FACTS's own opt-in convention (no task type
+    auto-chains into a costlier one).
+
+    Imports discover_supplements_for_study locally to avoid a circular
+    import: supplement_handlers.py already imports several helpers
+    (_apply_related_identifiers, _build_enabled_adapters, ...) from this
+    module at module level.
+    """
+    europe_pmc = adapters.get("europe_pmc")
+    if not isinstance(europe_pmc, EuropePmcAdapter):
+        return study
+
+    pmcid = _identifier_value(session, study.study_id, IdentifierType.PMCID)
+    if pmcid is None:
+        return study
+
+    try:
+        fulltext_xml = europe_pmc.fetch_fulltext_xml(pmcid)
+    except SourceRecordNotFoundError:
+        return study
+
+    from fair_ocean_agent.workflow.supplement_handlers import discover_supplements_for_study
+
+    discover_supplements_for_study(session, study, europe_pmc, fulltext_xml)
+    return study
+
+
 def _resolve_repository_sources(
     session: Session,
     study: Study,
@@ -598,6 +640,7 @@ def handle_discover_identifiers(session: Session, task: Task) -> None:
     if doi:
         study = _resolve_publication_sources(session, study, doi)
         study = _discover_identifiers_from_fulltext(session, study, _build_enabled_adapters())
+        study = _discover_supplements_from_fulltext(session, study, _build_enabled_adapters())
 
     dataset_dois = _identifier_values(session, study.study_id, IdentifierType.DATASET_DOI)
     bioproject_accessions = _identifier_values(session, study.study_id, IdentifierType.BIOPROJECT_ACCESSION)

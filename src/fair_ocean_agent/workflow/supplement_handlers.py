@@ -95,32 +95,18 @@ def _asset_type_for(extension: str) -> str:
     return AssetType.SUPPLEMENTARY_SPREADSHEET.value if extension in _TABULAR_EXTENSIONS else AssetType.OTHER.value
 
 
-def handle_discover_supplements(session: Session, task: Task) -> None:
-    """Requires a PMCID (same requirement as EXTRACT_TEXT_FACTS -- Europe
-    PMC's supplementary-material references only ever come from its own
-    JATS full text). No-ops (not an error) if the study has no open-access
-    full text at all, same convention as handle_extract_text_facts."""
-    study = session.get(Study, task.study_id)
-    if study is None:
-        raise ValueError(f"Study {task.study_id} not found")
-
-    pmcid = _study_pmcid(session, study)
-    if pmcid is None:
-        raise NotImplementedError(
-            "DISCOVER_SUPPLEMENTS requires a PMCID (discovered via Europe PMC during "
-            "DISCOVER_IDENTIFIERS) -- this study has none."
-        )
-
-    europe_pmc = _build_enabled_adapters().get("europe_pmc")
-    if europe_pmc is None:
-        raise RuntimeError("europe_pmc adapter is not enabled in config/sources.yaml")
-
-    try:
-        fulltext_xml = europe_pmc.fetch_fulltext_xml(pmcid)
-    except SourceRecordNotFoundError:
-        logger.info("no open-access full text available for %s -- nothing to discover", pmcid)
-        return
-
+def discover_supplements_for_study(session: Session, study: Study, europe_pmc, fulltext_xml: str) -> int:
+    """Core discovery logic, factored out so it can run from two entry
+    points against the exact same already-fetched full text: the standalone
+    DISCOVER_SUPPLEMENTS backfill task below, and inline from
+    handle_discover_identifiers (handlers.py's
+    `_discover_supplements_from_fulltext`) so a DOI-driven discovery pass
+    also surfaces supplement references for free -- discovery is pure XML
+    parsing plus small Source/DataAsset rows, no extra network fetch or LLM
+    call, so unlike RETRIEVE_SUPPLEMENTS there's no cost reason to keep it
+    manual-only. Idempotent: safe to call again for a study that already has
+    some or all of its supplements discovered. Returns the count of newly
+    created files."""
     references = discover_supplementary_materials(fulltext_xml)
 
     related = europe_pmc.find_related_from_fulltext(fulltext_xml)
@@ -128,8 +114,7 @@ def handle_discover_supplements(session: Session, task: Task) -> None:
         study = _apply_related_identifiers(session, study, related, source_name="europe_pmc_supplement_extlink")
 
     if not references:
-        logger.info("no supplementary materials referenced for %s", pmcid)
-        return
+        return 0
 
     existing_file_names = set(
         session.scalars(
@@ -186,6 +171,40 @@ def handle_discover_supplements(session: Session, task: Task) -> None:
         )
         created += 1
 
+    return created
+
+
+def handle_discover_supplements(session: Session, task: Task) -> None:
+    """Requires a PMCID (same requirement as EXTRACT_TEXT_FACTS -- Europe
+    PMC's supplementary-material references only ever come from its own
+    JATS full text). No-ops (not an error) if the study has no open-access
+    full text at all, same convention as handle_extract_text_facts.
+
+    This is the manually-triggered backfill entry point -- see
+    `discover_supplements_for_study` above for the shared logic also called
+    inline from DISCOVER_IDENTIFIERS."""
+    study = session.get(Study, task.study_id)
+    if study is None:
+        raise ValueError(f"Study {task.study_id} not found")
+
+    pmcid = _study_pmcid(session, study)
+    if pmcid is None:
+        raise NotImplementedError(
+            "DISCOVER_SUPPLEMENTS requires a PMCID (discovered via Europe PMC during "
+            "DISCOVER_IDENTIFIERS) -- this study has none."
+        )
+
+    europe_pmc = _build_enabled_adapters().get("europe_pmc")
+    if europe_pmc is None:
+        raise RuntimeError("europe_pmc adapter is not enabled in config/sources.yaml")
+
+    try:
+        fulltext_xml = europe_pmc.fetch_fulltext_xml(pmcid)
+    except SourceRecordNotFoundError:
+        logger.info("no open-access full text available for %s -- nothing to discover", pmcid)
+        return
+
+    created = discover_supplements_for_study(session, study, europe_pmc, fulltext_xml)
     logger.info("discovered %d new supplementary file(s) for study %s (%s)", created, study.study_id, pmcid)
 
 
