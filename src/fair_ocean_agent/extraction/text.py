@@ -157,7 +157,7 @@ EXTRACTION_FOCUSES: tuple[ExtractionFocus, ...] = (
     ExtractionFocus(
         name="sample_collection_dna",
         description="sample collection, sample handling/storage, environmental context, and DNA extraction facts",
-        group_names=frozenset({"DNA extraction"}),
+        group_names=frozenset({"Sample collection / environment", "DNA extraction"}),
         keywords=frozenset(
             {
                 "sample",
