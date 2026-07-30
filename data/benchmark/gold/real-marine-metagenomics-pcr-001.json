@@ -1,9 +1,9 @@
 {
   "case_id": "real-marine-metagenomics-pcr-001",
-  "curated_by": "codex",
-  "notes": "Real-paper gold case from STUDY-3ef53464fcdf, DOI 10.1038/s41598-023-48804-z, PMCID PMC10719357. Curated from stored Europe PMC full-text evidence for Benchmarking DNA isolation methods for marine metagenomics.",
-  "section_title": "PCR amplification",
-  "source_text": "PCR amplification for the detection of inhibitors: 16S rRNA V3-V4 region was amplified. 16S V3-V4 F CCTACGGGNGGCWGCAG 32 R GACTACHVGGGTATCTAATCC. Each PCR reaction contained 1 uL of DNA, 5 uL of Phusion High-Fidelity PCR Master Mix with HF Buffer (NEB), 0.5 uL of forward and reverse primer (final concentration of 0.5 mM), and water for final reaction volume of 10 uL. The thermal profile was 98 C for 30 s, followed by 25 cycles of 98 C for 10 s, 55 C for 20 s, and 72 C for 30 s.",
+  "curated_by": "claude",
+  "notes": "Real-paper gold case from STUDY-3ef53464fcdf, DOI 10.1038/s41598-023-48804-z, PMCID PMC10719357 (Benchmarking DNA isolation methods for marine metagenomics). source_text is a verbatim, unedited excerpt of the real stored Europe PMC full text. Re-curated after the original codex-authored version spliced a primer sequence from Table 1 of a *different* section (Quantitative real-time PCR, describing a separate qPCR assay) into this PCR section's text -- the real PCR-amplification-for-inhibitor-detection section only ever names \"universal Illumina V3/V4 PCR primers\", never their sequence.",
+  "section_title": "PCR amplification for the detection of inhibitors",
+  "source_text": "PCR amplification for the detection of inhibitors 16S rRNA V3-V4 region was amplified using universal Illumina V3/V4 PCR primers 32 . Each PCR reaction contained 1 μL of DNA, 0.5 μL of forward and reverse primer (final concentration of 0.5 mM), 5 μL of Phusion High-Fidelity PCR Master Mix with HF Buffer (NEB) and 3 μL of nuclease-free water (NEB) for final reaction volume of 10 μL. PCR conditions were 98 °C for 30 s, followed by 25 cycles of 98 °C for 10 s, 55 °C for 20 s, and 72 °C for 30 s, with a final extension time of 5 min at 72 °C. Amplicons were visualized on a 1% agarose gel containing 0.25 μg/μL ethidium bromide running in 1xTris-EDTA buffer at 100 V with a target product size in a range of 400–500bp 32 . Products of successful amplification were clearly visible on gel, otherwise the initial DNA sample was diluted 10 or 100 times for PCR re-examination.",
   "expected_facts": [
     {
       "fact_type_candidate": "target_gene",
@@ -16,19 +16,29 @@
       "evidence_quote": "16S rRNA V3-V4 region was amplified"
     },
     {
-      "fact_type_candidate": "forward_primer_sequence",
-      "raw_value": "CCTACGGGNGGCWGCAG",
-      "evidence_quote": "16S V3-V4 F CCTACGGGNGGCWGCAG"
-    },
-    {
-      "fact_type_candidate": "reverse_primer_sequence",
-      "raw_value": "GACTACHVGGGTATCTAATCC",
-      "evidence_quote": "R GACTACHVGGGTATCTAATCC"
-    },
-    {
       "fact_type_candidate": "template_dna_volume",
-      "raw_value": "1 uL",
-      "evidence_quote": "Each PCR reaction contained 1 uL of DNA"
+      "raw_value": "1 μL",
+      "evidence_quote": "Each PCR reaction contained 1"
+    },
+    {
+      "fact_type_candidate": "forward_primer_volume",
+      "raw_value": "0.5 μL",
+      "evidence_quote": "0.5 μL of forward and reverse primer"
+    },
+    {
+      "fact_type_candidate": "reverse_primer_volume",
+      "raw_value": "0.5 μL",
+      "evidence_quote": "0.5 μL of forward and reverse primer"
+    },
+    {
+      "fact_type_candidate": "forward_primer_concentration",
+      "raw_value": "0.5 mM",
+      "evidence_quote": "final concentration of 0.5 mM)"
+    },
+    {
+      "fact_type_candidate": "reverse_primer_concentration",
+      "raw_value": "0.5 mM",
+      "evidence_quote": "final concentration of 0.5 mM)"
     },
     {
       "fact_type_candidate": "commercial_master_mix",
@@ -37,8 +47,8 @@
     },
     {
       "fact_type_candidate": "pcr_reaction_volume",
-      "raw_value": "10 uL",
-      "evidence_quote": "final reaction volume of 10 uL"
+      "raw_value": "10 μL",
+      "evidence_quote": "final reaction volume of 10"
     },
     {
       "fact_type_candidate": "pcr_cycle_count",
@@ -47,8 +57,13 @@
     },
     {
       "fact_type_candidate": "annealing_temperature",
-      "raw_value": "55 C",
-      "evidence_quote": "55 C for 20 s"
+      "raw_value": "55°C",
+      "evidence_quote": "55 °C for 20"
+    },
+    {
+      "fact_type_candidate": "amplicon_size",
+      "raw_value": "400-500bp",
+      "evidence_quote": "target product size in a range of 400–500bp"
     }
   ]
 }

@@ -1,10 +1,25 @@
 {
   "case_id": "real-methane-sediments-sequencing-001",
-  "curated_by": "codex",
-  "notes": "Real-paper gold case from STUDY-c949b1b401bb, DOI 10.1093/ismejo/wrae013, PMCID PMC10942774. Curated from stored Europe PMC full-text evidence for the methane-flux coastal sediment study.",
-  "section_title": "RNA sequencing",
-  "source_text": "The extracted RNA was delivered to SciLifeLab, Stockholm where libraries were prepared with the TruSeq Stranded mRNA kit (Illumina) excluding the poly-A selection step, that is, libraries contained total RNA. The libraries were sequenced on a NovaSeq 6000 (Illumina) S4 lane with a 2 x 150 bp setup and the output data were demultiplexed by the sequencing facility.",
+  "curated_by": "claude",
+  "notes": "Real-paper gold case from STUDY-c949b1b401bb, DOI 10.1093/ismejo/wrae013, PMCID PMC10942774 (methane-flux coastal sediment study). source_text is a verbatim, unedited excerpt of the real stored Europe PMC full text. Re-curated after the original codex-authored version dropped the sentence naming the RT-qPCR primers (515F/805R, 16S rRNA) entirely.",
+  "section_title": "RNA extraction and sequencing",
+  "source_text": "RNA extraction and sequencing RNA was extracted from the samples (~2 g sediment) using the RNeasy PowerSoil Total Kit (Qiagen) following the manufacturer’s instructions. DNA contamination was removed with the TURBO DNA-free kit (Invitrogen) and confirmed to be DNA free by gel electrophoresis. The extracted RNA was delivered to SciLifeLab, Stockholm where libraries were prepared with the TruSeq Stranded mRNA kit (Illumina) excluding the poly-A selection step (i.e. libraries contained total RNA). The libraries were sequenced on a NovaSeq 6000 (Illumina) S4 lane with a 2 × 150 bp setup and the output data were demultiplexed by the sequencing facility.",
   "expected_facts": [
+    {
+      "fact_type_candidate": "sample_volume_for_extraction",
+      "raw_value": "~2 g sediment",
+      "evidence_quote": "the samples (~2 g sediment)"
+    },
+    {
+      "fact_type_candidate": "dna_extraction_kit",
+      "raw_value": "RNeasy PowerSoil Total Kit",
+      "evidence_quote": "using the RNeasy PowerSoil Total Kit"
+    },
+    {
+      "fact_type_candidate": "dna_cleanup_method",
+      "raw_value": "TURBO DNA-free kit",
+      "evidence_quote": "removed with the TURBO DNA-free kit"
+    },
     {
       "fact_type_candidate": "sequencing_location",
       "raw_value": "SciLifeLab, Stockholm",
@@ -19,21 +34,6 @@
       "fact_type_candidate": "sequencing_instrument",
       "raw_value": "NovaSeq 6000",
       "evidence_quote": "sequenced on a NovaSeq 6000"
-    },
-    {
-      "fact_type_candidate": "sequencing_platform_general",
-      "raw_value": "Illumina",
-      "evidence_quote": "NovaSeq 6000 (Illumina)"
-    },
-    {
-      "fact_type_candidate": "library_layout",
-      "raw_value": "2 x 150 bp",
-      "evidence_quote": "2 x 150 bp setup"
-    },
-    {
-      "fact_type_candidate": "demultiplexing_tool",
-      "raw_value": "sequencing facility",
-      "evidence_quote": "demultiplexed by the sequencing facility"
     }
   ]
 }

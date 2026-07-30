@@ -1,9 +1,9 @@
 {
   "case_id": "real-sponge-edna-sample-sequencing-001",
-  "curated_by": "codex",
-  "notes": "Real-paper gold case from STUDY-d7633d624b5a, DOI 10.1111/1755-0998.13677, PMCID PMC9796769. Curated from stored Europe PMC full-text evidence for the sponge eDNA persistence study.",
-  "section_title": "Sample processing and sequencing",
-  "source_text": "Each sponge was removed from the storage ethanol, blotted dry against filter paper (42.5 mm, Fisher Scientific) inside a Petri dish. Each filter capsule was opened onto a Petri dish using carpenter pliers. The filters were removed from the inner tube and torn into small pieces using metal forceps. All samples were processed using the Mu-DNA tissue protocol with an inhibitor removal step from the Mu-DNA water protocol. The libraries were sequenced on an Illumina iSeq100 using iSeq i1 Reagent version 2 (300 cycles) at Liverpool John Moores University with a final molarity of 60 pM.",
+  "curated_by": "claude",
+  "notes": "Real-paper gold case from STUDY-d7633d624b5a, DOI 10.1111/1755-0998.13677, PMCID PMC9796769 (sponge eDNA persistence study). source_text is a verbatim, unedited excerpt of the real stored Europe PMC full text. Re-curated after the original codex-authored version (a) skipped this study's entire real primer/PCR/replicate/control paragraph and (b) filed PCR/library-prep/sequencing facts under a case titled \"bioinformatics\" that never actually quoted the paper's real Bioinformatic and statistical analysis section. The sample-sequencing case now covers the full real Laboratory procedures section (sample processing through sequencing); the bioinformatics case now quotes the paper's actual bioinformatics section.",
+  "section_title": "Laboratory procedures",
+  "source_text": "2.2. Laboratory procedures Each filter capsule was opened onto a Petri dish using carpenter pliers. The filters were removed from the inner tube and torn into small pieces using metal forceps. All pieces were placed inside a 1.5 ml microtube for DNA extraction. For sponge biopsies, approximately 25 mg of dry sponge per sample was used for DNA extraction. Each sponge was removed from the storage ethanol, blotted dry against filter paper (42.5 mm, Fisher Scientific) inside a Petri dish, then placed inside a 1.5 ml microtube for DNA extraction. All samples were processed using the Mu‐DNA tissue protocol with an inhibitor removal step from the Mu‐DNA water protocol (Sellers et al., 2018 ). The extracts were then quantified for DNA concentration using a Qubit 4 fluorometer with a Qubit dsDNA HS Assay kit (Thermo Fisher Scientific). Thirty‐nine out of 72 sponge DNA extracts were diluted 1:10 to enable PCR amplification. Aquatic eDNA extracts were not diluted for PCR amplification due to their low DNA concentration. All reusable equipment for DNA extraction was first sterilized in 10% v/v bleach solution, followed by a rinse in 5% v/v lipsol detergent and deionized water. Equipment and consumables were then exposed to 30 minutes of ultraviolet (UV) light. PCR amplifications were carried out using the Tele02 primers (Taberlet et al., 2018 ), which amplify a ~169 bp fragment of the mitochondrial 12S rRNA gene. Primers contained unique 8‐bp dual barcodes for sample identification and to reduce tag jumping (Schnell et al., 2015 ), with 2–4 leading “N” bases to increase sequence diversity. Samples were amplified in triplicate under the following conditions: initial denaturation at 95°C for 10 min, followed by 40 cycles of 95°C for 30 s, 60°C for 45 s, 72°C for 30 s, and finishing at 72°C for 5 min. All PCRs were performed in 20 μl reactions containing 10 μl 2× MyFi Mix (Meridian Bioscience), 0.5 μM of each primer, 0.04 mg BSA (Bovine Serum Albumin Solution, Thermo Fisher Scientific), 5.84 μl of molecular grade water (Invitrogen), and 2 μl of DNA template. Two or three PCR positive and negative controls were included on each PCR run—two of each for eDNA samples and three of each for natural sampler DNA samples, given the higher overall number of nsDNA samples. PCR positive controls (0.05 ng/μl) contained one fish species which was not present in the HMG (the iridescent catfish Pangasianodon hypophthalmus ). PCR triplicates were pooled together and visualized on 2% agarose gels. Each sample was purified using Mag‐Bind Total Pure NGS (Omega Bio‐Tek) magnetic beads. Purified PCR products were quantified as above and pooled in equimolar amounts to create two libraries, one for eDNA samples (24 samples and 18 controls), and one for nsDNA samples (72 samples and 16 controls). Pooled PCR products were purified with magnetic beads, and libraries were prepared using the NEXTFLEX Rapid DNA‐Seq Kit for Illumina (PerkinElmer) following the manufacturer's instructions. The libraries were quantified by quantitative PCR (qPCR) using the NEBNext Library Quant Kit for Illumina (New England Biolabs) and fragment size was checked using the Tape Station 4200 (Agilent). They were then pooled in equimolar concentrations with a final molarity of 60 pM with 10% PhiX control. The libraries were sequenced on an Illumina iSeq100 using iSeq i1 Reagent version 2 (300 cycles) at Liverpool John Moores University.",
   "expected_facts": [
     {
       "fact_type_candidate": "storage_conditions",
@@ -11,17 +11,77 @@
       "evidence_quote": "removed from the storage ethanol"
     },
     {
-      "fact_type_candidate": "collection_method",
-      "raw_value": "filter capsules opened and filters torn into small pieces using metal forceps",
-      "evidence_quote": "The filters were removed from the inner tube and torn into small pieces using metal forceps"
-    },
-    {
       "fact_type_candidate": "DNA_extraction_method",
       "raw_value": "Mu-DNA tissue protocol with an inhibitor removal step from the Mu-DNA water protocol",
-      "evidence_quote": "processed using the Mu-DNA tissue protocol with an inhibitor removal step from the Mu-DNA water protocol"
+      "evidence_quote": "processed using the Mu‐DNA tissue protocol with an inhibitor removal step from the Mu‐DNA water protocol"
     },
     {
-      "fact_type_candidate": "sequencing_platform",
+      "fact_type_candidate": "library_concentration_method",
+      "raw_value": "Qubit 4 fluorometer with a Qubit dsDNA HS Assay kit",
+      "evidence_quote": "quantified for DNA concentration using a Qubit 4 fluorometer with a Qubit dsDNA HS Assay kit"
+    },
+    {
+      "fact_type_candidate": "assay_name",
+      "raw_value": "Tele02",
+      "evidence_quote": "carried out using the Tele02 primers"
+    },
+    {
+      "fact_type_candidate": "amplicon_size",
+      "raw_value": "~169 bp",
+      "evidence_quote": "amplify a ~169 bp fragment of the mitochondrial 12S rRNA gene"
+    },
+    {
+      "fact_type_candidate": "target_gene",
+      "raw_value": "12S rRNA",
+      "evidence_quote": "the mitochondrial 12S rRNA gene"
+    },
+    {
+      "fact_type_candidate": "pcr_replicate_count",
+      "raw_value": "triplicate",
+      "evidence_quote": "Samples were amplified in triplicate"
+    },
+    {
+      "fact_type_candidate": "pcr_cycle_count",
+      "raw_value": "40",
+      "evidence_quote": "followed by 40 cycles"
+    },
+    {
+      "fact_type_candidate": "annealing_temperature",
+      "raw_value": "60°C",
+      "evidence_quote": "60°C for 45"
+    },
+    {
+      "fact_type_candidate": "pcr_reaction_volume",
+      "raw_value": "20 μl",
+      "evidence_quote": "All PCRs were performed in 20"
+    },
+    {
+      "fact_type_candidate": "commercial_master_mix",
+      "raw_value": "MyFi Mix (Meridian Bioscience)",
+      "evidence_quote": "MyFi Mix (Meridian Bioscience)"
+    },
+    {
+      "fact_type_candidate": "template_dna_volume",
+      "raw_value": "2 μl",
+      "evidence_quote": "and 2 μl of DNA template"
+    },
+    {
+      "fact_type_candidate": "positive_control_type",
+      "raw_value": "one fish species which was not present in the HMG (the iridescent catfish Pangasianodon hypophthalmus)",
+      "evidence_quote": "PCR positive controls (0.05 ng/μl) contained one fish species which was not present in the HMG (the iridescent catfish Pangasianodon hypophthalmus"
+    },
+    {
+      "fact_type_candidate": "sequencing_kit",
+      "raw_value": "NEXTFLEX Rapid DNA-Seq Kit for Illumina",
+      "evidence_quote": "prepared using the NEXTFLEX Rapid DNA‐Seq Kit for Illumina"
+    },
+    {
+      "fact_type_candidate": "library_concentration",
+      "raw_value": "60 pM",
+      "evidence_quote": "final molarity of 60 pM"
+    },
+    {
+      "fact_type_candidate": "sequencing_instrument",
       "raw_value": "Illumina iSeq100",
       "evidence_quote": "sequenced on an Illumina iSeq100"
     },
@@ -29,11 +89,6 @@
       "fact_type_candidate": "sequencing_location",
       "raw_value": "Liverpool John Moores University",
       "evidence_quote": "at Liverpool John Moores University"
-    },
-    {
-      "fact_type_candidate": "library_concentration",
-      "raw_value": "60 pM",
-      "evidence_quote": "with a final molarity of 60 pM"
     }
   ]
 }

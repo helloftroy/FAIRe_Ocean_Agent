@@ -1,14 +1,24 @@
 {
   "case_id": "real-amazon-plume-pcr-sequencing-001",
-  "curated_by": "codex",
-  "notes": "Real-paper gold case from STUDY-bdc279dc42dc, DOI 10.3389/fmicb.2017.01436, PMCID PMC5540951. Curated from stored Europe PMC full-text evidence for the Amazon River plume zooplankton study.",
-  "section_title": "PCR and sequencing",
-  "source_text": "The V4 hypervariable region of 16S rRNA genes was targeted with 515F and 805R primers for PCR reactions using GoTaq Green Master Mix (Promega). PCR reactions were performed as follows: an initial denaturing step for 3 min at 95 C, then 30 cycles of 30 s at 95 C, 1 min at 55 C, 1 min at 72 C, and finally at 72 C for 5 min. Amplicons were sequenced using the Ion Torrent PGM sequencer (Life Technologies).",
+  "curated_by": "claude",
+  "notes": "Real-paper gold case from STUDY-bdc279dc42dc, DOI 10.3389/fmicb.2017.01436, PMCID PMC5540951 (Amazon River plume zooplankton study). source_text is a verbatim, unedited excerpt of the real stored Europe PMC full text for this PMCID (inline citations/footnote markers kept exactly as extracted, not cleaned up) -- re-curated after the original codex-authored version was found to lightly edit/reconstruct source_text rather than quote the real text verbatim, and to miss a real, explicitly-stated fact (denoising_tool).",
+  "section_title": "16S rRNA Gene Sequencing of Zooplankton",
+  "source_text": "16S rRNA Gene Sequencing of Zooplankton Sequencing of 16S rRNA genes in zooplankton (containing their gut contents) followed a modified protocol ( Arfken et al., 2015 ) using the Ion Torrent PGM sequencer (Life Technologies). DNA concentrations from the extractions were measured on a NanoDrop 2000 (Thermo Scientific) and PCR was performed on samples normalized to 5 ng μl -1 per reaction, except for fish larvae, which were normalized to 20 ng μl -1 (see Supplementary Table S3 for samples included in sequencing). The V4 hypervariable region of 16S rRNA genes was targeted with 515F and 805R primers for PCR reactions using GoTaq Green Master Mix (Promega) ( Caporaso et al., 2011 ). The 805R primers have barcodes with fusion sequences while the 515F contains fusion sequences only. PCR reactions were performed as follows: an initial denaturing step for 3 min at 95°C, then 30 cycles of 30 s at 95°C, 1 min at 55°C, 1 min at 72°C, and finally at 72°C for 5 min. PCR products for each sample were then combined and sequencing was conducted. Barcoded samples were sequenced using the Ion Torrent 400 base pair (bp) sequencing protocol with samples pooled onto a 316 chip. We note that for the 16S rRNA analysis we consider our results representative of the zooplankton “microbiome,” similar to other studies ( Scavotto et al., 2015 ; Shoemaker and Moisander, 2015 ), however, we focus our results on the cyanobacteria and are confident that the cleaning methods adapted from Boling et al. (2012) were adequate enough and our results represent the cyanobacteria consumed by the various mesozooplankton.",
   "expected_facts": [
+    {
+      "fact_type_candidate": "sequencing_instrument",
+      "raw_value": "Ion Torrent PGM sequencer",
+      "evidence_quote": "using the Ion Torrent PGM sequencer"
+    },
+    {
+      "fact_type_candidate": "dna_concentration_method",
+      "raw_value": "NanoDrop 2000",
+      "evidence_quote": "measured on a NanoDrop 2000"
+    },
     {
       "fact_type_candidate": "target_gene",
       "raw_value": "16S rRNA",
-      "evidence_quote": "16S rRNA genes was targeted"
+      "evidence_quote": "The V4 hypervariable region of 16S rRNA genes was targeted"
     },
     {
       "fact_type_candidate": "target_subfragment",
@@ -18,12 +28,12 @@
     {
       "fact_type_candidate": "forward_primer_name",
       "raw_value": "515F",
-      "evidence_quote": "with 515F and 805R primers"
+      "evidence_quote": "targeted with 515F and 805R primers"
     },
     {
       "fact_type_candidate": "reverse_primer_name",
       "raw_value": "805R",
-      "evidence_quote": "with 515F and 805R primers"
+      "evidence_quote": "targeted with 515F and 805R primers"
     },
     {
       "fact_type_candidate": "commercial_master_mix",
@@ -37,13 +47,8 @@
     },
     {
       "fact_type_candidate": "annealing_temperature",
-      "raw_value": "55 C",
-      "evidence_quote": "1 min at 55 C"
-    },
-    {
-      "fact_type_candidate": "sequencing_platform",
-      "raw_value": "Ion Torrent PGM sequencer",
-      "evidence_quote": "sequenced using the Ion Torrent PGM sequencer"
+      "raw_value": "55°C",
+      "evidence_quote": "1 min at 55"
     }
   ]
 }

@@ -1,14 +1,24 @@
 {
   "case_id": "real-marine-metagenomics-sequencing-001",
-  "curated_by": "codex",
-  "notes": "Real-paper gold case from STUDY-3ef53464fcdf, DOI 10.1038/s41598-023-48804-z, PMCID PMC10719357. Curated from stored Europe PMC full-text evidence for Benchmarking DNA isolation methods for marine metagenomics.",
+  "curated_by": "claude",
+  "notes": "Real-paper gold case from STUDY-3ef53464fcdf, DOI 10.1038/s41598-023-48804-z, PMCID PMC10719357 (Benchmarking DNA isolation methods for marine metagenomics). source_text is a verbatim, unedited excerpt of the real stored Europe PMC full text. Re-curated after the original codex-authored version spliced a primer sequence from Table 1 of a *different* section (Quantitative real-time PCR, describing a separate qPCR assay) into this PCR section's text -- the real PCR-amplification-for-inhibitor-detection section only ever names \"universal Illumina V3/V4 PCR primers\", never their sequence.",
   "section_title": "Shotgun sequencing",
-  "source_text": "Shotgun sequencing libraries were prepared from 300-500 ng of starting DNA using MGIEasy Universal DNA Library Prep Set (MGI Tech), following the manufacturer's instructions. DNA libraries were further circularized and sequenced by a paired end sequencing using DNBSEQ-G400 with the High-throughput Sequencing Set PE100 following the manufacturer's instructions (MGI Tech). The concentration of the prepared libraries was measured using Qubit Flex (Life Technologies) with the dsDNA HS Assay Kit.",
+  "source_text": "Shotgun sequencing Libraries for shotgun sequencing were prepared from 300–500 ng of staring DNA using MGIEasy Universal DNA Library Prep Set (MGI Tech), following the manufacturer's instructions. DNA was sonicated using a Covaris S-220 followed by selection of 200–250 bp-long fragments on magnetic beads (MagBio). The concentration of the prepared libraries was measured using Qubit Flex (Life Technologies) with the dsDNA HS Assay Kit. The quality of the prepared libraries was assessed using Bioanalyzer 2100 with the High Sensitivity DNA kit (Agilent). DNA libraries were further circularized and sequenced by a paired end sequencing using DNBSEQ-G400 with the High-throughput Sequencing Set PE100 following the manufacturer's instructions (MGI Tech) with an average coverage of 100×. FastQ files were generated using the zebracallV2 software (MGI Tech).",
   "expected_facts": [
     {
-      "fact_type_candidate": "sequencing_platform_general",
-      "raw_value": "DNBSEQ",
-      "evidence_quote": "sequenced by a paired end sequencing using DNBSEQ-G400"
+      "fact_type_candidate": "sequencing_kit",
+      "raw_value": "MGIEasy Universal DNA Library Prep Set",
+      "evidence_quote": "using MGIEasy Universal DNA Library Prep Set"
+    },
+    {
+      "fact_type_candidate": "library_concentration_method",
+      "raw_value": "Qubit Flex (Life Technologies) with the dsDNA HS Assay Kit",
+      "evidence_quote": "measured using Qubit Flex (Life Technologies) with the dsDNA HS Assay Kit"
+    },
+    {
+      "fact_type_candidate": "library_layout",
+      "raw_value": "paired end",
+      "evidence_quote": "sequenced by a paired end sequencing"
     },
     {
       "fact_type_candidate": "sequencing_instrument",
@@ -19,16 +29,6 @@
       "fact_type_candidate": "sequencing_kit",
       "raw_value": "High-throughput Sequencing Set PE100",
       "evidence_quote": "with the High-throughput Sequencing Set PE100"
-    },
-    {
-      "fact_type_candidate": "library_layout",
-      "raw_value": "paired end",
-      "evidence_quote": "paired end sequencing"
-    },
-    {
-      "fact_type_candidate": "library_concentration_method",
-      "raw_value": "Qubit Flex (Life Technologies) with the dsDNA HS Assay Kit",
-      "evidence_quote": "measured using Qubit Flex (Life Technologies) with the dsDNA HS Assay Kit"
     }
   ]
 }

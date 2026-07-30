@@ -1,22 +1,17 @@
 {
   "case_id": "real-cold-seep-sponge-sequencing-001",
-  "curated_by": "codex",
-  "notes": "Real-paper gold case from STUDY-ed8edfcb5a11, DOI 10.1128/msystems.00184-16, PMCID PMC5361782. Curated from stored Europe PMC full-text evidence for the cold-seep sponge symbiont study.",
-  "section_title": "Sequencing",
-  "source_text": "The DNA samples from layers A and E were subjected to library construction and sequenced using the Illumina HiSeq2000 platform in Novegene (Beijing, China). The sponge cell- and prokaryotic cell-enriched DNA samples were subjected to library construction and sequenced using the MiSeq platform with a library size of 500 bp and an average read length of 251 bp.",
+  "curated_by": "claude",
+  "notes": "Real-paper gold case from STUDY-ed8edfcb5a11, DOI 10.1128/msystems.00184-16, PMCID PMC5361782 (cold-seep sponge symbiont study). source_text is a verbatim, unedited excerpt of the real stored Europe PMC full text. Re-curated after the original codex-authored version mislabeled lab processing steps as collection_method/storage_conditions, and dropped a real lysis step (SDS/proteinase K) and the ethanol wash/cleanup step.",
+  "section_title": "Two strategies of preparing materials prior to DNA extraction and sequencing (approach 2)",
+  "source_text": "In the second approach, sponge cells and prokaryotic cells were enriched separately to generate two samples with different eukaryotic cell/prokaryotic cell ratios. In detail, a piece of intact sponge tissue (1 g [wet weight]) was homogenized in calcium- and magnesium-free seawater (CMFSW) buffer using sterilized glass pestles and 1.5-ml centrifuge tubes. The homogenate was vibrated with a vortex at the highest speed available for 5 min. The mixture of sponge cells and prokaryotic cells was collected and filtered using a polycarbonate membrane (pore size, 5.0 µm). The flowthrough (prokaryotic cell enriched) was collected, and cells were centrifuged at 10,000 × g for 5 min. The cells were then washed with 1 ml CMFSW before DNA extraction. The membrane (enriched in sponge cells) was washed by filtering with 10 ml of CMFSW and was then collected for DNA extraction. The sponge cell- and prokaryotic cell-enriched DNA samples were subjected to library construction and sequenced using the MiSeq platform with a library size of 500 bp and an average read length of 251 bp.",
   "expected_facts": [
     {
-      "fact_type_candidate": "sequencing_platform",
-      "raw_value": "Illumina HiSeq2000",
-      "evidence_quote": "sequenced using the Illumina HiSeq2000 platform"
+      "fact_type_candidate": "sample_volume_for_extraction",
+      "raw_value": "1 g",
+      "evidence_quote": "a piece of intact sponge tissue (1 g"
     },
     {
-      "fact_type_candidate": "sequencing_location",
-      "raw_value": "Novegene (Beijing, China)",
-      "evidence_quote": "in Novegene (Beijing, China)"
-    },
-    {
-      "fact_type_candidate": "sequencing_platform",
+      "fact_type_candidate": "sequencing_instrument",
       "raw_value": "MiSeq",
       "evidence_quote": "sequenced using the MiSeq platform"
     }

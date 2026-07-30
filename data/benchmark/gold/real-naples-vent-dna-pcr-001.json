@@ -1,24 +1,19 @@
 {
   "case_id": "real-naples-vent-dna-pcr-001",
-  "curated_by": "codex",
-  "notes": "Real-paper gold case from STUDY-c47dd2ce9a62, DOI 10.3389/fmicb.2020.02023, PMCID PMC7469538. Curated from stored Europe PMC full-text evidence for the Naples shallow-water hydrothermal vent study.",
-  "section_title": "DNA extraction and PCR",
-  "source_text": "Nematodes were directly frozen at -80 C. DNA was extracted using the Qiagen DNeasy Blood & Tissue kit following manufacturer's instructions. The extraction used a spin column. Partial fragments of 18S rRNA (597 bp) and the 28S rRNA gene (654 bp) were amplified. The PCR cycles were 2 min at 94 C followed by 30 cycles of 1 min denaturation at 94 C, 1 min annealing at 55 C and 2 min extension at 72 C, with a final 10 min extension at 72 C.",
+  "curated_by": "claude",
+  "notes": "Real-paper gold case from STUDY-c47dd2ce9a62, DOI 10.3389/fmicb.2020.02023, PMCID PMC7469538 (Naples shallow-water hydrothermal vent study). source_text is a verbatim, unedited excerpt of the real stored Europe PMC full text. Re-curated after the original codex-authored version fabricated a sentence (\"The extraction used a spin column.\") and fact (dna_separation_method = \"spin column\") that do not appear anywhere in the real paper -- the real text only names the Qiagen DNeasy Blood & Tissue kit, never a separation method. Also recovers several real, explicit facts the original dropped (thermocycler, pcr_reaction_volume, template_dna_volume, sequencing_location).",
+  "section_title": "Nematode DNA Extraction, PCR, and Sequencing",
+  "source_text": "Nematode DNA Extraction, PCR, and Sequencing Species assignment of the nematodes directly frozen at -80°C was verified with a molecular approach ( Table 1 ). Total DNA was extracted individually from each whole nematode, using the Qiagen ® DNeasy Blood & Tissue kit following manufacturer’s instructions. Partial fragments of 18S rRNA (597 bp), and the 28S rRNA gene (654 bp) were amplified with different primer pairs ( Supplementary Table S2 ). Ribosomal (18S and 28S) amplifications were performed on a Gene-Amp ™ PCR system 9700 thermocycler (Applied Biosystems, Forster City, CA, United States) in a final volume of 25 μL, using the following mix: 2 μL extracted DNA were added to 5 μL 5X PCR buffer, 5 mM of each dNTP, 50 mM MgCl 2 , 20 μM of each of the two primers and 0.1 μL Taq polymerase (5 U/μL - Promega). The PCR cycles were 2 min at 94°C followed by 30 cycles of 1 min denaturation at 94°C, 1 min annealing at 55°C and 2 min extension at 72°C, with a final 10 min extension at 72°C. All amplification products were run on a 0.8% agarose-TAE gel to verify the size of the amplicons. Purification and Sanger sequencing of PCR products were performed by Macrogen 1 . Chromatograms were assembled and edited using Geneious 8.1.9 ( Kearse et al., 2012 ) 2 and all nucleotide differences were checked visually. TABLE 1 Summary of experiments used to characterize and explore the bacterial diversity. G-2016 ( n ) G ( n ) H ( n ) Z ( n ) H1 ( n ) Total Oncholaimus sp. 18S 4 1 1 1 1 8 28S 4 8 15 6 11 44 Bacterial diversity (16S rRNA) O sp. 4 8 15 6 11 44 Sediment 3 2 3 3 0 11 Water 0 3 3 3 0 9 FISH 13 13 SEM 4 4 n = number of samples.",
   "expected_facts": [
     {
       "fact_type_candidate": "storage_conditions",
-      "raw_value": "-80 C",
-      "evidence_quote": "directly frozen at -80 C"
+      "raw_value": "-80°C",
+      "evidence_quote": "nematodes directly frozen at -80"
     },
     {
       "fact_type_candidate": "dna_extraction_kit",
       "raw_value": "Qiagen DNeasy Blood & Tissue kit",
-      "evidence_quote": "using the Qiagen DNeasy Blood & Tissue kit"
-    },
-    {
-      "fact_type_candidate": "dna_separation_method",
-      "raw_value": "spin column",
-      "evidence_quote": "The extraction used a spin column"
+      "evidence_quote": "using the Qiagen ® DNeasy Blood & Tissue kit"
     },
     {
       "fact_type_candidate": "target_gene",
@@ -33,12 +28,27 @@
     {
       "fact_type_candidate": "target_gene",
       "raw_value": "28S rRNA",
-      "evidence_quote": "28S rRNA gene"
+      "evidence_quote": "the 28S rRNA gene"
     },
     {
       "fact_type_candidate": "amplicon_size",
       "raw_value": "654 bp",
       "evidence_quote": "28S rRNA gene (654 bp)"
+    },
+    {
+      "fact_type_candidate": "thermocycler",
+      "raw_value": "Gene-Amp PCR system 9700",
+      "evidence_quote": "performed on a Gene-Amp ™ PCR system 9700 thermocycler"
+    },
+    {
+      "fact_type_candidate": "pcr_reaction_volume",
+      "raw_value": "25 μL",
+      "evidence_quote": "in a final volume of 25"
+    },
+    {
+      "fact_type_candidate": "template_dna_volume",
+      "raw_value": "2 μL",
+      "evidence_quote": "the following mix: 2 μL extracted DNA were added"
     },
     {
       "fact_type_candidate": "pcr_cycle_count",
@@ -47,13 +57,13 @@
     },
     {
       "fact_type_candidate": "annealing_temperature",
-      "raw_value": "55 C",
-      "evidence_quote": "1 min annealing at 55 C"
+      "raw_value": "55°C",
+      "evidence_quote": "1 min annealing at 55"
     },
     {
-      "fact_type_candidate": "PCR_amplification_conditions",
-      "raw_value": "2 min at 94 C followed by 30 cycles of 1 min denaturation at 94 C, 1 min annealing at 55 C and 2 min extension at 72 C, with a final 10 min extension at 72 C",
-      "evidence_quote": "The PCR cycles were 2 min at 94 C followed by 30 cycles of 1 min denaturation at 94 C, 1 min annealing at 55 C and 2 min extension at 72 C, with a final 10 min extension at 72 C"
+      "fact_type_candidate": "sequencing_location",
+      "raw_value": "Macrogen",
+      "evidence_quote": "were performed by Macrogen"
     }
   ]
 }

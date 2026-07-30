@@ -1,14 +1,19 @@
 {
   "case_id": "real-amazon-plume-bioinformatics-001",
-  "curated_by": "codex",
-  "notes": "Real-paper gold case from STUDY-bdc279dc42dc, DOI 10.3389/fmicb.2017.01436, PMCID PMC5540951. Curated from stored Europe PMC full-text evidence for the Amazon River plume zooplankton study.",
-  "section_title": "Bioinformatics",
-  "source_text": "The open-source bioinformatics program Mothur was used to trim and align the sequences. Chimera sequences were removed using UCHIME. Remaining sequences for each library were classified using the Greengenes database at confidence of greater than or equal to 0.80. Sequences were subsequently reclassified through the SILVAngs pipeline with the SILVA 128 reference library.",
+  "curated_by": "claude",
+  "notes": "Real-paper gold case from STUDY-bdc279dc42dc, DOI 10.3389/fmicb.2017.01436, PMCID PMC5540951 (Amazon River plume zooplankton study). source_text is a verbatim, unedited excerpt of the real stored Europe PMC full text for this PMCID (inline citations/footnote markers kept exactly as extracted, not cleaned up) -- re-curated after the original codex-authored version was found to lightly edit/reconstruct source_text rather than quote the real text verbatim, and to miss a real, explicitly-stated fact (denoising_tool).",
+  "section_title": "Statistical Analyses and Bioinformatics Pipeline",
+  "source_text": "Statistical Analyses and Bioinformatics Pipeline Sequencing output was downloaded from the Torrent Server using Torrent Suite v3.0 to obtain the FastQ file. A total of 33 libraries were created using the barcoded sequences. Denoising was performed with Acacia ( Bragg et al., 2012 ) and the open-source bioinformatics program Mothur ( Schloss et al., 2009 ) was used to trim and align the sequences. Chimera sequences were removed using UCHIME and remaining sequences for each library were classified using the Greengenes database 1 at confidence of greater than or equal to 0.80. Relative abundance of each taxa was calculated by dividing the number of classified sequences by total number of sequences in each library. All cyanobacteria sequences identified through Greengenes database were subsampled and subsequently reclassified through the SILVAngs pipeline 2 with the SILVA 128 reference library ( Quast et al., 2013 ). Additionally, principal coordinate analysis (PCoA) was performed on square-root transformed relative abundance data in PRIMER 7 to identify patterns in microbial diversity between libraries. The raw sequence reads have been submitted to National Center for Biotechnology Information 3 and are available under Bioproject number PRJNA387277 .",
   "expected_facts": [
+    {
+      "fact_type_candidate": "denoising_tool",
+      "raw_value": "Acacia",
+      "evidence_quote": "Denoising was performed with Acacia"
+    },
     {
       "fact_type_candidate": "adapter_trimming_method",
       "raw_value": "Mothur",
-      "evidence_quote": "Mothur was used to trim and align the sequences"
+      "evidence_quote": "the open-source bioinformatics program Mothur ( Schloss et al., 2009 ) was used to trim and align the sequences."
     },
     {
       "fact_type_candidate": "chimera_detection_method",
@@ -32,7 +37,7 @@
     },
     {
       "fact_type_candidate": "reference_database",
-      "raw_value": "SILVA 128",
+      "raw_value": "SILVA 128 reference library",
       "evidence_quote": "with the SILVA 128 reference library"
     }
   ]

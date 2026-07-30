@@ -1,34 +1,34 @@
 {
   "case_id": "real-sponge-edna-bioinformatics-001",
-  "curated_by": "codex",
-  "notes": "Real-paper gold case from STUDY-d7633d624b5a, DOI 10.1111/1755-0998.13677, PMCID PMC9796769. Curated from stored Europe PMC full-text evidence for the sponge eDNA persistence study.",
-  "section_title": "Bioinformatics",
-  "source_text": "The raw sequencing data were first trimmed to remove low-quality ends using obicut. After trimming, paired-end reads were merged by illuminapairedend. The alignments were then demultiplexed using ngsfilter with default parameters. Subsequently, quality filters were performed by obigrep to retain sequences between 130 and 190 bp without ambiguity. The remaining sequences were clustered by swarm version 2.1.3 with -d 3, followed by chimera removal using the de novo chimera search function in vsearch 2.4.3. Taxonomic assignment was performed via ecotag. The reference database used in ecotag was constructed by in silico PCR for Tele02 primers against the EMBL database, release r143, using ecoPCR.",
+  "curated_by": "claude",
+  "notes": "Real-paper gold case from STUDY-d7633d624b5a, DOI 10.1111/1755-0998.13677, PMCID PMC9796769 (sponge eDNA persistence study). source_text is a verbatim, unedited excerpt of the real stored Europe PMC full text. Re-curated after the original codex-authored version (a) skipped this study's entire real primer/PCR/replicate/control paragraph and (b) filed PCR/library-prep/sequencing facts under a case titled \"bioinformatics\" that never actually quoted the paper's real Bioinformatic and statistical analysis section. The sample-sequencing case now covers the full real Laboratory procedures section (sample processing through sequencing); the bioinformatics case now quotes the paper's actual bioinformatics section.",
+  "section_title": "Bioinformatic and statistical analysis",
+  "source_text": "2.3. Bioinformatic and statistical analysis The bioinformatic processing was based on the OBIT ools software 1.2.11 (Boyer et al., 2016 ). The raw sequencing data were first trimmed to remove low‐quality ends using ‘obicut’. After trimming, paired‐end reads were merged by ‘illuminapairedend’, and alignments with low (<40) quality scores were removed. The alignments were then demultiplexed using ‘ngsfilter’ with default parameters. Subsequently, quality filters were performed by ‘obigrep’ to retain sequences between 130 and 190 bp without ambiguity to filter out erroneous sequences, followed by dereplication using ‘obiuniq’, and chimera removal using the de novo chimera search function in vsearch 2.4.3 (Rognes et al., 2016 ). The remaining sequences were clustered by swarm version 2.1.3 (Mahé et al., 2015 ) with “‐d 3”. Taxonomic assignment was performed via ‘ecotag’. The reference database used in ecotag was constructed by in silico PCR for Tele02 primers against the EMBL database (Release version r143) using ‘ecoPCR’. An additional taxonomic assignment was carried out using BLAST against the NCBI reference database to check the assignment of sequences, and we manually corrected one species ( Gramma loreto ) that ecotag could only assign to the metazoan level. Finally, a sample/OTU table with taxon information was formatted using R scripts listed at https://github.com/metabarpark/R_scripts_metabarpark . We then used the R package lulu 0.1.0 (Frøslev et al., 2017 ) with default parameters to filter erroneous OTUs based on the calculation of OTUs' pairwise similarities and co‐occurrence patterns. The remaining OTUs were further collapsed using the metabarpark owi_collapse R script. All downstream statistical analyses were carried out in R version 3.6.3. The raw read counts were first transformed to log 10 read counts for visualizing the relationship between time and the read counts of each sample, and we kept read count zero instead of infinity (log 10 (0)). We also carried out the same analysis as using log 10 transformed reads by using other data transformations (relative abundance), and the results can be found in the Supporting Information . To examine the relationship between time and transformed reads or species richness, we performed linear models (LMs) using the “lm” function. We visualized community composition by the pheatmap function (version 1.0.12; Kolde, 2019 ). The transformed read counts then were converted to presence/absence (1/0) for subsequent analyses. To compare pairwise differences in species richness between samples, we performed multiple pairwise post hoc comparisons using the TukeyHSD function on the ANOVA object. Subsequently, we used mvabund version 3.12.3 (Wang et al., 2012 ) to analyse the effects of covariates (sample type, time, and tank) on community composition. Mvabund is a model‐based method (generalized linear model framework) which allows us to select an appropriate error distribution for the corresponding data type. Here we used the manyglm function with binomial error distribution for the presence/absence data to fit glms for each species and then used the “anova.manyglm” function to indicate the treatment effect. All results were visualized using the ggplot2 R package version 3.3.5.",
   "expected_facts": [
     {
       "fact_type_candidate": "adapter_trimming_method",
       "raw_value": "obicut",
-      "evidence_quote": "trimmed to remove low-quality ends using obicut"
+      "evidence_quote": "trimmed to remove low‐quality ends using ‘obicut’"
     },
     {
       "fact_type_candidate": "read_merging_tool",
       "raw_value": "illuminapairedend",
-      "evidence_quote": "paired-end reads were merged by illuminapairedend"
+      "evidence_quote": "paired‐end reads were merged by ‘illuminapairedend’"
     },
     {
       "fact_type_candidate": "demultiplexing_tool",
-      "raw_value": "ngsfilter with default parameters",
-      "evidence_quote": "demultiplexed using ngsfilter with default parameters"
-    },
-    {
-      "fact_type_candidate": "length_filtering_tool",
-      "raw_value": "obigrep",
-      "evidence_quote": "quality filters were performed by obigrep"
+      "raw_value": "ngsfilter",
+      "evidence_quote": "demultiplexed using ‘ngsfilter’"
     },
     {
       "fact_type_candidate": "minimum_read_length",
-      "raw_value": "130 and 190 bp",
-      "evidence_quote": "retain sequences between 130 and 190 bp"
+      "raw_value": "130 bp",
+      "evidence_quote": "retain sequences between 130 and 190"
+    },
+    {
+      "fact_type_candidate": "chimera_detection_method",
+      "raw_value": "vsearch 2.4.3",
+      "evidence_quote": "chimera removal using the de novo chimera search function in vsearch 2.4.3"
     },
     {
       "fact_type_candidate": "clustering_tool",
@@ -36,24 +36,24 @@
       "evidence_quote": "clustered by swarm version 2.1.3"
     },
     {
-      "fact_type_candidate": "clustering_similarity_threshold",
-      "raw_value": "-d 3",
-      "evidence_quote": "with -d 3"
-    },
-    {
-      "fact_type_candidate": "chimera_detection_method",
-      "raw_value": "de novo chimera search function in vsearch 2.4.3",
-      "evidence_quote": "chimera removal using the de novo chimera search function in vsearch 2.4.3"
-    },
-    {
       "fact_type_candidate": "taxonomic_assignment_method",
       "raw_value": "ecotag",
-      "evidence_quote": "Taxonomic assignment was performed via ecotag"
+      "evidence_quote": "Taxonomic assignment was performed via ‘ecotag"
     },
     {
       "fact_type_candidate": "reference_database",
-      "raw_value": "EMBL database release r143",
-      "evidence_quote": "against the EMBL database, release r143"
+      "raw_value": "EMBL database (Release version r143)",
+      "evidence_quote": "against the EMBL database (Release version r143)"
+    },
+    {
+      "fact_type_candidate": "taxonomic_assignment_method",
+      "raw_value": "BLAST",
+      "evidence_quote": "An additional taxonomic assignment was carried out using BLAST against the NCBI reference database"
+    },
+    {
+      "fact_type_candidate": "reference_database",
+      "raw_value": "NCBI reference database",
+      "evidence_quote": "using BLAST against the NCBI reference database"
     }
   ]
 }

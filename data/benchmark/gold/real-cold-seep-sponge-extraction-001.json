@@ -1,39 +1,44 @@
 {
   "case_id": "real-cold-seep-sponge-extraction-001",
-  "curated_by": "codex",
-  "notes": "Real-paper gold case from STUDY-ed8edfcb5a11, DOI 10.1128/msystems.00184-16, PMCID PMC5361782. Curated from stored Europe PMC full-text evidence for the cold-seep sponge symbiont study.",
-  "section_title": "Cell collection and DNA extraction",
-  "source_text": "The homogenate was vibrated with a vortex at the highest speed available for 5 min. The mixture of sponge cells and prokaryotic cells was collected and filtered using a polycarbonate membrane with pore size 5.0 um. The membrane was washed by filtering with 10 ml of CMFSW and was then collected for DNA extraction. Then, 0.8 ml of DNA extraction buffer and 10 ul of lysozyme (100 mg/ml) were added, followed by incubation at 37 C for 30 min. An equal volume of phenol-chloroform-isoamyl alcohol (25:24:1) was used to denature protein. This step was repeated once using chloroform-isoamyl alcohol (24:1), and then 0.6 volume of isopropanol was added to the supernatant to precipitate DNA at -20 C for 30 min.",
+  "curated_by": "claude",
+  "notes": "Real-paper gold case from STUDY-ed8edfcb5a11, DOI 10.1128/msystems.00184-16, PMCID PMC5361782 (cold-seep sponge symbiont study). source_text is a verbatim, unedited excerpt of the real stored Europe PMC full text. Re-curated after the original codex-authored version mislabeled lab processing steps as collection_method/storage_conditions, and dropped a real lysis step (SDS/proteinase K) and the ethanol wash/cleanup step.",
+  "section_title": "Two strategies of preparing materials prior to DNA extraction and sequencing (approach 1)",
+  "source_text": "Two strategies of preparing materials prior to DNA extraction and sequencing. We followed two different approaches to prepare samples before DNA extraction and sequencing. In the first approach, the sponge tissue samples were dissected into five layers (A to E). The external layer E and internal layer A were homogenized with sterilized glass pestles in 1.5-ml centrifuge tubes for DNA extraction and metagenomic sequencing. Then, 0.8 ml of DNA extraction buffer and 10 µl of lysozyme (100 mg/ml) were added, followed by incubation at 37°C for 30 min. After that, 80 µl of SDS (20%) and 8 µl of proteinase K (10 mg/ml) were used to disrupt the cell membrane and digest proteins at 65°C for 2 h. An equal volume of phenol-chloroform-isoamyl alcohol (25:24:1) was used to denature protein, and the mixture was shaken vigorously by hand for 10 s before centrifugation at 12,000 × g at 4°C for 10 min. This step was repeated once using chloroform-isoamyl alcohol (24:1), and then 0.6 volume of isopropanol was added to the supernatant to precipitate DNA at −20°C for 30 min. After centrifugation at 12,000 × g at 4°C for 10 min, the DNA was precipitated and washed using 75% ethanol. The DNA was then dried and dissolved in double-distilled water. The DNA samples from layers A and E were subjected to library construction and sequenced using the Illumina HiSeq2000 platform in Novegene (Beijing, China). The insert size was 500 bp, while the average read length was 101 bp.",
   "expected_facts": [
-    {
-      "fact_type_candidate": "collection_method",
-      "raw_value": "filtered using a polycarbonate membrane with pore size 5.0 um",
-      "evidence_quote": "filtered using a polycarbonate membrane with pore size 5.0 um"
-    },
-    {
-      "fact_type_candidate": "storage_conditions",
-      "raw_value": "washed by filtering with 10 ml of CMFSW",
-      "evidence_quote": "washed by filtering with 10 ml of CMFSW"
-    },
     {
       "fact_type_candidate": "dna_lysis_method",
       "raw_value": "lysozyme (100 mg/ml)",
-      "evidence_quote": "10 ul of lysozyme (100 mg/ml)"
+      "evidence_quote": "lysozyme (100 mg/ml) were added"
+    },
+    {
+      "fact_type_candidate": "dna_lysis_method",
+      "raw_value": "SDS (20%) and proteinase K (10 mg/ml)",
+      "evidence_quote": "SDS (20%) and 8 µl of proteinase K (10 mg/ml) were used to disrupt the cell membrane and digest proteins"
     },
     {
       "fact_type_candidate": "dna_separation_method",
       "raw_value": "phenol-chloroform-isoamyl alcohol (25:24:1)",
-      "evidence_quote": "phenol-chloroform-isoamyl alcohol (25:24:1)"
+      "evidence_quote": "phenol-chloroform-isoamyl alcohol (25:24:1) was used to denature protein"
     },
     {
       "fact_type_candidate": "dna_separation_method",
       "raw_value": "chloroform-isoamyl alcohol (24:1)",
-      "evidence_quote": "chloroform-isoamyl alcohol (24:1)"
+      "evidence_quote": "repeated once using chloroform-isoamyl alcohol (24:1)"
     },
     {
-      "fact_type_candidate": "storage_conditions",
-      "raw_value": "-20 C for 30 min",
-      "evidence_quote": "precipitate DNA at -20 C for 30 min"
+      "fact_type_candidate": "dna_cleanup_method",
+      "raw_value": "75% ethanol",
+      "evidence_quote": "the DNA was precipitated and washed using 75% ethanol"
+    },
+    {
+      "fact_type_candidate": "sequencing_instrument",
+      "raw_value": "Illumina HiSeq2000",
+      "evidence_quote": "sequenced using the Illumina HiSeq2000 platform"
+    },
+    {
+      "fact_type_candidate": "sequencing_location",
+      "raw_value": "Novegene (Beijing, China)",
+      "evidence_quote": "in Novegene (Beijing, China)"
     }
   ]
 }

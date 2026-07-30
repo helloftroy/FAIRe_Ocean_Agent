@@ -1,24 +1,29 @@
 {
   "case_id": "real-methane-sediments-qpcr-001",
-  "curated_by": "codex",
-  "notes": "Real-paper gold case from STUDY-c949b1b401bb, DOI 10.1093/ismejo/wrae013, PMCID PMC10942774. Curated from stored Europe PMC full-text evidence for the methane-flux coastal sediment study.",
-  "section_title": "RT-qPCR",
-  "source_text": "RNA was extracted from the samples, approximately 2 g sediment, using the RNeasy PowerSoil Total Kit (Qiagen) following the manufacturer's instructions. DNA contamination was removed with the TURBO DNA-free kit (Invitrogen). RNA samples were normalized to 10 ng uL-1. RT-qPCR reactions contained 1 uL of cDNA with 7 uL H2O, 10 uL SYBR GREEN (LightCycler 480 SYBR Green I Master kit, Roche), and 1 uL of each primer. The amplification program used 45 cycles of denaturation 95 C 30 s, annealing 60 C 30 s, and elongation 72 C for 15 s.",
+  "curated_by": "claude",
+  "notes": "Real-paper gold case from STUDY-c949b1b401bb, DOI 10.1093/ismejo/wrae013, PMCID PMC10942774 (methane-flux coastal sediment study). source_text is a verbatim, unedited excerpt of the real stored Europe PMC full text. Re-curated after the original codex-authored version dropped the sentence naming the RT-qPCR primers (515F/805R, 16S rRNA) entirely.",
+  "section_title": "Quantitative reverse transcription PCR",
+  "source_text": "Quantitative reverse transcription PCR RNA samples were normalized to 10 ng μL −1 , reverse transcribed into cDNA using the AccuScript High Fidelity 1st Strand cDNA Synthesis kit (Agilent) using the supplied random hexamer primers. The cDNA was then used as input material in RT-qPCR reactions containing primers 16S rRNA 515F and 805R [ 62 , 63 ]. RT-qPCR reactions contained 1 μL of cDNA were used with 7 μL H 2 O, 10 μL SYBR GREEN (LightCycler 480 SYBR Green I Master kit, Roche), and 1 μL of each primer. The qPCR program consisted of an initial denaturation at 95°C for 5 min, followed by 45 cycles of denaturation 95°C 30 s, annealing 60°C 30 s, and elongation 72°C for 15 s. The ramp rate was set to 4.40°C/s except for the annealing step that was 2.20°C/s. Technical duplicates were performed for each sample and the average Ct value was used.",
   "expected_facts": [
     {
-      "fact_type_candidate": "sample_volume_for_extraction",
-      "raw_value": "2 g",
-      "evidence_quote": "approximately 2 g sediment"
+      "fact_type_candidate": "target_gene",
+      "raw_value": "16S rRNA",
+      "evidence_quote": "primers 16S rRNA 515F and 805R"
     },
     {
-      "fact_type_candidate": "dna_cleanup_method",
-      "raw_value": "TURBO DNA-free kit",
-      "evidence_quote": "DNA contamination was removed with the TURBO DNA-free kit"
+      "fact_type_candidate": "forward_primer_name",
+      "raw_value": "515F",
+      "evidence_quote": "primers 16S rRNA 515F and 805R"
+    },
+    {
+      "fact_type_candidate": "reverse_primer_name",
+      "raw_value": "805R",
+      "evidence_quote": "primers 16S rRNA 515F and 805R"
     },
     {
       "fact_type_candidate": "template_dna_volume",
-      "raw_value": "1 uL",
-      "evidence_quote": "contained 1 uL of cDNA"
+      "raw_value": "1 μL",
+      "evidence_quote": "RT-qPCR reactions contained 1"
     },
     {
       "fact_type_candidate": "commercial_master_mix",
@@ -27,23 +32,28 @@
     },
     {
       "fact_type_candidate": "forward_primer_volume",
-      "raw_value": "1 uL",
-      "evidence_quote": "1 uL of each primer"
+      "raw_value": "1 μL",
+      "evidence_quote": "and 1 μL of each primer"
     },
     {
       "fact_type_candidate": "reverse_primer_volume",
-      "raw_value": "1 uL",
-      "evidence_quote": "1 uL of each primer"
+      "raw_value": "1 μL",
+      "evidence_quote": "and 1 μL of each primer"
     },
     {
       "fact_type_candidate": "pcr_cycle_count",
       "raw_value": "45",
-      "evidence_quote": "45 cycles"
+      "evidence_quote": "followed by 45 cycles"
     },
     {
       "fact_type_candidate": "annealing_temperature",
-      "raw_value": "60 C",
-      "evidence_quote": "annealing 60 C 30 s"
+      "raw_value": "60°C",
+      "evidence_quote": "annealing 60°C 30"
+    },
+    {
+      "fact_type_candidate": "pcr_replicate_count",
+      "raw_value": "Technical duplicates",
+      "evidence_quote": "Technical duplicates were performed for each sample"
     }
   ]
 }
