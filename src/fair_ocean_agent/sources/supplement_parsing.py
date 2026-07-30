@@ -340,6 +340,40 @@ def parse_xml_supplement(content: bytes, file_name: str) -> ParsedTableResult:
     return result
 
 
+def parse_zip_supplement(content: bytes, file_name: str, max_member_bytes: int) -> list[ParsedTableResult]:
+    """Parse supported structured files inside a supplementary ZIP.
+
+    Nested archives, PDFs, office documents, and images are intentionally
+    skipped here: this function is the deterministic structured-table path,
+    not the LLM/text path. Each inner file name is included in source
+    locators as ``outer.zip!inner.xlsx`` so provenance remains precise.
+    """
+    results: list[ParsedTableResult] = []
+    with zipfile.ZipFile(io.BytesIO(content)) as zip_file:
+        for info in zip_file.infolist():
+            if info.is_dir():
+                continue
+            inner_name = info.filename
+            extension = inner_name.rsplit(".", 1)[-1].lower() if "." in inner_name else ""
+            if extension not in {"csv", "tsv", "xlsx", "xls", "json", "xml"}:
+                continue
+            inner_content = safe_read_zip_member(zip_file, info, max_member_bytes)
+            locator_name = f"{file_name}!{inner_name}"
+            if extension == "csv":
+                results.append(parse_delimited_table(inner_content, locator_name, delimiter=","))
+            elif extension == "tsv":
+                results.append(parse_delimited_table(inner_content, locator_name, delimiter="\t"))
+            elif extension == "xlsx":
+                results.extend(parse_xlsx_table(inner_content, locator_name))
+            elif extension == "xls":
+                results.extend(parse_xls_table(inner_content, locator_name))
+            elif extension == "json":
+                results.append(parse_json_supplement(inner_content, locator_name))
+            elif extension == "xml":
+                results.append(parse_xml_supplement(inner_content, locator_name))
+    return results
+
+
 def extract_pdf_text(content: bytes) -> str:
     """Best-effort text extraction for a PDF supplementary-methods
     document -- handed to the *existing* LLM extraction path

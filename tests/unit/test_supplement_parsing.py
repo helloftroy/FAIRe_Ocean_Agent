@@ -18,6 +18,7 @@ from fair_ocean_agent.sources.supplement_parsing import (
     parse_xls_table,
     parse_xlsx_table,
     parse_xml_supplement,
+    parse_zip_supplement,
     safe_read_zip_member,
 )
 
@@ -217,6 +218,20 @@ def test_parse_xml_supplement_returns_empty_on_malformed_xml():
     assert result.facts == []
 
 
+def test_parse_zip_supplement_parses_supported_inner_tables_only():
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("metadata/samples.csv", b"sample_id,Lat.,Lon.\nS1,1.2,3.4\n")
+        zf.writestr("figures/plot.png", b"not a table")
+
+    results = parse_zip_supplement(buf.getvalue(), "supplement.zip", max_member_bytes=10_000)
+    facts = [fact for result in results for fact in result.facts]
+
+    assert {fact.fact_type_candidate for fact in facts} == {"latitude", "longitude"}
+    assert all(fact.entity_external_id == "S1" for fact in facts)
+    assert facts[0].source_locator.startswith("supplement.supplement.zip!metadata/samples.csv!")
+
+
 def test_extract_pdf_text_runs_without_error_on_a_real_pdf():
     from pypdf import PdfWriter
 
@@ -249,4 +264,3 @@ def test_safe_read_zip_member_raises_on_reported_size_over_cap():
     with pytest.raises(ZipMemberTooLargeError):
         safe_read_zip_member(zf, info, max_bytes=500)
     zf.close()
-

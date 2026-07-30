@@ -64,6 +64,7 @@ from fair_ocean_agent.sources.supplement_parsing import (
     parse_xls_table,
     parse_xlsx_table,
     parse_xml_supplement,
+    parse_zip_supplement,
     safe_read_zip_member,
 )
 from fair_ocean_agent.workflow.handlers import (
@@ -225,6 +226,8 @@ def _parsed_result_summary(results: list[ParsedTableResult]) -> tuple[list[RawFa
     for result in results:
         facts.extend(result.facts)
         summaries.append(result.summary())
+    if not summaries:
+        return facts, "0 parsed table(s); no supported structured files found"
     return facts, " | ".join(summaries)
 
 
@@ -288,8 +291,20 @@ def _process_member(
     exactly like handle_extract_text_facts never lets one section's LLM
     failure abort the whole study."""
     extension = _extension(file_name)
-    llm_config = load_config().llm
+    config = load_config()
+    llm_config = config.llm
     via_llm = extension in ("txt", "md", "pdf")
+    if via_llm and not config.supplements.llm_text_extraction_enabled:
+        _mark(
+            asset,
+            access_status=AccessStatus.OPEN.value,
+            inspection_level=InspectionLevel.LIGHTWEIGHT.value,
+            description=(
+                f"retrieved: .{extension} text extraction requires supplement "
+                "LLM opt-in (supplements.llm_text_extraction_enabled=false)"
+            ),
+        )
+        return
     backend = _build_llm_backend_cached() if via_llm else None
 
     try:
@@ -305,6 +320,10 @@ def _process_member(
             facts, summary = _parsed_result_summary([parse_json_supplement(content, file_name)])
         elif extension == "xml":
             facts, summary = _parsed_result_summary([parse_xml_supplement(content, file_name)])
+        elif extension == "zip":
+            facts, summary = _parsed_result_summary(
+                parse_zip_supplement(content, file_name, max_member_bytes=config.supplements.max_member_bytes)
+            )
         elif extension in ("txt", "md"):
             text = content.decode("utf-8", errors="replace")
             facts, _response = extract_facts_from_section(

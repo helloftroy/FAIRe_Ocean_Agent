@@ -106,6 +106,7 @@ class SupplementConfig(BaseModel):
     max_bundle_bytes: int = 50_000_000
     max_member_bytes: int = 10_000_000
     lightweight_inspection_of_large_assets: bool = False
+    llm_text_extraction_enabled: bool = False
 
 
 class DiscoveryConfig(BaseModel):

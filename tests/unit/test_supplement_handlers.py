@@ -241,6 +241,94 @@ def test_retrieve_parses_a_small_csv_and_creates_raw_facts(db_session, monkeypat
     assert all(f.source_locator.startswith("supplement.Table_1.csv!") for f in facts)
 
 
+def test_retrieve_skips_pdf_llm_extraction_without_explicit_opt_in(db_session, monkeypatch):
+    study = _seeded_study_with_pmcid(db_session)
+    small_xml = """<article><supplementary-material id="TS1"><media xmlns:xlink="http://www.w3.org/1999/xlink"
+    xlink:href="methods.pdf" mimetype="application" mime-subtype="pdf"><?size 40?></media></supplementary-material></article>"""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("methods.pdf", b"%PDF-1.4\n%%EOF")
+    monkeypatch.setattr(
+        supplement_handlers, "_build_enabled_adapters",
+        lambda: {"europe_pmc": FakeEuropePmcAdapter(fulltext_xml=small_xml, bundle=buf.getvalue())},
+    )
+    monkeypatch.setattr(
+        supplement_handlers,
+        "_build_llm_backend_cached",
+        lambda: (_ for _ in ()).throw(AssertionError("LLM backend should not be built")),
+    )
+    discover_task = _discover_task(db_session, study)
+    supplement_handlers.handle_discover_supplements(db_session, discover_task)
+    db_session.commit()
+
+    retrieve_task = _retrieve_task(db_session, study)
+    supplement_handlers.handle_retrieve_supplements(db_session, retrieve_task)
+    db_session.commit()
+
+    asset = db_session.query(DataAsset).filter_by(study_id=study.study_id, file_name="methods.pdf").one()
+    assert asset.access_status == "open"
+    assert asset.inspection_level == "lightweight"
+    assert "supplement LLM opt-in" in asset.description
+    assert db_session.query(RawFact).filter_by(study_id=study.study_id).count() == 0
+
+
+def test_retrieve_parses_supported_tables_inside_zip_supplement(db_session, monkeypatch):
+    study = _seeded_study_with_pmcid(db_session)
+    small_xml = """<article><supplementary-material id="TS1"><media xmlns:xlink="http://www.w3.org/1999/xlink"
+    xlink:href="metadata.zip" mimetype="application" mime-subtype="zip"><?size 200?></media></supplementary-material></article>"""
+    inner = io.BytesIO()
+    with zipfile.ZipFile(inner, "w") as zf:
+        zf.writestr("samples.csv", b"sample_id,Lat.,Lon.\nS1,1.2,3.4\n")
+        zf.writestr("figure.png", b"not a table")
+    outer = io.BytesIO()
+    with zipfile.ZipFile(outer, "w") as zf:
+        zf.writestr("metadata.zip", inner.getvalue())
+    monkeypatch.setattr(
+        supplement_handlers, "_build_enabled_adapters",
+        lambda: {"europe_pmc": FakeEuropePmcAdapter(fulltext_xml=small_xml, bundle=outer.getvalue())},
+    )
+    discover_task = _discover_task(db_session, study)
+    supplement_handlers.handle_discover_supplements(db_session, discover_task)
+    db_session.commit()
+
+    retrieve_task = _retrieve_task(db_session, study)
+    supplement_handlers.handle_retrieve_supplements(db_session, retrieve_task)
+    db_session.commit()
+
+    asset = db_session.query(DataAsset).filter_by(study_id=study.study_id, file_name="metadata.zip").one()
+    assert asset.inspection_level == "full"
+    facts = db_session.query(RawFact).filter_by(study_id=study.study_id, extraction_method="supplement_table_parsing").all()
+    assert {fact.fact_type_candidate for fact in facts} == {"latitude", "longitude"}
+    assert all("metadata.zip!samples.csv" in fact.source_locator for fact in facts)
+
+
+def test_retrieve_zip_with_no_supported_structured_files_has_clear_summary(db_session, monkeypatch):
+    study = _seeded_study_with_pmcid(db_session)
+    small_xml = """<article><supplementary-material id="TS1"><media xmlns:xlink="http://www.w3.org/1999/xlink"
+    xlink:href="figures.zip" mimetype="application" mime-subtype="zip"><?size 200?></media></supplementary-material></article>"""
+    inner = io.BytesIO()
+    with zipfile.ZipFile(inner, "w") as zf:
+        zf.writestr("plot.png", b"not a table")
+    outer = io.BytesIO()
+    with zipfile.ZipFile(outer, "w") as zf:
+        zf.writestr("figures.zip", inner.getvalue())
+    monkeypatch.setattr(
+        supplement_handlers, "_build_enabled_adapters",
+        lambda: {"europe_pmc": FakeEuropePmcAdapter(fulltext_xml=small_xml, bundle=outer.getvalue())},
+    )
+    discover_task = _discover_task(db_session, study)
+    supplement_handlers.handle_discover_supplements(db_session, discover_task)
+    db_session.commit()
+
+    retrieve_task = _retrieve_task(db_session, study)
+    supplement_handlers.handle_retrieve_supplements(db_session, retrieve_task)
+    db_session.commit()
+
+    asset = db_session.query(DataAsset).filter_by(study_id=study.study_id, file_name="figures.zip").one()
+    assert asset.inspection_level == "full"
+    assert asset.description == "0 parsed table(s); no supported structured files found"
+
+
 def test_retrieve_is_idempotent_skips_already_parsed_assets(db_session, monkeypatch):
     study = _seeded_study_with_pmcid(db_session)
     small_xml = """<article><supplementary-material id="TS1"><media xmlns:xlink="http://www.w3.org/1999/xlink"

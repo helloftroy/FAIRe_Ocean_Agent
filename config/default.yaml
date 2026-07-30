@@ -60,6 +60,10 @@ supplements:
   max_bundle_bytes: 50000000
   max_member_bytes: 10000000
   lightweight_inspection_of_large_assets: false
+  # Keep supplementary retrieval deterministic by default. Text/PDF
+  # supplement extraction can be opted in separately when intentionally
+  # running an LLM-backed pass.
+  llm_text_extraction_enabled: false
 
 discovery:
   citation_expansion_max_depth: 1
