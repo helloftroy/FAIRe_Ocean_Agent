@@ -747,14 +747,26 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
     if europe_pmc is None:
         raise RuntimeError("europe_pmc adapter is not enabled in config/sources.yaml")
 
+    backend = _build_llm_backend_cached()
+    extraction_version = f"{PROMPT_VERSION}:{backend.label}"
     already_recorded = (
         session.query(Source)
-        .filter_by(study_id=study.study_id, source_name="europe_pmc_fulltext", external_identifier=pmcid)
+        .filter_by(
+            study_id=study.study_id,
+            source_name="europe_pmc_fulltext",
+            external_identifier=pmcid,
+            source_version=extraction_version,
+        )
         .first()
         is not None
     )
     if already_recorded:
-        logger.info("full text for %s already processed for study %s", pmcid, study.study_id)
+        logger.info(
+            "full text for %s already processed for study %s with %s",
+            pmcid,
+            study.study_id,
+            extraction_version,
+        )
         return
 
     try:
@@ -768,8 +780,6 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
         logger.info("no relevant sections found in full text for %s", pmcid)
         return
 
-    backend = _build_llm_backend_cached()
-
     source = create_source(
         session,
         Source(
@@ -780,6 +790,7 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
             access_status=AccessStatus.OPEN.value,
             retrieved_at=utcnow(),
             content_hash=hash_payload({"pmcid": pmcid, "section_titles": [s["title"] for s in sections]}),
+            source_version=extraction_version,
             inspection_status=InspectionStatus.INSPECTED.value,
             inspection_level=InspectionLevel.FULL.value,
         ),

@@ -93,6 +93,7 @@ def test_handler_extracts_and_persists_verified_facts(db_session, monkeypatch):
 
     source = db_session.query(Source).filter_by(study_id=study.study_id, source_name="europe_pmc_fulltext").one()
     assert source.external_identifier == "PMC1234567"
+    assert source.source_version == f"{handlers.PROMPT_VERSION}:mock-model"
 
     facts = db_session.query(RawFact).filter_by(study_id=study.study_id, extraction_method="llm_text_extraction").all()
     assert len(facts) == 1
@@ -135,6 +136,43 @@ def test_handler_is_idempotent_on_retry(db_session, monkeypatch):
 
     assert db_session.query(Source).filter_by(study_id=study.study_id).count() == 1
     assert db_session.query(RawFact).filter_by(study_id=study.study_id, extraction_method="llm_text_extraction").count() == 1
+
+
+def test_handler_reprocesses_fulltext_with_new_prompt_version_or_model(db_session, monkeypatch):
+    study = _seeded_study_with_pmcid(db_session)
+    task = _task_for(db_session, study)
+    db_session.add(
+        Source(
+            study_id=study.study_id,
+            source_type="article_fulltext",
+            source_name="europe_pmc_fulltext",
+            external_identifier="PMC1234567",
+            source_version="text-extraction-v3:older-model",
+        )
+    )
+    db_session.commit()
+
+    response = json.dumps(
+        [{"fact_type_candidate": "collection_date", "raw_value": "2022-01-04", "evidence_id": "SAMPLING.P001"}]
+    )
+    handlers._llm_backend_cache = MockLLMBackend(label="new-model", responses=[response])
+    monkeypatch.setattr(handlers, "_build_enabled_adapters", lambda: {"europe_pmc": FakeEuropePmcAdapter()})
+
+    handlers.handle_extract_text_facts(db_session, task)
+    db_session.commit()
+
+    assert db_session.query(Source).filter_by(study_id=study.study_id).count() == 2
+    assert (
+        db_session.query(Source)
+        .filter_by(
+            study_id=study.study_id,
+            source_name="europe_pmc_fulltext",
+            source_version=f"{handlers.PROMPT_VERSION}:new-model",
+        )
+        .count()
+        == 1
+    )
+    assert db_session.query(RawFact).filter_by(study_id=study.study_id, model_name="new-model").count() == 1
 
 
 def test_handler_preserves_successful_sections_when_later_section_times_out(db_session, monkeypatch):

@@ -1,0 +1,6 @@
+FROM qwen3:4b-instruct
+
+# Ollama's OpenAI-compatible endpoint ignores per-request num_ctx options.
+# Pinning it in a local model variant allows larger paper chunks and avoids
+# repeatedly paying the focused-checklist prompt overhead.
+PARAMETER num_ctx 8192
