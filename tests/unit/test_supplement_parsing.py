@@ -74,6 +74,20 @@ def test_parse_delimited_table_skips_a_leading_caption_row():
     assert result.row_count == 1
     assert {f.fact_type_candidate for f in result.facts} == {"temp"}
     assert result.facts[0].entity_external_id == "S1"
+    assert result.facts[0].source_locator == "supplement.t.csv!B3"
+
+
+def test_parse_delimited_table_recognizes_real_supplement_environment_headers():
+    csv_content = (
+        b"station,Sites,Lat.,Lon.,Depth range (m),Markers name\n"
+        b"MC751,Seep site,27.1,-91.2,430-450,16S rRNA\n"
+    )
+
+    result = parse_delimited_table(csv_content, "gcb_sites.csv")
+    fact_types = {f.fact_type_candidate for f in result.facts}
+
+    assert fact_types == {"geo_loc_name", "latitude", "longitude", "depth", "target_gene"}
+    assert all(f.entity_external_id == "MC751" for f in result.facts)
 
 
 def test_parse_delimited_table_skips_blank_cells():
@@ -235,5 +249,4 @@ def test_safe_read_zip_member_raises_on_reported_size_over_cap():
     with pytest.raises(ZipMemberTooLargeError):
         safe_read_zip_member(zf, info, max_bytes=500)
     zf.close()
-
 

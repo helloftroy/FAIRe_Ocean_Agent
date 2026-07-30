@@ -199,6 +199,40 @@ def test_repository_resolution_is_idempotent_on_retry(db_session, monkeypatch):
     assert db_session.query(RawFact).filter_by(study_id=study.study_id).count() == 1
 
 
+def test_ena_aliases_with_same_content_hash_do_not_duplicate_facts(db_session, monkeypatch):
+    study = _seeded_study(db_session, bioproject_accession="PRJNA1425045")
+    db_session.add(
+        ExternalIdentifier(
+            study_id=study.study_id,
+            identifier_type=IdentifierType.SRA_STUDY_ACCESSION.value,
+            identifier_value=normalize_identifier(IdentifierType.SRA_STUDY_ACCESSION, "SRP123456"),
+        )
+    )
+    db_session.flush()
+    task = _task_for(db_session, study)
+
+    ena_adapter = FakeAdapter(
+        "ena",
+        record=_make_record("ena", external_identifier="PRJNA1425045", raw={"study": {"study_title": "Same ENA record"}}),
+        facts=[
+            RawFactCandidate(
+                entity_level=EntityLevel.PROJECT,
+                fact_type_candidate="study_title",
+                raw_field_name="study_title",
+                raw_value="Same ENA record",
+                source_locator="ena.study.study_title",
+            )
+        ],
+    )
+    monkeypatch.setattr(handlers, "_build_enabled_adapters", lambda: {"ena": ena_adapter})
+
+    handlers.handle_discover_identifiers(db_session, task)
+    db_session.commit()
+
+    assert db_session.query(Source).filter_by(study_id=study.study_id, source_name="ena").count() == 1
+    assert db_session.query(RawFact).filter_by(study_id=study.study_id, extraction_method="adapter:ena").count() == 1
+
+
 def test_ena_only_study_resolves_via_ena_study_accession(db_session, monkeypatch):
     study = _seeded_study(db_session, ena_accession="ERP123456")
     task = _task_for(db_session, study)

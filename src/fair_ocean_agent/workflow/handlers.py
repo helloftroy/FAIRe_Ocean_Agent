@@ -258,6 +258,16 @@ def _persist_source_and_facts(
         .first()
     )
     already_recorded = source is not None
+    same_content_source = None
+    if source is None and record.content_hash:
+        same_content_source = (
+            session.query(Source)
+            .filter_by(study_id=study.study_id, source_name=adapter.name, content_hash=record.content_hash)
+            .first()
+        )
+        if same_content_source is not None:
+            source = same_content_source
+            already_recorded = True
 
     if source is None:
         source = Source(
@@ -274,6 +284,15 @@ def _persist_source_and_facts(
         )
         session.add(source)
         session.flush()
+    elif same_content_source is not None:
+        logger.info(
+            "source %s for study %s already recorded with same content hash via %s; "
+            "skipping duplicate facts for alias %s",
+            adapter.name,
+            study.study_id,
+            same_content_source.external_identifier,
+            query_identifier,
+        )
 
     if source_type == SourceType.PUBLICATION_API:
         _apply_publication_fields(source, adapter.parse_publication_fields(record))

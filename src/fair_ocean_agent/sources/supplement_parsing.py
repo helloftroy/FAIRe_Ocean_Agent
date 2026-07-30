@@ -28,6 +28,7 @@ import zipfile
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
+import re
 
 from fair_ocean_agent.database.enums import EntityLevel
 from fair_ocean_agent.sources.base import RawFactCandidate
@@ -39,17 +40,17 @@ from fair_ocean_agent.sources.base import RawFactCandidate
 # observed data), not something to guess exhaustively up front.
 SUPPLEMENT_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     "collection_date": ("collection_date", "collection date", "date", "date_collected", "sampling_date", "sample_date"),
-    "depth": ("depth", "depth_m", "depth (m)", "sampling_depth", "water_depth"),
+    "depth": ("depth", "depth_m", "depth (m)", "depth range (m)", "sampling_depth", "water_depth"),
     "elev": ("elev", "elevation", "altitude"),
-    "geo_loc_name": ("geo_loc_name", "location", "locality", "site", "geographic_location"),
+    "geo_loc_name": ("geo_loc_name", "location", "locality", "site", "sites", "geographic_location"),
     "lat_lon": ("lat_lon", "lat/lon", "coordinates"),
     # "latitude"/"longitude" (plain, standard-agnostic) -- not FAIRe's own
     # "decimalLatitude"/"decimalLongitude" spelling. A raw fact's own
     # identity must never be a standard's field name (see extraction/
     # faire_fields.py's v2->v3 correction this session); mapping/rules.py
     # carries the correspondence to FAIRe's fields, not this alias table.
-    "latitude": ("latitude", "lat", "decimallatitude", "decimal_latitude"),
-    "longitude": ("longitude", "lon", "long", "decimallongitude", "decimal_longitude"),
+    "latitude": ("latitude", "lat", "lat.", "decimallatitude", "decimal_latitude"),
+    "longitude": ("longitude", "lon", "long", "lon.", "decimallongitude", "decimal_longitude"),
     "samp_collect_device": ("samp_collect_device", "collection_device", "sampling_device", "sampler"),
     "samp_collect_method": ("samp_collect_method", "collection_method", "sampling_method"),
     "samp_size": ("samp_size", "sample_size", "sample_volume", "sample_mass"),
@@ -63,12 +64,16 @@ SUPPLEMENT_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     "env_broad_scale": ("env_broad_scale", "biome"),
     "env_local_scale": ("env_local_scale", "environmental_feature"),
     "env_medium": ("env_medium", "environmental_material"),
-    "target_gene": ("target_gene", "gene", "marker", "locus"),
+    "target_gene": ("target_gene", "gene", "marker", "markers name", "locus"),
     "target_subfragment": ("target_subfragment", "subfragment", "region", "hypervariable_region"),
 }
 
+def _normalize_header(header: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", header.lower()).strip()
+
+
 _ALIAS_TO_CANONICAL = {
-    alias.lower(): canonical for canonical, aliases in SUPPLEMENT_COLUMN_ALIASES.items() for alias in aliases
+    _normalize_header(alias): canonical for canonical, aliases in SUPPLEMENT_COLUMN_ALIASES.items() for alias in aliases
 }
 
 # Header variants signaling "this column identifies the sample/run this row
@@ -77,9 +82,21 @@ _ALIAS_TO_CANONICAL = {
 # adapter's RawFactCandidate.entity_external_id already works) rather than
 # broadcasting study-wide.
 _SAMPLE_IDENTIFIER_ALIASES = frozenset(
-    {"sample_id", "sample_name", "sample", "biosample_accession", "specimen_id", "specimen", "station", "station_id"}
+    {
+        _normalize_header(alias)
+        for alias in (
+            "sample_id",
+            "sample_name",
+            "sample",
+            "biosample_accession",
+            "specimen_id",
+            "specimen",
+            "station",
+            "station_id",
+        )
+    }
 )
-_RUN_IDENTIFIER_ALIASES = frozenset({"run_accession", "run_id", "sra_run"})
+_RUN_IDENTIFIER_ALIASES = frozenset(_normalize_header(alias) for alias in ("run_accession", "run_id", "sra_run"))
 
 
 @dataclass
@@ -146,7 +163,7 @@ def _facts_from_rows(
     for col_index, raw_header in enumerate(header):
         if not raw_header:
             continue
-        lowered = raw_header.strip().lower()
+        lowered = _normalize_header(raw_header)
         entity_level = _entity_binding(lowered)
         if entity_level is not None and identifier_col is None:
             identifier_col = (col_index, entity_level)
@@ -166,7 +183,7 @@ def _facts_from_rows(
         locator_prefix = f"{locator_prefix}#{sheet_name}"
 
     for row_offset, row in enumerate(data_rows):
-        row_number = row_offset + 2  # +1 for 1-indexing, +1 for the header row
+        row_number = header_index + row_offset + 2  # +1 for 1-indexing, +1 for the header row
         entity_external_id = None
         entity_label = None
         entity_level = EntityLevel.STUDY
