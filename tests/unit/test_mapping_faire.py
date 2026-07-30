@@ -59,10 +59,12 @@ def test_maps_sample_level_structured_facts(db_session):
     assert values["env_broad_scale"].standardized_value == "http://purl.obolibrary.org/obo/ENVO_00000447"
     assert not values["env_broad_scale"].review_required
     assert values["geo_loc_name"].standardized_value == "USA: California"
+    assert values["geo_loc_name"].missingness_status == "present"
     assert values["decimalLatitude"].standardized_value == "38.030000"
     assert values["decimalLongitude"].standardized_value == "-122.151667"
     assert values["samp_name"].standardized_value == "SAMN1"
     assert values["samp_name"].mapping_method == "exact_identifier"
+    assert values["samp_name"].missingness_status == "present"
     assert created == len(values)
 
 

@@ -80,7 +80,7 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from fair_ocean_agent.database.enums import EntityLevel, MissingnessStatus, SupportType
+from fair_ocean_agent.database.enums import EntityLevel, MappingMethod, MissingnessStatus, SupportType
 from fair_ocean_agent.database.models import StandardizedValue
 from fair_ocean_agent.extraction.faire_fields import field_names_for_reference, render_field_reference
 from fair_ocean_agent.llm.base import LLMBackend, LLMBackendError, LLMResponse
@@ -270,18 +270,27 @@ EXTRACTION_FOCUSES: tuple[ExtractionFocus, ...] = (
 
 
 def resolved_faire_fields_for_study(session: Session, study_id: str) -> frozenset[str]:
-    """FAIRe target_field names that already have a real (`missingness_status
-    == "present"`), non-LLM-derived value for this study -- i.e. a prior
-    MAP_FAIRE pass already resolved them from a structured source. Returns
-    an empty set (never raises) if MAP_FAIRE hasn't run for this study yet,
-    which is exactly the "ask about everything" behavior this pipeline had
-    before this function existed."""
+    """FAIRe target_field names already resolved by trusted non-LLM paths.
+
+    Only non-review exact/deterministic rows suppress future LLM asks. A
+    review-required or suggested-semantic row is useful evidence, but should
+    not stop the paper/supplement text extractor from looking for a better
+    explicit statement later.
+    """
     rows = session.execute(
         select(StandardizedValue.target_field)
         .where(
             StandardizedValue.study_id == study_id,
             StandardizedValue.target_schema == TARGET_SCHEMA,
             StandardizedValue.missingness_status == MissingnessStatus.PRESENT.value,
+            StandardizedValue.review_required.is_(False),
+            StandardizedValue.mapping_method.in_(
+                (
+                    MappingMethod.EXACT_IDENTIFIER.value,
+                    MappingMethod.EXACT_LABEL.value,
+                    MappingMethod.DETERMINISTIC_SYNONYM.value,
+                )
+            ),
         )
         .distinct()
     )

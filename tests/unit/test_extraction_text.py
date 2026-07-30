@@ -1,6 +1,6 @@
 import json
 
-from fair_ocean_agent.database.enums import MissingnessStatus, SupportType
+from fair_ocean_agent.database.enums import MappingMethod, MissingnessStatus, SupportType
 from fair_ocean_agent.database.models import StandardizedValue, Study
 from fair_ocean_agent.extraction.faire_fields import all_field_names
 from fair_ocean_agent.extraction.text import (
@@ -333,7 +333,16 @@ def test_omitted_candidate_standard_fields_hint_leaves_a_valid_fact():
 # resolved_faire_fields_for_study) -----------------------------------------
 
 
-def _standardized_value(session, study, *, target_field, missingness_status, value=None):
+def _standardized_value(
+    session,
+    study,
+    *,
+    target_field,
+    missingness_status,
+    value=None,
+    mapping_method=MappingMethod.EXACT_LABEL.value,
+    review_required=False,
+):
     sv = StandardizedValue(
         study_id=study.study_id,
         target_schema=TARGET_SCHEMA,
@@ -341,6 +350,8 @@ def _standardized_value(session, study, *, target_field, missingness_status, val
         target_field=target_field,
         standardized_value=value,
         missingness_status=missingness_status,
+        mapping_method=mapping_method,
+        review_required=review_required,
     )
     session.add(sv)
     session.flush()
@@ -358,6 +369,31 @@ def test_resolved_faire_fields_for_study_returns_only_present_values(db_session)
 
     resolved = resolved_faire_fields_for_study(db_session, study.study_id)
     assert resolved == frozenset({"annealingTemp"})
+
+
+def test_resolved_faire_fields_for_study_does_not_suppress_review_or_llm_rows(db_session):
+    study = Study(title="review rows are not trusted enough to suppress LLM")
+    db_session.add(study)
+    db_session.flush()
+
+    _standardized_value(
+        db_session,
+        study,
+        target_field="annealingTemp",
+        missingness_status=MissingnessStatus.PRESENT.value,
+        value="55C",
+        review_required=True,
+    )
+    _standardized_value(
+        db_session,
+        study,
+        target_field="otu_db",
+        missingness_status=MissingnessStatus.PRESENT.value,
+        value="SILVA 138",
+        mapping_method=MappingMethod.SUGGESTED_SEMANTIC.value,
+    )
+
+    assert resolved_faire_fields_for_study(db_session, study.study_id) == frozenset()
 
 
 def test_resolved_faire_fields_for_study_is_empty_when_map_faire_never_ran(db_session):

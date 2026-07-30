@@ -36,7 +36,7 @@ from __future__ import annotations
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from fair_ocean_agent.database.enums import EntityLevel, MappingMethod
+from fair_ocean_agent.database.enums import EntityLevel, MappingMethod, MissingnessStatus
 from fair_ocean_agent.database.models import (
     Entity,
     ExternalIdentifier,
@@ -152,6 +152,7 @@ def map_study_to_faire(session: Session, study_id: str) -> int:
                 standardized_value=value,
                 mapping_method=rule.mapping_method,
                 review_required=review_required,
+                missingness_status=MissingnessStatus.PRESENT.value,
             )
             session.add(standardized_value)
             session.flush()
@@ -186,6 +187,7 @@ def map_study_to_faire(session: Session, study_id: str) -> int:
             standardized_value=entity.external_identifier,
             mapping_method=MappingMethod.EXACT_IDENTIFIER.value,
             review_required=False,
+            missingness_status=MissingnessStatus.PRESENT.value,
         )
         session.add(standardized_value)
         session.flush()
