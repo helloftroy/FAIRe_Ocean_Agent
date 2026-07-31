@@ -219,6 +219,23 @@ routes through) makes a Source belonging to more than one Study
 representable for the first time. See "Shared resolve_or_create_study()"
 below for the full design and the real 101-study validation run.
 
+**Text-extraction speed fix (v7 -> v8): real Ollama context, collapsed
+checklist passes.** Root-caused a genuine, measured ~700-900s-per-section
+slowdown to two compounding causes: Ollama's OpenAI-compatible endpoint
+silently ignoring `num_ctx` (capping every model at 4096 tokens regardless
+of config) and `extraction/text.py`'s 5-topic-focus x recall-retry split
+(sized around that same 4096-token ceiling) multiplying out to up to 10
+sequential LLM calls per section. Fixed both: a `qwen3:4b-instruct-16k`
+Ollama model variant with `num_ctx` genuinely baked into its own Modelfile,
+and `extract_facts_from_section`'s default collapsed to a single pass over
+the full checklist per chunk, with recall now only firing when a pass
+found zero facts. Measured **~12-15x** faster live (mean 61.4s/case vs.
+~700-900s/section), with JSON validity 100% and evidence verification
+98.5% on the full 18-case gold benchmark. See "Fixing the real Ollama
+context limit and collapsing the per-topic passes" below for the honest
+precision/recall numbers and why spot-checking traced most of the gap to
+pre-existing gold-data drift, not a new extraction regression.
+
 **What it does not do yet:** BeBOP/MIOP raw_fact mapping (see
 above), or discovering brand-new studies via keyword search/citation
 expansion (`DiscoveryConfig.keyword_search_enabled`/
@@ -1201,6 +1218,89 @@ pipeline against the same live model produced **32 real extracted facts,
 zero errors** (took 277s, vs. an instant failure before -- a real latency
 cost from many more, smaller calls, worth knowing about before assuming
 the fix is free).
+
+## Fixing the real Ollama context limit and collapsing the per-topic passes (v7 -> v8)
+
+The section above's own fix (chunking + 5 topic-focused passes, each with
+its own recall retry) worked, but at a real cost the milestone above
+already flagged: many more, smaller calls. Measured live on real hardware,
+that cost turned out to be much larger than "worth knowing about" implied
+-- a single real paper section (well under any char-based chunking
+threshold) took **913.8 seconds** end to end, because it triggered up to
+10 sequential LLM calls (5 topic focuses x a recall retry each, the retry
+firing almost every time since "any checklist concept unmentioned" is true
+for nearly every real section). Per-call instrumentation on that same
+section showed individual call latencies ranging **12.2s-238.3s** -- a
+30-90s+ tax paid separately by every one of those 10 calls.
+
+**Root cause, confirmed live via direct HTTP requests to both models
+side by side**: Ollama's OpenAI-compatible endpoint (`/v1/chat/completions`)
+silently ignores the `num_ctx` request option, capping every model at its
+built-in default (4096 tokens) regardless of `config.py`'s `llm.num_ctx`
+setting -- a 5,024-token prompt sent to the plain `qwen3:4b-instruct` model
+400s with `"exceeds the available context size (4096 tokens)"`; the exact
+same prompt sent to a new `qwen3:4b-instruct-16k` model (built via
+`ollama create` from the same base model plus a Modelfile with
+`PARAMETER num_ctx 16384` genuinely baked in) succeeds. The 5-focus split
+from the previous milestone was sized around that silent 4096-token
+ceiling in the first place -- once a real, larger context is available,
+the fix is smaller and structural, not just "more/smaller calls":
+`extraction/text.py` v8 now defaults `extract_facts_from_section` to a
+**single collapsed pass over the full checklist per chunk**
+(`focuses=(None,)`) instead of 5 topic-scoped passes, and narrows the
+recall retry to only fire when a pass found **zero** facts (not "any
+checklist concept went unmentioned," which was true almost every time and
+effectively doubled call volume for little benefit). `EXTRACTION_FOCUSES`
+remains fully available -- pass it explicitly as `focuses=EXTRACTION_FOCUSES`
+-- for a smaller-context model that still needs the old per-topic split.
+
+Config-side, `config/local.yaml`/`.env` now point `llm.model` at
+`qwen3:4b-instruct-16k` and raise `extraction_max_chars_per_call` from
+1600 to 16000 chars (the old value was conservative for a ~4096-token
+effective budget; the full checklist alone is ~3,300 tokens, so 16k chars
+of section text plus the checklist and a 2048-token completion budget
+comfortably fits in 16384 tokens with real margin for char/token-ratio
+estimation error). `config/benchmark_models.yaml` gained a
+`qwen3-4b-instruct-16k-ollama` candidate alongside the original
+`qwen3-4b-instruct-ollama` entry (kept as a live reference case for the
+context-limit finding itself, not removed).
+
+**Verified end to end, not assumed**: re-ran the exact same instrumented
+single-section test after the v8 change -- and separately ran the full
+18-case gold benchmark (`data/exports/benchmark/qwen3_4b_16k/`) against
+`qwen3-4b-instruct-16k`, live:
+
+| | v7 (5-focus, old context) | v8 (collapsed, real 16k context) |
+|---|---|---|
+| Mean latency per case/section | ~700-900s (measured on 1 section) | **61.4s/case** (median 50s, p95 123s) |
+| JSON validity | -- | 100% |
+| Evidence verification rate | -- | 98.5% |
+| Precision / recall / F1 | -- | 0.447 / 0.575 / 0.503 |
+
+The speed win (roughly **12-15x**) is real and directly measured, not
+estimated. The precision/recall numbers are honestly moderate, but
+spot-checking the actual returned facts (not just the score) on the
+worst-scoring cases shows the gap is mostly **gold-data quality, not a
+new extraction regression**: on `real-sponge-edna-sample-sequencing-001`
+(scored 6/25 "correct"), every one of the 25 returned facts is a real,
+evidence-verified value from the paper -- the gold file only enumerates
+17 expected facts, so genuinely-correct extra findings score as false
+positives. On `real-sponge-edna-bioinformatics-001`, several "misses" are
+gold using stale/informal label names (`storage_conditions`,
+`DNA_extraction_method`) that don't match the current taxonomy's real
+native names (`sample_storage_conditions`, `dna_extraction_kit`) the model
+correctly used instead, plus a few cases where the model copied the
+source text's own curly quotation marks verbatim (`'obicut'`) against
+gold's stripped value (`obicut`). None of these three effects are
+consequences of the v7->v8 change itself -- they're pre-existing
+gold-curation drift (the same kind of issue the earlier 12-real-paper
+gold-case cleanup this session addressed on a different axis --
+fabrication/splicing there, label/completeness drift here) that would
+affect scoring under either version of the extraction pipeline. A true
+head-to-head against the old 5-focus design wasn't run (would cost
+proportionally more of the same slow per-call time this milestone just
+fixed) -- fixing the gold-data drift itself is a deliberately separate,
+not-yet-started follow-up.
 
 ## Mapping expansion: the rest of FAIRe's Environment section
 
