@@ -1,11 +1,16 @@
 from fair_ocean_agent.extraction.faire_fields import (
     FALLBACK_NARRATIVE_FIELDS,
     FIELD_GROUPS,
+    LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS,
+    LLM_EXCLUDED_OPTIONAL_NATIVE_FIELDS,
     all_faire_hints,
     all_field_names,
+    field_names_for_reference,
     native_name_to_faire_hint,
     render_field_reference,
 )
+from fair_ocean_agent.exports.faire import class_columns
+from fair_ocean_agent.standards.faire_registry import build_faire_registry
 
 
 def test_all_field_names_covers_every_group_and_fallback():
@@ -53,13 +58,15 @@ def test_render_field_reference_includes_every_field_and_group_header():
     for group_name, fields in FIELD_GROUPS.items():
         assert f"{group_name}:" in rendered
         for f in fields:
+            if f.faire_hint in LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS:
+                continue
             assert f.native_name in rendered
             assert f.hint in rendered
 
 
 def test_render_field_reference_includes_faire_hints():
     rendered = render_field_reference()
-    for hint in all_faire_hints():
+    for hint in all_faire_hints() - LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS:
         assert hint in rendered
 
 
@@ -67,6 +74,8 @@ def test_render_field_reference_includes_fallback_section():
     rendered = render_field_reference()
     assert "General narrative fallback" in rendered
     for f in FALLBACK_NARRATIVE_FIELDS:
+        if f.native_name in LLM_EXCLUDED_OPTIONAL_NATIVE_FIELDS:
+            continue
         assert f.native_name in rendered
 
 
@@ -129,15 +138,62 @@ def test_render_field_reference_omits_group_left_empty_by_exclusion():
     assert "PCR / assay setup:" in rendered
 
 
-def test_render_field_reference_never_drops_fallback_fields():
-    """FALLBACK_NARRATIVE_FIELDS have no faire_hint by design (see
-    test_fallback_fields_have_no_faire_hint) -- excluding every real hint
-    must still leave the open-ended fallback section intact."""
+def test_render_field_reference_keeps_nonexcluded_fallback_fields():
+    """Dynamic hint exclusion must not remove unrelated fallbacks; the one
+    fallback covered by the static low-value policy stays absent."""
     rendered = render_field_reference(exclude_faire_hints=all_faire_hints())
     assert "General narrative fallback" in rendered
     for f in FALLBACK_NARRATIVE_FIELDS:
-        assert f.native_name in rendered
+        if f.native_name in LLM_EXCLUDED_OPTIONAL_NATIVE_FIELDS:
+            assert f.native_name not in rendered
+        else:
+            assert f.native_name in rendered
 
 
 def test_render_field_reference_with_no_exclusions_matches_default():
     assert render_field_reference(exclude_faire_hints=frozenset()) == render_field_reference()
+
+
+def test_low_value_optional_fields_are_excluded_from_llm_only():
+    expected_fields = frozenset(
+        {
+            "informationWithheld",
+            "dataGeneralizations",
+            "pcr_analysis_software",
+            "pcr_method_additional",
+            "pcr2_analysis_software",
+            "pcr2_method_additional",
+            "seq_method_additional",
+            "woce_sect",
+            "sequencing_location",
+            "block_seq",
+            "block_ref",
+            "block_taxa",
+            "inhibition_check_0_1",
+            "inhibition_check",
+        }
+    )
+    rendered = render_field_reference()
+    allowed_names = field_names_for_reference()
+
+    assert LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS == expected_fields
+    for field in expected_fields:
+        assert field not in rendered
+    assert "sequencing_location" not in rendered
+    assert "sequencing_location" not in allowed_names
+    assert "PCR_amplification_conditions" not in rendered
+    assert "PCR_amplification_conditions" not in allowed_names
+    assert LLM_EXCLUDED_OPTIONAL_NATIVE_FIELDS == frozenset({"PCR_amplification_conditions"})
+
+
+def test_llm_exclusions_do_not_remove_faire_registry_or_export_fields():
+    # woce_sect is guarded by the LLM policy for forward compatibility, but
+    # is not a field in the authoritative FAIRe v1.0.2 schema/workbook.
+    upstream_fields = LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS - {"woce_sect"}
+    registry_fields = {term["upstream_field_name"] for term in build_faire_registry()}
+    export_fields = set(class_columns("projectMetadata"))
+
+    assert upstream_fields <= registry_fields
+    assert upstream_fields <= export_fields
+    assert "woce_sect" not in registry_fields
+    assert "woce_sect" not in export_fields

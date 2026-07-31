@@ -40,6 +40,12 @@ some checklist concept went unmentioned -- most real sections never
 mention every concept, and retrying on partial coverage doubled call
 volume for little benefit.
 
+**v8 -> v9:** low-value optional project fields are retained in the FAIRe
+registry, structured-source mappings, and exports but omitted from both
+paper and supplement LLM checklists. The same policy also removes the
+generic PCR narrative fallback that mapped only to pcr_method_additional;
+the model still receives the atomic PCR fields that carry useful values.
+
 **Why "FAIRe-aware" matters (v1 -> v2):** v1's prompt was fully open-
 vocabulary -- "extract whatever facts you find, name them however you
 like" -- which never missed an explicitly-stated concept but also never
@@ -108,7 +114,7 @@ from fair_ocean_agent.llm.base import LLMBackend, LLMResponse
 from fair_ocean_agent.mapping.faire import TARGET_SCHEMA
 from fair_ocean_agent.sources.base import RawFactCandidate
 
-PROMPT_VERSION = "text-extraction-v8-collapsed-checklist-recall-on-empty"
+PROMPT_VERSION = "text-extraction-v9-skip-low-value-optional-fields"
 DEFAULT_MAX_SECTION_CHARS_PER_CALL = 1600
 
 ABSENT_RAW_VALUE_STRINGS = frozenset(

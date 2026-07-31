@@ -4,7 +4,7 @@ import pytest
 
 from fair_ocean_agent.database.enums import MappingMethod, MissingnessStatus, SupportType
 from fair_ocean_agent.database.models import StandardizedValue, Study
-from fair_ocean_agent.extraction.faire_fields import all_field_names
+from fair_ocean_agent.extraction.faire_fields import field_names_for_reference
 from fair_ocean_agent.extraction.text import (
     EXTRACTION_INSTRUCTIONS,
     EXTRACTION_FOCUSES,
@@ -148,7 +148,7 @@ def test_extract_facts_from_section_chunks_long_text_and_merges_facts():
 
 
 def test_prompt_version_is_stable_constant():
-    assert PROMPT_VERSION == "text-extraction-v8-collapsed-checklist-recall-on-empty"
+    assert PROMPT_VERSION == "text-extraction-v9-skip-low-value-optional-fields"
 
 
 def test_recall_second_pass_does_not_fire_when_first_pass_finds_any_facts():
@@ -305,8 +305,8 @@ def test_segments_for_focus_skips_unrelated_topic_prompts():
     assert [segment.segment_id for segment in segments_for_focus("Methods", segments, sequencing_focus)] == ["METHODS.P002"]
 
 
-def test_every_native_field_name_appears_in_instructions():
-    for field_name in all_field_names():
+def test_every_llm_enabled_native_field_name_appears_in_instructions():
+    for field_name in field_names_for_reference():
         assert field_name in EXTRACTION_INSTRUCTIONS, f"{field_name!r} missing from the extraction prompt"
 
 

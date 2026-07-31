@@ -38,6 +38,37 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
+# Optional projectMetadata fields that remain part of the FAIRe registry,
+# mappings, and exports but are not worth spending local-model context or
+# generation time on. Structured adapters may still populate them. Keeping
+# this policy beside the prompt taxonomy also prevents a future taxonomy
+# expansion from silently adding one of these fields back to either paper
+# or supplement LLM extraction.
+LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS = frozenset(
+    {
+        "informationWithheld",
+        "dataGeneralizations",
+        "pcr_analysis_software",
+        "pcr_method_additional",
+        "pcr2_analysis_software",
+        "pcr2_method_additional",
+        "seq_method_additional",
+        "woce_sect",
+        "sequencing_location",
+        "block_seq",
+        "block_ref",
+        "block_taxa",
+        "inhibition_check_0_1",
+        "inhibition_check",
+    }
+)
+
+# Narrative fallbacks do not carry a FAIRe hint, so target-field filtering
+# cannot remove them. This one maps only to the excluded free-text
+# pcr_method_additional field; atomic PCR facts remain in the checklist.
+LLM_EXCLUDED_OPTIONAL_NATIVE_FIELDS = frozenset({"PCR_amplification_conditions"})
+
+
 @dataclass(frozen=True)
 class FaireExtractionField:
     native_name: str
@@ -212,14 +243,16 @@ def field_names_for_reference(
     include_group_names: frozenset[str] | None = None,
     include_fallback_names: frozenset[str] | None = None,
 ) -> frozenset[str]:
+    excluded_hints = exclude_faire_hints | LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS
     names: set[str] = set()
     for group_name, fields in FIELD_GROUPS.items():
         if include_group_names is not None and group_name not in include_group_names:
             continue
-        names.update(f.native_name for f in fields if f.faire_hint not in exclude_faire_hints)
+        names.update(f.native_name for f in fields if f.faire_hint not in excluded_hints)
     names.update(
         f.native_name
         for f in FALLBACK_NARRATIVE_FIELDS
+        if f.native_name not in LLM_EXCLUDED_OPTIONAL_NATIVE_FIELDS
         if include_fallback_names is None or f.native_name in include_fallback_names
     )
     return frozenset(names)
@@ -243,17 +276,18 @@ def render_field_reference(
     already in that set -- used to skip asking the model about concepts
     already resolved from structured sources (NCBI/ENA/PANGAEA/...) for a
     given study, before ever calling the LLM (see
-    extraction/text.py's resolved_faire_fields_for_study). An entry with no
-    faire_hint can never match and always stays; FALLBACK_NARRATIVE_FIELDS
-    (no faire_hint at all, by design) are never filtered by this -- there's
-    no structured-field correspondence to check them against. A group left
-    with zero remaining entries after filtering is omitted entirely rather
-    than rendered as an empty heading.
+    extraction/text.py's resolved_faire_fields_for_study). The static
+    LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS policy is always applied as well.
+    Most entries with no faire_hint stay, but narrative fallbacks that map
+    only to an excluded optional field are removed through
+    LLM_EXCLUDED_OPTIONAL_NATIVE_FIELDS. A group left with zero remaining
+    entries is omitted rather than rendered as an empty heading.
 
     `include_group_names` and `include_fallback_names` let extraction/text.py
     render smaller topic-focused checklists for local 4B models while still
     drawing every concept from this same taxonomy.
     """
+    excluded_hints = exclude_faire_hints | LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS
     lines: list[str] = []
     for group_name, fields in FIELD_GROUPS.items():
         if include_group_names is not None and group_name not in include_group_names:
@@ -261,7 +295,7 @@ def render_field_reference(
         remaining = [
             f
             for f in fields
-            if f.faire_hint not in exclude_faire_hints
+            if f.faire_hint not in excluded_hints
             and (include_native_names is None or f.native_name in include_native_names)
         ]
         if not remaining:
@@ -274,6 +308,7 @@ def render_field_reference(
     fallback_fields = [
         f
         for f in FALLBACK_NARRATIVE_FIELDS
+        if f.native_name not in LLM_EXCLUDED_OPTIONAL_NATIVE_FIELDS
         if include_fallback_names is None or f.native_name in include_fallback_names
         if include_native_names is None or f.native_name in include_native_names
     ]
