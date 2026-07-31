@@ -9,14 +9,21 @@ import pytest
 from fair_ocean_agent.database.enums import (
     CanonicalStatus,
     EntityLevel,
+    EntityRelationshipType,
     IdentifierType,
     RelationshipType,
     SupportType,
 )
-from fair_ocean_agent.database.models import Entity, ExternalIdentifier, RawFact, Source, Study
+from fair_ocean_agent.database.models import Entity, EntityRelationship, ExternalIdentifier, RawFact, Source, Study
 from fair_ocean_agent.database.enums import TaskType
 from fair_ocean_agent.identity.identifiers import normalize_identifier
-from fair_ocean_agent.sources.base import RawFactCandidate, RelatedIdentifier, SourceRecord, SourceRecordNotFoundError
+from fair_ocean_agent.sources.base import (
+    EntityLinkCandidate,
+    RawFactCandidate,
+    RelatedIdentifier,
+    SourceRecord,
+    SourceRecordNotFoundError,
+)
 from fair_ocean_agent.workflow import handlers
 from fair_ocean_agent.workflow.task_queue import enqueue_task
 
@@ -139,6 +146,72 @@ def test_biosample_facts_create_per_sample_entities(db_session, monkeypatch):
 
     sample_one_facts = db_session.query(RawFact).filter_by(entity_id=sample_one_entity.entity_id).all()
     assert {f.raw_field_name for f in sample_one_facts} == {"collection_date", "depth"}
+
+
+def test_experiment_library_links_sample_assay_and_shared_sequencing_run(db_session, monkeypatch):
+    study = _seeded_study(db_session, ena_accession="ERP123456")
+    task = _task_for(db_session, study)
+    run_link = EntityLinkCandidate(
+        entity_level=EntityLevel.SEQUENCING_RUN,
+        external_identifier="ERR1",
+        relationship_type=EntityRelationshipType.SEQUENCED_IN_RUN,
+    )
+    sample_link = EntityLinkCandidate(
+        entity_level=EntityLevel.SAMPLE,
+        external_identifier="SAMEA1",
+        relationship_type=EntityRelationshipType.DERIVED_FROM_SAMPLE,
+    )
+    assay_link = EntityLinkCandidate(
+        entity_level=EntityLevel.ASSAY,
+        external_identifier="MiFish-12S",
+        relationship_type=EntityRelationshipType.USES_ASSAY,
+    )
+    facts = [
+        RawFactCandidate(
+            entity_level=EntityLevel.SEQUENCING_RUN,
+            fact_type_candidate="run_accession",
+            raw_field_name="run_accession",
+            raw_value="ERR1",
+            source_locator="ena.read_run.ERR1.run_accession",
+            entity_external_id="ERR1",
+        )
+    ] + [
+        RawFactCandidate(
+            entity_level=EntityLevel.EXPERIMENT_RUN,
+            fact_type_candidate=field,
+            raw_field_name=field,
+            raw_value=value,
+            source_locator=f"ena.read_run.ERR1.{field}",
+            entity_external_id=lib_id,
+            entity_links=[sample_link, assay_link, run_link],
+        )
+        for lib_id, field, value in (
+            ("LIB1", "lib_id", "LIB1"),
+            ("LIB2", "lib_id", "LIB2"),
+        )
+    ]
+    ena = FakeAdapter("ena", record=_make_record("ena", external_identifier="ERP123456"), facts=facts)
+    monkeypatch.setattr(handlers, "_build_enabled_adapters", lambda: {"ena": ena})
+
+    handlers.handle_discover_identifiers(db_session, task)
+    db_session.commit()
+
+    experiments = db_session.query(Entity).filter_by(
+        study_id=study.study_id,
+        entity_level=EntityLevel.EXPERIMENT_RUN.value,
+    ).all()
+    assert {entity.external_identifier for entity in experiments} == {"LIB1", "LIB2"}
+    sequencing_run = db_session.query(Entity).filter_by(
+        study_id=study.study_id,
+        entity_level=EntityLevel.SEQUENCING_RUN.value,
+        external_identifier="ERR1",
+    ).one()
+    run_links = db_session.query(EntityRelationship).filter_by(
+        study_id=study.study_id,
+        relationship_type=EntityRelationshipType.SEQUENCED_IN_RUN.value,
+        to_entity_id=sequencing_run.entity_id,
+    ).all()
+    assert {link.from_entity_id for link in run_links} == {entity.entity_id for entity in experiments}
 
 
 def test_bioproject_title_propagates_to_study_when_no_doi(db_session, monkeypatch):

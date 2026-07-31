@@ -90,7 +90,7 @@ from fair_ocean_agent.workflow.handlers import (
     _apply_related_identifiers,
     _build_enabled_adapters,
     _build_llm_backend_cached,
-    _get_or_create_entity,
+    _materialize_candidate_entity,
 )
 from fair_ocean_agent.workflow.task_queue import enqueue_task
 from fair_ocean_agent.workflow.worker import TASK_HANDLERS
@@ -262,11 +262,13 @@ def _persist_supplement_facts(
     prompt_version: str | None = None,
 ) -> None:
     for fact in facts:
-        entity_id = None
-        if fact.entity_external_id:
-            entity_id = _get_or_create_entity(
-                session, study.study_id, fact.entity_level, fact.entity_external_id, fact.entity_label
-            ).entity_id
+        entity = _materialize_candidate_entity(
+            session,
+            study.study_id,
+            fact,
+            internal_namespace=source.source_id,
+        )
+        entity_id = entity.entity_id if entity is not None else None
         session.add(
             RawFact(
                 study_id=study.study_id,

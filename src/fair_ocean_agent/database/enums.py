@@ -104,10 +104,17 @@ class EntityLevel(str, enum.Enum):
     SAMPLING_EVENT = "sampling_event"
     SAMPLE = "sample"
     ASSAY = "assay"
+    EXPERIMENT_RUN = "experiment_run"
     SEQUENCING_RUN = "sequencing_run"
     PROTOCOL = "protocol"
     BIOINFORMATICS_WORKFLOW = "bioinformatics_workflow"
     DATA_ASSET = "data_asset"
+
+
+class EntityRelationshipType(str, enum.Enum):
+    DERIVED_FROM_SAMPLE = "derived_from_sample"
+    USES_ASSAY = "uses_assay"
+    SEQUENCED_IN_RUN = "sequenced_in_run"
 
 
 class SupportType(str, enum.Enum):

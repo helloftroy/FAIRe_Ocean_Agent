@@ -270,6 +270,35 @@ class Entity(Base, TimestampMixin):
     study: Mapped["Study"] = relationship(back_populates="entities")
 
 
+class EntityRelationship(Base, TimestampMixin):
+    """Typed links between study sub-entities.
+
+    In particular, a FAIRe experimentRunMetadata row is an EXPERIMENT_RUN
+    (a sample/assay-specific library), not a SEQUENCING_RUN. These links
+    let multiple libraries point at one physical sequencing run without
+    collapsing the two identities.
+    """
+
+    __tablename__ = "entity_relationships"
+    __table_args__ = (
+        UniqueConstraint(
+            "from_entity_id",
+            "to_entity_id",
+            "relationship_type",
+            name="uq_entity_relationship",
+        ),
+        Index("ix_entity_relationships_study_type", "study_id", "relationship_type"),
+    )
+
+    entity_relationship_id: Mapped[str] = mapped_column(
+        String, primary_key=True, default=lambda: new_id("ENTREL")
+    )
+    study_id: Mapped[str] = mapped_column(ForeignKey("studies.study_id"), index=True)
+    from_entity_id: Mapped[str] = mapped_column(ForeignKey("entities.entity_id", ondelete="CASCADE"), index=True)
+    to_entity_id: Mapped[str] = mapped_column(ForeignKey("entities.entity_id", ondelete="CASCADE"), index=True)
+    relationship_type: Mapped[str] = mapped_column(String)
+
+
 class RawFact(Base, TimestampMixin):
     __tablename__ = "raw_facts"
     __table_args__ = (

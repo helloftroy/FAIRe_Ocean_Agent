@@ -44,6 +44,7 @@ from fair_ocean_agent.database.models import (
     StandardizedValue,
     StandardizedValueEvidence,
 )
+from fair_ocean_agent.extraction.experiment_runs import materialize_legacy_experiment_runs
 from fair_ocean_agent.mapping import vocabularies
 from fair_ocean_agent.mapping.rules import MappingRule, rules_for
 
@@ -89,18 +90,11 @@ def _resolve_entity_id(session: Session, study_id: str, fact: RawFact, rule: Map
         return sample.entity_id if sample else None
     if rule.target_table == "projectMetadata":
         return None
-    if fact.entity_level in (EntityLevel.SAMPLE.value, EntityLevel.SEQUENCING_RUN.value):
-        # A run-level fact (e.g. ENA's per-run fastq_ftp/fastq_md5/read_count,
-        # mapped onto experimentRunMetadata's filename/checksum_filename/
-        # input_read_count) genuinely differs run to run -- unlike
-        # instrument_platform/instrument_model, which map onto
-        # projectMetadata and are expected to agree across a study's runs
-        # (see the target_table check above), so those still correctly
-        # collapse to one project-wide row. Before this, every
-        # SEQUENCING_RUN-level rule targeting a *per-entity* table (not
-        # projectMetadata) fell through to the study-wide broadcast default
-        # below, silently discarding all but one run's value the first time
-        # a real per-run field (rather than platform/instrument) was mapped.
+    if fact.entity_level in (
+        EntityLevel.SAMPLE.value,
+        EntityLevel.EXPERIMENT_RUN.value,
+        EntityLevel.SEQUENCING_RUN.value,
+    ):
         return fact.entity_id
     return None  # study-wide fact mapped onto a sample-scoped field: broadcast default
 
@@ -109,6 +103,7 @@ def map_study_to_faire(session: Session, study_id: str) -> int:
     """Idempotent: re-derives every FAIRe StandardizedValue for a study
     from scratch each time it's called (delete-then-recreate), so it's safe
     to call again after new raw_facts arrive or after a rules.py change."""
+    materialize_legacy_experiment_runs(session, study_id)
     _clear_existing_faire_mappings(session, study_id)
 
     facts = list(session.scalars(select(RawFact).where(RawFact.study_id == study_id)))
@@ -171,9 +166,12 @@ def map_study_to_faire(session: Session, study_id: str) -> int:
         if entity.entity_level == EntityLevel.SAMPLE.value:
             key = ("sampleMetadata", "samp_name", entity.entity_id)
             target_field = "samp_name"
-        elif entity.entity_level == EntityLevel.SEQUENCING_RUN.value:
-            key = ("experimentRunMetadata", "seq_run_id", entity.entity_id)
-            target_field = "seq_run_id"
+        elif (
+            entity.entity_level == EntityLevel.EXPERIMENT_RUN.value
+            and not entity.external_identifier.startswith("internal:")
+        ):
+            key = ("experimentRunMetadata", "lib_id", entity.entity_id)
+            target_field = "lib_id"
         else:
             continue
         if key in seen:

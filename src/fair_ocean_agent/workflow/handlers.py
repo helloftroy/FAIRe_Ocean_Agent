@@ -18,6 +18,7 @@ from fair_ocean_agent.config import load_config, load_sources_config
 from fair_ocean_agent.database.enums import (
     AccessStatus,
     EntityLevel,
+    EntityRelationshipType,
     IdentifierType,
     InspectionLevel,
     InspectionStatus,
@@ -25,7 +26,7 @@ from fair_ocean_agent.database.enums import (
     SourceType,
     TaskType,
 )
-from fair_ocean_agent.database.models import Entity, ExternalIdentifier, RawFact, Source, Study, Task
+from fair_ocean_agent.database.models import Entity, EntityRelationship, ExternalIdentifier, RawFact, Source, Study, Task
 from fair_ocean_agent.discovery.text_identifiers import (
     extract_repository_identifiers_from_text,
     verify_deterministic_identifier,
@@ -45,6 +46,7 @@ from fair_ocean_agent.logging_setup import get_logger
 from fair_ocean_agent.mapping.faire import map_study_to_faire
 from fair_ocean_agent.sources.base import (
     RateLimitedClient,
+    RawFactCandidate,
     RelatedIdentifier,
     SourceAdapter,
     SourceConfig,
@@ -224,6 +226,80 @@ def _get_or_create_entity(
     return entity
 
 
+def _get_or_create_entity_relationship(
+    session: Session,
+    study_id: str,
+    from_entity_id: str,
+    to_entity_id: str,
+    relationship_type: EntityRelationshipType,
+) -> EntityRelationship:
+    existing = session.scalar(
+        select(EntityRelationship).where(
+            EntityRelationship.study_id == study_id,
+            EntityRelationship.from_entity_id == from_entity_id,
+            EntityRelationship.to_entity_id == to_entity_id,
+            EntityRelationship.relationship_type == relationship_type.value,
+        )
+    )
+    if existing is not None:
+        return existing
+    relationship = EntityRelationship(
+        study_id=study_id,
+        from_entity_id=from_entity_id,
+        to_entity_id=to_entity_id,
+        relationship_type=relationship_type.value,
+    )
+    session.add(relationship)
+    session.flush()
+    return relationship
+
+
+def _materialize_candidate_entity(
+    session: Session,
+    study_id: str,
+    fact: RawFactCandidate,
+    internal_namespace: str | None = None,
+) -> Entity | None:
+    if not fact.entity_external_id:
+        return None
+    external_identifier = fact.entity_external_id
+    if internal_namespace and external_identifier.startswith("internal:"):
+        external_identifier = f"{external_identifier}:source:{internal_namespace}"
+    entity = _get_or_create_entity(
+        session,
+        study_id,
+        fact.entity_level,
+        external_identifier,
+        fact.entity_label,
+    )
+    for link in fact.entity_links:
+        target = _get_or_create_entity(
+            session,
+            study_id,
+            link.entity_level,
+            link.external_identifier,
+            link.label,
+        )
+        _get_or_create_entity_relationship(
+            session,
+            study_id,
+            entity.entity_id,
+            target.entity_id,
+            link.relationship_type,
+        )
+        if link.relationship_type == EntityRelationshipType.DERIVED_FROM_SAMPLE:
+            if entity.parent_entity_id is None:
+                entity.parent_entity_id = target.entity_id
+            elif entity.parent_entity_id != target.entity_id:
+                logger.warning(
+                    "entity %s is linked to conflicting sample parents %s and %s; preserving the first",
+                    entity.entity_id,
+                    entity.parent_entity_id,
+                    target.entity_id,
+                )
+    return entity
+
+
 PersistFn = Callable[[Session, Study, SourceAdapter, SourceType, str, SourceRecord], tuple[bool, Source]]
 
 
@@ -307,11 +383,8 @@ def _persist_source_and_facts(
         return False, source
 
     for fact in adapter.extract_structured_facts(record):
-        entity_id = None
-        if fact.entity_external_id:
-            entity_id = _get_or_create_entity(
-                session, study.study_id, fact.entity_level, fact.entity_external_id, fact.entity_label
-            ).entity_id
+        entity = _materialize_candidate_entity(session, study.study_id, fact)
+        entity_id = entity.entity_id if entity is not None else None
         session.add(
             RawFact(
                 study_id=study.study_id,

@@ -98,8 +98,8 @@ deterministic rule application over already-extracted facts.
 
 ## Why `entities` is one generic table, not one table per level
 
-`EntityLevel` (project, sampling_event, sample, assay, sequencing_run,
-protocol, bioinformatics_workflow, data_asset) is a column, not a set of
+`EntityLevel` (project, sampling_event, sample, assay, experiment_run,
+sequencing_run, protocol, bioinformatics_workflow, data_asset) is a column, not a set of
 separate tables with separate foreign keys. A new entity level is a new
 enum value, not a migration. Level-specific attributes live in
 `raw_facts`/`standardized_values` keyed by `entity_id`, not as columns on
@@ -116,6 +116,16 @@ enforced by a real unique constraint (`uq_entity_study_level_external_id`).
 NULL is exempt from that constraint in both SQLite and PostgreSQL (`NULL
 <> NULL` in standard SQL), so entity levels with no independent accession
 (sampling_event, assay, protocol, ...) can have any number of NULL rows.
+
+`experiment_run` is the row-owning entity for FAIRe
+`experimentRunMetadata`: one sample- and assay-specific library, identified
+by `lib_id` when the source reports one. It is deliberately distinct from
+`sequencing_run`, the physical run/file event. `entity_relationships`
+records `derived_from_sample`, `uses_assay`, and `sequenced_in_run`, so two
+library entities can share one sequencing run without merging their PCR
+well, MID/barcode, concentration, or file metadata. A source that omits
+`lib_id` gets an `internal:` entity key for traceability, but no fabricated
+FAIRe `lib_id` value.
 
 `RawFactCandidate.entity_external_id`/`entity_label` (also Milestone 3) is
 how an adapter tells the handler "this fact is about sub-entity X, not the

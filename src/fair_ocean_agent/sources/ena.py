@@ -10,10 +10,16 @@ NCBI's SRA XML. See sources/ncbi.py's module docstring.
 from __future__ import annotations
 
 from fair_ocean_agent.clock import utcnow
-from fair_ocean_agent.database.enums import EntityLevel, IdentifierType, RelationshipType
+from fair_ocean_agent.database.enums import (
+    EntityLevel,
+    EntityRelationshipType,
+    IdentifierType,
+    RelationshipType,
+)
 from fair_ocean_agent.identity.identifiers import guess_identifier_type
 from fair_ocean_agent.logging_setup import get_logger
 from fair_ocean_agent.sources.base import (
+    EntityLinkCandidate,
     RawFactCandidate,
     RelatedIdentifier,
     SearchPage,
@@ -28,7 +34,8 @@ logger = get_logger(__name__)
 
 STUDY_FIELDS = "study_accession,secondary_study_accession,study_title,study_description,center_name,first_public"
 RUN_FIELDS = (
-    "run_accession,sample_accession,library_strategy,library_source,library_selection,"
+    "run_accession,sample_accession,experiment_accession,experiment_alias,experiment_title,experiment_target,"
+    "library_name,library_strategy,library_source,library_selection,"
     "library_layout,library_construction_protocol,instrument_platform,instrument_model,"
     "base_count,read_count,fastq_bytes,fastq_md5,fastq_ftp,first_public"
 )
@@ -155,6 +162,85 @@ class EnaAdapter(SourceAdapter):
                         source_locator=f"ena.read_run.{run_accession}.{field}",
                         entity_external_id=run_accession,
                         entity_label=run_accession,
+                    )
+                )
+
+            # ENA's experiment is the library-producing instance; the run
+            # is the physical sequencing event/file set. Keep the original
+            # sequencing_run facts above for inventory and provenance, and
+            # attach FAIRe row-shaped facts to a distinct experiment_run.
+            experiment_accession = run.get("experiment_accession")
+            library_name = run.get("library_name")
+            experiment_id = experiment_accession or library_name or f"internal:ena:{run_accession}"
+            sample_accession = run.get("sample_accession")
+            links = [
+                EntityLinkCandidate(
+                    entity_level=EntityLevel.SEQUENCING_RUN,
+                    external_identifier=run_accession,
+                    relationship_type=EntityRelationshipType.SEQUENCED_IN_RUN,
+                    label=run_accession,
+                )
+            ]
+            if sample_accession:
+                links.append(
+                    EntityLinkCandidate(
+                        entity_level=EntityLevel.SAMPLE,
+                        external_identifier=sample_accession,
+                        relationship_type=EntityRelationshipType.DERIVED_FROM_SAMPLE,
+                        label=sample_accession,
+                    )
+                )
+
+            experiment_facts: list[tuple[str, str, str]] = []
+            if library_name or experiment_accession:
+                # ENA experiment accessions are archive-unique; submitter
+                # library names are not guaranteed unique. Prefer the
+                # accession for FAIRe's required unique lib_id and retain
+                # library_name separately as source-native metadata.
+                chosen_field = "experiment_accession" if experiment_accession else "library_name"
+                experiment_facts.append(("lib_id", chosen_field, str(experiment_accession or library_name)))
+            if sample_accession:
+                experiment_facts.append(("samp_name", "sample_accession", str(sample_accession)))
+            experiment_facts.extend(
+                (
+                    ("seq_run_id", "run_accession", str(run_accession)),
+                    ("associatedSequences", "run_accession", str(run_accession)),
+                )
+            )
+            for field in (
+                "experiment_accession",
+                "experiment_alias",
+                "experiment_title",
+                "experiment_target",
+                "library_name",
+                "library_strategy",
+                "library_source",
+                "library_selection",
+                "library_layout",
+                "library_construction_protocol",
+                "instrument_platform",
+                "instrument_model",
+                "base_count",
+                "read_count",
+                "fastq_bytes",
+                "fastq_md5",
+                "fastq_ftp",
+            ):
+                value = run.get(field)
+                if value not in (None, ""):
+                    experiment_facts.append((field, field, str(value)))
+
+            for fact_type, raw_field, value in experiment_facts:
+                facts.append(
+                    RawFactCandidate(
+                        entity_level=EntityLevel.EXPERIMENT_RUN,
+                        fact_type_candidate=fact_type,
+                        raw_field_name=raw_field,
+                        raw_value=value,
+                        source_locator=f"ena.read_run.{run_accession}.{raw_field}",
+                        entity_external_id=str(experiment_id),
+                        entity_label=str(library_name or experiment_accession or f"Library for {run_accession}"),
+                        entity_links=links,
                     )
                 )
         return facts

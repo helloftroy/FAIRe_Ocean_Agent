@@ -28,9 +28,11 @@ adapters (E-utilities: esearch/elink/efetch, XML parsing) and an ENA
 adapter (study + read_run, clean JSON) added to the same handler --
 BioProject/ENA-accession-keyed studies now get real per-sample structured
 metadata (collection date, depth, lat/lon, ENVO terms, ...) materialized as
-`sample` Entity rows, and per-run sequencing metadata (library
-strategy/source, platform, file accession/size/checksum -- never the file
-itself) as `sequencing_run` Entity rows. A study with both a DOI and a
+`sample` Entity rows, physical run/file metadata as `sequencing_run`
+entities, and sample/assay-specific library instances as `experiment_run`
+entities. Explicit entity relationships preserve sample -> library,
+library -> assay, and library -> sequencing-run links, including multiple
+libraries multiplexed on one physical run. A study with both a DOI and a
 BioProject accession gets both resolved in one task. Validated against a
 real public BioProject (837 linked BioSamples, 500+ sequencing runs) --
 see "Real seed data" below.

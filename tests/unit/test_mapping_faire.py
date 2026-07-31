@@ -303,8 +303,18 @@ def test_run_level_file_facts_get_one_row_per_run_not_collapsed(db_session):
         sv.entity_id: sv.standardized_value
         for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id, target_field="input_read_count")
     }
-    assert filenames == {run_a.entity_id: "SRR_A.fastq.gz", run_b.entity_id: "SRR_B.fastq.gz"}
-    assert read_counts == {run_a.entity_id: "1000", run_b.entity_id: "2000"}
+    experiment_ids = {
+        entity.entity_id
+        for entity in db_session.query(Entity).filter_by(
+            study_id=study.study_id,
+            entity_level=EntityLevel.EXPERIMENT_RUN.value,
+        )
+    }
+    assert set(filenames) == experiment_ids
+    assert set(read_counts) == experiment_ids
+    assert set(filenames.values()) == {"SRR_A.fastq.gz", "SRR_B.fastq.gz"}
+    assert set(read_counts.values()) == {"1000", "2000"}
+    assert not ({run_a.entity_id, run_b.entity_id} & set(filenames))
 
 
 def test_run_level_checksum_method_and_lib_layout_still_collapse_project_wide(db_session):
@@ -409,7 +419,11 @@ def test_maps_ena_run_accession_and_library_construction_protocol(db_session):
         sv.target_field: sv
         for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id)
     }
-    assert values["associatedSequences"].entity_id == run.entity_id
+    experiment = db_session.query(Entity).filter_by(
+        study_id=study.study_id,
+        entity_level=EntityLevel.EXPERIMENT_RUN.value,
+    ).one()
+    assert values["associatedSequences"].entity_id == experiment.entity_id
     assert values["associatedSequences"].standardized_value == "ERR123"
     assert values["pcr_method_additional"].entity_id is None
     assert values["pcr_method_additional"].review_required is True
@@ -442,10 +456,10 @@ def test_dedups_identical_project_wide_facts_across_many_runs(db_session):
         .all()
     )
     assert len(project_rows) == 1
-    assert len(run_rows) == 5
+    assert len(run_rows) == 0
     assert project_rows[0].standardized_value == "ILLUMINA"
     assert not project_rows[0].review_required
-    assert created == 11  # 1 project platform + 5 run platforms + 5 derived seq_run_id rows
+    assert created == 1
 
 
 def test_flags_review_required_on_conflicting_project_wide_facts(db_session):
@@ -473,7 +487,7 @@ def test_flags_review_required_on_conflicting_project_wide_facts(db_session):
     )
     assert len(project_rows) == 1  # first project-wide value wins, no duplicate row
     assert project_rows[0].review_required is True  # but the disagreement isn't silently dropped
-    assert len(run_rows) == 2  # per-run experiment metadata is still retained
+    assert len(run_rows) == 0  # platform is project metadata, never a library/run-row field
 
 
 def test_flags_review_required_when_value_fails_closed_vocab_check(db_session):
@@ -490,15 +504,7 @@ def test_flags_review_required_when_value_fails_closed_vocab_check(db_session):
     project_row = db_session.query(StandardizedValue).filter_by(
         study_id=study.study_id, target_field="platform", entity_id=None
     ).one()
-    run_row = (
-        db_session.query(StandardizedValue)
-        .filter(StandardizedValue.study_id == study.study_id)
-        .filter(StandardizedValue.target_field == "platform")
-        .filter(StandardizedValue.entity_id.is_not(None))
-        .one()
-    )
     assert project_row.review_required is True
-    assert run_row.review_required is True
 
 
 def test_sample_accession_redirects_to_matching_sample_entity_not_the_run(db_session):
@@ -518,7 +524,7 @@ def test_sample_accession_redirects_to_matching_sample_entity_not_the_run(db_ses
     assert row.entity_id != run.entity_id
 
 
-def test_sample_accession_with_no_matching_sample_entity_is_skipped_not_fabricated(db_session):
+def test_sample_accession_materializes_referenced_sample_identity(db_session):
     study = _study(db_session, title="No matching sample")
     run = Entity(study_id=study.study_id, entity_level=EntityLevel.SEQUENCING_RUN.value, external_identifier="SRR1")
     db_session.add(run)
@@ -529,15 +535,22 @@ def test_sample_accession_with_no_matching_sample_entity_is_skipped_not_fabricat
     created = map_study_to_faire(db_session, study.study_id)
     db_session.commit()
 
-    assert db_session.query(StandardizedValue).filter_by(
-        study_id=study.study_id, target_field="materialSampleID"
-    ).count() == 0
-    values = {
-        sv.target_field: sv.standardized_value
-        for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id)
-    }
-    assert values == {"samp_name": "SAMN_NONEXISTENT", "seq_run_id": "SRR1"}
-    assert created == 2
+    sample = db_session.query(Entity).filter_by(
+        study_id=study.study_id,
+        entity_level=EntityLevel.SAMPLE.value,
+        external_identifier="SAMN_NONEXISTENT",
+    ).one()
+    material = db_session.query(StandardizedValue).filter_by(
+        study_id=study.study_id,
+        target_field="materialSampleID",
+    ).one()
+    assert material.entity_id == sample.entity_id
+    experiment = db_session.query(Entity).filter_by(
+        study_id=study.study_id,
+        entity_level=EntityLevel.EXPERIMENT_RUN.value,
+    ).one()
+    assert experiment.parent_entity_id == sample.entity_id
+    assert created == 3
 
 
 def test_llm_blob_fact_is_broadcast_and_flagged_for_review(db_session):

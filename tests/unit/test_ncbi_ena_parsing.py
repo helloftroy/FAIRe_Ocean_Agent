@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from fair_ocean_agent.database.enums import EntityLevel, IdentifierType
+from fair_ocean_agent.database.enums import EntityLevel, EntityRelationshipType, IdentifierType
 from fair_ocean_agent.sources.base import SourceConfig, SourceRecord
 from fair_ocean_agent.sources.ena import EnaAdapter
 from fair_ocean_agent.sources.ncbi import NcbiBioProjectAdapter, NcbiBioSampleAdapter
@@ -141,6 +141,8 @@ def test_ena_extract_structured_facts_splits_project_and_run_level(ena_adapter):
             {
                 "run_accession": "SRR1",
                 "sample_accession": "SAMN1",
+                "experiment_accession": "SRX1",
+                "library_name": "LIB1",
                 "library_strategy": "AMPLICON",
                 "library_source": "METAGENOMIC",
                 "fastq_ftp": "ftp.sra.ebi.ac.uk/vol1/fastq/SRR001/SRR1.fastq.gz",
@@ -154,12 +156,26 @@ def test_ena_extract_structured_facts_splits_project_and_run_level(ena_adapter):
 
     project_facts = [f for f in facts if f.entity_level == EntityLevel.PROJECT]
     run_facts = [f for f in facts if f.entity_level == EntityLevel.SEQUENCING_RUN]
+    experiment_facts = [f for f in facts if f.entity_level == EntityLevel.EXPERIMENT_RUN]
     assert {f.fact_type_candidate for f in project_facts} == {
         "study_title", "study_description", "center_name", "first_public", "secondary_study_accession",
     }
     assert all(f.entity_external_id == "SRR1" for f in run_facts)
     assert {f.fact_type_candidate for f in run_facts} == {
         "run_accession", "sample_accession", "library_strategy", "library_source", "fastq_ftp", "fastq_bytes",
+    }
+    assert all(f.entity_external_id == "SRX1" for f in experiment_facts)
+    by_type = {fact.fact_type_candidate: fact for fact in experiment_facts}
+    assert by_type["lib_id"].raw_value == "SRX1"
+    assert by_type["library_name"].raw_value == "LIB1"
+    assert by_type["samp_name"].raw_value == "SAMN1"
+    assert by_type["seq_run_id"].raw_value == "SRR1"
+    assert {
+        (link.entity_level, link.external_identifier, link.relationship_type)
+        for link in by_type["lib_id"].entity_links
+    } == {
+        (EntityLevel.SAMPLE, "SAMN1", EntityRelationshipType.DERIVED_FROM_SAMPLE),
+        (EntityLevel.SEQUENCING_RUN, "SRR1", EntityRelationshipType.SEQUENCED_IN_RUN),
     }
 
 

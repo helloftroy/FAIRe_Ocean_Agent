@@ -8,7 +8,7 @@ import zipfile
 import openpyxl
 import pytest
 
-from fair_ocean_agent.database.enums import EntityLevel
+from fair_ocean_agent.database.enums import EntityLevel, EntityRelationshipType
 from fair_ocean_agent.sources.supplement_parsing import (
     ZipMemberTooLargeError,
     _column_letter,
@@ -51,17 +51,19 @@ def test_parse_delimited_table_binds_recognized_identifier_column_to_sample_enti
     assert fact.entity_label == "S1"
 
 
-def test_parse_delimited_table_binds_experiment_run_columns_to_run_entity():
+def test_parse_delimited_table_binds_library_columns_to_experiment_entity():
     csv_content = (
-        b"sample_id,run_accession,library concentration,library concentration unit,"
+        b"sample_id,run_accession,lib_id,library concentration,library concentration unit,"
         b"library concentration method,PhiX percentage,R1,read count,pcr well position\n"
-        b"SAMN1,SRR1,4.2,ng/uL,Qubit,15,SRR1_1.fastq.gz,1000,A01\n"
+        b"SAMN1,SRR1,LIB1,4.2,ng/uL,Qubit,15,SRR1_1.fastq.gz,1000,A01\n"
     )
     result = parse_delimited_table(csv_content, "run_metadata.csv")
 
     values = {fact.fact_type_candidate: fact for fact in result.facts}
     assert {
         "samp_name",
+        "lib_id",
+        "seq_run_id",
         "lib_conc",
         "lib_conc_unit",
         "lib_conc_meth",
@@ -72,6 +74,8 @@ def test_parse_delimited_table_binds_experiment_run_columns_to_run_entity():
     }.issubset(values)
     for fact_type in (
         "samp_name",
+        "lib_id",
+        "seq_run_id",
         "lib_conc",
         "lib_conc_unit",
         "lib_conc_meth",
@@ -80,9 +84,14 @@ def test_parse_delimited_table_binds_experiment_run_columns_to_run_entity():
         "input_read_count",
         "pcr_well_position",
     ):
-        assert values[fact_type].entity_level == EntityLevel.SEQUENCING_RUN
-        assert values[fact_type].entity_external_id == "SRR1"
+        assert values[fact_type].entity_level == EntityLevel.EXPERIMENT_RUN
+        assert values[fact_type].entity_external_id == "LIB1"
     assert values["samp_name"].raw_value == "SAMN1"
+    links = values["lib_id"].entity_links
+    assert {(link.entity_level, link.external_identifier, link.relationship_type) for link in links} == {
+        (EntityLevel.SAMPLE, "SAMN1", EntityRelationshipType.DERIVED_FROM_SAMPLE),
+        (EntityLevel.SEQUENCING_RUN, "SRR1", EntityRelationshipType.SEQUENCED_IN_RUN),
+    }
 
 
 def test_parse_delimited_table_defaults_to_study_level_without_identifier_column():

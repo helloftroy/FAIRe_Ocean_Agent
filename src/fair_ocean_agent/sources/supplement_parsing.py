@@ -30,8 +30,8 @@ from dataclasses import dataclass, field
 from typing import Any
 import re
 
-from fair_ocean_agent.database.enums import EntityLevel
-from fair_ocean_agent.sources.base import RawFactCandidate
+from fair_ocean_agent.database.enums import EntityLevel, EntityRelationshipType
+from fair_ocean_agent.sources.base import EntityLinkCandidate, RawFactCandidate
 
 # Canonical native_name -> header variants that should map to it. Modest and
 # curated rather than exhaustive -- expanding this table as real
@@ -232,6 +232,49 @@ def _facts_from_rows(
             if id_index < len(row) and row[id_index] not in (None, ""):
                 row_identifiers[id_level] = str(row[id_index]).strip()
 
+        canonical_values = {
+            canonical: str(row[col_index]).strip()
+            for col_index, canonical, _raw_header in column_plan
+            if col_index < len(row) and row[col_index] not in (None, "")
+        }
+        has_experiment_metadata = any(name in _EXPERIMENT_RUN_FACTS for name in canonical_values)
+        experiment_id = canonical_values.get("lib_id")
+        if has_experiment_metadata and not experiment_id:
+            sheet_part = f":{sheet_name}" if sheet_name else ""
+            experiment_id = f"internal:supplement:{file_name}{sheet_part}:row:{row_number}"
+
+        experiment_links: list[EntityLinkCandidate] = []
+        sample_id = row_identifiers.get(EntityLevel.SAMPLE)
+        run_id = row_identifiers.get(EntityLevel.SEQUENCING_RUN) or canonical_values.get("seq_run_id")
+        assay_name = canonical_values.get("assay_name")
+        if sample_id:
+            experiment_links.append(
+                EntityLinkCandidate(
+                    entity_level=EntityLevel.SAMPLE,
+                    external_identifier=sample_id,
+                    relationship_type=EntityRelationshipType.DERIVED_FROM_SAMPLE,
+                    label=sample_id,
+                )
+            )
+        if run_id:
+            experiment_links.append(
+                EntityLinkCandidate(
+                    entity_level=EntityLevel.SEQUENCING_RUN,
+                    external_identifier=run_id,
+                    relationship_type=EntityRelationshipType.SEQUENCED_IN_RUN,
+                    label=run_id,
+                )
+            )
+        if assay_name:
+            experiment_links.append(
+                EntityLinkCandidate(
+                    entity_level=EntityLevel.ASSAY,
+                    external_identifier=assay_name,
+                    relationship_type=EntityRelationshipType.USES_ASSAY,
+                    label=assay_name,
+                )
+            )
+
         for col_index, canonical, raw_header in column_plan:
             if col_index >= len(row):
                 continue
@@ -240,9 +283,11 @@ def _facts_from_rows(
                 continue
             entity_level = EntityLevel.STUDY
             entity_external_id = None
-            if canonical in _EXPERIMENT_RUN_FACTS and EntityLevel.SEQUENCING_RUN in row_identifiers:
-                entity_level = EntityLevel.SEQUENCING_RUN
-                entity_external_id = row_identifiers[EntityLevel.SEQUENCING_RUN]
+            entity_links: list[EntityLinkCandidate] = []
+            if canonical in _EXPERIMENT_RUN_FACTS and experiment_id:
+                entity_level = EntityLevel.EXPERIMENT_RUN
+                entity_external_id = experiment_id
+                entity_links = experiment_links
             elif EntityLevel.SAMPLE in row_identifiers:
                 entity_level = EntityLevel.SAMPLE
                 entity_external_id = row_identifiers[EntityLevel.SAMPLE]
@@ -259,24 +304,37 @@ def _facts_from_rows(
                     source_locator=f"{locator_prefix}!{cell_ref}",
                     entity_external_id=entity_external_id,
                     entity_label=entity_external_id,
+                    entity_links=entity_links,
                 )
             )
-        if EntityLevel.SEQUENCING_RUN in row_identifiers and EntityLevel.SAMPLE in row_identifiers:
-            sample_id = row_identifiers[EntityLevel.SAMPLE]
-            if sample_id:
-                id_index, raw_header = identifier_cols[EntityLevel.SAMPLE]
-                cell_ref = f"{_column_letter(id_index)}{row_number}"
-                result.facts.append(
-                    RawFactCandidate(
-                        entity_level=EntityLevel.SEQUENCING_RUN,
-                        fact_type_candidate="samp_name",
-                        raw_field_name=raw_header,
-                        raw_value=sample_id,
-                        source_locator=f"{locator_prefix}!{cell_ref}",
-                        entity_external_id=row_identifiers[EntityLevel.SEQUENCING_RUN],
-                        entity_label=row_identifiers[EntityLevel.SEQUENCING_RUN],
-                    )
+        if experiment_id and sample_id:
+            id_index, raw_header = identifier_cols[EntityLevel.SAMPLE]
+            result.facts.append(
+                RawFactCandidate(
+                    entity_level=EntityLevel.EXPERIMENT_RUN,
+                    fact_type_candidate="samp_name",
+                    raw_field_name=raw_header,
+                    raw_value=sample_id,
+                    source_locator=f"{locator_prefix}!{_column_letter(id_index)}{row_number}",
+                    entity_external_id=experiment_id,
+                    entity_label=experiment_id,
+                    entity_links=experiment_links,
                 )
+            )
+        if experiment_id and run_id and "seq_run_id" not in canonical_values:
+            id_index, raw_header = identifier_cols[EntityLevel.SEQUENCING_RUN]
+            result.facts.append(
+                RawFactCandidate(
+                    entity_level=EntityLevel.EXPERIMENT_RUN,
+                    fact_type_candidate="seq_run_id",
+                    raw_field_name=raw_header,
+                    raw_value=run_id,
+                    source_locator=f"{locator_prefix}!{_column_letter(id_index)}{row_number}",
+                    entity_external_id=experiment_id,
+                    entity_label=experiment_id,
+                    entity_links=experiment_links,
+                )
+            )
     return result
 
 

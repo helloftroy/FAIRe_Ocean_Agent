@@ -13,11 +13,17 @@ from datetime import datetime
 from pathlib import Path
 
 import httpx
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from fair_ocean_agent.config import REPO_ROOT, RetrievalConfig
-from fair_ocean_agent.database.enums import EntityLevel, IdentifierType, RelationshipType, SupportType
+from fair_ocean_agent.database.enums import (
+    EntityLevel,
+    EntityRelationshipType,
+    IdentifierType,
+    RelationshipType,
+    SupportType,
+)
 from fair_ocean_agent.logging_setup import get_logger
 
 logger = get_logger(__name__)
@@ -84,6 +90,13 @@ class RelatedIdentifier(BaseModel):
     confidence: SupportType = SupportType.STRUCTURED_SOURCE
 
 
+class EntityLinkCandidate(BaseModel):
+    entity_level: EntityLevel
+    external_identifier: str
+    relationship_type: EntityRelationshipType
+    label: str | None = None
+
+
 class RawFactCandidate(BaseModel):
     entity_level: EntityLevel
     fact_type_candidate: str
@@ -100,6 +113,7 @@ class RawFactCandidate(BaseModel):
     # (study-wide fact, same as every Milestone 2 adapter).
     entity_external_id: str | None = None
     entity_label: str | None = None
+    entity_links: list[EntityLinkCandidate] = Field(default_factory=list)
     # Verbatim quote from the source text, required for LLM-derived facts.
     # extraction/text.py now obtains this by asking the model for source
     # segment ID(s), then copying the segment text itself before persistence;

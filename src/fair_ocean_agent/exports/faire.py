@@ -13,8 +13,9 @@ one command.
 `ampData`, `stdData`, `eLowQuantData`, `taxaRaw`, and `taxaFinal` are
 written header-only: no source adapter or extraction step in this pipeline
 currently produces amplification/standard-curve/taxonomic-assignment data.
-`experimentRunMetadata` is populated from ENA sequencing-run facts where
-available.
+`experimentRunMetadata` is populated from sample/assay-specific
+experiment_run (library) entities. Sequencing runs remain separate linked
+entities, so many library rows may correctly share one `seq_run_id`.
 
 Alongside the per-class data files, `export_faire` also writes
 `field_reference.csv` -- one row per FAIRe field, every column that
@@ -39,8 +40,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from fair_ocean_agent.config import REPO_ROOT
-from fair_ocean_agent.database.enums import EntityLevel
-from fair_ocean_agent.database.models import Entity, StandardizedValue, Study
+from fair_ocean_agent.database.enums import EntityLevel, EntityRelationshipType
+from fair_ocean_agent.database.models import Entity, EntityRelationship, StandardizedValue, Study
 from fair_ocean_agent.mapping.faire import TARGET_SCHEMA, resolve_project_id
 from fair_ocean_agent.standards.faire_registry import build_faire_registry
 
@@ -82,6 +83,31 @@ def _entity_values(session: Session, entity_id: str) -> dict[str, str]:
         )
     ).all()
     return {field: value for field, value in rows if value is not None}
+
+
+def _linked_entity(
+    session: Session,
+    from_entity_id: str,
+    relationship_type: EntityRelationshipType,
+) -> Entity | None:
+    entities = list(
+        session.scalars(
+            select(Entity)
+            .join(EntityRelationship, EntityRelationship.to_entity_id == Entity.entity_id)
+            .where(
+                EntityRelationship.from_entity_id == from_entity_id,
+                EntityRelationship.relationship_type == relationship_type.value,
+            )
+            .order_by(Entity.external_identifier, Entity.entity_id)
+            .limit(2)
+        )
+    )
+    if len(entities) > 1:
+        raise ValueError(
+            f"experiment entity {from_entity_id} has multiple {relationship_type.value} links; "
+            "cannot emit an unambiguous FAIRe experimentRunMetadata row"
+        )
+    return entities[0] if entities else None
 
 
 def _write_csv(path: Path, columns: list[str], rows: list[dict[str, str]]) -> int:
@@ -156,16 +182,38 @@ def export_faire(session: Session, output_dir: str | Path) -> dict[str, int]:
     experiment_rows = []
     for study in studies:
         broadcast = _study_wide_values(session, study.study_id)
-        run_entities = session.scalars(
+        experiment_entities = session.scalars(
             select(Entity).where(
                 Entity.study_id == study.study_id,
-                Entity.entity_level == EntityLevel.SEQUENCING_RUN.value,
+                Entity.entity_level == EntityLevel.EXPERIMENT_RUN.value,
             )
         )
-        for entity in run_entities:
+        for entity in experiment_entities:
             row = dict(broadcast)
             row.update(_entity_values(session, entity.entity_id))
-            row.setdefault("seq_run_id", entity.external_identifier or entity.entity_id)
+            sample = _linked_entity(
+                session,
+                entity.entity_id,
+                EntityRelationshipType.DERIVED_FROM_SAMPLE,
+            )
+            assay = _linked_entity(
+                session,
+                entity.entity_id,
+                EntityRelationshipType.USES_ASSAY,
+            )
+            sequencing_run = _linked_entity(
+                session,
+                entity.entity_id,
+                EntityRelationshipType.SEQUENCED_IN_RUN,
+            )
+            if sample is not None:
+                row.setdefault("samp_name", sample.external_identifier or sample.entity_id)
+            if assay is not None:
+                row.setdefault("assay_name", assay.external_identifier or assay.label or assay.entity_id)
+            if sequencing_run is not None:
+                row.setdefault("seq_run_id", sequencing_run.external_identifier or sequencing_run.entity_id)
+            if entity.external_identifier and not entity.external_identifier.startswith("internal:"):
+                row.setdefault("lib_id", entity.external_identifier)
             experiment_rows.append(row)
     counts["experimentRunMetadata"] = _write_csv(
         output_dir / "experimentRunMetadata.csv", experiment_columns, experiment_rows
