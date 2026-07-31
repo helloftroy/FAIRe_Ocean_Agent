@@ -19,6 +19,27 @@ adds a deterministic absent-value guard: candidates whose value is blank,
 persistence and before benchmark scoring. The prompt also tells recall not
 to return placeholder absence values.
 
+**v7 -> v8: the per-topic split from v5 is no longer the default.**
+Measured live against a local qwen3:4b: v5's 5 topic passes x v6's
+recall-on-any-missing-type retry meant up to 10 sequential LLM calls per
+section chunk regardless of chunk length, at ~30-240s per call on
+consumer hardware -- minutes per section, tens of minutes per paper. That
+split was sized around Ollama's OpenAI-compatible endpoint silently
+enforcing a ~4096-token effective context unless a model's own Modelfile
+bakes in a larger `num_ctx` (see config.py's LLMConfig docstring) --
+keeping each topic's own prompt small enough to fit. Once a real, larger
+context is available (a model variant with `num_ctx` actually baked in),
+the full checklist (~3,300 tokens) comfortably fits alongside a real
+section in one call, so `extract_facts_from_section` now defaults to a
+single collapsed pass over every concept per chunk (`focuses=(None,)`);
+`EXTRACTION_FOCUSES` remains available to opt back into the old
+fine-grained split for a smaller-context model. v8 also narrows the
+recall trigger: a pass now only gets a retry when it found ZERO facts (a
+real parse failure or the model missing everything), not merely because
+some checklist concept went unmentioned -- most real sections never
+mention every concept, and retrying on partial coverage doubled call
+volume for little benefit.
+
 **Why "FAIRe-aware" matters (v1 -> v2):** v1's prompt was fully open-
 vocabulary -- "extract whatever facts you find, name them however you
 like" -- which never missed an explicitly-stated concept but also never
@@ -83,11 +104,11 @@ from sqlalchemy.orm import Session
 from fair_ocean_agent.database.enums import EntityLevel, MappingMethod, MissingnessStatus, SupportType
 from fair_ocean_agent.database.models import StandardizedValue
 from fair_ocean_agent.extraction.faire_fields import field_names_for_reference, render_field_reference
-from fair_ocean_agent.llm.base import LLMBackend, LLMBackendError, LLMResponse
+from fair_ocean_agent.llm.base import LLMBackend, LLMResponse
 from fair_ocean_agent.mapping.faire import TARGET_SCHEMA
 from fair_ocean_agent.sources.base import RawFactCandidate
 
-PROMPT_VERSION = "text-extraction-v7-focused-recall-no-absence-placeholders"
+PROMPT_VERSION = "text-extraction-v8-collapsed-checklist-recall-on-empty"
 DEFAULT_MAX_SECTION_CHARS_PER_CALL = 1600
 
 ABSENT_RAW_VALUE_STRINGS = frozenset(
@@ -108,6 +129,7 @@ ABSENT_RAW_VALUE_STRINGS = frozenset(
         "not mentioned",
         "not provided",
         "not reported",
+        "not resolved",
         "not specified",
         "not stated",
         "not explicitly mentioned",
@@ -116,6 +138,7 @@ ABSENT_RAW_VALUE_STRINGS = frozenset(
         "not explicitly specified",
         "not explicitly stated",
         "unknown",
+        "unresolved",
         "unspecified",
     }
 )
@@ -128,12 +151,13 @@ def is_absent_raw_value(value) -> bool:
     if value is None:
         return True
     folded = " ".join(str(value).strip().lower().split())
-    if folded in ABSENT_RAW_VALUE_STRINGS:
+    folded_without_terminal_punctuation = folded.rstrip(".;:")
+    if folded in ABSENT_RAW_VALUE_STRINGS or folded_without_terminal_punctuation in ABSENT_RAW_VALUE_STRINGS:
         return True
     return bool(
         re.fullmatch(
             r"(not\s+)?(explicitly\s+)?(stated|specified|reported|provided|mentioned)(\s+in\s+(the\s+)?text)?",
-            folded,
+            folded_without_terminal_punctuation,
         )
     )
 
@@ -564,8 +588,13 @@ def _text_matches_focus(text: str, focus: ExtractionFocus) -> bool:
 def segments_for_focus(
     section_title: str,
     segments: list[SourceSegment],
-    focus: ExtractionFocus,
+    focus: ExtractionFocus | None,
 ) -> list[SourceSegment]:
+    """`focus=None` means "no topic restriction" -- every segment is in
+    scope (used by the default, collapsed single-pass extraction strategy;
+    see extract_facts_from_section)."""
+    if focus is None:
+        return segments
     title_matches = _text_matches_focus(section_title, focus)
     return [
         segment
@@ -575,9 +604,13 @@ def segments_for_focus(
 
 
 def fact_type_names_for_focus(
-    focus: ExtractionFocus,
+    focus: ExtractionFocus | None,
     exclude_faire_hints: frozenset[str] = frozenset(),
 ) -> frozenset[str]:
+    """`focus=None` returns every checklist name (all groups, all fallback
+    names) -- no topic restriction."""
+    if focus is None:
+        return field_names_for_reference(exclude_faire_hints)
     return field_names_for_reference(
         exclude_faire_hints,
         include_group_names=focus.group_names,
@@ -594,7 +627,7 @@ def _source_has_nucleotide_sequence(segments: list[SourceSegment]) -> bool:
 
 
 def recall_missing_fact_types(
-    focus: ExtractionFocus,
+    focus: ExtractionFocus | None,
     exclude_faire_hints: frozenset[str],
     accepted_fact_types: set[str],
     segments: list[SourceSegment],
@@ -618,7 +651,7 @@ def extract_facts_from_section(
     exclude_faire_hints: frozenset[str] = frozenset(),
     max_section_chars_per_call: int = DEFAULT_MAX_SECTION_CHARS_PER_CALL,
     max_output_tokens: int | None = None,
-    focuses: tuple[ExtractionFocus, ...] = EXTRACTION_FOCUSES,
+    focuses: tuple[ExtractionFocus | None, ...] = (None,),
     recall_second_pass: bool = True,
 ) -> tuple[list[RawFactCandidate], LLMResponse | None]:
     """Returns (verified facts, the last LLMResponse -- for latency/token
@@ -629,7 +662,30 @@ def extract_facts_from_section(
     `exclude_faire_hints` (see resolved_faire_fields_for_study) drops those
     concepts from the checklist entirely -- a caller with nothing resolved
     yet passes the default empty set and gets the exact same behavior as
-    before this parameter existed."""
+    before this parameter existed.
+
+    `focuses` defaults to a single collapsed pass over the FULL checklist
+    per chunk (`(None,)`) -- one LLM call per chunk instead of one per
+    topic group. This used to default to `EXTRACTION_FOCUSES` (5 topic-
+    scoped passes: sample collection, DNA extraction, PCR/assay,
+    sequencing, bioinformatics/taxonomy), each with its own recall retry --
+    up to 10 sequential calls per section regardless of section length,
+    measured live at ~30-240s per call against a local qwen3:4b, i.e.
+    minutes per section. That per-topic split was sized for the ~4096-token
+    effective context Ollama's OpenAI-compatible endpoint silently enforces
+    unless a model's own Modelfile bakes in a larger num_ctx (see
+    config.py's LLMConfig docstring) -- once a real, larger context is
+    available, the full checklist (~3,300 tokens) comfortably fits
+    alongside a real paper section in one call. `EXTRACTION_FOCUSES`
+    remains importable and usable here (pass it explicitly as `focuses=`)
+    for anyone who wants the old fine-grained-per-topic behavior back, e.g.
+    for a smaller-context model.
+
+    `recall_second_pass` only retries a chunk when its first pass found
+    ZERO facts (a real parse failure or the model missing everything) --
+    it does not retry merely because some checklist concepts went
+    unmentioned, since most real sections never mention every concept and
+    retrying on partial coverage doubled call volume for little benefit."""
     segments = segment_source_text(section_title, section_text)
     segment_chunks = split_segments_for_calls(segments, max_section_chars_per_call)
     if not segment_chunks:
@@ -639,7 +695,7 @@ def extract_facts_from_section(
     seen: set[tuple[str, str, str]] = set()
     last_response: LLMResponse | None = None
 
-    active_focuses = focuses or EXTRACTION_FOCUSES
+    active_focuses = focuses if focuses else (None,)
     for index, chunk_segments in enumerate(segment_chunks):
         chunk_title = section_title if len(segment_chunks) == 1 else f"{section_title} [chunk {index + 1}/{len(segment_chunks)}]"
         for focus in active_focuses:
@@ -647,7 +703,7 @@ def extract_facts_from_section(
             if not focused_segments:
                 continue
             segment_lookup = {segment.segment_id: segment.text for segment in focused_segments}
-            focused_title = f"{chunk_title} [{focus.name}]"
+            focused_title = chunk_title if focus is None else f"{chunk_title} [{focus.name}]"
             prompt = build_prompt(
                 focused_title,
                 "",
@@ -672,6 +728,8 @@ def extract_facts_from_section(
 
             if not recall_second_pass:
                 continue
+            if accepted_facts:
+                continue  # found at least one fact already -- no automatic retry
 
             missing_types = recall_missing_fact_types(
                 focus,
@@ -690,10 +748,7 @@ def extract_facts_from_section(
                 include_native_names=missing_types,
                 recall_pass=True,
             )
-            try:
-                parsed, response = backend.generate_json(recall_prompt, temperature=0, max_tokens=max_output_tokens)
-            except LLMBackendError:
-                continue
+            parsed, response = backend.generate_json(recall_prompt, temperature=0, max_tokens=max_output_tokens)
             last_response = response
             if parsed is None:
                 continue

@@ -69,7 +69,7 @@ from fair_ocean_agent.extraction.text import (
     present_faire_fields_for_study,
 )
 from fair_ocean_agent.identity.source_linking import create_source
-from fair_ocean_agent.llm.base import LLMBackendError
+from fair_ocean_agent.llm.base import LLMBackendError, try_parse_json
 from fair_ocean_agent.logging_setup import get_logger
 from fair_ocean_agent.mapping.faire import map_study_to_faire
 from fair_ocean_agent.sources.base import RawFactCandidate, SourceRecordNotFoundError, hash_payload
@@ -622,7 +622,7 @@ def handle_extract_supplement_text_facts(session: Session, task: Task) -> None:
     for prepared in pending:
         already_present = present_faire_fields_for_study(session, study.study_id)
         try:
-            facts, _response = extract_facts_from_section(
+            facts, response = extract_facts_from_section(
                 backend,
                 prepared.title,
                 prepared.text_content,
@@ -637,7 +637,12 @@ def handle_extract_supplement_text_facts(session: Session, task: Task) -> None:
                 prepared.prepared_source_text_id,
                 exc,
             )
-            continue
+            raise
+        if response is not None and try_parse_json(response.text) is None:
+            raise LLMBackendError(
+                f"{backend.label}: supplement text extraction returned invalid JSON after retries "
+                f"for study {study.study_id} text {prepared.prepared_source_text_id}"
+            )
 
         source = session.get(Source, prepared.source_id)
         if source is None:

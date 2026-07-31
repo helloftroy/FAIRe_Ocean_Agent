@@ -78,7 +78,7 @@ class LLMBackend(ABC):
         for _ in range(max_retries + 1):
             response = self.generate(attempt_prompt, system=system, temperature=temperature, max_tokens=max_tokens)
             last_response = response
-            parsed = _try_parse_json(response.text)
+            parsed = try_parse_json(response.text)
             if parsed is not None:
                 return parsed, response
             attempt_prompt = (
@@ -91,7 +91,13 @@ class LLMBackend(ABC):
         pass
 
 
-def _try_parse_json(text: str):
+def try_parse_json(text: str):
+    """Parse the JSON response forms accepted by `generate_json`.
+
+    Public so orchestration code can distinguish a valid empty result from
+    exhausted JSON-repair attempts. Those have identical fact lists but
+    must produce different task outcomes.
+    """
     text = text.strip()
     if text.startswith("```"):
         lines = text.splitlines()

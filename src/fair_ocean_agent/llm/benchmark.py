@@ -28,7 +28,7 @@ from pydantic import BaseModel
 
 from fair_ocean_agent.dates import try_parse_date
 from fair_ocean_agent.extraction.text import (
-    EXTRACTION_FOCUSES,
+    ExtractionFocus,
     build_prompt,
     is_absent_raw_value,
     recall_missing_fact_types,
@@ -169,19 +169,28 @@ class CaseResult:
     error: str | None = None
 
 
-def run_case(backend: LLMBackend, case: GoldCase) -> CaseResult:
+def run_case(
+    backend: LLMBackend, case: GoldCase, focuses: tuple[ExtractionFocus | None, ...] = (None,)
+) -> CaseResult:
+    """Mirrors extraction/text.py's extract_facts_from_section exactly (same
+    build_prompt production code, same collapsed-single-pass default, same
+    recall-only-on-zero-facts trigger) so a benchmark run measures the real
+    pipeline's actual behavior, not a second, drifted copy of it. Pass
+    `focuses=EXTRACTION_FOCUSES` to benchmark the old fine-grained-per-topic
+    strategy instead (e.g. for a smaller-context model)."""
     segments = segment_source_text(case.section_title, case.source_text)
     segment_lookup = {segment.segment_id: segment.text for segment in segments}
     returned_facts: list[dict] = []
     latency_seconds = 0.0
     json_valid = True
 
-    for focus in EXTRACTION_FOCUSES:
+    for focus in focuses:
         focused_segments = segments_for_focus(case.section_title, segments, focus)
         if not focused_segments:
             continue
+        focused_title = case.section_title if focus is None else f"{case.section_title} [{focus.name}]"
         prompt = build_prompt(
-            f"{case.section_title} [{focus.name}]",
+            focused_title,
             case.source_text,
             segments=focused_segments,
             focus=focus,
@@ -207,16 +216,14 @@ def run_case(backend: LLMBackend, case: GoldCase) -> CaseResult:
             returned_facts.extend(parsed_facts)
 
         verified_first_pass = _facts_with_verified_segment_ids(parsed_facts, segment_lookup)
-        accepted_fact_types = {
-            str(fact.get("fact_type_candidate"))
-            for fact in verified_first_pass
-            if fact.get("fact_type_candidate")
-        }
+        if verified_first_pass:
+            continue  # found at least one verified fact already -- no automatic retry
+        accepted_fact_types: set[str] = set()
         missing_types = recall_missing_fact_types(focus, frozenset(), accepted_fact_types, focused_segments)
         if not missing_types:
             continue
         recall_prompt = build_prompt(
-            f"{case.section_title} [{focus.name}] [recall]",
+            f"{focused_title} [recall]",
             case.source_text,
             segments=focused_segments,
             focus=focus,

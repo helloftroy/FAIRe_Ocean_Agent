@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from fair_ocean_agent.database.enums import EntityLevel, IdentifierType, TaskType
+from fair_ocean_agent.database.enums import EntityLevel, IdentifierType, TaskStatus, TaskType
 from fair_ocean_agent.database.models import Entity, ExternalIdentifier, RawFact, Source, Study
 from fair_ocean_agent.llm.base import LLMBackendError
 from fair_ocean_agent.llm.disabled import DisabledLLMBackend
@@ -14,6 +14,7 @@ from fair_ocean_agent.llm.mock import MockLLMBackend
 from fair_ocean_agent.sources.base import SourceRecordNotFoundError
 from fair_ocean_agent.workflow import handlers
 from fair_ocean_agent.workflow.task_queue import enqueue_task
+from fair_ocean_agent.workflow.worker import run_worker
 
 FULLTEXT_XML = """<article><body>
 <sec><title>Materials and Methods</title>
@@ -175,7 +176,7 @@ def test_handler_reprocesses_fulltext_with_new_prompt_version_or_model(db_sessio
     assert db_session.query(RawFact).filter_by(study_id=study.study_id, model_name="new-model").count() == 1
 
 
-def test_handler_preserves_successful_sections_when_later_section_times_out(db_session, monkeypatch):
+def test_handler_fails_atomically_when_later_section_times_out(db_session, monkeypatch):
     study = _seeded_study_with_pmcid(db_session)
     task = _task_for(db_session, study)
 
@@ -189,13 +190,79 @@ def test_handler_preserves_successful_sections_when_later_section_times_out(db_s
         lambda: {"europe_pmc": FakeEuropePmcAdapter(fulltext_xml=MULTI_SECTION_XML)},
     )
 
-    handlers.handle_extract_text_facts(db_session, task)
-    db_session.commit()
+    with pytest.raises(LLMBackendError, match="simulated section timeout"):
+        handlers.handle_extract_text_facts(db_session, task)
+    # The real worker does this rollback before marking the task for retry.
+    db_session.rollback()
 
-    assert db_session.query(Source).filter_by(study_id=study.study_id, source_name="europe_pmc_fulltext").count() == 1
-    facts = db_session.query(RawFact).filter_by(study_id=study.study_id, extraction_method="llm_text_extraction").all()
-    assert len(facts) == 1
-    assert facts[0].raw_value == "2022-01-04"
+    assert db_session.query(Source).filter_by(
+        study_id=study.study_id,
+        source_name="europe_pmc_fulltext",
+    ).count() == 0
+    assert db_session.query(RawFact).filter_by(
+        study_id=study.study_id,
+        extraction_method="llm_text_extraction",
+    ).count() == 0
+
+
+def test_handler_fails_atomically_after_exhausted_json_repairs(db_session, monkeypatch):
+    study = _seeded_study_with_pmcid(db_session)
+    task = _task_for(db_session, study)
+    handlers._llm_backend_cache = MockLLMBackend(
+        label="invalid-json-model",
+        responses=["this is not json"],
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_build_enabled_adapters",
+        lambda: {"europe_pmc": FakeEuropePmcAdapter()},
+    )
+
+    with pytest.raises(LLMBackendError, match="invalid JSON after retries"):
+        handlers.handle_extract_text_facts(db_session, task)
+    db_session.rollback()
+
+    assert db_session.query(Source).filter_by(
+        study_id=study.study_id,
+        source_name="europe_pmc_fulltext",
+    ).count() == 0
+    assert db_session.query(RawFact).filter_by(
+        study_id=study.study_id,
+        extraction_method="llm_text_extraction",
+    ).count() == 0
+
+
+def test_worker_marks_incomplete_paper_pass_for_retry_not_completed(db_session, monkeypatch):
+    study = _seeded_study_with_pmcid(db_session)
+    task = _task_for(db_session, study)
+    handlers._llm_backend_cache = MockLLMBackend(
+        label="invalid-json-model",
+        responses=["this is not json"],
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_build_enabled_adapters",
+        lambda: {"europe_pmc": FakeEuropePmcAdapter()},
+    )
+
+    summary = run_worker(
+        db_session,
+        worker_id="paper-pass-test",
+        max_tasks=1,
+    )
+
+    db_session.refresh(task)
+    assert summary == {"processed": 1, "completed": 0, "failed": 1}
+    assert task.status == TaskStatus.RETRY_PENDING.value
+    assert "invalid JSON after retries" in task.last_error
+    assert db_session.query(Source).filter_by(
+        study_id=study.study_id,
+        source_name="europe_pmc_fulltext",
+    ).count() == 0
+    assert db_session.query(RawFact).filter_by(
+        study_id=study.study_id,
+        extraction_method="llm_text_extraction",
+    ).count() == 0
 
 
 def test_handler_raises_not_implemented_without_pmcid(db_session):
@@ -292,8 +359,11 @@ def test_handler_excludes_faire_fields_already_resolved_from_structured_sources(
 
 def test_handler_asks_about_everything_when_nothing_resolved_yet(db_session, monkeypatch):
     """No StandardizedValue rows at all (MAP_FAIRE hasn't run) must leave
-    the relevant focused checklist intact -- the exact structured-first
-    behavior before topic-focused prompts existed."""
+    the full checklist intact -- nothing gets excluded via structured-first
+    when nothing has been resolved yet. (The checklist is the full one, not
+    a topic-narrowed subset, since extract_facts_from_section's default is
+    now a single collapsed pass over every concept -- see its own
+    docstring for why the old per-topic-focus split was removed.)"""
     study = _seeded_study_with_pmcid(db_session)
     task = _task_for(db_session, study)
 
@@ -306,4 +376,4 @@ def test_handler_asks_about_everything_when_nothing_resolved_yet(db_session, mon
 
     assert backend.calls
     assert any("depth" in call["prompt"] for call in backend.calls)
-    assert not any("dna_extraction_kit" in call["prompt"] for call in backend.calls)
+    assert any("dna_extraction_kit" in call["prompt"] for call in backend.calls)

@@ -21,6 +21,7 @@ from fair_ocean_agent.database.models import (
     Task,
 )
 from fair_ocean_agent.extraction.text import PROMPT_VERSION, segment_source_text
+from fair_ocean_agent.llm.base import LLMBackendError
 from fair_ocean_agent.llm.mock import MockLLMBackend
 from fair_ocean_agent.sources.base import RelatedIdentifier, SourceRecordNotFoundError
 from fair_ocean_agent.sources.europe_pmc import SupplementReference
@@ -408,6 +409,74 @@ def test_supplement_llm_pass_targets_fields_still_missing_after_paper(db_session
         target_field="annealingTemp",
     ).one()
     assert mapped.standardized_value == "54 C"
+
+
+def test_supplement_llm_invalid_json_keeps_document_pending(db_session, monkeypatch):
+    study = _seeded_study_with_pmcid(db_session)
+    source = Source(
+        study_id=study.study_id,
+        source_type="supplement",
+        source_name="europe_pmc_supplement",
+        external_identifier="methods.txt",
+    )
+    db_session.add(source)
+    db_session.flush()
+    asset = DataAsset(
+        study_id=study.study_id,
+        source_id=source.source_id,
+        asset_type="other",
+        access_status="open",
+        raw_or_processed="raw",
+    )
+    db_session.add(asset)
+    db_session.flush()
+    prepared = PreparedSourceText(
+        study_id=study.study_id,
+        source_id=source.source_id,
+        data_asset_id=asset.asset_id,
+        title="Supplementary Methods",
+        text_content="PCR reactions were annealed at 54 C.",
+        content_hash="invalid-json-supplement",
+        preparation_method="txt_decode_utf8",
+        character_count=38,
+    )
+    db_session.add(prepared)
+    db_session.commit()
+
+    backend = MockLLMBackend(label="invalid-json-model", responses=["not json"])
+    monkeypatch.setattr(supplement_handlers, "_build_llm_backend_cached", lambda: backend)
+    monkeypatch.setattr(supplement_handlers, "_has_completed_paper_pass", lambda *_args: True)
+    config = supplement_handlers.load_config()
+    monkeypatch.setattr(
+        supplement_handlers,
+        "load_config",
+        lambda: config.model_copy(
+            update={
+                "supplements": config.supplements.model_copy(
+                    update={"llm_text_extraction_enabled": True}
+                )
+            }
+        ),
+    )
+    task = enqueue_task(
+        db_session,
+        TaskType.EXTRACT_SUPPLEMENT_TEXT_FACTS,
+        study_id=study.study_id,
+    )
+    db_session.commit()
+
+    with pytest.raises(LLMBackendError, match="invalid JSON after retries"):
+        supplement_handlers.handle_extract_supplement_text_facts(db_session, task)
+    db_session.rollback()
+
+    db_session.refresh(prepared)
+    assert prepared.llm_model_name is None
+    assert prepared.llm_prompt_version is None
+    assert prepared.llm_extracted_at is None
+    assert db_session.query(RawFact).filter_by(
+        study_id=study.study_id,
+        extraction_method="supplement_llm_extraction",
+    ).count() == 0
 
 
 def test_supplement_llm_backfill_stays_off_until_explicitly_enabled(db_session):

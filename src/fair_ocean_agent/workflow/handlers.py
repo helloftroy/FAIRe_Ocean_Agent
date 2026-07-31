@@ -39,8 +39,7 @@ from fair_ocean_agent.extraction.text import (
 )
 from fair_ocean_agent.identity.resolution import resolve_or_create_study
 from fair_ocean_agent.identity.source_linking import create_source
-from fair_ocean_agent.llm.base import LLMBackend, LLMBackendError
-from fair_ocean_agent.llm.disabled import DisabledLLMBackend
+from fair_ocean_agent.llm.base import LLMBackend, LLMBackendError, try_parse_json
 from fair_ocean_agent.llm.factory import build_llm_backend
 from fair_ocean_agent.logging_setup import get_logger
 from fair_ocean_agent.mapping.faire import map_study_to_faire
@@ -810,7 +809,7 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
 
     for section in sections:
         try:
-            facts, _response = extract_facts_from_section(
+            facts, response = extract_facts_from_section(
                 backend,
                 section["title"],
                 section["text"],
@@ -819,15 +818,18 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
                 max_output_tokens=llm_config.max_output_tokens,
             )
         except LLMBackendError as exc:
-            if isinstance(backend, DisabledLLMBackend):
-                raise
             logger.warning(
                 "text extraction failed for study %s section %r: %s",
                 study.study_id,
                 section["title"],
                 exc,
             )
-            continue
+            raise
+        if response is not None and try_parse_json(response.text) is None:
+            raise LLMBackendError(
+                f"{backend.label}: text extraction returned invalid JSON after retries "
+                f"for study {study.study_id} section {section['title']!r}"
+            )
         for fact in facts:
             session.add(
                 RawFact(

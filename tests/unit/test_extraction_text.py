@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from fair_ocean_agent.database.enums import MappingMethod, MissingnessStatus, SupportType
 from fair_ocean_agent.database.models import StandardizedValue, Study
 from fair_ocean_agent.extraction.faire_fields import all_field_names
@@ -70,7 +72,19 @@ def test_absent_placeholder_values_are_dropped():
 
 
 def test_absent_raw_value_predicate_covers_common_model_placeholders():
-    for value in (None, "", "   ", "none", "N/A", "not specified", "not explicitly stated", "not reported in the text"):
+    for value in (
+        None,
+        "",
+        "   ",
+        "none",
+        "N/A",
+        "not specified",
+        "not explicitly stated",
+        "not reported in the text",
+        "not resolved",
+        "not resolved.",
+        "unresolved",
+    ):
         assert is_absent_raw_value(value)
     assert not is_absent_raw_value("none detected in the negative control")
 
@@ -123,39 +137,57 @@ def test_extract_facts_from_section_chunks_long_text_and_merges_facts():
     )
 
     assert [fact.fact_type_candidate for fact in facts] == ["collection_date", "forward_primer_name"]
-    assert len(backend.calls) == 4
+    # One call per chunk (no per-topic-focus fan-out, and no recall retry
+    # since each chunk's single pass already found a fact) -- 2 chunks, 2 calls.
+    assert len(backend.calls) == 2
     assert all(call["max_tokens"] == 2048 for call in backend.calls)
     assert "METHODS.P001:" in backend.calls[0]["prompt"]
-    assert "METHODS.P002:" in backend.calls[2]["prompt"]
+    assert "METHODS.P002:" in backend.calls[1]["prompt"]
     assert facts[0].evidence_quote == first
     assert facts[1].evidence_quote == second
 
 
 def test_prompt_version_is_stable_constant():
-    assert PROMPT_VERSION == "text-extraction-v7-focused-recall-no-absence-placeholders"
+    assert PROMPT_VERSION == "text-extraction-v8-collapsed-checklist-recall-on-empty"
 
 
-def test_recall_second_pass_asks_only_for_missing_fact_types_and_merges_new_facts():
+def test_recall_second_pass_does_not_fire_when_first_pass_finds_any_facts():
+    """A partial main-pass result (found forward_primer_name, missed
+    reverse_primer_name) is accepted as-is -- no automatic retry just
+    because the checklist wasn't fully satisfied. Recall now only exists as
+    a safety net for a pass that found literally nothing (see the sibling
+    test below), not a completeness guarantee for every concept."""
+    section_text = "PCR reactions used MiFish-U-F and MiFish-U-R primers at 54 C."
+    response = json.dumps(
+        [{"fact_type_candidate": "forward_primer_name", "raw_value": "MiFish-U-F", "evidence_id": "PCR.P001"}]
+    )
+    backend = MockLLMBackend(responses=[response])
+
+    facts, _ = extract_facts_from_section(backend, "PCR", section_text)
+
+    assert [fact.fact_type_candidate for fact in facts] == ["forward_primer_name"]
+    assert len(backend.calls) == 1
+
+
+def test_recall_second_pass_fires_only_when_first_pass_finds_nothing():
     section_text = "PCR reactions used MiFish-U-F and MiFish-U-R primers at 54 C."
 
     def respond(prompt):
         if "[recall]" in prompt:
-            assert "forward_primer_name" not in prompt
-            assert "reverse_primer_name" in prompt
             return json.dumps(
-                [{"fact_type_candidate": "reverse_primer_name", "raw_value": "MiFish-U-R", "evidence_id": "PCR.P001"}]
+                [
+                    {"fact_type_candidate": "forward_primer_name", "raw_value": "MiFish-U-F", "evidence_id": "PCR.P001"},
+                    {"fact_type_candidate": "reverse_primer_name", "raw_value": "MiFish-U-R", "evidence_id": "PCR.P001"},
+                ]
             )
-        return json.dumps(
-            [{"fact_type_candidate": "forward_primer_name", "raw_value": "MiFish-U-F", "evidence_id": "PCR.P001"}]
-        )
+        return "[]"
 
     backend = MockLLMBackend(responses=respond)
     facts, _ = extract_facts_from_section(backend, "PCR", section_text)
 
-    assert [fact.fact_type_candidate for fact in facts] == ["forward_primer_name", "reverse_primer_name"]
+    assert {fact.fact_type_candidate for fact in facts} == {"forward_primer_name", "reverse_primer_name"}
     assert len(backend.calls) == 2
     assert "This is a recall-focused second pass" in backend.calls[1]["prompt"]
-    assert "same focused topic only" in backend.calls[1]["prompt"]
     assert "Never return placeholder absence values" in backend.calls[1]["prompt"]
 
 
@@ -186,7 +218,7 @@ def test_recall_second_pass_dedupes_repeated_first_pass_facts():
     assert [fact.fact_type_candidate for fact in facts] == ["forward_primer_name"]
 
 
-def test_recall_second_pass_failure_preserves_first_pass_facts():
+def test_recall_second_pass_failure_fails_the_extraction():
     from fair_ocean_agent.llm.base import LLMBackendError
 
     class RecallFailsBackend(MockLLMBackend):
@@ -195,14 +227,10 @@ def test_recall_second_pass_failure_preserves_first_pass_facts():
                 raise LLMBackendError("recall failed")
             return super().generate(*args, **kwargs)
 
-    response = json.dumps(
-        [{"fact_type_candidate": "forward_primer_name", "raw_value": "MiFish-U-F", "evidence_id": "PCR.P001"}]
-    )
-    backend = RecallFailsBackend(responses=[response])
+    backend = RecallFailsBackend(responses=["[]"])
 
-    facts, _ = extract_facts_from_section(backend, "PCR", "PCR reactions used MiFish-U-F primers.")
-
-    assert [fact.fact_type_candidate for fact in facts] == ["forward_primer_name"]
+    with pytest.raises(LLMBackendError, match="recall failed"):
+        extract_facts_from_section(backend, "PCR", "PCR reactions used MiFish-U-F primers.")
 
 
 def test_recall_missing_fact_types_skips_primer_sequences_without_nucleotide_text():

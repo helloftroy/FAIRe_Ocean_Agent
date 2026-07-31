@@ -26,11 +26,27 @@ candidates:
     api_key_env: "LOCAL_LLM_API_KEY"
     timeout_seconds: 180
     max_concurrency: 1
-    # Debug/default target: keep output from truncating mid-JSON and ask
-    # compatible servers for a larger context. For Ollama's OpenAI route,
-    # set OLLAMA_CONTEXT_LENGTH=8192 or use a Modelfile PARAMETER num_ctx.
+    # Known gap, kept here as a reference case: `num_ctx` below is silently
+    # ignored by Ollama's OpenAI-compatible endpoint (confirmed live -- this
+    # model 400s at ~5,000 prompt tokens with "exceeds the available context
+    # size (4096 tokens)" even with num_ctx set here). The only real fix is
+    # server-side: a Modelfile with `PARAMETER num_ctx` actually baked in --
+    # see the qwen3-4b-instruct-16k entry below for exactly that.
     max_output_tokens: 2048
     num_ctx: 8192
+
+  - label: "qwen3-4b-instruct-16k-ollama"
+    base_url: "http://localhost:11434/v1"
+    # `ollama create qwen3:4b-instruct-16k` from qwen3:4b-instruct's own
+    # Modelfile plus `PARAMETER num_ctx 16384` -- num_ctx is genuinely
+    # honored here (confirmed live), unlike the plain qwen3-4b-instruct-ollama
+    # entry above.
+    model: "qwen3:4b-instruct-16k"
+    api_key_env: "LOCAL_LLM_API_KEY"
+    timeout_seconds: 180
+    max_concurrency: 1
+    max_output_tokens: 2048
+    num_ctx: 16384
 
   - label: "gemma3-4b-ollama"
     base_url: "http://localhost:11434/v1"
