@@ -29,6 +29,16 @@
       "fact_type_candidate": "sequencing_kit",
       "raw_value": "High-throughput Sequencing Set PE100",
       "evidence_quote": "with the High-throughput Sequencing Set PE100"
+    },
+    {
+      "fact_type_candidate": "dna_separation_method",
+      "raw_value": "magnetic beads",
+      "evidence_quote": "selection of 200–250 bp-long fragments on magnetic beads (MagBio)."
+    },
+    {
+      "fact_type_candidate": "sequencing_platform_general",
+      "raw_value": "DNBSEQ",
+      "evidence_quote": "sequenced by a paired end sequencing using DNBSEQ-G400"
     }
   ]
 }

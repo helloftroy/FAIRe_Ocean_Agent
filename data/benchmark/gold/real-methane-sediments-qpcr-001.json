@@ -54,6 +54,11 @@
       "fact_type_candidate": "pcr_replicate_count",
       "raw_value": "Technical duplicates",
       "evidence_quote": "Technical duplicates were performed for each sample"
+    },
+    {
+      "fact_type_candidate": "pcr_conditions",
+      "raw_value": "The qPCR program consisted of an initial denaturation at 95°C for 5 min, followed by 45 cycles of denaturation 95°C 30 s, annealing 60°C 30 s, and elongation 72°C for 15 s",
+      "evidence_quote": "The qPCR program consisted of an initial denaturation at 95°C for 5 min, followed by 45 cycles of denaturation 95°C 30 s, annealing 60°C 30 s, and elongation 72°C for 15 s."
     }
   ]
 }

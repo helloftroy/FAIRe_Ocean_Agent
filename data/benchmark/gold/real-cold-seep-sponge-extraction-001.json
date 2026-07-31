@@ -39,6 +39,11 @@
       "fact_type_candidate": "sequencing_location",
       "raw_value": "Novegene (Beijing, China)",
       "evidence_quote": "in Novegene (Beijing, China)"
+    },
+    {
+      "fact_type_candidate": "sequencing_platform_general",
+      "raw_value": "Illumina",
+      "evidence_quote": "sequenced using the Illumina HiSeq2000 platform"
     }
   ]
 }

@@ -39,6 +39,26 @@
       "fact_type_candidate": "taxonomic_assignment_method",
       "raw_value": "BLASTn+",
       "evidence_quote": "taxonomically assigned by BLASTn"
+    },
+    {
+      "fact_type_candidate": "adapter_trimming_method",
+      "raw_value": "q25 trimming of the ends",
+      "evidence_quote": "Prokaryotic 16S rRNA paired-end reads were merged using USEARCH ( Edgar and Flyvbjerg, 2015 ) after q25 trimming of the ends."
+    },
+    {
+      "fact_type_candidate": "clustering_similarity_threshold",
+      "raw_value": "3",
+      "evidence_quote": "Next, reads were clustered into de novo operational taxonomic units (OTUs) using Swarm ( Mahé et al., 2014 ), with an aggregation distance equal to 3."
+    },
+    {
+      "fact_type_candidate": "percent_query_coverage",
+      "raw_value": "60%",
+      "evidence_quote": "Finally, filtrations were performed on BLAST taxonomic affiliation, with a minimum coverage of 60% and a minimum identity of 60%."
+    },
+    {
+      "fact_type_candidate": "percent_sequence_identity",
+      "raw_value": "60%",
+      "evidence_quote": "Finally, filtrations were performed on BLAST taxonomic affiliation, with a minimum coverage of 60% and a minimum identity of 60%."
     }
   ]
 }

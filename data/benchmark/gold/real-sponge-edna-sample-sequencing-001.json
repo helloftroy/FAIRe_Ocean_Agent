@@ -6,7 +6,7 @@
   "source_text": "2.2. Laboratory procedures Each filter capsule was opened onto a Petri dish using carpenter pliers. The filters were removed from the inner tube and torn into small pieces using metal forceps. All pieces were placed inside a 1.5 ml microtube for DNA extraction. For sponge biopsies, approximately 25 mg of dry sponge per sample was used for DNA extraction. Each sponge was removed from the storage ethanol, blotted dry against filter paper (42.5 mm, Fisher Scientific) inside a Petri dish, then placed inside a 1.5 ml microtube for DNA extraction. All samples were processed using the Mu‐DNA tissue protocol with an inhibitor removal step from the Mu‐DNA water protocol (Sellers et al., 2018 ). The extracts were then quantified for DNA concentration using a Qubit 4 fluorometer with a Qubit dsDNA HS Assay kit (Thermo Fisher Scientific). Thirty‐nine out of 72 sponge DNA extracts were diluted 1:10 to enable PCR amplification. Aquatic eDNA extracts were not diluted for PCR amplification due to their low DNA concentration. All reusable equipment for DNA extraction was first sterilized in 10% v/v bleach solution, followed by a rinse in 5% v/v lipsol detergent and deionized water. Equipment and consumables were then exposed to 30 minutes of ultraviolet (UV) light. PCR amplifications were carried out using the Tele02 primers (Taberlet et al., 2018 ), which amplify a ~169 bp fragment of the mitochondrial 12S rRNA gene. Primers contained unique 8‐bp dual barcodes for sample identification and to reduce tag jumping (Schnell et al., 2015 ), with 2–4 leading “N” bases to increase sequence diversity. Samples were amplified in triplicate under the following conditions: initial denaturation at 95°C for 10 min, followed by 40 cycles of 95°C for 30 s, 60°C for 45 s, 72°C for 30 s, and finishing at 72°C for 5 min. All PCRs were performed in 20 μl reactions containing 10 μl 2× MyFi Mix (Meridian Bioscience), 0.5 μM of each primer, 0.04 mg BSA (Bovine Serum Albumin Solution, Thermo Fisher Scientific), 5.84 μl of molecular grade water (Invitrogen), and 2 μl of DNA template. Two or three PCR positive and negative controls were included on each PCR run—two of each for eDNA samples and three of each for natural sampler DNA samples, given the higher overall number of nsDNA samples. PCR positive controls (0.05 ng/μl) contained one fish species which was not present in the HMG (the iridescent catfish Pangasianodon hypophthalmus ). PCR triplicates were pooled together and visualized on 2% agarose gels. Each sample was purified using Mag‐Bind Total Pure NGS (Omega Bio‐Tek) magnetic beads. Purified PCR products were quantified as above and pooled in equimolar amounts to create two libraries, one for eDNA samples (24 samples and 18 controls), and one for nsDNA samples (72 samples and 16 controls). Pooled PCR products were purified with magnetic beads, and libraries were prepared using the NEXTFLEX Rapid DNA‐Seq Kit for Illumina (PerkinElmer) following the manufacturer's instructions. The libraries were quantified by quantitative PCR (qPCR) using the NEBNext Library Quant Kit for Illumina (New England Biolabs) and fragment size was checked using the Tape Station 4200 (Agilent). They were then pooled in equimolar concentrations with a final molarity of 60 pM with 10% PhiX control. The libraries were sequenced on an Illumina iSeq100 using iSeq i1 Reagent version 2 (300 cycles) at Liverpool John Moores University.",
   "expected_facts": [
     {
-      "fact_type_candidate": "storage_conditions",
+      "fact_type_candidate": "sample_storage_conditions",
       "raw_value": "storage ethanol",
       "evidence_quote": "removed from the storage ethanol"
     },
@@ -16,7 +16,7 @@
       "evidence_quote": "processed using the Mu‐DNA tissue protocol with an inhibitor removal step from the Mu‐DNA water protocol"
     },
     {
-      "fact_type_candidate": "library_concentration_method",
+      "fact_type_candidate": "dna_concentration_method",
       "raw_value": "Qubit 4 fluorometer with a Qubit dsDNA HS Assay kit",
       "evidence_quote": "quantified for DNA concentration using a Qubit 4 fluorometer with a Qubit dsDNA HS Assay kit"
     },
@@ -89,6 +89,51 @@
       "fact_type_candidate": "sequencing_location",
       "raw_value": "Liverpool John Moores University",
       "evidence_quote": "at Liverpool John Moores University"
+    },
+    {
+      "fact_type_candidate": "sample_volume_for_extraction",
+      "raw_value": "approximately 25 mg of dry sponge per sample",
+      "evidence_quote": "For sponge biopsies, approximately 25 mg of dry sponge per sample"
+    },
+    {
+      "fact_type_candidate": "sample_volume_for_extraction_unit",
+      "raw_value": "mg",
+      "evidence_quote": "For sponge biopsies, approximately 25 mg of dry sponge per sample"
+    },
+    {
+      "fact_type_candidate": "dna_cleanup_method",
+      "raw_value": "Each sample was purified using Mag‐Bind Total Pure NGS (Omega Bio‐Tek) magnetic beads",
+      "evidence_quote": "Each sample was purified using Mag‐Bind Total Pure NGS (Omega Bio‐Tek) magnetic beads."
+    },
+    {
+      "fact_type_candidate": "pcr_conditions",
+      "raw_value": "Samples were amplified in triplicate under the following conditions: initial denaturation at 95°C for 10 min, followed by 40 cycles of 95°C for 30 s, 60°C for 45 s, 72°C for 30 s, and finishing at 72°C for 5 min",
+      "evidence_quote": "Samples were amplified in triplicate under the following conditions: initial denaturation at 95°C for 10 min, followed by 40 cycles of 95°C for 30 s, 60°C for 45 s, 72°C for 30 s, and finishing at 72°C for 5 min."
+    },
+    {
+      "fact_type_candidate": "phix_percentage",
+      "raw_value": "10%",
+      "evidence_quote": "a final molarity of 60 pM with 10% PhiX"
+    },
+    {
+      "fact_type_candidate": "sequencing_platform_general",
+      "raw_value": "Illumina",
+      "evidence_quote": "The libraries were sequenced on an Illumina iSeq100"
+    },
+    {
+      "fact_type_candidate": "sequencing_kit",
+      "raw_value": "iSeq i1 Reagent version 2",
+      "evidence_quote": "using iSeq i1 Reagent version 2 (300 cycles"
+    },
+    {
+      "fact_type_candidate": "forward_primer_concentration",
+      "raw_value": "0.5 μM",
+      "evidence_quote": "0.5 μM"
+    },
+    {
+      "fact_type_candidate": "reverse_primer_concentration",
+      "raw_value": "0.5 μM",
+      "evidence_quote": "0.5 μM"
     }
   ]
 }

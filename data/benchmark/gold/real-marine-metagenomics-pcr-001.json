@@ -64,6 +64,11 @@
       "fact_type_candidate": "amplicon_size",
       "raw_value": "400-500bp",
       "evidence_quote": "target product size in a range of 400–500bp"
+    },
+    {
+      "fact_type_candidate": "pcr_conditions",
+      "raw_value": "PCR conditions were 98 °C for 30 s, followed by 25 cycles of 98 °C for 10 s, 55 °C for 20 s, and 72 °C for 30 s, with a final extension time of 5 min at 72 °C",
+      "evidence_quote": "PCR conditions were 98 °C for 30 s, followed by 25 cycles of 98 °C for 10 s, 55 °C for 20 s, and 72 °C for 30 s, with a final extension time of 5 min at 72 °C."
     }
   ]
 }

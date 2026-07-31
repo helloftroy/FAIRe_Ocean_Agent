@@ -243,7 +243,8 @@ found zero facts. Measured **~12-15x** faster live (mean 61.4s/case vs.
 98.5% on the full 18-case gold benchmark. See "Fixing the real Ollama
 context limit and collapsing the per-topic passes" below for the honest
 precision/recall numbers and why spot-checking traced most of the gap to
-pre-existing gold-data drift, not a new extraction regression.
+pre-existing gold-data drift, and "Gold-case label-drift/completeness
+cleanup" below for the fix.
 
 **What it does not do yet:** BeBOP/MIOP raw_fact mapping (see
 above), or discovering brand-new studies via keyword search/citation
@@ -1308,8 +1309,75 @@ fabrication/splicing there, label/completeness drift here) that would
 affect scoring under either version of the extraction pipeline. A true
 head-to-head against the old 5-focus design wasn't run (would cost
 proportionally more of the same slow per-call time this milestone just
-fixed) -- fixing the gold-data drift itself is a deliberately separate,
-not-yet-started follow-up.
+fixed) -- fixing the gold-data drift itself is addressed next.
+
+## Gold-case label-drift/completeness cleanup
+
+Followed up on the honest gap flagged above by re-deriving `expected_facts`
+for all 12 real-paper gold cases directly against each case's own cached
+`source_text` -- not by absorbing every model "extra" wholesale (most
+model differences are genuine mislabels, not gold gaps: primer *names*
+tagged as primer *sequences*, a reference database mistaken for a
+taxonomic-assignment *method*, a sequencer manufacturer mistaken for a
+sequencing *location*, a basecalling tool mistaken for a read-merging
+tool, values inferred rather than explicitly stated (`library_layout:
+"paired"`, `assay_type: "targeted"`), and outright fabrications where a
+reaction's own stated component volumes don't sum to the value the model
+reported). Roughly 40 genuinely explicit, non-redundant, taxonomy-valid
+facts were added across 10 of the 12 cases (2 relabels, the rest
+additions), each with a real byte-exact `evidence_quote` sliced directly
+out of `source_text` (not hand-typed -- several source texts use `\xa0`
+non-breaking spaces and ` ` thin spaces mid-sentence that a
+hand-typed quote silently fails to match) and checked against
+`verify_evidence_quote` before being written. Two of the 12 cases needed
+no changes at all; their existing gold was already complete and correct.
+
+The two relabels are worth calling out because they're the concrete
+payoff of the taxonomy near-duplicate-field finding flagged earlier
+(fallback vs. primary names can both validly describe the same concept):
+`real-sponge-edna-sample-sequencing-001`'s `storage_conditions` ->
+`sample_storage_conditions` (the primary field clearly applies, so use
+it over the generic fallback) and its `library_concentration_method` ->
+`dna_concentration_method` (the source text says extracts, not
+libraries, were quantified with the Qubit at that point in the
+protocol -- gold's original label was a genuine mislabel, not just a
+naming-convention choice).
+
+**Investigated the two cases that scored zero extracted facts, rather
+than assuming a bug.** `real-cold-seep-sponge-sequencing-001` turned out
+to be a non-issue on closer inspection: rerunning it live against
+`qwen3-4b-instruct-16k` twice in a row now reliably returns all 7 real,
+evidence-verified facts (the original empty result was a one-off,
+almost certainly from whatever the very first cold-start request in that
+multi-hour benchmark run hit). `real-methane-sediments-sequencing-001`
+is a different story -- **reproducibly** empty (0/0 facts across 2 fresh
+runs, valid JSON both times, and unchanged even after retrying at
+temperature 0.3 and 0.7, so it isn't sampling noise). Root-caused with a
+controlled test: the section is titled "RNA extraction and sequencing"
+and every fact in it is genuinely about RNA (`RNA was extracted... using
+the RNeasy PowerSoil Total Kit`), but the extraction checklist's fact
+names are all DNA-prefixed (`dna_extraction_kit`, `dna_cleanup_method`,
+...) with **zero RNA-specific names anywhere in the taxonomy**
+(confirmed via `all_field_names()`). Manually substituting `RNA` -> `DNA`
+throughout the same section text, with everything else held identical
+(same prompt structure, same temperature 0), immediately produced 10
+correctly-extracted facts. The model isn't malfunctioning -- given a
+strict "only extract what matches a listed concept name" instruction and
+a checklist with no RNA-shaped concept to match against, it's making a
+literal-minded, highly confident (not just borderline: the empty
+response persists at temperature 0.7 too) decision that none of the
+checklist applies to an RNA-only section, even though FAIRe's underlying
+`nucl_acid_ext_kit`/`nucl_acid_ext_*` fields are nucleic-acid-generic by
+design and gold correctly labels this same kind of fact
+`dna_extraction_kit` regardless of RNA/DNA. **This is a real taxonomy
+naming gap** (no `sample_volume_for_extraction`-style field name signals
+"this applies to RNA too"), not a gold-curation issue and not something
+this cleanup fixes -- flagged here as a genuine follow-up candidate
+(e.g. renaming/aliasing the nucleic-acid-extraction fact names to be
+RNA/DNA-neutral) since real marine 'omics data includes metatranscriptomic
+studies, not just DNA-based metabarcoding/metagenomics. Left this gold
+case's `expected_facts` unchanged -- they're accurate and explicit; the
+model's zero-result is the real, now-understood limitation being scored.
 
 ## Mapping expansion: the rest of FAIRe's Environment section
 

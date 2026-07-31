@@ -64,6 +64,21 @@
       "fact_type_candidate": "sequencing_location",
       "raw_value": "Macrogen",
       "evidence_quote": "were performed by Macrogen"
+    },
+    {
+      "fact_type_candidate": "forward_primer_concentration",
+      "raw_value": "20 μM",
+      "evidence_quote": "50 mM MgCl 2 , 20 μM of each of the two primers"
+    },
+    {
+      "fact_type_candidate": "reverse_primer_concentration",
+      "raw_value": "20 μM",
+      "evidence_quote": "50 mM MgCl 2 , 20 μM of each of the two primers"
+    },
+    {
+      "fact_type_candidate": "pcr_conditions",
+      "raw_value": "The PCR cycles were 2 min at 94°C followed by 30 cycles of 1 min denaturation at 94°C, 1 min annealing at 55°C and 2 min extension at 72°C, with a final 10 min extension at 72°C",
+      "evidence_quote": "The PCR cycles were 2 min at 94°C followed by 30 cycles of 1 min denaturation at 94°C, 1 min annealing at 55°C and 2 min extension at 72°C, with a final 10 min extension at 72°C."
     }
   ]
 }

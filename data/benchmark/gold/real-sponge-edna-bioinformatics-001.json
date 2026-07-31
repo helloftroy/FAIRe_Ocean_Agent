@@ -54,6 +54,36 @@
       "fact_type_candidate": "reference_database",
       "raw_value": "NCBI reference database",
       "evidence_quote": "using BLAST against the NCBI reference database"
+    },
+    {
+      "fact_type_candidate": "length_filtering_tool",
+      "raw_value": "obigrep",
+      "evidence_quote": "Subsequently, quality filters were performed by ‘obigrep’ to retain sequences between 130 and 190 bp without ambiguity to filter out erroneous sequences,"
+    },
+    {
+      "fact_type_candidate": "scientific_name",
+      "raw_value": "Gramma loreto",
+      "evidence_quote": "we manually corrected one species ( Gramma loreto )"
+    },
+    {
+      "fact_type_candidate": "taxon_kingdom",
+      "raw_value": "metazoan",
+      "evidence_quote": "we manually corrected one species ( Gramma loreto )"
+    },
+    {
+      "fact_type_candidate": "taxon_genus",
+      "raw_value": "Gramma",
+      "evidence_quote": "we manually corrected one species ( Gramma loreto )"
+    },
+    {
+      "fact_type_candidate": "species_epithet",
+      "raw_value": "loreto",
+      "evidence_quote": "we manually corrected one species ( Gramma loreto )"
+    },
+    {
+      "fact_type_candidate": "bioinformatics_sop_reference",
+      "raw_value": "https://github.com/metabarpark/R_scripts_metabarpark",
+      "evidence_quote": "a sample/OTU table with taxon information was formatted using R scripts listed at https://github.com/metabarpark/R_scripts_metabarpark"
     }
   ]
 }

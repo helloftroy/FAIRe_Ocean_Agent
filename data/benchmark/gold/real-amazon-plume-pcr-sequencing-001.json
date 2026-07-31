@@ -49,6 +49,16 @@
       "fact_type_candidate": "annealing_temperature",
       "raw_value": "55°C",
       "evidence_quote": "1 min at 55"
+    },
+    {
+      "fact_type_candidate": "pcr_conditions",
+      "raw_value": "an initial denaturing step for 3 min at 95°C, then 30 cycles of 30 s at 95°C, 1 min at 55°C, 1 min at 72°C, and finally at 72°C for 5 min",
+      "evidence_quote": "PCR reactions were performed as follows: an initial denaturing step for 3 min at 95°C, then 30 cycles of 30 s at 95°C, 1 min at 55°C, 1 min at 72°C, and finally at 72°C for 5 min."
+    },
+    {
+      "fact_type_candidate": "sequencing_platform_general",
+      "raw_value": "Ion Torrent",
+      "evidence_quote": "using the Ion Torrent PGM sequencer (Life Technologies)"
     }
   ]
 }
