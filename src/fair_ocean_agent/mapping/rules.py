@@ -282,8 +282,6 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
                 MappingMethod.EXACT_LABEL.value),
     MappingRule("pcr_plate_id", EntityLevel.EXPERIMENT_RUN.value, "experimentRunMetadata", "pcr_plate_id",
                 MappingMethod.EXACT_LABEL.value),
-    MappingRule("pcr_well_position", EntityLevel.EXPERIMENT_RUN.value, "experimentRunMetadata", "pcr_well_position",
-                MappingMethod.EXACT_LABEL.value),
     MappingRule("lib_id", EntityLevel.EXPERIMENT_RUN.value, "experimentRunMetadata", "lib_id",
                 MappingMethod.EXACT_LABEL.value),
     MappingRule("seq_run_id", EntityLevel.EXPERIMENT_RUN.value, "experimentRunMetadata", "seq_run_id",

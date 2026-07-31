@@ -68,7 +68,6 @@ SUPPLEMENT_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     "target_subfragment": ("target_subfragment", "subfragment", "region", "hypervariable_region"),
     "assay_name": ("assay_name", "assay name", "assay", "assay_id", "assay id"),
     "pcr_plate_id": ("pcr_plate_id", "pcr plate id", "pcr_plate", "plate_id", "plate id"),
-    "pcr_well_position": ("pcr_well_position", "pcr well position", "pcr_well", "well", "well_position"),
     "lib_id": ("lib_id", "library_id", "library id", "library", "lib name"),
     "seq_run_id": ("seq_run_id", "sequencing_run_id", "sequencing run id", "run_accession", "run accession"),
     "lib_conc": ("lib_conc", "library_concentration", "library concentration", "lib concentration"),
@@ -122,7 +121,6 @@ _EXPERIMENT_RUN_FACTS = frozenset(
     {
         "assay_name",
         "pcr_plate_id",
-        "pcr_well_position",
         "lib_id",
         "seq_run_id",
         "lib_conc",

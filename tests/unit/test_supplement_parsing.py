@@ -70,7 +70,6 @@ def test_parse_delimited_table_binds_library_columns_to_experiment_entity():
         "phix_perc",
         "filename",
         "input_read_count",
-        "pcr_well_position",
     }.issubset(values)
     for fact_type in (
         "samp_name",
@@ -82,11 +81,11 @@ def test_parse_delimited_table_binds_library_columns_to_experiment_entity():
         "phix_perc",
         "filename",
         "input_read_count",
-        "pcr_well_position",
     ):
         assert values[fact_type].entity_level == EntityLevel.EXPERIMENT_RUN
         assert values[fact_type].entity_external_id == "LIB1"
     assert values["samp_name"].raw_value == "SAMN1"
+    assert "pcr well position" in result.unrecognized_columns
     links = values["lib_id"].entity_links
     assert {(link.entity_level, link.external_identifier, link.relationship_type) for link in links} == {
         (EntityLevel.SAMPLE, "SAMN1", EntityRelationshipType.DERIVED_FROM_SAMPLE),

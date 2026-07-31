@@ -206,7 +206,6 @@ def test_maps_run_level_fastq_and_checksum_and_lib_layout(db_session):
     _fact(db_session, study, entity=run, entity_level="sequencing_run", field="instrument_platform", value="ILLUMINA")
     _fact(db_session, study, entity=run, entity_level="sequencing_run", field="assay_name", value="16S metabarcoding")
     _fact(db_session, study, entity=run, entity_level="sequencing_run", field="pcr_plate_id", value="plate-1")
-    _fact(db_session, study, entity=run, entity_level="sequencing_run", field="pcr_well_position", value="A01")
     _fact(db_session, study, entity=run, entity_level="sequencing_run", field="lib_id", value="lib-1")
     _fact(db_session, study, entity=run, entity_level="sequencing_run", field="lib_conc", value="4.2")
     _fact(db_session, study, entity=run, entity_level="sequencing_run", field="lib_conc_unit", value="ng/μL")
@@ -234,7 +233,6 @@ def test_maps_run_level_fastq_and_checksum_and_lib_layout(db_session):
     assert values["platform"].standardized_value == "ILLUMINA"
     assert values["assay_name"].standardized_value == "16S metabarcoding"
     assert values["pcr_plate_id"].standardized_value == "plate-1"
-    assert values["pcr_well_position"].standardized_value == "A01"
     assert values["lib_id"].standardized_value == "lib-1"
     assert values["lib_conc"].standardized_value == "4.2"
     assert values["lib_conc_unit"].standardized_value == "ng/μL"

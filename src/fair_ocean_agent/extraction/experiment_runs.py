@@ -23,7 +23,6 @@ _EXPERIMENT_FACT_TYPES = frozenset(
     {
         "assay_name",
         "pcr_plate_id",
-        "pcr_well_position",
         "lib_id",
         "library_name",
         "experiment_accession",
@@ -69,7 +68,6 @@ _ROW_ANCHOR_FACT_TYPES = frozenset(
         "input_read_count",
         "assay_name",
         "pcr_plate_id",
-        "pcr_well_position",
     }
 )
 
