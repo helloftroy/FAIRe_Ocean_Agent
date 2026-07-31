@@ -107,6 +107,7 @@ class SupplementConfig(BaseModel):
     max_member_bytes: int = 10_000_000
     lightweight_inspection_of_large_assets: bool = False
     llm_text_extraction_enabled: bool = False
+    require_completed_paper_pass: bool = True
 
 
 class DiscoveryConfig(BaseModel):
@@ -242,6 +243,12 @@ def _apply_env_overrides(raw: dict[str, Any]) -> dict[str, Any]:
     llm_num_ctx = os.environ.get("LOCAL_LLM_NUM_CTX")
     if llm_num_ctx:
         raw.setdefault("llm", {})["num_ctx"] = int(llm_num_ctx)
+
+    supplement_llm_enabled = os.environ.get("FAIR_OCEAN_SUPPLEMENT_LLM_ENABLED")
+    if supplement_llm_enabled:
+        raw.setdefault("supplements", {})["llm_text_extraction_enabled"] = (
+            supplement_llm_enabled.lower() in {"1", "true", "yes", "on"}
+        )
 
     verifier_base_url = os.environ.get("LOCAL_LLM_VERIFIER_BASE_URL")
     if verifier_base_url:

@@ -310,6 +310,28 @@ def resolved_faire_fields_for_study(session: Session, study_id: str) -> frozense
     return frozenset(row[0] for row in rows)
 
 
+def present_faire_fields_for_study(session: Session, study_id: str) -> frozenset[str]:
+    """FAIRe fields already supported by any inspected stage.
+
+    This is intentionally broader than `resolved_faire_fields_for_study`.
+    The paper pass should only trust structured, non-review mappings when
+    deciding what not to ask. The later supplement pass should also avoid
+    re-asking for fields the paper explicitly supported, even though those
+    LLM-derived mappings remain review-required.
+    """
+    rows = session.execute(
+        select(StandardizedValue.target_field)
+        .where(
+            StandardizedValue.study_id == study_id,
+            StandardizedValue.target_schema == TARGET_SCHEMA,
+            StandardizedValue.missingness_status == MissingnessStatus.PRESENT.value,
+            StandardizedValue.standardized_value.is_not(None),
+        )
+        .distinct()
+    )
+    return frozenset(row[0] for row in rows)
+
+
 def build_extraction_instructions(
     exclude_faire_hints: frozenset[str] = frozenset(),
     focus: ExtractionFocus | None = None,

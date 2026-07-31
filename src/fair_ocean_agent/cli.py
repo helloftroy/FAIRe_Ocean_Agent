@@ -16,7 +16,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from fair_ocean_agent.config import load_benchmark_candidates
+from fair_ocean_agent.config import load_benchmark_candidates, load_config
 from fair_ocean_agent.database.enums import TaskType
 from fair_ocean_agent.database.models import ValidationResult, WorkflowRun
 from fair_ocean_agent.database.session import init_db as _init_db
@@ -117,6 +117,32 @@ def enqueue_supplement_retrieval_backfill_command() -> None:
     with session_scope() as session:
         count = fair_ocean_agent.workflow.supplement_handlers.enqueue_supplement_retrieval_backfill(session)
     console.print(f"Queued RETRIEVE_SUPPLEMENTS for {count} stud(y/ies) with a discovered supplement.")
+
+
+@app.command("enqueue-supplement-text-extraction-backfill")
+def enqueue_supplement_text_extraction_backfill_command() -> None:
+    """Queue the opt-in, post-paper LLM pass over prepared supplement text.
+
+    Retrieval prepares TXT/Markdown/PDF text without invoking a model.
+    This command is the explicit switch for the later missing-field-only
+    extraction stage.
+    """
+    config = load_config()
+    if not config.supplements.llm_text_extraction_enabled:
+        console.print(
+            "[yellow]Supplement text LLM extraction is disabled.[/yellow] "
+            "Set FAIR_OCEAN_SUPPLEMENT_LLM_ENABLED=true (or "
+            "supplements.llm_text_extraction_enabled: true in config/local.yaml) "
+            "when you are ready to test it."
+        )
+        return
+    with session_scope() as session:
+        count = fair_ocean_agent.workflow.supplement_handlers.enqueue_supplement_text_extraction_backfill(
+            session
+        )
+    console.print(
+        f"Queued EXTRACT_SUPPLEMENT_TEXT_FACTS for {count} paper-ready stud(y/ies)."
+    )
 
 
 @app.command("enqueue-validation-backfill")

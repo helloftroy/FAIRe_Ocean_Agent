@@ -382,6 +382,41 @@ class DataAsset(Base, TimestampMixin):
     source_id: Mapped[str | None] = mapped_column(ForeignKey("sources.source_id"))
 
 
+class PreparedSourceText(Base, TimestampMixin):
+    """Reusable text prepared from a retrieved source asset.
+
+    Retrieval and model inference are deliberately separate stages. This
+    row preserves the exact text passed to the LLM, while RawFact keeps the
+    literal supporting passage copied from that text after extraction.
+    """
+
+    __tablename__ = "prepared_source_texts"
+    __table_args__ = (
+        UniqueConstraint(
+            "data_asset_id",
+            "content_hash",
+            "title",
+            name="uq_prepared_source_text_asset_hash_title",
+        ),
+        Index("ix_prepared_source_texts_study_source", "study_id", "source_id"),
+    )
+
+    prepared_source_text_id: Mapped[str] = mapped_column(
+        String, primary_key=True, default=lambda: new_id("SRCTEXT")
+    )
+    study_id: Mapped[str] = mapped_column(ForeignKey("studies.study_id"), index=True)
+    source_id: Mapped[str] = mapped_column(ForeignKey("sources.source_id"), index=True)
+    data_asset_id: Mapped[str] = mapped_column(ForeignKey("data_assets.asset_id"), index=True)
+    title: Mapped[str] = mapped_column(Text)
+    text_content: Mapped[str] = mapped_column(Text)
+    content_hash: Mapped[str] = mapped_column(String, index=True)
+    preparation_method: Mapped[str] = mapped_column(String)
+    character_count: Mapped[int] = mapped_column(Integer)
+    llm_model_name: Mapped[str | None] = mapped_column(String)
+    llm_prompt_version: Mapped[str | None] = mapped_column(String)
+    llm_extracted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class ValidationResult(Base):
     __tablename__ = "validation_results"
 

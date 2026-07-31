@@ -2,13 +2,26 @@
 -- a fake europe_pmc adapter (no network) standing in for the real one,
 mirroring test_handlers_text_extraction.py's FakeEuropePmcAdapter pattern."""
 import io
+import json
 import zipfile
 
 import pytest
 
 from fair_ocean_agent.config import reset_config_cache
 from fair_ocean_agent.database.enums import IdentifierType, TaskType
-from fair_ocean_agent.database.models import DataAsset, ExternalIdentifier, RawFact, Source, Study, StudySource
+from fair_ocean_agent.database.models import (
+    DataAsset,
+    ExternalIdentifier,
+    PreparedSourceText,
+    RawFact,
+    Source,
+    StandardizedValue,
+    Study,
+    StudySource,
+    Task,
+)
+from fair_ocean_agent.extraction.text import PROMPT_VERSION, segment_source_text
+from fair_ocean_agent.llm.mock import MockLLMBackend
 from fair_ocean_agent.sources.base import RelatedIdentifier, SourceRecordNotFoundError
 from fair_ocean_agent.sources.europe_pmc import SupplementReference
 from fair_ocean_agent.workflow import handlers, supplement_handlers
@@ -248,7 +261,7 @@ def test_retrieve_parses_a_small_csv_and_creates_raw_facts(db_session, monkeypat
     assert all(f.source_locator.startswith("supplement.Table_1.csv!") for f in facts)
 
 
-def test_retrieve_skips_pdf_llm_extraction_without_explicit_opt_in(db_session, monkeypatch):
+def test_retrieve_prepares_pdf_text_without_calling_llm(db_session, monkeypatch):
     study = _seeded_study_with_pmcid(db_session)
     small_xml = """<article><supplementary-material id="TS1"><media xmlns:xlink="http://www.w3.org/1999/xlink"
     xlink:href="methods.pdf" mimetype="application" mime-subtype="pdf"><?size 40?></media></supplementary-material></article>"""
@@ -264,6 +277,11 @@ def test_retrieve_skips_pdf_llm_extraction_without_explicit_opt_in(db_session, m
         "_build_llm_backend_cached",
         lambda: (_ for _ in ()).throw(AssertionError("LLM backend should not be built")),
     )
+    monkeypatch.setattr(
+        supplement_handlers,
+        "extract_pdf_text",
+        lambda _content: "PCR reactions used MiFish-U-F and MiFish-U-R primers.",
+    )
     discover_task = _discover_task(db_session, study)
     supplement_handlers.handle_discover_supplements(db_session, discover_task)
     db_session.commit()
@@ -275,8 +293,159 @@ def test_retrieve_skips_pdf_llm_extraction_without_explicit_opt_in(db_session, m
     asset = db_session.query(DataAsset).filter_by(study_id=study.study_id, file_name="methods.pdf").one()
     assert asset.access_status == "open"
     assert asset.inspection_level == "lightweight"
-    assert "supplement LLM opt-in" in asset.description
+    assert "text_ready" in asset.description
+    prepared = db_session.query(PreparedSourceText).filter_by(data_asset_id=asset.asset_id).one()
+    assert prepared.text_content == "PCR reactions used MiFish-U-F and MiFish-U-R primers."
+    assert prepared.preparation_method == "pypdf_text_extraction"
     assert db_session.query(RawFact).filter_by(study_id=study.study_id).count() == 0
+
+
+def test_supplement_llm_pass_targets_fields_still_missing_after_paper(db_session, monkeypatch):
+    study = _seeded_study_with_pmcid(db_session)
+    paper_source = Source(
+        study_id=study.study_id,
+        source_type="article_fulltext",
+        source_name="europe_pmc_fulltext",
+        external_identifier="PMC1234567",
+        inspection_level="full",
+    )
+    supplement_source = Source(
+        study_id=study.study_id,
+        source_type="supplement",
+        source_name="europe_pmc_supplement",
+        external_identifier="methods.txt",
+    )
+    db_session.add_all([paper_source, supplement_source])
+    db_session.flush()
+    asset = DataAsset(
+        study_id=study.study_id,
+        source_id=supplement_source.source_id,
+        asset_type="other",
+        file_name="methods.txt",
+        access_status="open",
+        raw_or_processed="raw",
+        inspection_level="lightweight",
+    )
+    db_session.add(asset)
+    db_session.flush()
+    supplement_text = "PCR reactions were annealed at 54 C for 35 cycles."
+    prepared = PreparedSourceText(
+        study_id=study.study_id,
+        source_id=supplement_source.source_id,
+        data_asset_id=asset.asset_id,
+        title="Supplementary Methods (methods.txt)",
+        text_content=supplement_text,
+        content_hash="supplement-hash",
+        preparation_method="txt_decode_utf8",
+        character_count=len(supplement_text),
+    )
+    db_session.add(prepared)
+    db_session.add(
+        RawFact(
+            study_id=study.study_id,
+            source_id=paper_source.source_id,
+            raw_field_name="depth",
+            raw_value="5 m",
+            fact_type_candidate="depth",
+            entity_level="study",
+            support_type="explicit",
+            extraction_method="llm_text_extraction",
+            evidence_quote="Samples were collected at 5 m depth.",
+        )
+    )
+    db_session.commit()
+
+    segment_id = segment_source_text(prepared.title, supplement_text)[0].segment_id
+    response = json.dumps(
+        [
+            {
+                "fact_type_candidate": "annealing_temperature",
+                "raw_value": "54 C",
+                "evidence_id": segment_id,
+            }
+        ]
+    )
+    backend = MockLLMBackend(label="supplement-model", responses=[response])
+    monkeypatch.setattr(supplement_handlers, "_build_llm_backend_cached", lambda: backend)
+    config = supplement_handlers.load_config()
+    monkeypatch.setattr(
+        supplement_handlers,
+        "load_config",
+        lambda: config.model_copy(
+            update={
+                "supplements": config.supplements.model_copy(
+                    update={"llm_text_extraction_enabled": True}
+                )
+            }
+        ),
+    )
+    task = enqueue_task(
+        db_session,
+        TaskType.EXTRACT_SUPPLEMENT_TEXT_FACTS,
+        study_id=study.study_id,
+    )
+    db_session.commit()
+
+    supplement_handlers.handle_extract_supplement_text_facts(db_session, task)
+    db_session.commit()
+
+    assert backend.calls
+    assert all("sampling depth" not in call["prompt"] for call in backend.calls)
+    fact = db_session.query(RawFact).filter_by(
+        study_id=study.study_id,
+        extraction_method="supplement_llm_extraction",
+    ).one()
+    assert fact.raw_value == "54 C"
+    assert fact.evidence_quote == supplement_text
+    assert fact.source_id == supplement_source.source_id
+    assert prepared.llm_model_name == "supplement-model"
+    assert prepared.llm_prompt_version == PROMPT_VERSION
+    assert prepared.llm_extracted_at is not None
+    assert asset.inspection_level == "full"
+
+    mapped = db_session.query(StandardizedValue).filter_by(
+        study_id=study.study_id,
+        target_field="annealingTemp",
+    ).one()
+    assert mapped.standardized_value == "54 C"
+
+
+def test_supplement_llm_backfill_stays_off_until_explicitly_enabled(db_session):
+    study = _seeded_study_with_pmcid(db_session)
+    source = Source(
+        study_id=study.study_id,
+        source_type="supplement",
+        source_name="europe_pmc_supplement",
+    )
+    db_session.add(source)
+    db_session.flush()
+    asset = DataAsset(
+        study_id=study.study_id,
+        source_id=source.source_id,
+        asset_type="other",
+        access_status="open",
+        raw_or_processed="raw",
+    )
+    db_session.add(asset)
+    db_session.flush()
+    db_session.add(
+        PreparedSourceText(
+            study_id=study.study_id,
+            source_id=source.source_id,
+            data_asset_id=asset.asset_id,
+            title="Supplementary Methods",
+            text_content="Some text.",
+            content_hash="hash",
+            preparation_method="txt_decode_utf8",
+            character_count=10,
+        )
+    )
+    db_session.commit()
+
+    assert supplement_handlers.enqueue_supplement_text_extraction_backfill(db_session) == 0
+    assert db_session.query(Task).filter_by(
+        task_type=TaskType.EXTRACT_SUPPLEMENT_TEXT_FACTS.value
+    ).count() == 0
 
 
 def test_retrieve_parses_supported_tables_inside_zip_supplement(db_session, monkeypatch):

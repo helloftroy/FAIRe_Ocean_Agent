@@ -61,9 +61,12 @@ supplements:
   max_member_bytes: 10000000
   lightweight_inspection_of_large_assets: false
   # Keep supplementary retrieval deterministic by default. Text/PDF
-  # supplement extraction can be opted in separately when intentionally
-  # running an LLM-backed pass.
+  # preparation still happens, but model extraction is a later explicit
+  # task and can be opted in separately.
   llm_text_extraction_enabled: false
+  # The opt-in text task normally waits until the main-paper pass exists,
+  # then recomputes missing FAIRe fields before reading supplements.
+  require_completed_paper_pass: true
 
 discovery:
   citation_expansion_max_depth: 1

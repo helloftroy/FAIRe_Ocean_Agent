@@ -1,10 +1,9 @@
 """Task handlers for supplementary-material discovery and retrieval
 (supplementary-material and structured-table retrieval layer).
 
-Two stages, matching every other pipeline stage's shape (separate,
+Three stages, matching every other pipeline stage's shape (separate,
 manually-triggered CLI backfill commands -- no handler auto-chains into the
-next stage, so this stays opt-in exactly like EXTRACT_TEXT_FACTS already
-is):
+next stage):
 
 - DISCOVER_SUPPLEMENTS: parses <supplementary-material> tags out of the
   (cached) main article XML -- no new network call. Creates one `Source`
@@ -17,7 +16,13 @@ is):
 - RETRIEVE_SUPPLEMENTS: for a study's not-yet-parsed supplement
   `DataAsset` rows, checks the summed *already-known* size (from discovery)
   against a config cap before ever downloading Europe PMC's single
-  all-files-bundled zip, then routes each member by extension.
+  all-files-bundled zip, then routes each member by extension. Structured
+  files are parsed deterministically; TXT/Markdown/PDF become persisted
+  PreparedSourceText rows without invoking a model.
+- EXTRACT_SUPPLEMENT_TEXT_FACTS: disabled by default and separately
+  enqueued. Requires the paper pass by default, rebuilds current FAIRe
+  mapping, and asks the LLM only for fields still missing after structured
+  sources and the paper.
 
 The mutable, evolving per-file retrieval state (the user's 6 named states:
 referenced/available/retrieved/parsed/inaccessible/parse_failed) lives
@@ -49,12 +54,25 @@ from fair_ocean_agent.database.enums import (
     SupportType,
     TaskType,
 )
-from fair_ocean_agent.database.models import DataAsset, ExternalIdentifier, RawFact, Source, Study, Task
-from fair_ocean_agent.extraction.text import PROMPT_VERSION, extract_facts_from_section, resolved_faire_fields_for_study
+from fair_ocean_agent.database.models import (
+    DataAsset,
+    ExternalIdentifier,
+    PreparedSourceText,
+    RawFact,
+    Source,
+    Study,
+    Task,
+)
+from fair_ocean_agent.extraction.text import (
+    PROMPT_VERSION,
+    extract_facts_from_section,
+    present_faire_fields_for_study,
+)
 from fair_ocean_agent.identity.source_linking import create_source
 from fair_ocean_agent.llm.base import LLMBackendError
 from fair_ocean_agent.logging_setup import get_logger
-from fair_ocean_agent.sources.base import RawFactCandidate, SourceRecordNotFoundError
+from fair_ocean_agent.mapping.faire import map_study_to_faire
+from fair_ocean_agent.sources.base import RawFactCandidate, SourceRecordNotFoundError, hash_payload
 from fair_ocean_agent.sources.europe_pmc import discover_supplementary_materials
 from fair_ocean_agent.sources.supplement_parsing import (
     ParsedTableResult,
@@ -278,6 +296,45 @@ def _mark(asset: DataAsset, *, access_status: str | None = None, inspection_leve
         asset.description = description
 
 
+def _prepare_source_text(
+    session: Session,
+    study: Study,
+    source: Source,
+    asset: DataAsset,
+    *,
+    file_name: str,
+    text: str,
+    preparation_method: str,
+) -> PreparedSourceText | None:
+    normalized = text.strip()
+    if not normalized:
+        return None
+    content_hash = hash_payload({"text": normalized})
+    title = f"Supplementary Methods ({file_name})"
+    existing = session.scalar(
+        select(PreparedSourceText).where(
+            PreparedSourceText.data_asset_id == asset.asset_id,
+            PreparedSourceText.content_hash == content_hash,
+            PreparedSourceText.title == title,
+        )
+    )
+    if existing is not None:
+        return existing
+    prepared = PreparedSourceText(
+        study_id=study.study_id,
+        source_id=source.source_id,
+        data_asset_id=asset.asset_id,
+        title=title,
+        text_content=normalized,
+        content_hash=content_hash,
+        preparation_method=preparation_method,
+        character_count=len(normalized),
+    )
+    session.add(prepared)
+    session.flush()
+    return prepared
+
+
 def _process_member(
     session: Session,
     study: Study,
@@ -285,7 +342,6 @@ def _process_member(
     asset: DataAsset,
     content: bytes,
     file_name: str,
-    llm_exclude_faire_hints: frozenset[str],
 ) -> None:
     """Routes one already-retrieved supplement's bytes by extension. Never
     lets one file's parse failure raise out to the caller -- caught and
@@ -294,20 +350,7 @@ def _process_member(
     failure abort the whole study."""
     extension = _extension(file_name)
     config = load_config()
-    llm_config = config.llm
-    via_llm = extension in ("txt", "md", "pdf")
-    if via_llm and not config.supplements.llm_text_extraction_enabled:
-        _mark(
-            asset,
-            access_status=AccessStatus.OPEN.value,
-            inspection_level=InspectionLevel.LIGHTWEIGHT.value,
-            description=(
-                f"retrieved: .{extension} text extraction requires supplement "
-                "LLM opt-in (supplements.llm_text_extraction_enabled=false)"
-            ),
-        )
-        return
-    backend = _build_llm_backend_cached() if via_llm else None
+    text_preparation = extension in ("txt", "md", "pdf")
 
     try:
         if extension == "csv":
@@ -328,26 +371,34 @@ def _process_member(
             )
         elif extension in ("txt", "md"):
             text = content.decode("utf-8", errors="replace")
-            facts, _response = extract_facts_from_section(
-                backend,
-                f"Supplementary Methods ({file_name})",
-                text,
-                exclude_faire_hints=llm_exclude_faire_hints,
-                max_section_chars_per_call=llm_config.extraction_max_chars_per_call,
-                max_output_tokens=llm_config.max_output_tokens,
+            prepared = _prepare_source_text(
+                session,
+                study,
+                source,
+                asset,
+                file_name=file_name,
+                text=text,
+                preparation_method=f"{extension}_decode_utf8",
             )
-            summary = f"{len(text)} chars of supplementary text run through LLM extraction"
+            if prepared is None:
+                raise ValueError("no extractable text")
+            summary = f"text_ready: {prepared.character_count} chars prepared; supplement LLM extraction pending"
+            facts = []
         elif extension == "pdf":
             text = extract_pdf_text(content)
-            facts, _response = extract_facts_from_section(
-                backend,
-                f"Supplementary Methods ({file_name})",
-                text,
-                exclude_faire_hints=llm_exclude_faire_hints,
-                max_section_chars_per_call=llm_config.extraction_max_chars_per_call,
-                max_output_tokens=llm_config.max_output_tokens,
+            prepared = _prepare_source_text(
+                session,
+                study,
+                source,
+                asset,
+                file_name=file_name,
+                text=text,
+                preparation_method="pypdf_text_extraction",
             )
-            summary = f"{len(text)} chars extracted from PDF, run through LLM extraction"
+            if prepared is None:
+                raise ValueError("PDF contains no extractable text")
+            summary = f"text_ready: {prepared.character_count} chars prepared from PDF; supplement LLM extraction pending"
+            facts = []
         else:
             _mark(
                 asset,
@@ -356,14 +407,6 @@ def _process_member(
                 description=f"retrieved: unsupported file type .{extension or '?'}, not parsed",
             )
             return
-    except LLMBackendError as exc:
-        _mark(
-            asset,
-            access_status=AccessStatus.OPEN.value,
-            inspection_level=InspectionLevel.LIGHTWEIGHT.value,
-            description=f"parse_failed: LLM extraction error: {exc}",
-        )
-        return
     except Exception as exc:  # noqa: BLE001 -- one bad file must never abort the whole task
         logger.warning("failed to parse supplement %s for study %s: %s", file_name, study.study_id, exc)
         _mark(
@@ -374,16 +417,18 @@ def _process_member(
         )
         return
 
-    if via_llm:
-        _persist_supplement_facts(
-            session, study, source, facts,
-            extraction_method="supplement_llm_extraction",
-            model_name=backend.label,
-            prompt_version=PROMPT_VERSION,
-        )
-    else:
+    if not text_preparation:
         _persist_supplement_facts(session, study, source, facts)
-    _mark(asset, access_status=AccessStatus.OPEN.value, inspection_level=InspectionLevel.FULL.value, description=summary)
+    _mark(
+        asset,
+        access_status=AccessStatus.OPEN.value,
+        inspection_level=(
+            InspectionLevel.LIGHTWEIGHT.value
+            if text_preparation
+            else InspectionLevel.FULL.value
+        ),
+        description=summary,
+    )
 
 
 def handle_retrieve_supplements(session: Session, task: Task) -> None:
@@ -410,7 +455,19 @@ def handle_retrieve_supplements(session: Session, task: Task) -> None:
     assets = session.scalars(
         select(DataAsset).where(DataAsset.source_id.in_(supplement_source_ids))
     ).all()
-    pending = [asset for asset in assets if asset.inspection_level != InspectionLevel.FULL.value]
+    prepared_asset_ids = set(
+        session.scalars(
+            select(PreparedSourceText.data_asset_id).where(
+                PreparedSourceText.study_id == study.study_id
+            )
+        ).all()
+    )
+    pending = [
+        asset
+        for asset in assets
+        if asset.inspection_level != InspectionLevel.FULL.value
+        and asset.asset_id not in prepared_asset_ids
+    ]
     if not pending:
         logger.info("all discovered supplements for study %s already parsed", study.study_id)
         return
@@ -455,7 +512,6 @@ def handle_retrieve_supplements(session: Session, task: Task) -> None:
             )
         return
 
-    already_resolved = resolved_faire_fields_for_study(session, study.study_id)
     asset_by_file_name = {asset.file_name: asset for asset in pending}
     source_by_id = {source.source_id: source for source in session.scalars(
         select(Source).where(Source.source_id.in_(supplement_source_ids))
@@ -496,10 +552,129 @@ def handle_retrieve_supplements(session: Session, task: Task) -> None:
                 continue
 
             source = source_by_id[asset.source_id]
-            _process_member(session, study, source, asset, content, file_name, already_resolved)
+            _process_member(session, study, source, asset, content, file_name)
 
     session.flush()
     logger.info("processed %d pending supplement(s) for study %s", len(pending), study.study_id)
+
+
+def _has_completed_paper_pass(session: Session, study_id: str) -> bool:
+    return (
+        session.scalar(
+            select(Source.source_id).where(
+                Source.study_id == study_id,
+                Source.source_name == "europe_pmc_fulltext",
+                Source.inspection_level == InspectionLevel.FULL.value,
+            )
+        )
+        is not None
+    )
+
+
+def handle_extract_supplement_text_facts(session: Session, task: Task) -> None:
+    """Run the opt-in, missing-field-only LLM stage over prepared text.
+
+    The mapping is rebuilt before the first document and after each
+    successful document. Consequently every call sees structured + paper +
+    earlier-supplement fields and asks only for FAIRe fields that still have
+    no supported value.
+    """
+    study = session.get(Study, task.study_id)
+    if study is None:
+        raise ValueError(f"Study {task.study_id} not found")
+
+    config = load_config()
+    if not config.supplements.llm_text_extraction_enabled:
+        raise RuntimeError(
+            "supplement text LLM extraction is disabled; set "
+            "FAIR_OCEAN_SUPPLEMENT_LLM_ENABLED=true (or the matching local config value)"
+        )
+    if config.supplements.require_completed_paper_pass and not _has_completed_paper_pass(
+        session, study.study_id
+    ):
+        raise RuntimeError(
+            "supplement text extraction requires a completed main-paper pass for this study"
+        )
+
+    backend = _build_llm_backend_cached()
+    prepared_texts = list(
+        session.scalars(
+            select(PreparedSourceText)
+            .where(PreparedSourceText.study_id == study.study_id)
+            .order_by(PreparedSourceText.created_at, PreparedSourceText.prepared_source_text_id)
+        )
+    )
+    pending = [
+        prepared
+        for prepared in prepared_texts
+        if prepared.llm_model_name != backend.label
+        or prepared.llm_prompt_version != PROMPT_VERSION
+        or prepared.llm_extracted_at is None
+    ]
+    if not pending:
+        logger.info("no prepared supplement text pending for study %s", study.study_id)
+        return
+
+    map_study_to_faire(session, study.study_id)
+    session.flush()
+    llm_config = config.llm
+
+    for prepared in pending:
+        already_present = present_faire_fields_for_study(session, study.study_id)
+        try:
+            facts, _response = extract_facts_from_section(
+                backend,
+                prepared.title,
+                prepared.text_content,
+                exclude_faire_hints=already_present,
+                max_section_chars_per_call=llm_config.extraction_max_chars_per_call,
+                max_output_tokens=llm_config.max_output_tokens,
+            )
+        except LLMBackendError as exc:
+            logger.warning(
+                "supplement text extraction failed for study %s text %s: %s",
+                study.study_id,
+                prepared.prepared_source_text_id,
+                exc,
+            )
+            continue
+
+        source = session.get(Source, prepared.source_id)
+        if source is None:
+            raise ValueError(f"Source {prepared.source_id} not found")
+        _persist_supplement_facts(
+            session,
+            study,
+            source,
+            facts,
+            extraction_method="supplement_llm_extraction",
+            model_name=backend.label,
+            prompt_version=PROMPT_VERSION,
+        )
+        prepared.llm_model_name = backend.label
+        prepared.llm_prompt_version = PROMPT_VERSION
+        prepared.llm_extracted_at = utcnow()
+
+        asset = session.get(DataAsset, prepared.data_asset_id)
+        if asset is not None:
+            _mark(
+                asset,
+                access_status=AccessStatus.OPEN.value,
+                inspection_level=InspectionLevel.FULL.value,
+                description=(
+                    f"LLM inspected {prepared.character_count} prepared text chars; "
+                    f"{len(facts)} supported fact(s) retained"
+                ),
+            )
+        session.flush()
+        map_study_to_faire(session, study.study_id)
+        session.flush()
+
+    logger.info(
+        "processed %d prepared supplement text document(s) for study %s",
+        len(pending),
+        study.study_id,
+    )
 
 
 def enqueue_supplement_retrieval_backfill(session: Session) -> int:
@@ -513,5 +688,34 @@ def enqueue_supplement_retrieval_backfill(session: Session) -> int:
     return len(study_ids)
 
 
+def enqueue_supplement_text_extraction_backfill(session: Session) -> int:
+    """Queue only explicitly enabled, paper-ready prepared supplement text."""
+    config = load_config()
+    if not config.supplements.llm_text_extraction_enabled:
+        return 0
+
+    study_ids = list(
+        session.scalars(select(PreparedSourceText.study_id).distinct())
+    )
+    queued = 0
+    for study_id in study_ids:
+        if config.supplements.require_completed_paper_pass and not _has_completed_paper_pass(
+            session, study_id
+        ):
+            continue
+        enqueue_task(
+            session,
+            TaskType.EXTRACT_SUPPLEMENT_TEXT_FACTS,
+            study_id=study_id,
+            payload={
+                "model": config.llm.model,
+                "prompt_version": PROMPT_VERSION,
+            },
+        )
+        queued += 1
+    return queued
+
+
 TASK_HANDLERS[TaskType.DISCOVER_SUPPLEMENTS] = handle_discover_supplements
 TASK_HANDLERS[TaskType.RETRIEVE_SUPPLEMENTS] = handle_retrieve_supplements
+TASK_HANDLERS[TaskType.EXTRACT_SUPPLEMENT_TEXT_FACTS] = handle_extract_supplement_text_facts

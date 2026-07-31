@@ -43,6 +43,7 @@ from fair_ocean_agent.llm.base import LLMBackend, LLMBackendError
 from fair_ocean_agent.llm.disabled import DisabledLLMBackend
 from fair_ocean_agent.llm.factory import build_llm_backend
 from fair_ocean_agent.logging_setup import get_logger
+from fair_ocean_agent.mapping.faire import map_study_to_faire
 from fair_ocean_agent.sources.base import (
     RateLimitedClient,
     RelatedIdentifier,
@@ -796,12 +797,14 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
         ),
     )
 
-    # Computed once per study, before any section's LLM call: FAIRe fields
-    # already resolved from structured sources (NCBI/ENA/PANGAEA/... via a
-    # prior MAP_FAIRE pass) are dropped from every section's checklist --
+    # Rebuild mapping immediately before extraction so this ordering does
+    # not depend on a caller remembering to run a separate MAP_FAIRE task.
+    # FAIRe fields already resolved from structured sources
+    # (NCBI/ENA/PANGAEA/...) are dropped from every section's checklist --
     # less prompt, fewer questions, no chance of the LLM contradicting an
-    # already-resolved structured value. Empty if MAP_FAIRE hasn't run yet
-    # for this study, which leaves every section's prompt exactly as before.
+    # already-resolved structured value.
+    map_study_to_faire(session, study.study_id)
+    session.flush()
     already_resolved = resolved_faire_fields_for_study(session, study.study_id)
     llm_config = load_config().llm
 

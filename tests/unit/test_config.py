@@ -73,3 +73,14 @@ def test_llm_verifier_env_overrides(monkeypatch, tmp_path):
     monkeypatch.delenv("LOCAL_LLM_VERIFIER_MODEL", raising=False)
     monkeypatch.delenv("LOCAL_LLM_VERIFIER_MAX_OUTPUT_TOKENS", raising=False)
     monkeypatch.delenv("LOCAL_LLM_VERIFIER_NUM_CTX", raising=False)
+
+
+def test_supplement_llm_env_override_is_explicit(monkeypatch, tmp_path):
+    reset_config_cache()
+    monkeypatch.setenv("FAIR_OCEAN_SUPPLEMENT_LLM_ENABLED", "true")
+
+    config = load_config(env_file=tmp_path / "does-not-exist.env")
+
+    assert config.supplements.llm_text_extraction_enabled is True
+    reset_config_cache()
+    monkeypatch.delenv("FAIR_OCEAN_SUPPLEMENT_LLM_ENABLED", raising=False)

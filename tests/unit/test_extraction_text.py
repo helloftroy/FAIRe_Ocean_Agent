@@ -10,6 +10,7 @@ from fair_ocean_agent.extraction.text import (
     build_prompt,
     extract_facts_from_section,
     is_absent_raw_value,
+    present_faire_fields_for_study,
     resolved_faire_fields_for_study,
     recall_missing_fact_types,
     segment_source_text,
@@ -409,6 +410,25 @@ def test_resolved_faire_fields_for_study_does_not_suppress_review_or_llm_rows(db
     )
 
     assert resolved_faire_fields_for_study(db_session, study.study_id) == frozenset()
+
+
+def test_present_faire_fields_for_supplement_includes_paper_review_rows(db_session):
+    study = Study(title="paper facts should suppress duplicate supplement asks")
+    db_session.add(study)
+    db_session.flush()
+    _standardized_value(
+        db_session,
+        study,
+        target_field="annealingTemp",
+        missingness_status=MissingnessStatus.PRESENT.value,
+        value="55C",
+        review_required=True,
+        mapping_method=MappingMethod.SUGGESTED_SEMANTIC.value,
+    )
+
+    assert present_faire_fields_for_study(db_session, study.study_id) == frozenset(
+        {"annealingTemp"}
+    )
 
 
 def test_resolved_faire_fields_for_study_is_empty_when_map_faire_never_ran(db_session):
