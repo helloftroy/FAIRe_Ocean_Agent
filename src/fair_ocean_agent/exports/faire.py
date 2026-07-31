@@ -156,12 +156,47 @@ def export_faire(session: Session, output_dir: str | Path) -> dict[str, int]:
     project_columns = class_columns("projectMetadata")
     project_rows = []
     for study in studies:
-        row = _study_wide_values(session, study.study_id)
+        broadcast = _study_wide_values(session, study.study_id)
         project_id = resolve_project_id(session, study.study_id)
-        if project_id is None and not row:
-            continue  # nothing at all mapped for this study -- don't emit an all-blank row
-        row["project_id"] = project_id or ""
-        project_rows.append(row)
+        # Real FAIRe's own projectMetadata export layout is one row per
+        # assay_name, not one global row per study (see
+        # schemas/faire/README.md) -- a paper describing more than one
+        # assay tags each assay's facts with a real ASSAY Entity
+        # (extraction/text.py's assay_tag), and mapping/faire.py gives each
+        # its own StandardizedValue rows (entity_id set, not broadcast).
+        #
+        # Gated on assay entities that have at least one direct
+        # StandardizedValue, not merely on the entity existing:
+        # extraction/experiment_runs.py's materialize_legacy_experiment_runs
+        # already creates ASSAY entities today purely as USES_ASSAY link
+        # targets for structured ENA/BioProject assay_name facts -- those
+        # facts land on the EXPERIMENT_RUN entity's row, never the assay
+        # entity itself, so such an assay entity has zero StandardizedValue
+        # rows of its own. Gating on mere existence would make every such
+        # structured-only multi-assay study suddenly emit one
+        # near-duplicate broadcast row per assay where it previously
+        # emitted exactly one.
+        assay_entities = list(
+            session.scalars(
+                select(Entity).where(
+                    Entity.study_id == study.study_id, Entity.entity_level == EntityLevel.ASSAY.value
+                )
+            )
+        )
+        assays_with_values = [assay for assay in assay_entities if _entity_values(session, assay.entity_id)]
+        if not assays_with_values:
+            if project_id is None and not broadcast:
+                continue  # nothing at all mapped for this study -- don't emit an all-blank row
+            row = dict(broadcast)
+            row["project_id"] = project_id or ""
+            project_rows.append(row)
+            continue
+        for assay in assays_with_values:
+            row = dict(broadcast)
+            row.update(_entity_values(session, assay.entity_id))
+            row.setdefault("assay_name", assay.external_identifier or assay.label or assay.entity_id)
+            row["project_id"] = project_id or ""
+            project_rows.append(row)
     counts["projectMetadata"] = _write_csv(output_dir / "projectMetadata.csv", project_columns, project_rows)
 
     sample_columns = class_columns("sampleMetadata")

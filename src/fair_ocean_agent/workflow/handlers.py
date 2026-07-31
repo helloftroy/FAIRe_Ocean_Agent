@@ -300,6 +300,49 @@ def _materialize_candidate_entity(
     return entity
 
 
+def _persist_candidate_facts(
+    session: Session,
+    study_id: str,
+    source_id: str,
+    facts: list[RawFactCandidate],
+    *,
+    extraction_method: str,
+    model_name: str | None = None,
+    prompt_version: str | None = None,
+    review_status: str | None = None,
+    internal_namespace: str | None = None,
+) -> None:
+    """Shared RawFactCandidate -> RawFact persistence for both LLM-driven
+    persist paths (full-paper text extraction here, supplement table/text
+    parsing in supplement_handlers.py). Always materializes the fact's
+    entity via _materialize_candidate_entity first, so a fact tagged with
+    a real entity_external_id (e.g. extraction/text.py's per-assay
+    assay_tag) gets a real Entity + entity_id rather than landing as an
+    untethered study-wide fact."""
+    for fact in facts:
+        entity = _materialize_candidate_entity(session, study_id, fact, internal_namespace=internal_namespace)
+        entity_id = entity.entity_id if entity is not None else None
+        kwargs = dict(
+            study_id=study_id,
+            entity_id=entity_id,
+            source_id=source_id,
+            source_locator=fact.source_locator,
+            raw_field_name=fact.raw_field_name,
+            raw_value=fact.raw_value,
+            evidence_quote=fact.evidence_quote,
+            confidence_metadata=fact.confidence_metadata,
+            fact_type_candidate=fact.fact_type_candidate,
+            entity_level=fact.entity_level.value,
+            support_type=fact.support_type.value,
+            extraction_method=extraction_method,
+            model_name=model_name,
+            prompt_version=prompt_version,
+        )
+        if review_status is not None:
+            kwargs["review_status"] = review_status
+        session.add(RawFact(**kwargs))
+
+
 PersistFn = Callable[[Session, Study, SourceAdapter, SourceType, str, SourceRecord], tuple[bool, Source]]
 
 
@@ -903,25 +946,16 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
                 f"{backend.label}: text extraction returned invalid JSON after retries "
                 f"for study {study.study_id} section {section['title']!r}"
             )
-        for fact in facts:
-            session.add(
-                RawFact(
-                    study_id=study.study_id,
-                    source_id=source.source_id,
-                    source_locator=fact.source_locator,
-                    raw_field_name=fact.raw_field_name,
-                    raw_value=fact.raw_value,
-                    evidence_quote=fact.evidence_quote,
-                    fact_type_candidate=fact.fact_type_candidate,
-                    entity_level=fact.entity_level.value,
-                    support_type=fact.support_type.value,
-                    extraction_method="llm_text_extraction",
-                    model_name=backend.label,
-                    prompt_version=PROMPT_VERSION,
-                    review_status=ReviewStatus.ACCEPTED.value,
-                    confidence_metadata=fact.confidence_metadata,
-                )
-            )
+        _persist_candidate_facts(
+            session,
+            study.study_id,
+            source.source_id,
+            facts,
+            extraction_method="llm_text_extraction",
+            model_name=backend.label,
+            prompt_version=PROMPT_VERSION,
+            review_status=ReviewStatus.ACCEPTED.value,
+        )
 
     session.flush()
 

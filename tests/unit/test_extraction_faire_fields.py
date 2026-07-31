@@ -5,6 +5,7 @@ from fair_ocean_agent.extraction.faire_fields import (
     LLM_EXCLUDED_OPTIONAL_NATIVE_FIELDS,
     all_faire_hints,
     all_field_names,
+    assay_scoped_field_names,
     field_names_for_reference,
     native_name_to_faire_hint,
     render_field_reference,
@@ -111,6 +112,30 @@ def test_native_name_to_faire_hint_round_trips_a_known_field():
     mapping = native_name_to_faire_hint()
     assert mapping["annealing_temperature"] == "annealingTemp"
     assert mapping["standard_curve_r_squared"] == "r2"
+
+
+def test_assay_scoped_field_names_is_subset_of_all_field_names():
+    assert assay_scoped_field_names() <= all_field_names()
+
+
+def test_assay_scoped_field_names_excludes_sample_and_control_type_fields():
+    """biological_replicate_count is about a sample/treatment, not an
+    assay. negative_control_type/positive_control_type map to FAIRe's
+    sampleMetadata, not projectMetadata, so tagging them with an assay_tag
+    would have no effect downstream -- excluded to keep the prompt
+    simpler for zero lost benefit."""
+    names = assay_scoped_field_names()
+    assert "biological_replicate_count" not in names
+    assert "negative_control_type" not in names
+    assert "positive_control_type" not in names
+
+
+def test_assay_scoped_field_names_includes_pcr_and_qpcr_fields():
+    names = assay_scoped_field_names()
+    assert "assay_name" in names
+    assert "annealing_temperature" in names
+    assert "pcr_replicate_count" in names
+    assert "standard_curve_r_squared" in names
 
 
 # --- Structured-first extraction: excluding already-resolved FAIRe fields ---

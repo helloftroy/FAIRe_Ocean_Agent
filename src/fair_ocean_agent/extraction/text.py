@@ -46,6 +46,34 @@ paper and supplement LLM checklists. The same policy also removes the
 generic PCR narrative fallback that mapped only to pcr_method_additional;
 the model still receives the atomic PCR fields that carry useful values.
 
+**v9 -> v10: optional per-fact `assay_tag` for multi-assay papers.** A
+paper can describe more than one distinct assay run on the same samples
+(e.g. a 16S PCR assay and an 18S PCR assay), each with its own primers,
+target gene, annealing temperature, etc. Previously every extracted fact
+was hardcoded to `entity_level=EntityLevel.STUDY` with no entity at all --
+two assays' PCR/qPCR facts would collide onto the same
+`(study, target_field)` mapping key downstream and the second assay's data
+was lost, flagged only as a "conflict" for manual review. The model may now
+return an optional `assay_tag` string per fact; when present, non-empty,
+and the fact's `fact_type_candidate` is one this pipeline considers
+assay-scoped (`extraction/faire_fields.assay_scoped_field_names()` --
+primers, target gene, PCR/qPCR conditions, ...), `_facts_from_candidates`
+tags the resulting `RawFactCandidate` with `entity_level=EntityLevel.ASSAY`
+and `entity_external_id=assay_tag`, so `workflow/handlers.py` materializes
+a real per-assay `Entity` and `mapping/faire.py` produces one
+`projectMetadata` row per assay instead of colliding them (matching real
+FAIRe's own export layout -- see `schemas/faire/README.md` -- which is one
+`projectMetadata` row per `assay_name`, not one global row per study). A
+fact with no `assay_tag` (the overwhelmingly common single-assay case)
+keeps today's exact `entity_level=STUDY` behavior -- this is a strictly
+additive, backward-compatible change. Cross-call/cross-section assay-tag
+consistency is a known, unaddressed limitation: the model has no memory
+between separate section calls or between chunks within one long section,
+so the prompt biases it toward reusing the paper's own given assay name
+(most likely to be repeated consistently) rather than an arbitrary
+placeholder -- a real fix would need a separate reconciliation pass, out of
+scope for this change.
+
 **Why "FAIRe-aware" matters (v1 -> v2):** v1's prompt was fully open-
 vocabulary -- "extract whatever facts you find, name them however you
 like" -- which never missed an explicitly-stated concept but also never
@@ -109,12 +137,16 @@ from sqlalchemy.orm import Session
 
 from fair_ocean_agent.database.enums import EntityLevel, MappingMethod, MissingnessStatus, SupportType
 from fair_ocean_agent.database.models import StandardizedValue
-from fair_ocean_agent.extraction.faire_fields import field_names_for_reference, render_field_reference
+from fair_ocean_agent.extraction.faire_fields import (
+    assay_scoped_field_names,
+    field_names_for_reference,
+    render_field_reference,
+)
 from fair_ocean_agent.llm.base import LLMBackend, LLMResponse
 from fair_ocean_agent.mapping.faire import TARGET_SCHEMA
 from fair_ocean_agent.sources.base import RawFactCandidate
 
-PROMPT_VERSION = "text-extraction-v9-skip-low-value-optional-fields"
+PROMPT_VERSION = "text-extraction-v10-assay-tagging"
 DEFAULT_MAX_SECTION_CHARS_PER_CALL = 1600
 
 ABSENT_RAW_VALUE_STRINGS = frozenset(
@@ -416,7 +448,20 @@ def build_extraction_instructions(
         "colon, e.g. \"annealing_temperature\" in \"- annealing_temperature: PCR "
         "annealing temperature\") is what fact_type_candidate must be set to, one "
         "concept per fact -- never combine a concept name and its value into one "
-        "string."
+        "string.\n\n"
+        "If the text describes MORE THAN ONE distinct assay or primer set (for "
+        "example, separate PCR protocols targeting different genes run on the "
+        "same samples), give each assay-identity/PCR/qPCR fact (assay_name, "
+        "assay_type, target_gene, primers, PCR/qPCR conditions and related "
+        "fields) an assay_tag string that is the SAME for every fact belonging "
+        "to that one assay -- prefer the paper's own name for the assay if it "
+        "gives one (e.g. \"16S-V3V4\"), since that is what you are most likely "
+        "to use consistently if this assay is described again elsewhere in the "
+        "paper; otherwise use a short, descriptive label of your own. If the "
+        "text only describes ONE assay, omit assay_tag entirely -- do not "
+        "invent a placeholder tag for a single-assay paper, and never add "
+        "assay_tag to a fact that isn't about one specific assay's identity or "
+        "setup."
     )
 
 
@@ -431,6 +476,7 @@ Return ONLY a JSON array of objects, each with these fields:
 - raw_value (string, required)
 - evidence_id (string, required -- one of the source segment IDs below that explicitly supports this fact)
 - candidate_standard_fields (object, OPTIONAL -- only include this if the checklist gave a "[FAIRe hint: ...]" for the concept you used; set it to {{"faire": "<that exact hint>"}}. Omit this field entirely rather than guess a hint that wasn't given.)
+- assay_tag (string, OPTIONAL -- only for a fact about one specific assay's identity/PCR/qPCR setup, and only when the text describes more than one assay; see the instructions above. Omit entirely otherwise.)
 
 If nothing in the source text supports a fact, return an empty array. Do
 not reproduce or paraphrase source text. Your evidence_id must point to a
@@ -698,7 +744,7 @@ def extract_facts_from_section(
         return [], None
 
     facts: list[RawFactCandidate] = []
-    seen: set[tuple[str, str, str]] = set()
+    seen: set[tuple[str, str, str, str]] = set()
     last_response: LLMResponse | None = None
 
     active_focuses = focuses if focuses else (None,)
@@ -771,11 +817,25 @@ def extract_facts_from_section(
     return facts, last_response
 
 
+def _candidate_assay_tag(candidate: dict, fact_type: str) -> str | None:
+    """Normalizes a model-supplied assay_tag, dropping placeholder/absent
+    values via the same is_absent_raw_value check used for raw_value, and
+    ignoring the tag entirely for a fact_type this pipeline doesn't
+    consider assay-scoped (see assay_scoped_field_names's docstring)."""
+    if fact_type not in assay_scoped_field_names():
+        return None
+    raw_tag = candidate.get("assay_tag")
+    if raw_tag is None or is_absent_raw_value(raw_tag):
+        return None
+    tag = " ".join(str(raw_tag).strip().split())
+    return tag or None
+
+
 def _facts_from_candidates(
     candidates,
     segment_lookup: dict[str, str],
     section_title: str,
-    seen: set[tuple[str, str, str]],
+    seen: set[tuple[str, str, str, str]],
     allowed_fact_types: frozenset[str] | None = None,
 ) -> list[RawFactCandidate]:
     facts: list[RawFactCandidate] = []
@@ -792,7 +852,8 @@ def _facts_from_candidates(
             continue
         if allowed_fact_types is not None and str(fact_type) not in allowed_fact_types:
             continue
-        dedupe_key = (str(fact_type), str(raw_value), quote)
+        assay_tag = _candidate_assay_tag(candidate, str(fact_type))
+        dedupe_key = (str(fact_type), str(raw_value), quote, assay_tag or "")
         if dedupe_key in seen:
             continue
         seen.add(dedupe_key)
@@ -800,9 +861,10 @@ def _facts_from_candidates(
         confidence_metadata = {"evidence_ids": evidence_ids}
         if isinstance(hints, dict) and hints:
             confidence_metadata["candidate_standard_fields"] = hints
+        entity_level = EntityLevel.ASSAY if assay_tag else EntityLevel.STUDY
         facts.append(
             RawFactCandidate(
-                entity_level=EntityLevel.STUDY,
+                entity_level=entity_level,
                 fact_type_candidate=str(fact_type),
                 raw_field_name=str(fact_type),
                 raw_value=str(raw_value),
@@ -810,6 +872,8 @@ def _facts_from_candidates(
                 support_type=SupportType.EXPLICIT,
                 evidence_quote=quote,
                 confidence_metadata=confidence_metadata,
+                entity_external_id=assay_tag,
+                entity_label=assay_tag,
             )
         )
     return facts

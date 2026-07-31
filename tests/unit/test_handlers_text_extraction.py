@@ -103,6 +103,52 @@ def test_handler_extracts_and_persists_verified_facts(db_session, monkeypatch):
     assert facts[0].model_name == "mock-model"
 
 
+def test_handler_materializes_a_real_entity_per_assay_tag(db_session, monkeypatch):
+    """Two distinct assays' primer facts (assay_tag on the LLM response)
+    must each get a real Entity + RawFact.entity_id -- not collapse into
+    one untethered study-wide fact -- so mapping/faire.py can produce
+    separate projectMetadata rows for each assay downstream."""
+    study = _seeded_study_with_pmcid(db_session)
+    task = _task_for(db_session, study)
+
+    response = json.dumps(
+        [
+            {
+                "fact_type_candidate": "annealing_temperature",
+                "raw_value": "55C",
+                "evidence_id": "SAMPLING.P001",
+                "assay_tag": "16S-V3V4",
+            },
+            {
+                "fact_type_candidate": "annealing_temperature",
+                "raw_value": "60C",
+                "evidence_id": "SAMPLING.P001",
+                "assay_tag": "18S-V9",
+            },
+        ]
+    )
+    handlers._llm_backend_cache = MockLLMBackend(label="mock-model", responses=[response])
+    monkeypatch.setattr(handlers, "_build_enabled_adapters", lambda: {"europe_pmc": FakeEuropePmcAdapter()})
+
+    handlers.handle_extract_text_facts(db_session, task)
+    db_session.commit()
+
+    assay_entities = {
+        entity.external_identifier: entity
+        for entity in db_session.query(Entity).filter_by(study_id=study.study_id, entity_level=EntityLevel.ASSAY.value)
+    }
+    assert set(assay_entities) == {"16S-V3V4", "18S-V9"}
+
+    facts = {
+        fact.raw_value: fact
+        for fact in db_session.query(RawFact).filter_by(
+            study_id=study.study_id, extraction_method="llm_text_extraction"
+        )
+    }
+    assert facts["55C"].entity_id == assay_entities["16S-V3V4"].entity_id
+    assert facts["60C"].entity_id == assay_entities["18S-V9"].entity_id
+
+
 def test_handler_drops_facts_with_fabricated_evidence(db_session, monkeypatch):
     study = _seeded_study_with_pmcid(db_session)
     task = _task_for(db_session, study)

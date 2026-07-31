@@ -6,7 +6,7 @@ free text.
 """
 from fair_ocean_agent.database.enums import EntityLevel, IdentifierType, SupportType
 from fair_ocean_agent.database.models import Entity, ExternalIdentifier, RawFact, StandardizedValue, Study
-from fair_ocean_agent.extraction.faire_fields import native_name_to_faire_hint
+from fair_ocean_agent.extraction.faire_fields import assay_scoped_field_names, native_name_to_faire_hint
 from fair_ocean_agent.mapping.faire import map_study_to_faire, resolve_project_id
 from fair_ocean_agent.mapping.rules import _ADDITIONAL_ENVIRONMENTAL_SAMPLE_ATTRIBUTES, RULES, rules_for
 
@@ -488,6 +488,55 @@ def test_flags_review_required_on_conflicting_project_wide_facts(db_session):
     assert len(run_rows) == 0  # platform is project metadata, never a library/run-row field
 
 
+def test_assay_tagged_facts_get_separate_projectmetadata_rows_not_a_conflict(db_session):
+    """Two distinct assays' annealing_temperature facts (extraction/text.py's
+    assay_tag) must not collide into one projectMetadata row the way two
+    untagged conflicting facts do (see
+    test_flags_review_required_on_conflicting_project_wide_facts above) --
+    each assay gets its own row instead, since a paper can genuinely
+    describe more than one assay run on the same samples."""
+    study = _study(db_session, title="Two assays")
+    assay_16s = Entity(study_id=study.study_id, entity_level=EntityLevel.ASSAY.value, external_identifier="16S-V3V4")
+    assay_18s = Entity(study_id=study.study_id, entity_level=EntityLevel.ASSAY.value, external_identifier="18S-V9")
+    db_session.add_all([assay_16s, assay_18s])
+    db_session.flush()
+    _fact(db_session, study, entity=assay_16s, field="annealing_temperature", value="55C", entity_level="assay", support=SupportType.EXPLICIT)
+    _fact(db_session, study, entity=assay_18s, field="annealing_temperature", value="60C", entity_level="assay", support=SupportType.EXPLICIT)
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    rows = db_session.query(StandardizedValue).filter_by(study_id=study.study_id, target_field="annealingTemp").all()
+    # Two separate rows, not one collapsed/conflicting row -- this is the
+    # real fix: without per-assay entity_ids these would collide onto a
+    # single (target_table, target_field, None) key and the second value
+    # would be lost, only flagged review_required as a "conflict" (see
+    # test_flags_review_required_on_conflicting_project_wide_facts above).
+    assert len(rows) == 2
+    assert {row.entity_id for row in rows} == {assay_16s.entity_id, assay_18s.entity_id}
+    values = {row.entity_id: row.standardized_value for row in rows}
+    assert values[assay_16s.entity_id] == "55C"
+    assert values[assay_18s.entity_id] == "60C"
+
+
+def test_project_level_structured_assay_name_still_broadcasts_unaffected(db_session):
+    """Regression guard: the new ASSAY-level entity resolution only applies
+    to fact.entity_level == EntityLevel.ASSAY -- a PROJECT-level structured
+    fact (e.g. OBIS/GBIF-sourced assay_name) must keep broadcasting via
+    entity_id=None exactly as before this change."""
+    study = _study(db_session, title="Structured assay_name")
+    _fact(db_session, study, field="assay_name", value="16S-V4", entity_level="project")
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    rows = db_session.query(StandardizedValue).filter_by(study_id=study.study_id, target_field="assay_name").all()
+    assert len(rows) == 1
+    assert rows[0].entity_id is None
+
+
 def test_rejected_facts_are_excluded_from_mapping_entirely(db_session):
     """review_status=REJECTED (the quarantine mechanism for facts extracted
     under a since-fixed bug, or from a superseded model/prompt version)
@@ -693,6 +742,19 @@ def test_all_v3_extraction_hints_have_a_study_level_rule_specifically():
         assert rules_for(native_name, EntityLevel.STUDY.value), (
             f"{native_name!r} has no rule reachable at EntityLevel.STUDY -- "
             "an LLM-extracted fact with this name would never map"
+        )
+
+
+def test_all_assay_scoped_extraction_hints_have_an_assay_level_rule_specifically():
+    """Mirrors test_all_v3_extraction_hints_have_a_study_level_rule_specifically
+    for the parallel EntityLevel.ASSAY rule: a paper describing more than
+    one assay tags each assay's facts with entity_level=ASSAY
+    (extraction/text.py's assay_tag), and without a matching ASSAY-level
+    rule those facts would have nowhere to map."""
+    for native_name in assay_scoped_field_names():
+        assert rules_for(native_name, EntityLevel.ASSAY.value), (
+            f"{native_name!r} has no rule reachable at EntityLevel.ASSAY -- "
+            "an assay-tagged LLM-extracted fact with this name would never map"
         )
 
 

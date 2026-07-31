@@ -94,7 +94,7 @@ from functools import lru_cache
 from typing import Callable
 
 from fair_ocean_agent.database.enums import EntityLevel, MappingMethod
-from fair_ocean_agent.extraction.faire_fields import native_name_to_faire_hint
+from fair_ocean_agent.extraction.faire_fields import assay_scoped_field_names, native_name_to_faire_hint
 from fair_ocean_agent.mapping.units import to_decimal_latitude, to_decimal_longitude, to_iso_event_date, to_meters
 from fair_ocean_agent.standards.faire_registry import build_faire_registry
 
@@ -607,26 +607,55 @@ def _generated_v3_llm_rules() -> tuple[MappingRule, ...]:
     a real regression this exact check caught: adding the ENA rule
     silently stopped every LLM-extracted STUDY-level "library_layout" fact
     from mapping at all, since the old check only compared fact_type
-    strings, ignoring entity_level entirely."""
+    strings, ignoring entity_level entirely.
+
+    Assay-scoped native names (extraction/faire_fields.assay_scoped_field_names --
+    primers, target gene, PCR/qPCR conditions, ...) additionally get a
+    second, parallel rule at EntityLevel.ASSAY: a paper describing more than
+    one distinct assay tags each assay's facts with entity_level=ASSAY
+    (extraction/text.py's assay_tag), and without a matching ASSAY-level
+    rule those facts would have nowhere to map at all, since rules_for
+    requires an exact entity_level match. The existing STUDY-level rule is
+    left completely untouched (not widened to source_entity_level=None/"any
+    level") deliberately: _EXPLICIT_RULES already has literal-FAIRe-spelling
+    rules for "target_gene"/"assay_type"/"assay_name" at EntityLevel.PROJECT
+    (repository/OBIS/GBIF-sourced) and EntityLevel.EXPERIMENT_RUN, sharing
+    the exact fact_type_candidate string with these native names -- widening
+    to None would make the generated rule also match those structured
+    facts. EntityLevel.ASSAY is unused as a source_entity_level anywhere in
+    _EXPLICIT_RULES, so the new rule is collision-free by construction."""
     explicit_at_study_level = {
         rule.source_fact_type
         for rule in _EXPLICIT_RULES
         if rule.source_entity_level in (None, EntityLevel.STUDY.value)
     }
+    assay_scoped = assay_scoped_field_names()
     generated: list[MappingRule] = []
     for native_name, faire_field in sorted(native_name_to_faire_hint().items()):
         if native_name in explicit_at_study_level:
             continue
+        target_table = _target_table_for_faire_field(faire_field)
         generated.append(
             MappingRule(
                 native_name,
                 EntityLevel.STUDY.value,
-                _target_table_for_faire_field(faire_field),
+                target_table,
                 faire_field,
                 MappingMethod.SUGGESTED_SEMANTIC.value,
                 review_required=True,
             )
         )
+        if native_name in assay_scoped:
+            generated.append(
+                MappingRule(
+                    native_name,
+                    EntityLevel.ASSAY.value,
+                    target_table,
+                    faire_field,
+                    MappingMethod.SUGGESTED_SEMANTIC.value,
+                    review_required=True,
+                )
+            )
     return tuple(generated)
 
 

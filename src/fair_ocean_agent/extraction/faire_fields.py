@@ -238,6 +238,34 @@ def native_name_to_faire_hint() -> dict[str, str]:
     return {f.native_name: f.faire_hint for fields in FIELD_GROUPS.values() for f in fields if f.faire_hint}
 
 
+_ASSAY_SCOPED_GROUP_NAMES = frozenset({"PCR / assay setup", "qPCR / standard curve"})
+_ASSAY_SCOPED_EXTRA_NAMES = frozenset({"pcr_replicate_count"})
+
+
+def assay_scoped_field_names() -> frozenset[str]:
+    """Native names describing a property of one specific assay (its
+    primers, target gene, PCR/qPCR conditions, ...) rather than the whole
+    study -- a paper can describe more than one distinct assay run on the
+    same samples, each with its own values for these. `extraction/text.py`
+    uses this to decide which facts an LLM-supplied `assay_tag` applies to;
+    `mapping/rules.py` uses it to generate a parallel EntityLevel.ASSAY
+    mapping rule alongside the existing study-level one.
+
+    Deliberately excludes `biological_replicate_count` (a property of a
+    sample/treatment, not an assay) and `negative_control_type`/
+    `positive_control_type` -- both map to FAIRe's `sampleMetadata`, not
+    `projectMetadata` (verified via `mapping.rules._target_table_for_faire_field`),
+    so tagging them with an assay_tag would have no effect downstream; kept
+    out of the taxonomy's assay-tagging surface to keep the prompt simpler
+    for zero lost benefit. `pcr_replicate_count` stays in: it genuinely maps
+    to `projectMetadata` and is a real per-assay setting."""
+    names: set[str] = set()
+    for group_name in _ASSAY_SCOPED_GROUP_NAMES:
+        names.update(f.native_name for f in FIELD_GROUPS[group_name])
+    names |= _ASSAY_SCOPED_EXTRA_NAMES
+    return frozenset(names)
+
+
 def field_names_for_reference(
     exclude_faire_hints: frozenset[str] = frozenset(),
     include_group_names: frozenset[str] | None = None,

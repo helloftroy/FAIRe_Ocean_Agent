@@ -58,7 +58,6 @@ from fair_ocean_agent.database.models import (
     DataAsset,
     ExternalIdentifier,
     PreparedSourceText,
-    RawFact,
     Source,
     Study,
     Task,
@@ -90,7 +89,7 @@ from fair_ocean_agent.workflow.handlers import (
     _apply_related_identifiers,
     _build_enabled_adapters,
     _build_llm_backend_cached,
-    _materialize_candidate_entity,
+    _persist_candidate_facts,
 )
 from fair_ocean_agent.workflow.task_queue import enqueue_task
 from fair_ocean_agent.workflow.worker import TASK_HANDLERS
@@ -261,32 +260,16 @@ def _persist_supplement_facts(
     model_name: str | None = None,
     prompt_version: str | None = None,
 ) -> None:
-    for fact in facts:
-        entity = _materialize_candidate_entity(
-            session,
-            study.study_id,
-            fact,
-            internal_namespace=source.source_id,
-        )
-        entity_id = entity.entity_id if entity is not None else None
-        session.add(
-            RawFact(
-                study_id=study.study_id,
-                entity_id=entity_id,
-                source_id=source.source_id,
-                source_locator=fact.source_locator,
-                raw_field_name=fact.raw_field_name,
-                raw_value=fact.raw_value,
-                evidence_quote=fact.evidence_quote,
-                confidence_metadata=fact.confidence_metadata,
-                fact_type_candidate=fact.fact_type_candidate,
-                entity_level=fact.entity_level.value,
-                support_type=fact.support_type.value,
-                extraction_method=extraction_method,
-                model_name=model_name,
-                prompt_version=prompt_version,
-            )
-        )
+    _persist_candidate_facts(
+        session,
+        study.study_id,
+        source.source_id,
+        facts,
+        extraction_method=extraction_method,
+        model_name=model_name,
+        prompt_version=prompt_version,
+        internal_namespace=source.source_id,
+    )
 
 
 def _mark(asset: DataAsset, *, access_status: str | None = None, inspection_level: str | None = None, description: str | None = None) -> None:

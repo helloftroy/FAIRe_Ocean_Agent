@@ -89,6 +89,18 @@ def _resolve_entity_id(session: Session, study_id: str, fact: RawFact, rule: Map
         sample = _find_sample_entity_by_external_id(session, study_id, fact.raw_value)
         return sample.entity_id if sample else None
     if rule.target_table == "projectMetadata":
+        # A fact tagged with a real assay (extraction/text.py's assay_tag,
+        # EntityLevel.ASSAY) gets its own per-assay row instead of
+        # broadcasting -- this is the one case where projectMetadata is not
+        # a study-wide singleton, matching real FAIRe's own export layout
+        # (one projectMetadata row per assay_name, see
+        # schemas/faire/README.md). Every other projectMetadata-targeted
+        # fact (ENA's instrument_platform/instrument_model at
+        # SEQUENCING_RUN, OBIS/GBIF's PROJECT-level facts, an untagged
+        # single-assay STUDY-level fact, ...) keeps broadcasting via
+        # entity_id=None exactly as before.
+        if fact.entity_level == EntityLevel.ASSAY.value:
+            return fact.entity_id
         return None
     if fact.entity_level in (
         EntityLevel.SAMPLE.value,

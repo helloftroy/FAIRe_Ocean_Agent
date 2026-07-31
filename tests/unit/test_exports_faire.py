@@ -75,6 +75,83 @@ def test_export_faire_writes_expected_files_and_rows(db_session, tmp_path):
     assert rows[0]["input_read_count"] == "1000"
 
 
+def test_export_still_emits_one_project_row_when_assay_entity_has_no_direct_values(db_session, tmp_path):
+    """Regression guard: extraction/experiment_runs.py's
+    materialize_legacy_experiment_runs already creates ASSAY entities today
+    purely as USES_ASSAY link targets for structured ENA/BioProject
+    assay_name facts -- those facts land on the EXPERIMENT_RUN entity's
+    row, never the assay entity itself, so such an assay entity has zero
+    StandardizedValue rows of its own. This must NOT trigger the new
+    one-row-per-assay export path; the study should still get exactly one
+    broadcast projectMetadata row, same as before this change."""
+    study = Study(title="Legacy assay-linkage only")
+    db_session.add(study)
+    db_session.flush()
+    assay = Entity(study_id=study.study_id, entity_level=EntityLevel.ASSAY.value, external_identifier="16S-V4")
+    run = Entity(study_id=study.study_id, entity_level=EntityLevel.SEQUENCING_RUN.value, external_identifier="SRR1")
+    db_session.add_all([assay, run])
+    db_session.flush()
+    db_session.add(
+        RawFact(
+            study_id=study.study_id, entity_id=run.entity_id, raw_field_name="instrument_platform",
+            raw_value="ILLUMINA", fact_type_candidate="instrument_platform", entity_level="sequencing_run",
+            support_type=SupportType.STRUCTURED_SOURCE.value,
+        )
+    )
+    db_session.commit()
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    counts = export_faire(db_session, tmp_path)
+
+    assert counts["projectMetadata"] == 1
+    with (tmp_path / "projectMetadata.csv").open() as f:
+        rows = list(csv.DictReader(f))
+    assert len(rows) == 1
+    assert rows[0]["platform"] == "ILLUMINA"
+
+
+def test_export_emits_one_project_row_per_assay_with_distinct_values(db_session, tmp_path):
+    """Two distinct assays, each with their own annealing_temperature fact
+    (extraction/text.py's assay_tag), must produce two distinct
+    projectMetadata rows -- matching real FAIRe's own export layout of one
+    row per assay_name (see schemas/faire/README.md)."""
+    study = Study(title="Two assays")
+    db_session.add(study)
+    db_session.flush()
+    assay_16s = Entity(study_id=study.study_id, entity_level=EntityLevel.ASSAY.value, external_identifier="16S-V3V4")
+    assay_18s = Entity(study_id=study.study_id, entity_level=EntityLevel.ASSAY.value, external_identifier="18S-V9")
+    db_session.add_all([assay_16s, assay_18s])
+    db_session.flush()
+    db_session.add(
+        RawFact(
+            study_id=study.study_id, entity_id=assay_16s.entity_id, raw_field_name="annealing_temperature",
+            raw_value="55C", fact_type_candidate="annealing_temperature", entity_level="assay",
+            support_type=SupportType.EXPLICIT.value,
+        )
+    )
+    db_session.add(
+        RawFact(
+            study_id=study.study_id, entity_id=assay_18s.entity_id, raw_field_name="annealing_temperature",
+            raw_value="60C", fact_type_candidate="annealing_temperature", entity_level="assay",
+            support_type=SupportType.EXPLICIT.value,
+        )
+    )
+    db_session.commit()
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    counts = export_faire(db_session, tmp_path)
+
+    assert counts["projectMetadata"] == 2
+    with (tmp_path / "projectMetadata.csv").open() as f:
+        rows = list(csv.DictReader(f))
+    by_assay = {row["assay_name"]: row for row in rows}
+    assert set(by_assay) == {"16S-V3V4", "18S-V9"}
+    assert by_assay["16S-V3V4"]["annealingTemp"] == "55C"
+    assert by_assay["18S-V9"]["annealingTemp"] == "60C"
+
+
 def test_export_emits_one_library_row_each_when_libraries_share_a_sequencing_run(db_session, tmp_path):
     study = Study(title="Multiplexed libraries")
     db_session.add(study)

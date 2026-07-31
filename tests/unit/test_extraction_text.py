@@ -49,6 +49,107 @@ def test_missing_or_unknown_evidence_id_is_dropped():
     assert facts == []
 
 
+def test_assay_tag_on_assay_scoped_fact_becomes_assay_entity():
+    from fair_ocean_agent.database.enums import EntityLevel
+
+    text = (
+        "For 16S, primers X/Y were used with an annealing temperature of "
+        "55C. For 18S, primers Z/W were used with an annealing temperature "
+        "of 60C."
+    )
+    response = json.dumps(
+        [
+            {
+                "fact_type_candidate": "annealing_temperature",
+                "raw_value": "55C",
+                "evidence_id": "METHODS.P001",
+                "assay_tag": "16S-V3V4",
+            },
+            {
+                "fact_type_candidate": "annealing_temperature",
+                "raw_value": "60C",
+                "evidence_id": "METHODS.P001",
+                "assay_tag": "18S-V9",
+            },
+        ]
+    )
+    backend = MockLLMBackend(responses=[response])
+    facts, _ = extract_facts_from_section(backend, "Methods", text)
+
+    assert len(facts) == 2
+    by_value = {fact.raw_value: fact for fact in facts}
+    assert by_value["55C"].entity_level == EntityLevel.ASSAY
+    assert by_value["55C"].entity_external_id == "16S-V3V4"
+    assert by_value["60C"].entity_level == EntityLevel.ASSAY
+    assert by_value["60C"].entity_external_id == "18S-V9"
+
+
+def test_assay_tag_ignored_for_non_assay_scoped_fact_type():
+    from fair_ocean_agent.database.enums import EntityLevel
+
+    response = json.dumps(
+        [
+            {
+                "fact_type_candidate": "sample_collection_method",
+                "raw_value": "Niskin bottle",
+                "evidence_id": "METHODS.P001",
+                "assay_tag": "16S-V3V4",
+            }
+        ]
+    )
+    backend = MockLLMBackend(responses=[response])
+    facts, _ = extract_facts_from_section(backend, "Methods", SECTION_TEXT)
+
+    assert len(facts) == 1
+    assert facts[0].entity_level == EntityLevel.STUDY
+    assert facts[0].entity_external_id is None
+
+
+def test_placeholder_assay_tag_is_dropped():
+    from fair_ocean_agent.database.enums import EntityLevel
+
+    response = json.dumps(
+        [
+            {
+                "fact_type_candidate": "annealing_temperature",
+                "raw_value": "55C",
+                "evidence_id": "METHODS.P001",
+                "assay_tag": "N/A",
+            }
+        ]
+    )
+    backend = MockLLMBackend(responses=[response])
+    facts, _ = extract_facts_from_section(backend, "Methods", SECTION_TEXT)
+
+    assert len(facts) == 1
+    assert facts[0].entity_level == EntityLevel.STUDY
+    assert facts[0].entity_external_id is None
+
+
+def test_identical_value_and_quote_with_different_assay_tags_both_survive_dedup():
+    response = json.dumps(
+        [
+            {
+                "fact_type_candidate": "pcr_cycle_count",
+                "raw_value": "35",
+                "evidence_id": "METHODS.P001",
+                "assay_tag": "16S-V3V4",
+            },
+            {
+                "fact_type_candidate": "pcr_cycle_count",
+                "raw_value": "35",
+                "evidence_id": "METHODS.P001",
+                "assay_tag": "18S-V9",
+            },
+        ]
+    )
+    backend = MockLLMBackend(responses=[response])
+    facts, _ = extract_facts_from_section(backend, "Methods", SECTION_TEXT)
+
+    assert len(facts) == 2
+    assert {fact.entity_external_id for fact in facts} == {"16S-V3V4", "18S-V9"}
+
+
 def test_missing_fields_are_skipped_not_crashed_on():
     response = json.dumps([{"evidence_id": "METHODS.P001"}])  # no fact_type/raw_value
     backend = MockLLMBackend(responses=[response])
@@ -148,7 +249,7 @@ def test_extract_facts_from_section_chunks_long_text_and_merges_facts():
 
 
 def test_prompt_version_is_stable_constant():
-    assert PROMPT_VERSION == "text-extraction-v9-skip-low-value-optional-fields"
+    assert PROMPT_VERSION == "text-extraction-v10-assay-tagging"
 
 
 def test_recall_second_pass_does_not_fire_when_first_pass_finds_any_facts():

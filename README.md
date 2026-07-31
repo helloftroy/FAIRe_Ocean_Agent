@@ -1379,6 +1379,110 @@ studies, not just DNA-based metabarcoding/metagenomics. Left this gold
 case's `expected_facts` unchanged -- they're accurate and explicit; the
 model's zero-result is the real, now-understood limitation being scored.
 
+## Assay-entity tagging for multi-assay papers
+
+A paper can describe more than one distinct assay run on the same samples
+(a 16S rRNA V3-V4 PCR assay and an 18S rRNA V4 assay, say), each with its
+own primers, target gene, annealing temperature, PCR conditions. Before
+this change, every LLM-extracted fact from a full-text section was
+hardcoded to `entity_level=EntityLevel.STUDY` with no entity at all --
+every fact was study-wide/broadcast, with no way to know which assay a
+given primer or temperature belonged to. Downstream,
+`mapping/faire.py::map_study_to_faire`'s dedup key is `(target_table,
+target_field, entity_id)`; since every LLM-extracted PCR/assay fact maps to
+`target_table="projectMetadata"` and entity resolution unconditionally
+returned `None` there, two different assays' primer sets collapsed onto
+the identical key -- the first won, the second was silently flagged
+`review_required=True` as a "conflict" instead of being recognized as a
+second, valid assay. Real, observed data loss, and the concrete bug this
+milestone fixes.
+
+Checked directly against the vendored FAIRe schema before designing
+anything (`schemas/faire/README.md`): real FAIRe's own `projectMetadata.csv`
+export layout is **one wide row per `samp_name`/`assay_name`/`seq_id` join
+key** -- FAIRe's actual design already expects one `projectMetadata` row
+per assay, not one global row per study. This pipeline's previous
+`entity_id=None`-only treatment was a simplification that didn't match
+FAIRe's real intent.
+
+**What already existed and got reused, not rebuilt:** `EntityLevel.ASSAY`
+and `EntityRelationshipType.USES_ASSAY` were already in the schema (no
+migration needed). `sources/base.py::RawFactCandidate` already had
+`entity_level`/`entity_external_id`/`entity_label` -- a fully generic "tag
+this fact with which entity it belongs to" mechanism, and
+`workflow/handlers.py::_materialize_candidate_entity` already
+get-or-created an `Entity` from one. That mechanism was already wired into
+the supplement-parsing persist path (`workflow/supplement_handlers.py`)
+but, tellingly, **not** into the main full-paper `handle_extract_text_facts`
+path -- every LLM-extracted fact's `entity_id` was silently `None`
+regardless of what `extraction/text.py` set on the candidate. The two
+near-duplicate persist loops are now one shared
+`workflow/handlers.py::_persist_candidate_facts` helper used by both.
+
+**The fix, end to end:**
+- `extraction/faire_fields.py` gains `assay_scoped_field_names()`: the
+  native names describing one specific assay's setup (PCR/assay-setup and
+  qPCR/standard-curve groups, plus `pcr_replicate_count`) -- deliberately
+  excludes `negative_control_type`/`positive_control_type` (they map to
+  `sampleMetadata`, not `projectMetadata` -- tagging them would do nothing)
+  and `biological_replicate_count` (a sample property, not an assay one).
+- `extraction/text.py`'s prompt gained an optional `assay_tag` output
+  field: when a section describes more than one assay, the model tags each
+  assay-identity/PCR/qPCR fact with a short, consistent tag -- preferring
+  the paper's own name for the assay (most likely to be reused
+  consistently if the same assay is described again elsewhere in the
+  paper) over an arbitrary placeholder. A fact with no `assay_tag` (the
+  overwhelming common single-assay case) keeps today's exact
+  `entity_level=STUDY` behavior -- strictly additive, backward-compatible
+  by construction. `PROMPT_VERSION` bumped to
+  `text-extraction-v10-assay-tagging`.
+- `mapping/rules.py`'s generated LLM rules get a **parallel** rule at
+  `EntityLevel.ASSAY` for every assay-scoped native name, alongside
+  (never replacing) the existing `EntityLevel.STUDY` rule.
+  Deliberately not widened to "any entity level": `_EXPLICIT_RULES`
+  already has literal-FAIRe-spelling rules for
+  `target_gene`/`assay_type`/`assay_name` at `EntityLevel.PROJECT`
+  (repository/OBIS/GBIF-sourced) sharing the exact fact_type_candidate
+  string -- widening would have made the generated rule double-match those
+  structured facts too.
+- `mapping/faire.py::_resolve_entity_id`: a `projectMetadata`-targeted fact
+  with `entity_level=ASSAY` now resolves to its own `entity_id` instead of
+  unconditionally `None`, so two assays' facts land in two separate
+  `StandardizedValue` rows instead of colliding.
+- `exports/faire.py::export_faire`'s `projectMetadata` loop now emits one
+  row per assay entity that has real values -- gated on **having at least
+  one direct StandardizedValue**, not merely existing, since
+  `extraction/experiment_runs.py::materialize_legacy_experiment_runs`
+  already creates `ASSAY` entities today purely as link targets for
+  structured ENA/BioProject `assay_name` facts (which land on the
+  `EXPERIMENT_RUN` row, not the assay entity). Gating on mere existence
+  would have made every such structured-only multi-assay study suddenly
+  emit N near-duplicate broadcast rows where it previously emitted
+  exactly one -- checked for this real regression risk before shipping,
+  not just assumed away.
+
+**Verified end to end, not just unit-by-unit**: fed a synthetic two-assay
+Methods section ("For 16S, ... annealing temperature of 55C... For 18S,
+... annealing temperature of 60C...") through
+`extract_facts_from_section` with a mock backend tagging the two facts
+`assay_tag="16S"`/`"18S"`, persisted via `_persist_candidate_facts`, ran
+`map_study_to_faire`, then `export_faire` -- confirmed real, distinct
+`projectMetadata` rows with `annealingTemp`/`assay_name` = 55C/16S and
+60C/18S. 517 tests pass (12 new), including two explicit regression guards
+(a structured-only assay entity with no direct values still yields exactly
+1 project row; a PROJECT/EXPERIMENT_RUN-level structured `assay_name` fact
+still broadcasts unaffected).
+
+**Explicit non-goals, not silently skipped:** linking text-derived assay
+entities to specific samples/experiment_runs ("which samples were tested
+with which assay") -- prose rarely states this per-sample, a substantially
+harder problem left for a separate follow-up. Cross-call/cross-section
+assay-tag consistency is a real, acknowledged limitation: the model has no
+memory between separate section calls or between chunks within one long
+section, mitigated (not solved) by biasing the prompt toward the paper's
+own given assay name rather than an arbitrary placeholder -- a real fix
+would need a separate reconciliation pass.
+
 ## Mapping expansion: the rest of FAIRe's Environment section
 
 Beyond the 8 BioSample attributes already mapped (elev/samp_collect_device/

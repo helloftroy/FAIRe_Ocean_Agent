@@ -128,7 +128,7 @@ def _candidate_evidence_ids(candidate: dict) -> list[str]:
 
 def _facts_with_verified_segment_ids(returned_facts: list[dict], segment_lookup: dict[str, str]) -> list[dict]:
     verified = []
-    seen: set[tuple[str, str, str]] = set()
+    seen: set[tuple[str, str, str, str]] = set()
     for fact in returned_facts:
         if is_absent_raw_value(fact.get("raw_value")):
             continue
@@ -136,10 +136,17 @@ def _facts_with_verified_segment_ids(returned_facts: list[dict], segment_lookup:
         if not evidence_ids or any(evidence_id not in segment_lookup for evidence_id in evidence_ids):
             continue
         quote = "\n".join(segment_lookup[evidence_id] for evidence_id in evidence_ids)
+        # Fold in assay_tag (extraction/text.py's per-assay tagging) so two
+        # real, distinct assays that happen to share an identical
+        # value+quote don't collapse into one -- mirrors
+        # extraction/text.py's own _facts_from_candidates exactly, per this
+        # function's stated "mirrors production exactly" invariant.
+        assay_tag = fact.get("assay_tag")
         dedupe_key = (
             str(fact.get("fact_type_candidate", "")),
             str(fact.get("raw_value", "")),
             quote,
+            "" if assay_tag is None or is_absent_raw_value(assay_tag) else " ".join(str(assay_tag).strip().split()),
         )
         if dedupe_key in seen:
             continue
