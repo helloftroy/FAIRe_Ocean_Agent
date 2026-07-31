@@ -490,6 +490,47 @@ def test_flags_review_required_on_conflicting_project_wide_facts(db_session):
     assert len(run_rows) == 0  # platform is project metadata, never a library/run-row field
 
 
+def test_rejected_facts_are_excluded_from_mapping_entirely(db_session):
+    """review_status=REJECTED (the quarantine mechanism for facts extracted
+    under a since-fixed bug, or from a superseded model/prompt version)
+    must actually be excluded from mapping, not merely deprioritized --
+    otherwise quarantining a fact has no real effect on exported data."""
+    study = _study(db_session, title="Quarantined fact")
+    run = Entity(study_id=study.study_id, entity_level=EntityLevel.SEQUENCING_RUN.value, external_identifier="SRR1")
+    db_session.add(run)
+    db_session.flush()
+    rejected = _fact(db_session, study, entity=run, field="instrument_platform", value="ILLUMINA", entity_level="sequencing_run")
+    rejected.review_status = "rejected"
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    assert db_session.query(StandardizedValue).filter_by(
+        study_id=study.study_id, target_field="platform"
+    ).count() == 0
+
+
+def test_non_rejected_fact_wins_over_a_quarantined_conflicting_one(db_session):
+    study = _study(db_session, title="One quarantined, one good")
+    run_a = Entity(study_id=study.study_id, entity_level=EntityLevel.SEQUENCING_RUN.value, external_identifier="SRR_A")
+    run_b = Entity(study_id=study.study_id, entity_level=EntityLevel.SEQUENCING_RUN.value, external_identifier="SRR_B")
+    db_session.add_all([run_a, run_b])
+    db_session.flush()
+    stale = _fact(db_session, study, entity=run_a, field="instrument_platform", value="PACBIO_SMRT", entity_level="sequencing_run")
+    stale.review_status = "rejected"
+    _fact(db_session, study, entity=run_b, field="instrument_platform", value="ILLUMINA", entity_level="sequencing_run")
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    project_rows = db_session.query(StandardizedValue).filter_by(study_id=study.study_id, target_field="platform").all()
+    assert len(project_rows) == 1
+    assert project_rows[0].standardized_value == "ILLUMINA"
+    assert project_rows[0].review_required is False  # the quarantined fact never entered the comparison
+
+
 def test_flags_review_required_when_value_fails_closed_vocab_check(db_session):
     study = _study(db_session, title="Bad platform value")
     run = Entity(study_id=study.study_id, entity_level=EntityLevel.SEQUENCING_RUN.value, external_identifier="SRR1")

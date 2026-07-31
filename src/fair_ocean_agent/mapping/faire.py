@@ -36,7 +36,7 @@ from __future__ import annotations
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from fair_ocean_agent.database.enums import EntityLevel, MappingMethod, MissingnessStatus
+from fair_ocean_agent.database.enums import EntityLevel, MappingMethod, MissingnessStatus, ReviewStatus
 from fair_ocean_agent.database.models import (
     Entity,
     ExternalIdentifier,
@@ -106,7 +106,21 @@ def map_study_to_faire(session: Session, study_id: str) -> int:
     materialize_legacy_experiment_runs(session, study_id)
     _clear_existing_faire_mappings(session, study_id)
 
-    facts = list(session.scalars(select(RawFact).where(RawFact.study_id == study_id)))
+    # REJECTED facts (quarantined -- e.g. extracted under a since-fixed
+    # bug, or from a superseded model/prompt version) are excluded from
+    # mapping entirely, not merely deprioritized: review_status only has
+    # real effect here, at this one filter. `created_at` ASC makes "first
+    # (oldest surviving, non-rejected) fact wins" explicit and deterministic
+    # rather than relying on whatever order the DB happens to return rows
+    # in absent an ORDER BY -- this preserves today's de facto behavior for
+    # legitimate multi-source ties, it does not introduce a new preference.
+    facts = list(
+        session.scalars(
+            select(RawFact)
+            .where(RawFact.study_id == study_id, RawFact.review_status != ReviewStatus.REJECTED.value)
+            .order_by(RawFact.created_at)
+        )
+    )
     created = 0
     seen: dict[tuple[str, str, str | None], StandardizedValue] = {}
 
