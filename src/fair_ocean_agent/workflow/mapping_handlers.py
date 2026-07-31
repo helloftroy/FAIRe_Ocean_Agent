@@ -20,6 +20,8 @@ from fair_ocean_agent.workflow.worker import TASK_HANDLERS
 
 logger = get_logger(__name__)
 
+MAPPING_VERSION = "faire-mapping-v2-experiment-runs"
+
 
 def handle_map_faire(session: Session, task: Task) -> None:
     created = map_study_to_faire(session, task.study_id)
@@ -33,7 +35,12 @@ def enqueue_mapping_backfill(session: Session) -> int:
     type for the same study."""
     study_ids = list(session.scalars(select(RawFact.study_id).distinct()))
     for study_id in study_ids:
-        enqueue_task(session, TaskType.MAP_FAIRE, study_id=study_id)
+        enqueue_task(
+            session,
+            TaskType.MAP_FAIRE,
+            study_id=study_id,
+            payload={"mapping_version": MAPPING_VERSION},
+        )
     return len(study_ids)
 
 

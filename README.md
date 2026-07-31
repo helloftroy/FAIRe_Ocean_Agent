@@ -42,6 +42,13 @@ via ENA's read_run query instead (same underlying INSDC-shared records,
 much cleaner JSON than NCBI's SRA XML) -- see `sources/ncbi.py`'s
 docstring and `docs/architecture.md`.
 
+After upgrading an existing database to the experiment/library entity
+model, run `fair-ocean enqueue-mapping-backfill` and process those tasks.
+Mapping task keys include a mapping version, so this schedules a fresh
+pass even when older MAP_FAIRE tasks are already completed; legacy
+run-bound raw facts remain intact and are projected onto experiment_run
+entities during that pass.
+
 **Milestone 4 (open-access retrieval + provider-independent LLM
 extraction):** open-access full-text retrieval (Europe PMC JATS XML only --
 never a paywalled source) + deterministic section selection (Methods,
