@@ -196,6 +196,12 @@ def test_low_value_optional_fields_are_excluded_from_llm_only():
             "block_taxa",
             "inhibition_check_0_1",
             "inhibition_check",
+            "samp_collect_method",
+            "samp_store_method_additional",
+            "assay_name",
+            "lib_conc",
+            "lib_conc_unit",
+            "lib_conc_meth",
         }
     )
     rendered = render_field_reference()
@@ -208,7 +214,9 @@ def test_low_value_optional_fields_are_excluded_from_llm_only():
     assert "sequencing_location" not in allowed_names
     assert "PCR_amplification_conditions" not in rendered
     assert "PCR_amplification_conditions" not in allowed_names
-    assert LLM_EXCLUDED_OPTIONAL_NATIVE_FIELDS == frozenset({"PCR_amplification_conditions"})
+    assert LLM_EXCLUDED_OPTIONAL_NATIVE_FIELDS == frozenset(
+        {"PCR_amplification_conditions", "collection_method", "storage_conditions", "environmental_context"}
+    )
 
 
 def test_llm_exclusions_do_not_remove_faire_registry_or_export_fields():
@@ -216,9 +224,37 @@ def test_llm_exclusions_do_not_remove_faire_registry_or_export_fields():
     # is not a field in the authoritative FAIRe v1.0.2 schema/workbook.
     upstream_fields = LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS - {"woce_sect"}
     registry_fields = {term["upstream_field_name"] for term in build_faire_registry()}
-    export_fields = set(class_columns("projectMetadata"))
+    # This exclusion policy now spans projectMetadata, sampleMetadata, and
+    # experimentRunMetadata fields (not just projectMetadata) -- check each
+    # excluded field is still a real, exported column in whichever of
+    # those three tables it actually belongs to.
+    export_fields = (
+        set(class_columns("projectMetadata"))
+        | set(class_columns("sampleMetadata"))
+        | set(class_columns("experimentRunMetadata"))
+    )
 
     assert upstream_fields <= registry_fields
     assert upstream_fields <= export_fields
     assert "woce_sect" not in registry_fields
     assert "woce_sect" not in export_fields
+
+
+def test_sample_metadata_llm_checklist_is_narrowed_to_location_date_depth():
+    """Regression guard for an explicit user review of which sample-level
+    fields are realistically findable in prose: only coordinates
+    (decimalLatitude/decimalLongitude), collection_date (eventDate), and
+    depth (minimumDepthInMeters/maximumDepthInMeters) remain. Everything
+    else about a sample -- including samp_category (sample vs. control),
+    which isn't even in this taxonomy at all -- is structured-source-only."""
+    names = field_names_for_reference()
+    assert {"collection_date", "depth", "coordinates"} <= names
+    for excluded in (
+        "sample_collection_method",
+        "sample_storage_conditions",
+        "collection_method",
+        "storage_conditions",
+        "environmental_context",
+    ):
+        assert excluded not in names
+    assert "samp_category" not in all_field_names()

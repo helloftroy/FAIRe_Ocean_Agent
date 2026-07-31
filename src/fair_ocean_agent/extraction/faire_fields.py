@@ -38,12 +38,31 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-# Optional projectMetadata fields that remain part of the FAIRe registry,
-# mappings, and exports but are not worth spending local-model context or
-# generation time on. Structured adapters may still populate them. Keeping
-# this policy beside the prompt taxonomy also prevents a future taxonomy
-# expansion from silently adding one of these fields back to either paper
-# or supplement LLM extraction.
+# Fields that remain part of the FAIRe registry, mappings, and exports but
+# are not worth spending local-model context or generation time on --
+# either because a structured adapter (NCBI BioSample/ENA/repository
+# experiment records) is a far more reliable source for them than free
+# prose, or because they vary sample-to-sample/run-to-run in a way a paper
+# essentially never states explicitly (e.g. samp_category -- whether a
+# given physical sample is a real sample or a control -- is not even in
+# this taxonomy at all, precisely because it's not the kind of thing a
+# paper's Methods section states per-sample). Structured adapters may
+# still populate every field here. Keeping this policy beside the prompt
+# taxonomy also prevents a future taxonomy expansion from silently adding
+# one of these fields back to either paper or supplement LLM extraction.
+#
+# samp_collect_method/samp_store_method_additional (sampleMetadata) and
+# assay_name/lib_conc/lib_conc_unit/lib_conc_meth (experimentRunMetadata,
+# via `_target_table_for_faire_field`'s resolution -- assay_name in
+# particular resolves to projectMetadata, see mapping/rules.py's
+# _TARGET_TABLE_OVERRIDES) were added per an explicit user review of which
+# project/sample/experiment fields are realistically findable in prose
+# versus structured-source-only. sampleMetadata's LLM checklist is now
+# deliberately narrow: only collection_date/depth/coordinates (->
+# eventDate, minimumDepthInMeters/maximumDepthInMeters,
+# decimalLatitude/decimalLongitude) remain -- everything else about a
+# sample, including which samples are controls, comes from APIs/structured
+# supplementary data, never the LLM.
 LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS = frozenset(
     {
         "informationWithheld",
@@ -60,13 +79,35 @@ LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS = frozenset(
         "block_taxa",
         "inhibition_check_0_1",
         "inhibition_check",
+        "samp_collect_method",
+        "samp_store_method_additional",
+        "assay_name",
+        "lib_conc",
+        "lib_conc_unit",
+        "lib_conc_meth",
     }
 )
 
 # Narrative fallbacks do not carry a FAIRe hint, so target-field filtering
-# cannot remove them. This one maps only to the excluded free-text
-# pcr_method_additional field; atomic PCR facts remain in the checklist.
-LLM_EXCLUDED_OPTIONAL_NATIVE_FIELDS = frozenset({"PCR_amplification_conditions"})
+# cannot remove them. "PCR_amplification_conditions" maps only to the
+# excluded free-text pcr_method_additional field (atomic PCR facts remain
+# in the checklist). "collection_method"/"storage_conditions" are the
+# fallback-narrative counterparts of the now-excluded
+# sample_collection_method/sample_storage_conditions atomic fields (same
+# samp_collect_method/samp_store_method_additional targets -- see
+# mapping/rules.py) and are excluded for the same reason.
+# "environmental_context" is deliberately unmapped by mapping/rules.py
+# (genuinely ambiguous among env_broad_scale/env_local_scale/env_medium)
+# and, being a sample-level narrative concept outside the now-narrow
+# sampleMetadata checklist, is excluded too.
+LLM_EXCLUDED_OPTIONAL_NATIVE_FIELDS = frozenset(
+    {
+        "PCR_amplification_conditions",
+        "collection_method",
+        "storage_conditions",
+        "environmental_context",
+    }
+)
 
 
 @dataclass(frozen=True)

@@ -1483,6 +1483,67 @@ section, mitigated (not solved) by biasing the prompt toward the paper's
 own given assay name rather than an arbitrary placeholder -- a real fix
 would need a separate reconciliation pass.
 
+## Narrowing the sample/experiment LLM checklist to what's realistically in prose
+
+Not every FAIRe field that *can* be populated from a paper's Methods
+section is *worth* asking the LLM about. Some are much more reliably
+sourced from structured data (NCBI BioSample/ENA/repository experiment
+records) than from free prose, and asking anyway just spends prompt
+budget and risks a weaker model guessing or hallucinating an answer that
+structured data would get right (or correctly report as absent). Following
+an explicit review of the FAIRe sample/experiment/project fields, the
+`extraction/faire_fields.py` exclusion policy (already used by Codex's
+low-value-optional-field work, `LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS`/
+`LLM_EXCLUDED_OPTIONAL_NATIVE_FIELDS`) grew two more targeted cuts:
+
+- **sampleMetadata's LLM checklist is now deliberately narrow**: only
+  `coordinates`/`collection_date`/`depth` remain (->
+  `decimalLatitude`/`decimalLongitude`, `eventDate`,
+  `minimumDepthInMeters`/`maximumDepthInMeters`). `sample_collection_method`/
+  `sample_storage_conditions` (and their narrative-fallback counterparts
+  `collection_method`/`storage_conditions`, same FAIRe targets) are
+  excluded. `samp_category` (whether a given physical sample is a real
+  sample or a control) was **not added to the taxonomy at all** -- it
+  varies sample-to-sample in a way a paper's prose essentially never
+  states explicitly per-sample; structured sources (BioSample attributes,
+  supplementary sample tables) are the only realistic source for it.
+  `environmental_context` (already deliberately left unmapped by
+  `mapping/rules.py` -- genuinely ambiguous among
+  `env_broad_scale`/`env_local_scale`/`env_medium`) is cut too, since it's
+  a sample-level narrative concept outside this narrower checklist and was
+  contributing zero real mapping value anyway.
+- **experimentRunMetadata**: `assay_name` (which actually resolves to
+  `projectMetadata` via `mapping/rules.py`'s `_TARGET_TABLE_OVERRIDES`, not
+  `experimentRunMetadata` -- checked directly rather than assumed) and
+  `library_concentration`/`library_concentration_unit`/
+  `library_concentration_method` (-> `lib_conc`/`lib_conc_unit`/
+  `lib_conc_meth`) are excluded. `phix_percentage` (-> `phix_perc`) and
+  `sequencing_platform_general` (-> `platform`) are deliberately kept --
+  these two are worth asking about. Checked the rest of the
+  experimentRunMetadata fields the user flagged (`pcr_plate_id`,
+  `pcr_well_position`, `lib_id`, `seq_run_id`, `mid_forward`/`mid_reverse`,
+  `filename`/`filename2`, `checksum_filename`/`checksum_filename2`,
+  `associatedSequences`, `input_read_count`) directly against the taxonomy
+  first: none of them were ever part of the LLM checklist to begin with
+  (all repository/ENA-structured-only, via `extraction/experiment_runs.py`'s
+  `_EXPERIMENT_FACT_TYPES`) -- "should only come from APIs" was already
+  true for those, confirmed rather than assumed.
+
+Every excluded field stays fully live for structured adapters -- this is
+the same "cut from the LLM's checklist, keep everywhere else" mechanism
+already established for the low-value optional project fields, applied to
+two more tables. `mapping/rules.py`'s new parallel `EntityLevel.ASSAY`
+rule for `assay_name` (added for the multi-assay work above) is
+unaffected: it's driven by `assay_scoped_field_names()`, which reads
+`FIELD_GROUPS` directly rather than the checklist-rendering exclusion --
+correct and inert if the model ever produces an `assay_name` fact anyway
+(e.g. from a forced recall pass), consistent with this codebase's existing
+"correct and inert until a real source has it" idiom.
+
+Project metadata's own LLM checklist coverage (which fields the LLM
+*should* be asked about that it currently isn't) is a separate, explicitly
+deferred follow-up, not addressed here.
+
 ## Mapping expansion: the rest of FAIRe's Environment section
 
 Beyond the 8 BioSample attributes already mapped (elev/samp_collect_device/

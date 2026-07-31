@@ -90,8 +90,8 @@ def test_assay_tag_ignored_for_non_assay_scoped_fact_type():
     response = json.dumps(
         [
             {
-                "fact_type_candidate": "sample_collection_method",
-                "raw_value": "Niskin bottle",
+                "fact_type_candidate": "dna_extraction_kit",
+                "raw_value": "DNeasy PowerWater Kit",
                 "evidence_id": "METHODS.P001",
                 "assay_tag": "16S-V3V4",
             }
