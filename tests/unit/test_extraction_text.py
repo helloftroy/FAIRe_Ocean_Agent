@@ -74,7 +74,7 @@ def test_assay_tag_on_assay_scoped_fact_becomes_assay_entity():
         ]
     )
     backend = MockLLMBackend(responses=[response])
-    facts, _ = extract_facts_from_section(backend, "Methods", text)
+    facts, _ = extract_facts_from_section(backend, "Methods", text, active_flags=frozenset({"pcr_0_1"}))
 
     assert len(facts) == 2
     by_value = {fact.raw_value: fact for fact in facts}
@@ -119,7 +119,7 @@ def test_placeholder_assay_tag_is_dropped():
         ]
     )
     backend = MockLLMBackend(responses=[response])
-    facts, _ = extract_facts_from_section(backend, "Methods", SECTION_TEXT)
+    facts, _ = extract_facts_from_section(backend, "Methods", SECTION_TEXT, active_flags=frozenset({"pcr_0_1"}))
 
     assert len(facts) == 1
     assert facts[0].entity_level == EntityLevel.STUDY
@@ -144,7 +144,7 @@ def test_identical_value_and_quote_with_different_assay_tags_both_survive_dedup(
         ]
     )
     backend = MockLLMBackend(responses=[response])
-    facts, _ = extract_facts_from_section(backend, "Methods", SECTION_TEXT)
+    facts, _ = extract_facts_from_section(backend, "Methods", SECTION_TEXT, active_flags=frozenset({"pcr_0_1"}))
 
     assert len(facts) == 2
     assert {fact.entity_external_id for fact in facts} == {"16S-V3V4", "18S-V9"}
@@ -235,6 +235,7 @@ def test_extract_facts_from_section_chunks_long_text_and_merges_facts():
         section_text,
         max_section_chars_per_call=len(first) + 1,
         max_output_tokens=2048,
+        active_flags=frozenset({"pcr_0_1"}),
     )
 
     assert [fact.fact_type_candidate for fact in facts] == ["collection_date", "forward_primer_name"]
@@ -249,7 +250,7 @@ def test_extract_facts_from_section_chunks_long_text_and_merges_facts():
 
 
 def test_prompt_version_is_stable_constant():
-    assert PROMPT_VERSION == "text-extraction-v15-library-prep-quote-judgement"
+    assert PROMPT_VERSION == "text-extraction-v16-flag-gated-pcr-checklist"
 
 
 def test_recall_second_pass_does_not_fire_when_first_pass_finds_any_facts():
@@ -264,7 +265,7 @@ def test_recall_second_pass_does_not_fire_when_first_pass_finds_any_facts():
     )
     backend = MockLLMBackend(responses=[response])
 
-    facts, _ = extract_facts_from_section(backend, "PCR", section_text)
+    facts, _ = extract_facts_from_section(backend, "PCR", section_text, active_flags=frozenset({"pcr_0_1"}))
 
     assert [fact.fact_type_candidate for fact in facts] == ["forward_primer_name"]
     assert len(backend.calls) == 1
@@ -284,7 +285,7 @@ def test_recall_second_pass_fires_only_when_first_pass_finds_nothing():
         return "[]"
 
     backend = MockLLMBackend(responses=respond)
-    facts, _ = extract_facts_from_section(backend, "PCR", section_text)
+    facts, _ = extract_facts_from_section(backend, "PCR", section_text, active_flags=frozenset({"pcr_0_1"}))
 
     assert {fact.fact_type_candidate for fact in facts} == {"forward_primer_name", "reverse_primer_name"}
     assert len(backend.calls) == 2
@@ -314,7 +315,7 @@ def test_recall_second_pass_dedupes_repeated_first_pass_facts():
     )
     backend = MockLLMBackend(responses=[response])
 
-    facts, _ = extract_facts_from_section(backend, "PCR", section_text)
+    facts, _ = extract_facts_from_section(backend, "PCR", section_text, active_flags=frozenset({"pcr_0_1"}))
 
     assert [fact.fact_type_candidate for fact in facts] == ["forward_primer_name"]
 
@@ -339,8 +340,9 @@ def test_recall_missing_fact_types_skips_primer_sequences_without_nucleotide_tex
     name_only_segments = segment_source_text("PCR", "PCR used MiFish-U-F and MiFish-U-R primers.")
     sequence_segments = segment_source_text("PCR", "PCR used primers GTGYCAGCMGCCGCGGTAA and GGACTACNVGGGTWTCTAAT.")
 
-    name_only_missing = recall_missing_fact_types(primer_focus, frozenset(), set(), name_only_segments)
-    sequence_missing = recall_missing_fact_types(primer_focus, frozenset(), set(), sequence_segments)
+    active_flags = frozenset({"pcr_0_1"})
+    name_only_missing = recall_missing_fact_types(primer_focus, frozenset(), set(), name_only_segments, active_flags=active_flags)
+    sequence_missing = recall_missing_fact_types(primer_focus, frozenset(), set(), sequence_segments, active_flags=active_flags)
 
     assert "forward_primer_sequence" not in name_only_missing
     assert "reverse_primer_sequence" not in name_only_missing
@@ -362,14 +364,18 @@ def test_recall_missing_fact_types_skips_primer_sequences_without_nucleotide_tex
 
 
 def test_prompt_embeds_the_native_name_checklist():
-    prompt = build_prompt("PCR", SECTION_TEXT)
+    prompt = build_prompt("PCR", SECTION_TEXT, active_flags=frozenset({"pcr_0_1"}))
     # Spot-check one native_name from each group actually appears in the
     # prompt the model sees, not just in extraction/faire_fields.py.
+    # sequencing_kit is deliberately not checked here -- it's fully
+    # excluded (search_flags.CONTROLLED_SEARCH_FIELDS covers it
+    # deterministically instead), so phix_percentage stands in as this
+    # group's still-LLM-askable representative.
     for native_name in (
         "annealing_temperature",
         "negative_control_type",
         "standard_curve_slope",
-        "sequencing_kit",
+        "phix_percentage",
         "reference_database",
         "scientific_name",
     ):
@@ -377,7 +383,7 @@ def test_prompt_embeds_the_native_name_checklist():
 
 
 def test_prompt_embeds_faire_hints_as_hints_not_identity():
-    prompt = build_prompt("PCR", SECTION_TEXT)
+    prompt = build_prompt("PCR", SECTION_TEXT, active_flags=frozenset({"pcr_0_1"}))
     assert "[FAIRe hint: annealingTemp]" in prompt
     assert "candidate_standard_fields" in prompt
     assert "evidence_id" in prompt
@@ -428,7 +434,7 @@ def test_extracting_an_atomic_native_field_by_exact_name():
         ]
     )
     backend = MockLLMBackend(responses=[response])
-    facts, _ = extract_facts_from_section(backend, "PCR", section_text)
+    facts, _ = extract_facts_from_section(backend, "PCR", section_text, active_flags=frozenset({"pcr_0_1"}))
 
     fact_types = {f.fact_type_candidate for f in facts}
     assert fact_types == {"annealing_temperature", "pcr_cycle_count"}
@@ -450,7 +456,7 @@ def test_candidate_standard_fields_hint_is_stored_in_confidence_metadata():
         ]
     )
     backend = MockLLMBackend(responses=[response])
-    facts, _ = extract_facts_from_section(backend, "PCR", section_text)
+    facts, _ = extract_facts_from_section(backend, "PCR", section_text, active_flags=frozenset({"pcr_0_1"}))
 
     assert len(facts) == 1
     assert facts[0].fact_type_candidate == "annealing_temperature"
@@ -466,7 +472,7 @@ def test_omitted_candidate_standard_fields_hint_leaves_a_valid_fact():
         [{"fact_type_candidate": "annealing_temperature", "raw_value": "57C", "evidence_id": "PCR.P001"}]
     )
     backend = MockLLMBackend(responses=[response])
-    facts, _ = extract_facts_from_section(backend, "PCR", section_text)
+    facts, _ = extract_facts_from_section(backend, "PCR", section_text, active_flags=frozenset({"pcr_0_1"}))
 
     assert len(facts) == 1
     assert facts[0].fact_type_candidate == "annealing_temperature"
@@ -613,3 +619,64 @@ def test_extract_facts_from_section_passes_exclusions_into_the_prompt():
     backend = MockLLMBackend(responses=["[]"])
     extract_facts_from_section(backend, "PCR", SECTION_TEXT, exclude_faire_hints=frozenset({"otu_db"}))
     assert "reference_database" not in backend.calls[-1]["prompt"]
+
+
+# --- Flag-gated checklist (extraction/faire_fields.py's required_any_flags,
+# v15 -> v16): a paper with no detected PCR evidence should never even be
+# asked about the "PCR / assay setup" group; a probe-based qPCR/ddPCR paper
+# should additionally see probe_sequence/probe_concentration. ------------
+
+
+def test_build_prompt_hides_pcr_checklist_with_no_active_flags():
+    # pcr_cycle_count (unlike annealing_temperature/target_gene) never
+    # appears in the static illustrative instruction text, so its absence
+    # here unambiguously means the checklist entry was actually filtered.
+    prompt = build_prompt("PCR", SECTION_TEXT)
+    assert "pcr_cycle_count" not in prompt
+    assert "probe_sequence" not in prompt
+    # An ungated concept from another group must still be present.
+    assert "reference_database" in prompt
+
+
+def test_build_prompt_shows_pcr_checklist_when_pcr_0_1_active():
+    prompt = build_prompt("PCR", SECTION_TEXT, active_flags=frozenset({"pcr_0_1"}))
+    assert "pcr_cycle_count" in prompt
+    # probe_sequence requires pcr_0_1 OR probe_based -- pcr_0_1 alone is
+    # sufficient (required_any_flags is an OR, matching the source CSV's
+    # own "if pcr_0_1 TRUE | if probe_based... TRUE" conditional column).
+    assert "probe_sequence" in prompt
+
+
+def test_build_prompt_hides_probe_fields_without_either_probe_flag():
+    """probe_sequence/probe_concentration require pcr_0_1 OR
+    probe_based_qPCR_ddPCR_assay_0_1 -- covered by the previous test.
+    This one confirms neither flag active means neither shows, even
+    though other PCR fields are also absent for the same reason."""
+    prompt = build_prompt("PCR", SECTION_TEXT)
+    assert "probe_concentration" not in prompt
+
+
+def test_extract_facts_from_section_rejects_gated_fact_when_flag_inactive():
+    """A model that reports a gated fact_type_candidate anyway (e.g.
+    hallucinated from general knowledge, never actually shown in the
+    prompt) must still be rejected by allowed_fact_types -- gating must
+    hold on both the input (what's shown) and output (what's accepted)
+    sides, not just the rendered prompt text."""
+    section_text = "PCR was performed with an annealing temperature of 57C."
+    response = json.dumps(
+        [{"fact_type_candidate": "annealing_temperature", "raw_value": "57C", "evidence_id": "PCR.P001"}]
+    )
+    backend = MockLLMBackend(responses=[response])
+    facts, _ = extract_facts_from_section(backend, "PCR", section_text)  # no active_flags
+    assert facts == []
+
+
+def test_extract_facts_from_section_accepts_gated_fact_when_flag_active():
+    section_text = "PCR was performed with an annealing temperature of 57C."
+    response = json.dumps(
+        [{"fact_type_candidate": "annealing_temperature", "raw_value": "57C", "evidence_id": "PCR.P001"}]
+    )
+    backend = MockLLMBackend(responses=[response])
+    facts, _ = extract_facts_from_section(backend, "PCR", section_text, active_flags=frozenset({"pcr_0_1"}))
+    assert len(facts) == 1
+    assert facts[0].fact_type_candidate == "annealing_temperature"

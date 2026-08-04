@@ -1655,6 +1655,96 @@ from ENA exactly as before, untouched. 536 tests pass (16 new, including a
 `tests/unit/test_extraction_publication_metadata.py` suite that parses
 this same real cached JATS XML end to end).
 
+## Flag-gated LLM checklist: PCR fields + a reusable, generic gating mechanism
+
+The user gave a CSV of PCR-section FAIRe fields, each row's `Conditional`
+column saying which deterministic boolean flag(s) (`pcr_0_1`,
+`probe_based_qPCR_ddPCR_assay_0_1`) must be true before the LLM should even
+be asked about that field -- with an explicit, repeated instruction to
+build one generic, reusable gating mechanism now, not a one-off, since more
+term batches are coming.
+
+Codex had concurrently built the deterministic half already
+(`extraction/search_flags.py`): `TEXT_SEARCH_FLAGS` detects boolean
+evidence (`pcr_0_1`, `probe_based_qPCR_ddPCR_assay_0_1`, ...) from paper
+text, and `CONTROLLED_SEARCH_FIELDS` does literal-substring matching
+against curated term lists for a handful of controlled-vocabulary-style
+fields, each already carrying a `required_any_flags: frozenset[str]`. What
+was missing: the LLM checklist itself (`extraction/faire_fields.py`) had
+no equivalent gate at all -- the "PCR / assay setup" group was shown on
+every single call, PCR paper or not.
+
+**Added `required_any_flags` to the LLM taxonomy too** (mirroring
+`ControlledSearchField`'s own field name/shape deliberately, one gating
+vocabulary shared by both sides, not two): the entire "PCR / assay setup"
+group + `pcr_replicate_count` now requires `pcr_0_1`; two new probe fields
+additionally accept `probe_based_qPCR_ddPCR_assay_0_1`. `active_flags`
+threads through `extraction/text.py`'s `build_extraction_instructions` ->
+`build_prompt` -> `extract_facts_from_section`, reaching not just what the
+prompt *shows* but also `fact_type_names_for_focus`'s `allowed_fact_types`
+filter on both the main and recall passes -- a gated field can never sneak
+through a hallucinated response even when it was never shown. Both
+production call sites (`workflow/handlers.py`,
+`workflow/supplement_handlers.py`) pass the already-computed
+`active_flags` in; `supplement_handlers.py` needed a real reorder (it
+computed its flags *after* the LLM call, the reverse of `handlers.py`), not
+just a parameter add. `llm/benchmark.py::run_case` computes `active_flags`
+internally via the same detector against each gold case's own
+`source_text`, mirroring production exactly with no gold-case schema
+change.
+
+**5 genuinely missing fields added** (`probe_sequence`, `probe_concentration`,
+`assay_target_taxa`, `assay_validation`, `study_target_taxonomic_scope`) --
+descriptions sourced from `schemas/faire/schema.yaml` directly rather than
+the raw CSV, both to avoid real copy-paste encoding artifacts in the CSV
+(`Â°C`, `â`) reaching a real prompt, and because two of the CSV's own
+proposed native-name spellings (`targetTaxonomicAssay`/`targetTaxonomicScope`)
+were literal FAIRe camelCase slot spellings -- exactly the anti-pattern
+this taxonomy's own module docstring calls out by name as what a
+native_name must never be.
+
+**A second, related problem found and resolved with the user mid-task**: 5
+LLM-taxonomy native names (`target_gene`, `thermocycler`,
+`commercial_master_mix`, `assay_type`, `biological_replicate_count`)
+exactly duplicated `CONTROLLED_SEARCH_FIELDS` entries -- both mechanisms
+firing for the same real facts. Checked real gold data before proposing a
+fix, not just in theory: the deterministic term-matcher is literal
+substring matching against curated lists, not free-text extraction, and it
+demonstrably misses or mangles real values (`"MyFi Mix (Meridian
+Bioscience)"` matches nothing in `commercial_mm`'s term list; `"Bio-Rad
+T100"` gets captured as two disjoint spans `"Bio-Rad | T100"`). Presented
+this evidence to the user, who confirmed: **gate these 5 with
+`required_any_flags={"pcr_0_1"}` rather than excluding them** -- the LLM
+stays the richer, free-text-capable complement, just asked conditionally.
+`sequencing_kit` (no natural PCR-adjacent flag -- sequencing is universal
+to every eDNA paper) stays excluded, an already-approved trade-off; 4 real
+gold cases carry a known, accepted `sequencing_kit` miss as a result, not
+fixed here.
+
+**New standing collision-guard test**, the durable fix for "call in
+tandem" rather than a one-time hand check: asserts every
+`CONTROLLED_SEARCH_FIELDS` term_name that also appears in the LLM taxonomy
+is either excluded or flag-gated. It would have caught
+`assay_type`/`biological_rep` colliding the moment those landed mid-
+research on this very task -- now it catches the next one automatically.
+
+**A real detector bug found by verifying against real gold data, not
+trusted on paper**: cross-checked every gold case's `pcr_0_1` detection
+against whether its own `expected_facts` include real PCR content, and
+found one mismatch -- `example-001` describes explicit PCR content ("...was
+amplified using primers... in a 25 uL reaction volume with an annealing
+temperature of 57C for 35 cycles...") but never uses the word "PCR" or the
+noun "amplification", only the verb "amplified" --
+`search_flags.py`'s own `pcr_0_1` pattern (`\bamplification\b`) missed
+verb forms entirely. Fixed to `\bamplif\w*\b` (amplify/amplified/
+amplifying/amplification/amplifies, no real false-positive risk). Re-ran
+the same cross-check after the fix: zero remaining mismatches across all
+18 gold cases.
+
+552 tests pass (11 new + ~20 migrated to pass `active_flags` explicitly,
+since a `"PCR"`-titled test section with no active flags now correctly
+returns nothing for a gated field -- the entire point of this change).
+
 ## Mapping expansion: the rest of FAIRe's Environment section
 
 Beyond the 8 BioSample attributes already mapped (elev/samp_collect_device/

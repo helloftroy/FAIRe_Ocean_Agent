@@ -27,6 +27,7 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from fair_ocean_agent.dates import try_parse_date
+from fair_ocean_agent.extraction.search_flags import detect_text_search_flags
 from fair_ocean_agent.extraction.text import (
     ExtractionFocus,
     build_prompt,
@@ -184,12 +185,27 @@ def run_case(
     recall-only-on-zero-facts trigger) so a benchmark run measures the real
     pipeline's actual behavior, not a second, drifted copy of it. Pass
     `focuses=EXTRACTION_FOCUSES` to benchmark the old fine-grained-per-topic
-    strategy instead (e.g. for a smaller-context model)."""
+    strategy instead (e.g. for a smaller-context model).
+
+    Also mirrors production's deterministic-flags-before-LLM ordering
+    (workflow/handlers.py::handle_extract_text_facts): runs
+    extraction/search_flags.py's detect_text_search_flags against this
+    gold case's own source_text to compute active_flags, then passes that
+    into build_prompt/recall_missing_fact_types exactly like production
+    does -- so a PCR-content gold case correctly sees the "PCR / assay
+    setup" checklist (gated on pcr_0_1, see extraction/faire_fields.py's
+    required_any_flags) and a non-PCR case correctly doesn't, without a
+    gold-case JSON schema change."""
     segments = segment_source_text(case.section_title, case.source_text)
     segment_lookup = {segment.segment_id: segment.text for segment in segments}
     returned_facts: list[dict] = []
     latency_seconds = 0.0
     json_valid = True
+
+    flag_facts = detect_text_search_flags(
+        ((case.section_title, case.source_text),), locator_prefix=f"gold:{case.case_id}"
+    )
+    active_flags = frozenset(fact.fact_type_candidate for fact in flag_facts)
 
     for focus in focuses:
         focused_segments = segments_for_focus(case.section_title, segments, focus)
@@ -201,6 +217,7 @@ def run_case(
             case.source_text,
             segments=focused_segments,
             focus=focus,
+            active_flags=active_flags,
         )
         try:
             parsed, response = backend.generate_json(prompt, temperature=0)
@@ -226,7 +243,9 @@ def run_case(
         if verified_first_pass:
             continue  # found at least one verified fact already -- no automatic retry
         accepted_fact_types: set[str] = set()
-        missing_types = recall_missing_fact_types(focus, frozenset(), accepted_fact_types, focused_segments)
+        missing_types = recall_missing_fact_types(
+            focus, frozenset(), accepted_fact_types, focused_segments, active_flags=active_flags
+        )
         if not missing_types:
             continue
         recall_prompt = build_prompt(
@@ -236,6 +255,7 @@ def run_case(
             focus=focus,
             include_native_names=missing_types,
             recall_pass=True,
+            active_flags=active_flags,
         )
         try:
             parsed, response = backend.generate_json(recall_prompt, temperature=0)

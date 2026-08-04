@@ -35,6 +35,21 @@ def test_detect_text_search_flags_records_pcr_and_probe_flags_once():
     assert by_type["pcr_0_1"].evidence_quote == "PCR amplification was performed in triplicate."
 
 
+def test_detect_text_search_flags_matches_amplified_verb_forms_not_just_amplification():
+    """Regression guard for a real gold case (data/benchmark/gold/example-001.json)
+    that describes explicit PCR content ("...was amplified using primers...
+    in a 25 uL reaction volume with an annealing temperature of 57C for 35
+    cycles...") but never uses the word "PCR" or the noun "amplification" --
+    only the verb "amplified". pcr_0_1 must still activate, or every
+    downstream flag-gated PCR checklist field silently becomes unreachable
+    for a real paper phrased this way."""
+    facts = detect_text_search_flags(
+        (("Methods", "The target region was amplified using primers X and Y."),),
+        locator_prefix="paper:PMC1",
+    )
+    assert {fact.fact_type_candidate for fact in facts} == {"pcr_0_1"}
+
+
 def test_detect_text_search_flags_does_not_invent_absent_flags():
     facts = detect_text_search_flags(
         (("Methods", "Water samples were collected at 5 m depth."),),

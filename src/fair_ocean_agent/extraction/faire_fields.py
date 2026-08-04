@@ -97,6 +97,16 @@ LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS = frozenset(
         "platform",
         "instrument",
         "lib_layout",
+        # sequencing_kit (native name) / seq_kit (hint): duplicates
+        # search_flags.CONTROLLED_SEARCH_FIELDS's own "seq_kit" entry
+        # (large curated list of real sequencing-kit names). Unlike the
+        # PCR-adjacent overlaps below (gated, not excluded), sequencing
+        # itself is universal to every eDNA paper -- there's no natural
+        # boolean flag to gate this one on the way pcr_0_1 gates PCR
+        # fields, so it's excluded outright rather than conditionally
+        # asked. A known, accepted precision/recall trade-off for this one
+        # field in the gold benchmark (see llm/benchmark.py).
+        "seq_kit",
     }
 )
 
@@ -128,6 +138,15 @@ class FaireExtractionField:
     hint: str
     faire_hint: str | None = None
     example: str | None = None
+    # Mirrors search_flags.ControlledSearchField's own field name/shape --
+    # a deliberate consistency choice, not a coincidence. Empty (the
+    # default) means "always shown" (today's behavior for every
+    # pre-existing field). Non-empty means "only shown when at least one
+    # of these deterministic boolean flags (extraction/search_flags.py's
+    # TEXT_SEARCH_FLAGS, e.g. pcr_0_1) was detected true for this paper" --
+    # see field_names_for_reference/render_field_reference's active_flags
+    # parameter.
+    required_any_flags: frozenset[str] = frozenset()
 
 
 FIELD_GROUPS: dict[str, tuple[FaireExtractionField, ...]] = {
@@ -155,33 +174,82 @@ FIELD_GROUPS: dict[str, tuple[FaireExtractionField, ...]] = {
         FaireExtractionField("dna_cleanup_method", "DNA clean-up/purification method or kit name", "dna_cleanup_method"),
     ),
     "PCR / assay setup": (
+        # Every field in this group only applies to a paper that actually
+        # performed PCR -- gated on pcr_0_1 (extraction/search_flags.py's
+        # deterministic keyword detector for "this paper describes
+        # PCR/qPCR/ddPCR/amplification"), matching a NOAA FAIRe checklist's
+        # own per-field "if pcr_0_1 TRUE" conditional-requirement column.
+        # assay_name is the one exception: it's fully excluded (not
+        # gated) via LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS above, since
+        # search_flags.CONTROLLED_SEARCH_FIELDS already covers it
+        # deterministically end to end.
         FaireExtractionField("assay_name", "a short name/identifier the paper gives its assay", "assay_name", "18S-V4-eukaryote"),
-        FaireExtractionField("assay_type", "targeted, metabarcoding, or other detection approach", "assay_type"),
-        FaireExtractionField("target_gene", "targeted gene or locus", "target_gene", "16S rRNA"),
-        FaireExtractionField("target_subfragment", "targeted hypervariable subregion", "target_subfragment", "V4"),
-        FaireExtractionField("forward_primer_sequence", "forward primer sequence, 5' to 3'", "pcr_primer_forward"),
-        FaireExtractionField("reverse_primer_sequence", "reverse primer sequence, 5' to 3'", "pcr_primer_reverse"),
-        FaireExtractionField("forward_primer_name", "forward primer's name", "pcr_primer_name_forward", "515F"),
-        FaireExtractionField("reverse_primer_name", "reverse primer's name", "pcr_primer_name_reverse", "926R"),
-        FaireExtractionField("forward_primer_concentration", "forward primer's stock concentration", "pcr_primer_conc_forward", "10 uM"),
-        FaireExtractionField("reverse_primer_concentration", "reverse primer's stock concentration", "pcr_primer_conc_reverse", "10 uM"),
-        FaireExtractionField("forward_primer_volume", "forward primer volume per reaction", "pcr_primer_vol_forward", "1 uL"),
-        FaireExtractionField("reverse_primer_volume", "reverse primer volume per reaction", "pcr_primer_vol_reverse", "1 uL"),
-        FaireExtractionField("amplicon_size", "expected amplicon length in base pairs, excluding primers/adapters", "ampliconSize", "411 bp"),
-        FaireExtractionField("pcr_reaction_volume", "total PCR reaction volume", "amplificationReactionVolume", "25 uL"),
-        FaireExtractionField("template_dna_volume", "template DNA volume added per PCR reaction", "pcr_dna_vol", "2 uL"),
-        FaireExtractionField("thermocycler", "thermocycler manufacturer and model", "thermocycler"),
-        FaireExtractionField("annealing_temperature", "PCR annealing temperature", "annealingTemp", "55C"),
-        FaireExtractionField("pcr_cycle_count", "number of PCR cycles", "pcr_cycles", "35"),
-        FaireExtractionField("pcr_conditions", "full description of PCR reaction conditions/thermal profile", "pcr_cond"),
-        FaireExtractionField("commercial_master_mix", "commercial master mix name/brand, if one was used", "commercial_mm"),
-        FaireExtractionField("custom_master_mix", "custom master mix composition, if a commercial one was not used", "custom_mm"),
+        # target_gene/thermocycler/commercial_master_mix/assay_type also
+        # have a search_flags.CONTROLLED_SEARCH_FIELDS entry with the same
+        # identity, but that mechanism is literal-substring matching
+        # against a curated term list, not free-text extraction -- checked
+        # against real gold data and confirmed it demonstrably misses or
+        # mangles real values a careful read of the prose would get right
+        # (e.g. "MyFi Mix (Meridian Bioscience)" matches nothing in
+        # commercial_mm's term list). Gated here rather than excluded, so
+        # the LLM stays the richer source, just asked conditionally.
+        FaireExtractionField("assay_type", "targeted, metabarcoding, or other detection approach", "assay_type", required_any_flags=frozenset({"pcr_0_1"})),
+        FaireExtractionField("target_gene", "targeted gene or locus", "target_gene", "16S rRNA", required_any_flags=frozenset({"pcr_0_1"})),
+        FaireExtractionField("target_subfragment", "targeted hypervariable subregion", "target_subfragment", "V4", required_any_flags=frozenset({"pcr_0_1"})),
+        FaireExtractionField("forward_primer_sequence", "forward primer sequence, 5' to 3'", "pcr_primer_forward", required_any_flags=frozenset({"pcr_0_1"})),
+        FaireExtractionField("reverse_primer_sequence", "reverse primer sequence, 5' to 3'", "pcr_primer_reverse", required_any_flags=frozenset({"pcr_0_1"})),
+        FaireExtractionField("forward_primer_name", "forward primer's name", "pcr_primer_name_forward", "515F", required_any_flags=frozenset({"pcr_0_1"})),
+        FaireExtractionField("reverse_primer_name", "reverse primer's name", "pcr_primer_name_reverse", "926R", required_any_flags=frozenset({"pcr_0_1"})),
+        FaireExtractionField("forward_primer_concentration", "forward primer's stock concentration", "pcr_primer_conc_forward", "10 uM", required_any_flags=frozenset({"pcr_0_1"})),
+        FaireExtractionField("reverse_primer_concentration", "reverse primer's stock concentration", "pcr_primer_conc_reverse", "10 uM", required_any_flags=frozenset({"pcr_0_1"})),
+        FaireExtractionField("forward_primer_volume", "forward primer volume per reaction", "pcr_primer_vol_forward", "1 uL", required_any_flags=frozenset({"pcr_0_1"})),
+        FaireExtractionField("reverse_primer_volume", "reverse primer volume per reaction", "pcr_primer_vol_reverse", "1 uL", required_any_flags=frozenset({"pcr_0_1"})),
+        FaireExtractionField("amplicon_size", "expected amplicon length in base pairs, excluding primers/adapters", "ampliconSize", "411 bp", required_any_flags=frozenset({"pcr_0_1"})),
+        FaireExtractionField("pcr_reaction_volume", "total PCR reaction volume", "amplificationReactionVolume", "25 uL", required_any_flags=frozenset({"pcr_0_1"})),
+        FaireExtractionField("template_dna_volume", "template DNA volume added per PCR reaction", "pcr_dna_vol", "2 uL", required_any_flags=frozenset({"pcr_0_1"})),
+        FaireExtractionField("thermocycler", "thermocycler manufacturer and model", "thermocycler", required_any_flags=frozenset({"pcr_0_1"})),
+        FaireExtractionField("annealing_temperature", "PCR annealing temperature", "annealingTemp", "55C", required_any_flags=frozenset({"pcr_0_1"})),
+        FaireExtractionField("pcr_cycle_count", "number of PCR cycles", "pcr_cycles", "35", required_any_flags=frozenset({"pcr_0_1"})),
+        FaireExtractionField("pcr_conditions", "full description of PCR reaction conditions/thermal profile", "pcr_cond", required_any_flags=frozenset({"pcr_0_1"})),
+        FaireExtractionField("commercial_master_mix", "commercial master mix name/brand, if one was used", "commercial_mm", required_any_flags=frozenset({"pcr_0_1"})),
+        FaireExtractionField("custom_master_mix", "custom master mix composition, if a commercial one was not used", "custom_mm", required_any_flags=frozenset({"pcr_0_1"})),
+        FaireExtractionField(
+            "probe_sequence",
+            "hydrolysis/TaqMan probe sequence, 5' to 3', if a probe-based qPCR/ddPCR assay was used",
+            "probe_seq",
+            required_any_flags=frozenset({"pcr_0_1", "probe_based_qPCR_ddPCR_assay_0_1"}),
+        ),
+        FaireExtractionField(
+            "probe_concentration",
+            "the probe's STOCK concentration (not the final in-reaction concentration), if a probe-based qPCR/ddPCR assay was used",
+            "probe_conc",
+            "5 uM",
+            required_any_flags=frozenset({"pcr_0_1", "probe_based_qPCR_ddPCR_assay_0_1"}),
+        ),
+        FaireExtractionField(
+            "assay_target_taxa",
+            "the taxon/taxa or species name(s) targeted by the primers/probes/other approach used in the PCR",
+            "targetTaxonomicAssay",
+            required_any_flags=frozenset({"pcr_0_1"}),
+        ),
+        FaireExtractionField(
+            "assay_validation",
+            "how the assay was validated for specificity (e.g. in-silico, in-vitro, in-situ validation, Sanger sequencing, repeat analysis with an alternate assay, intra/inter-species tests)",
+            "assay_validation",
+            required_any_flags=frozenset({"pcr_0_1"}),
+        ),
+        FaireExtractionField(
+            "study_target_taxonomic_scope",
+            "the broader taxonomic group(s) targeted by the STUDY as a whole, which can differ from assay_target_taxa (e.g. assay targets Chordata, but the study's scope is Chondrichthyes -- sharks and rays)",
+            "targetTaxonomicScope",
+            required_any_flags=frozenset({"pcr_0_1"}),
+        ),
     ),
     "Controls & replicates": (
         FaireExtractionField("negative_control_type", "type of negative control used", "neg_cont_type", "extraction blank"),
         FaireExtractionField("positive_control_type", "type of positive control used", "pos_cont_type", "synthetic DNA standard"),
-        FaireExtractionField("biological_replicate_count", "number of biological replicates collected per sample/treatment", "biological_rep", "3"),
-        FaireExtractionField("pcr_replicate_count", "number of PCR technical replicates per sample", "pcr_rep", "3"),
+        FaireExtractionField("biological_replicate_count", "number of biological replicates collected per sample/treatment", "biological_rep", "3", required_any_flags=frozenset({"pcr_0_1"})),
+        FaireExtractionField("pcr_replicate_count", "number of PCR technical replicates per sample", "pcr_rep", "3", required_any_flags=frozenset({"pcr_0_1"})),
     ),
     "qPCR / standard curve": (
         FaireExtractionField("quantification_cycle_threshold", "the fluorescence threshold value used for Cq/Ct", "thresholdQuantificationCycle"),
@@ -323,13 +391,19 @@ def field_names_for_reference(
     exclude_faire_hints: frozenset[str] = frozenset(),
     include_group_names: frozenset[str] | None = None,
     include_fallback_names: frozenset[str] | None = None,
+    active_flags: frozenset[str] = frozenset(),
 ) -> frozenset[str]:
     excluded_hints = exclude_faire_hints | LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS
     names: set[str] = set()
     for group_name, fields in FIELD_GROUPS.items():
         if include_group_names is not None and group_name not in include_group_names:
             continue
-        names.update(f.native_name for f in fields if f.faire_hint not in excluded_hints)
+        names.update(
+            f.native_name
+            for f in fields
+            if f.faire_hint not in excluded_hints
+            and (not f.required_any_flags or (f.required_any_flags & active_flags))
+        )
     names.update(
         f.native_name
         for f in FALLBACK_NARRATIVE_FIELDS
@@ -344,6 +418,7 @@ def render_field_reference(
     include_group_names: frozenset[str] | None = None,
     include_fallback_names: frozenset[str] | None = None,
     include_native_names: frozenset[str] | None = None,
+    active_flags: frozenset[str] = frozenset(),
 ) -> str:
     """Renders FIELD_GROUPS + FALLBACK_NARRATIVE_FIELDS as the itemized,
     group-headed checklist `extraction/text.py`'s prompt embeds -- one
@@ -364,6 +439,16 @@ def render_field_reference(
     LLM_EXCLUDED_OPTIONAL_NATIVE_FIELDS. A group left with zero remaining
     entries is omitted rather than rendered as an empty heading.
 
+    `active_flags` drops any field whose `required_any_flags` is non-empty
+    and shares nothing with it -- e.g. a paper with no detected PCR
+    evidence (extraction/search_flags.py's `pcr_0_1`) never even sees the
+    "PCR / assay setup" checklist. Mirrors
+    search_flags.detect_controlled_search_facts's own identical
+    `required_any_flags & active_flags` check, for the same deterministic-
+    flag vocabulary. Empty (the default) means every conditional field is
+    hidden -- callers that care about a flag-gated group must pass real
+    flags explicitly, never assume they're shown by default.
+
     `include_group_names` and `include_fallback_names` let extraction/text.py
     render smaller topic-focused checklists for local 4B models while still
     drawing every concept from this same taxonomy.
@@ -378,6 +463,7 @@ def render_field_reference(
             for f in fields
             if f.faire_hint not in excluded_hints
             and (include_native_names is None or f.native_name in include_native_names)
+            and (not f.required_any_flags or (f.required_any_flags & active_flags))
         ]
         if not remaining:
             continue

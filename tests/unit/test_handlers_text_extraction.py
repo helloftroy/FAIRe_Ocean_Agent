@@ -143,9 +143,20 @@ def test_handler_materializes_a_real_entity_per_assay_tag(db_session, monkeypatc
     """Two distinct assays' primer facts (assay_tag on the LLM response)
     must each get a real Entity + RawFact.entity_id -- not collapse into
     one untethered study-wide fact -- so mapping/faire.py can produce
-    separate projectMetadata rows for each assay downstream."""
+    separate projectMetadata rows for each assay downstream.
+
+    annealing_temperature is now gated on pcr_0_1 (extraction/faire_fields.py's
+    required_any_flags) -- the fake fulltext must genuinely mention PCR so
+    the real deterministic detector activates the flag and the mocked
+    LLM response's gated facts aren't filtered out by allowed_fact_types."""
     study = _seeded_study_with_pmcid(db_session)
     task = _task_for(db_session, study)
+
+    pcr_fulltext_xml = """<article><body>
+<sec><title>Materials and Methods</title>
+<sec><title>Sampling</title><p>PCR reactions used primers for 16S and 18S targets at varying annealing temperatures.</p></sec>
+</sec>
+</body></article>"""
 
     response = json.dumps(
         [
@@ -164,7 +175,9 @@ def test_handler_materializes_a_real_entity_per_assay_tag(db_session, monkeypatc
         ]
     )
     handlers._llm_backend_cache = MockLLMBackend(label="mock-model", responses=[response])
-    monkeypatch.setattr(handlers, "_build_enabled_adapters", lambda: {"europe_pmc": FakeEuropePmcAdapter()})
+    monkeypatch.setattr(
+        handlers, "_build_enabled_adapters", lambda: {"europe_pmc": FakeEuropePmcAdapter(fulltext_xml=pcr_fulltext_xml)}
+    )
 
     handlers.handle_extract_text_facts(db_session, task)
     db_session.commit()

@@ -54,8 +54,11 @@ def test_native_names_never_equal_a_faire_hint_of_another_field():
             )
 
 
+_ALL_FLAGS = frozenset({"pcr_0_1", "probe_based_qPCR_ddPCR_assay_0_1"})
+
+
 def test_render_field_reference_includes_every_field_and_group_header():
-    rendered = render_field_reference()
+    rendered = render_field_reference(active_flags=_ALL_FLAGS)
     for group_name, fields in FIELD_GROUPS.items():
         assert f"{group_name}:" in rendered
         for f in fields:
@@ -66,7 +69,7 @@ def test_render_field_reference_includes_every_field_and_group_header():
 
 
 def test_render_field_reference_includes_faire_hints():
-    rendered = render_field_reference()
+    rendered = render_field_reference(active_flags=_ALL_FLAGS)
     for hint in all_faire_hints() - LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS:
         assert hint in rendered
 
@@ -114,6 +117,36 @@ def test_native_name_to_faire_hint_round_trips_a_known_field():
     assert mapping["standard_curve_r_squared"] == "r2"
 
 
+def test_controlled_search_field_overlaps_are_excluded_or_flag_gated():
+    """Standing guard against the exact failure mode this task fixed:
+    search_flags.CONTROLLED_SEARCH_FIELDS and this taxonomy can both cover
+    the same real-world concept under two different mechanisms (a
+    deterministic curated-term matcher and the LLM checklist). Every
+    CONTROLLED_SEARCH_FIELDS term_name that also appears here (as a
+    native_name or a faire_hint) must be handled deliberately -- either
+    fully excluded (LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS, when there's no
+    natural flag to gate on, e.g. seq_kit) or flag-gated
+    (required_any_flags, when the LLM should stay a richer complement,
+    e.g. target_gene/thermocycler/commercial_master_mix/assay_type) --
+    never left silently duplicated. Catches the next new deterministic
+    detector landing without its LLM-side twin being reconciled, the way
+    assay_type/biological_rep both did mid-development of this very test."""
+    from fair_ocean_agent.extraction.search_flags import CONTROLLED_SEARCH_FIELDS
+
+    controlled_names = {f.term_name for f in CONTROLLED_SEARCH_FIELDS}
+    for fields in FIELD_GROUPS.values():
+        for f in fields:
+            if f.native_name not in controlled_names and f.faire_hint not in controlled_names:
+                continue
+            handled = f.faire_hint in LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS or bool(f.required_any_flags)
+            assert handled, (
+                f"{f.native_name!r} (hint {f.faire_hint!r}) duplicates a "
+                "search_flags.CONTROLLED_SEARCH_FIELDS entry but is neither "
+                "excluded nor flag-gated -- both mechanisms would fire for "
+                "the same real fact"
+            )
+
+
 def test_assay_scoped_field_names_is_subset_of_all_field_names():
     assert assay_scoped_field_names() <= all_field_names()
 
@@ -145,7 +178,7 @@ def test_assay_scoped_field_names_includes_pcr_and_qpcr_fields():
 
 
 def test_render_field_reference_omits_excluded_faire_hints():
-    rendered = render_field_reference(exclude_faire_hints=frozenset({"annealingTemp"}))
+    rendered = render_field_reference(exclude_faire_hints=frozenset({"annealingTemp"}), active_flags=_ALL_FLAGS)
     assert "annealing_temperature" not in rendered
     assert "annealingTemp" not in rendered
     # An unrelated concept in the same group must still be present.
@@ -157,7 +190,7 @@ def test_render_field_reference_omits_group_left_empty_by_exclusion():
     whole group heading too -- an empty "DNA extraction:" heading with no
     bullets under it would confuse the model, not help it."""
     dna_hints = frozenset(f.faire_hint for f in FIELD_GROUPS["DNA extraction"])
-    rendered = render_field_reference(exclude_faire_hints=dna_hints)
+    rendered = render_field_reference(exclude_faire_hints=dna_hints, active_flags=_ALL_FLAGS)
     assert "DNA extraction:" not in rendered
     # A different, non-excluded group must still render.
     assert "PCR / assay setup:" in rendered
@@ -205,6 +238,7 @@ def test_low_value_optional_fields_are_excluded_from_llm_only():
             "platform",
             "instrument",
             "lib_layout",
+            "seq_kit",
         }
     )
     rendered = render_field_reference()

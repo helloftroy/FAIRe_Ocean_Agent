@@ -611,6 +611,35 @@ def handle_extract_supplement_text_facts(session: Session, task: Task) -> None:
 
     for prepared in pending:
         already_present = present_faire_fields_for_study(session, study.study_id)
+
+        # Deterministic flag/controlled-search detection must run BEFORE the
+        # LLM extraction call below, not after: extract_facts_from_section's
+        # own active_flags parameter (extraction/faire_fields.py's
+        # required_any_flags gating, e.g. the "PCR / assay setup" checklist
+        # group requiring pcr_0_1) needs these flags in hand first, so a
+        # gated field is only ever asked about when this document's own
+        # text genuinely triggered the flag. Mirrors workflow/handlers.py's
+        # handle_extract_text_facts, which already computes its flags
+        # before its own extraction loop.
+        source = session.get(Source, prepared.source_id)
+        if source is None:
+            raise ValueError(f"Source {prepared.source_id} not found")
+        prepared_texts = ((prepared.title, prepared.text_content),)
+        locator_prefix = f"prepared_source_text:{prepared.prepared_source_text_id}"
+        flag_facts = detect_text_search_flags(prepared_texts, locator_prefix=locator_prefix)
+        active_flags = frozenset(fact.fact_type_candidate for fact in flag_facts)
+        controlled_search_facts = detect_controlled_search_facts(
+            prepared_texts,
+            locator_prefix=locator_prefix,
+            active_flags=active_flags,
+        )
+        llm_judged_search_facts = detect_llm_judged_search_facts(
+            backend,
+            prepared_texts,
+            locator_prefix=locator_prefix,
+            max_output_tokens=512,
+        )
+
         try:
             facts, response = extract_facts_from_section(
                 backend,
@@ -619,6 +648,7 @@ def handle_extract_supplement_text_facts(session: Session, task: Task) -> None:
                 exclude_faire_hints=already_present,
                 max_section_chars_per_call=llm_config.extraction_max_chars_per_call,
                 max_output_tokens=llm_config.max_output_tokens,
+                active_flags=active_flags,
             )
         except LLMBackendError as exc:
             logger.warning(
@@ -634,23 +664,6 @@ def handle_extract_supplement_text_facts(session: Session, task: Task) -> None:
                 f"for study {study.study_id} text {prepared.prepared_source_text_id}"
             )
 
-        source = session.get(Source, prepared.source_id)
-        if source is None:
-            raise ValueError(f"Source {prepared.source_id} not found")
-        prepared_texts = ((prepared.title, prepared.text_content),)
-        locator_prefix = f"prepared_source_text:{prepared.prepared_source_text_id}"
-        flag_facts = detect_text_search_flags(prepared_texts, locator_prefix=locator_prefix)
-        controlled_search_facts = detect_controlled_search_facts(
-            prepared_texts,
-            locator_prefix=locator_prefix,
-            active_flags=frozenset(fact.fact_type_candidate for fact in flag_facts),
-        )
-        llm_judged_search_facts = detect_llm_judged_search_facts(
-            backend,
-            prepared_texts,
-            locator_prefix=locator_prefix,
-            max_output_tokens=512,
-        )
         _persist_supplement_facts(
             session,
             study,

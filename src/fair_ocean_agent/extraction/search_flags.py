@@ -80,7 +80,12 @@ TEXT_SEARCH_FLAGS: tuple[TextSearchFlag, ...] = (
             re.compile(r"\bPCR\b", re.IGNORECASE),
             re.compile(r"\bqPCR\b", re.IGNORECASE),
             re.compile(r"\bddPCR\b", re.IGNORECASE),
-            re.compile(r"\bamplification\b", re.IGNORECASE),
+            # \bamplification\b alone missed a real gold case ("...was
+            # amplified using primers...") -- amplif\w* also matches
+            # amplify/amplified/amplifying/amplifies, every PCR-relevant
+            # verb form, with no real false-positive risk (no common
+            # English word besides these starts with "amplif").
+            re.compile(r"\bamplif\w*\b", re.IGNORECASE),
             re.compile(r"\bpolymerase\s+chain\s+reaction\b", re.IGNORECASE),
         ),
     ),

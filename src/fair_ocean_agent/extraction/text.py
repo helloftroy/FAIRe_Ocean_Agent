@@ -78,6 +78,33 @@ paper/supplement extraction. Python supplies only search-term-matched
 sentences with stable quote IDs, the model returns field/value/quote_id,
 and Python stores the literal supporting quote itself.
 
+**v15 -> v16: the LLM checklist itself is now conditionally gated on the
+same deterministic flags the pre-LLM pass already computes.**
+`extraction/faire_fields.py`'s taxonomy entries can now carry
+`required_any_flags` (mirroring `search_flags.ControlledSearchField`'s own
+field, for consistency -- one gating vocabulary shared by both the
+deterministic and LLM sides, not two). The entire "PCR / assay setup"
+group (primers, target gene, thermal profile, master mix, ...) requires
+`pcr_0_1`; the two new probe fields (`probe_sequence`/
+`probe_concentration`) additionally accept `probe_based_qPCR_ddPCR_assay_0_1`.
+A non-PCR paper's checklist genuinely shrinks now instead of always
+showing the full PCR section; a PCR paper's checklist genuinely includes
+it, matching a real NOAA FAIRe checklist's own per-field
+conditional-requirement column. `target_gene`/`thermocycler`/
+`commercial_master_mix`/`assay_type`/`biological_replicate_count` were
+also gated (not excluded) here even though
+`search_flags.CONTROLLED_SEARCH_FIELDS` already covers the same concepts
+deterministically -- checked real gold data first and found that
+deterministic path is literal-substring matching against a curated term
+list, not free-text extraction, and it demonstrably misses or mangles
+real values a careful LLM read would get right; gating keeps the LLM as
+the richer complement instead of replacing it. `active_flags` (the new
+parameter on `extract_facts_from_section`/`build_prompt`/
+`build_extraction_instructions`) governs both what the prompt shows AND
+what `allowed_fact_types` accepts back on the main and recall passes, so
+a gated field can never sneak through a hallucinated response even when
+it was never shown.
+
 **v9 -> v10: optional per-fact `assay_tag` for multi-assay papers.** A
 paper can describe more than one distinct assay run on the same samples
 (e.g. a 16S PCR assay and an 18S PCR assay), each with its own primers,
@@ -178,7 +205,7 @@ from fair_ocean_agent.llm.base import LLMBackend, LLMResponse
 from fair_ocean_agent.mapping.faire import TARGET_SCHEMA
 from fair_ocean_agent.sources.base import RawFactCandidate
 
-PROMPT_VERSION = "text-extraction-v15-library-prep-quote-judgement"
+PROMPT_VERSION = "text-extraction-v16-flag-gated-pcr-checklist"
 DEFAULT_MAX_SECTION_CHARS_PER_CALL = 1600
 
 ABSENT_RAW_VALUE_STRINGS = frozenset(
@@ -431,12 +458,14 @@ def build_extraction_instructions(
     focus: ExtractionFocus | None = None,
     include_native_names: frozenset[str] | None = None,
     recall_pass: bool = False,
+    active_flags: frozenset[str] = frozenset(),
 ) -> str:
     field_reference = render_field_reference(
         exclude_faire_hints,
         include_group_names=focus.group_names if focus else None,
         include_fallback_names=focus.fallback_names if focus else None,
         include_native_names=include_native_names,
+        active_flags=active_flags,
     )
     focus_sentence = (
         f"This focused pass is only for {focus.description}. "
@@ -578,8 +607,11 @@ def build_prompt(
     focus: ExtractionFocus | None = None,
     include_native_names: frozenset[str] | None = None,
     recall_pass: bool = False,
+    active_flags: frozenset[str] = frozenset(),
 ) -> str:
-    instructions = build_extraction_instructions(exclude_faire_hints, focus, include_native_names, recall_pass)
+    instructions = build_extraction_instructions(
+        exclude_faire_hints, focus, include_native_names, recall_pass, active_flags=active_flags
+    )
     source_segments = segments if segments is not None else segment_source_text(section_title, section_text)
     return PROMPT_TEMPLATE.format(
         instructions=instructions,
@@ -690,15 +722,17 @@ def segments_for_focus(
 def fact_type_names_for_focus(
     focus: ExtractionFocus | None,
     exclude_faire_hints: frozenset[str] = frozenset(),
+    active_flags: frozenset[str] = frozenset(),
 ) -> frozenset[str]:
     """`focus=None` returns every checklist name (all groups, all fallback
     names) -- no topic restriction."""
     if focus is None:
-        return field_names_for_reference(exclude_faire_hints)
+        return field_names_for_reference(exclude_faire_hints, active_flags=active_flags)
     return field_names_for_reference(
         exclude_faire_hints,
         include_group_names=focus.group_names,
         include_fallback_names=focus.fallback_names,
+        active_flags=active_flags,
     )
 
 
@@ -715,8 +749,9 @@ def recall_missing_fact_types(
     exclude_faire_hints: frozenset[str],
     accepted_fact_types: set[str],
     segments: list[SourceSegment],
+    active_flags: frozenset[str] = frozenset(),
 ) -> frozenset[str]:
-    missing_types = set(fact_type_names_for_focus(focus, exclude_faire_hints) - accepted_fact_types)
+    missing_types = set(fact_type_names_for_focus(focus, exclude_faire_hints, active_flags=active_flags) - accepted_fact_types)
 
     # Small models often confuse primer names (e.g. MiFish-U-F) with primer
     # sequences on a recall pass. Only ask for sequence fields when the text
@@ -737,6 +772,7 @@ def extract_facts_from_section(
     max_output_tokens: int | None = None,
     focuses: tuple[ExtractionFocus | None, ...] = (None,),
     recall_second_pass: bool = True,
+    active_flags: frozenset[str] = frozenset(),
 ) -> tuple[list[RawFactCandidate], LLMResponse | None]:
     """Returns (verified facts, the last LLMResponse -- for latency/token
     bookkeeping by the caller). An empty fact list can mean either "the
@@ -769,7 +805,18 @@ def extract_facts_from_section(
     ZERO facts (a real parse failure or the model missing everything) --
     it does not retry merely because some checklist concepts went
     unmentioned, since most real sections never mention every concept and
-    retrying on partial coverage doubled call volume for little benefit."""
+    retrying on partial coverage doubled call volume for little benefit.
+
+    `active_flags` gates conditional taxonomy fields (extraction/faire_fields.py's
+    `required_any_flags`, e.g. the whole "PCR / assay setup" group requires
+    `pcr_0_1`) -- both what the prompt shows the model AND what
+    `allowed_fact_types` accepts back, on both the main and recall passes,
+    so a gated field can never sneak through via the recall pass or a
+    hallucinated response even though it was never shown. Empty (the
+    default) hides every conditional field -- a caller with real
+    deterministic-flag facts already computed (see
+    extraction/search_flags.py's detect_text_search_flags, already run
+    before this in every production call site) must pass them explicitly."""
     segments = segment_source_text(section_title, section_text)
     segment_chunks = split_segments_for_calls(segments, max_section_chars_per_call)
     if not segment_chunks:
@@ -794,6 +841,7 @@ def extract_facts_from_section(
                 exclude_faire_hints,
                 segments=focused_segments,
                 focus=focus,
+                active_flags=active_flags,
             )
             parsed, response = backend.generate_json(prompt, temperature=0, max_tokens=max_output_tokens)
             last_response = response
@@ -806,7 +854,7 @@ def extract_facts_from_section(
                     segment_lookup,
                     focused_title,
                     seen,
-                    allowed_fact_types=fact_type_names_for_focus(focus, exclude_faire_hints),
+                    allowed_fact_types=fact_type_names_for_focus(focus, exclude_faire_hints, active_flags=active_flags),
                 )
                 facts.extend(accepted_facts)
 
@@ -820,6 +868,7 @@ def extract_facts_from_section(
                 exclude_faire_hints,
                 {fact.fact_type_candidate for fact in accepted_facts},
                 focused_segments,
+                active_flags=active_flags,
             )
             if not missing_types:
                 continue
@@ -831,6 +880,7 @@ def extract_facts_from_section(
                 focus=focus,
                 include_native_names=missing_types,
                 recall_pass=True,
+                active_flags=active_flags,
             )
             parsed, response = backend.generate_json(recall_prompt, temperature=0, max_tokens=max_output_tokens)
             last_response = response

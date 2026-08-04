@@ -1011,10 +1011,11 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
     section_texts = tuple((section["title"], section["text"]) for section in sections)
     locator_prefix = f"europe_pmc_fulltext:{pmcid}"
     flag_facts = detect_text_search_flags(section_texts, locator_prefix=locator_prefix)
+    active_flags = frozenset(fact.fact_type_candidate for fact in flag_facts)
     controlled_search_facts = detect_controlled_search_facts(
         section_texts,
         locator_prefix=locator_prefix,
-        active_flags=frozenset(fact.fact_type_candidate for fact in flag_facts),
+        active_flags=active_flags,
     )
     _persist_candidate_facts(
         session,
@@ -1051,6 +1052,7 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
                 exclude_faire_hints=already_resolved,
                 max_section_chars_per_call=llm_config.extraction_max_chars_per_call,
                 max_output_tokens=llm_config.max_output_tokens,
+                active_flags=active_flags,
             )
         except LLMBackendError as exc:
             logger.warning(
