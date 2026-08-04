@@ -32,6 +32,7 @@ class ControlledSearchField:
     description: str
     search_terms: tuple[str, ...]
     required_any_flags: frozenset[str] = frozenset()
+    value_strategy: str = "literal_matches"
 
 
 TEXT_SEARCH_FLAGS: tuple[TextSearchFlag, ...] = (
@@ -116,6 +117,84 @@ TEXT_SEARCH_FLAGS: tuple[TextSearchFlag, ...] = (
 )
 
 CONTROLLED_SEARCH_FIELDS: tuple[ControlledSearchField, ...] = (
+    ControlledSearchField(
+        term_name="sterilise_method",
+        section="Project",
+        description="Explicit contamination-minimization procedures, retained as direct source text.",
+        value_strategy="evidence_sentences",
+        search_terms=(
+            "contamination control",
+            "single-use equipment",
+            "separate pre-PCR",
+            "decontamination",
+            "decontaminate",
+            "cleaned with",
+            "rinsed with",
+            "sodium hypochlorite",
+            "flame sterilised",
+            "sterilise",
+            "sterilize",
+            "DNA Away",
+            "DNAZap",
+            "clean room",
+            "bleach",
+            "ethanol",
+            "UV-C",
+            "autoclave",
+            "UV",
+        ),
+    ),
+    ControlledSearchField(
+        term_name="biological_rep",
+        section="Sample collection",
+        description=(
+            "Number of independently collected biological/environmental samples at each sampling "
+            "point or treatment; never PCR, extraction, filtration, sequencing, or analytical replicates."
+        ),
+        value_strategy="biological_replicate_integer",
+        search_terms=(
+            "biological replicates",
+            "biological replicate",
+            "independent replicate",
+            "replicate samples",
+            "samples per site",
+            "samples per station",
+            "replicates per site",
+            "replicates per treatment",
+            "collected in duplicate",
+            "collected in triplicate",
+            "three independent samples",
+            "replicate water samples",
+            "replicate sediment samples",
+            "n =",
+            "n=",
+        ),
+    ),
+    ControlledSearchField(
+        term_name="assay_type",
+        section="PCR",
+        description="Fixed vocabulary classifier: targeted | metabarcoding | other | unknown.",
+        value_strategy="assay_type_classifier",
+        search_terms=(
+            "quantitative PCR",
+            "digital PCR",
+            "species-specific",
+            "taxon-specific",
+            "targeted assay",
+            "hydrolysis probe",
+            "qPCR",
+            "ddPCR",
+            "TaqMan",
+            "metabarcoding",
+            "community profiling",
+            "amplicon sequencing",
+            "biodiversity assessment",
+            "high-throughput sequencing",
+            "multiple taxa",
+            "universal primers",
+            "HTS",
+        ),
+    ),
     ControlledSearchField(
         term_name="seq_kit",
         section="Library preparation sequencing",
@@ -587,6 +666,59 @@ CONTROLLED_SEARCH_FIELDS: tuple[ControlledSearchField, ...] = (
 )
 
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+_BIOLOGICAL_REPLICATE_EXCLUSION_RE = re.compile(
+    r"\b(PCR|technical|extraction|filtration|sequencing|analytical|library|qPCR|ddPCR)\s+replicates?\b",
+    re.IGNORECASE,
+)
+_BIOLOGICAL_REPLICATE_CONTEXT_RE = re.compile(
+    r"\b(biological|environmental|independent|collected|samples?|sites?|stations?|treatments?|water|sediment)\b",
+    re.IGNORECASE,
+)
+_BIOLOGICAL_REPLICATE_PATTERNS: tuple[tuple[re.Pattern[str], dict[str, str]], ...] = (
+    (re.compile(r"\bcollected\s+in\s+duplicate\b", re.IGNORECASE), {"value": "2"}),
+    (re.compile(r"\bcollected\s+in\s+triplicate\b", re.IGNORECASE), {"value": "3"}),
+    (re.compile(r"\bthree\s+independent\s+samples?\b", re.IGNORECASE), {"value": "3"}),
+    (re.compile(r"\btwo\s+independent\s+samples?\b", re.IGNORECASE), {"value": "2"}),
+    (re.compile(r"\b(?P<num>\d+)\s+(?:biological|environmental|independent)\s+replicates?\b", re.IGNORECASE), {}),
+    (re.compile(r"\b(?:biological|environmental|independent)\s+replicates?\s*(?:\(?\s*n\s*=\s*)?(?P<num>\d+)\b", re.IGNORECASE), {}),
+    (re.compile(r"\b(?P<num>\d+)\s+replicate\s+(?:water|sediment|environmental\s+)?samples?\b", re.IGNORECASE), {}),
+    (re.compile(r"\breplicate\s+(?:water|sediment|environmental\s+)?samples?\s*(?:\(?\s*n\s*=\s*)?(?P<num>\d+)\b", re.IGNORECASE), {}),
+    (re.compile(r"\b(?P<num>\d+)\s+samples?\s+per\s+(?:site|station|treatment)\b", re.IGNORECASE), {}),
+    (re.compile(r"\bsamples?\s+per\s+(?:site|station|treatment)\s*(?:=|:|was|were)?\s*(?P<num>\d+)\b", re.IGNORECASE), {}),
+    (re.compile(r"\b(?P<num>\d+)\s+replicates?\s+per\s+(?:site|station|treatment)\b", re.IGNORECASE), {}),
+    (re.compile(r"\breplicates?\s+per\s+(?:site|station|treatment)\s*(?:=|:|was|were)?\s*(?P<num>\d+)\b", re.IGNORECASE), {}),
+    (re.compile(r"\bn\s*=\s*(?P<num>\d+)\b", re.IGNORECASE), {"needs_context": "1"}),
+)
+
+_ASSAY_TYPE_CUES: tuple[tuple[str, tuple[re.Pattern[str], ...]], ...] = (
+    (
+        "targeted",
+        (
+            re.compile(r"\bquantitative\s+PCR\b", re.IGNORECASE),
+            re.compile(r"\bdigital\s+PCR\b", re.IGNORECASE),
+            re.compile(r"\bspecies[-\s]+specific\b", re.IGNORECASE),
+            re.compile(r"\btaxon[-\s]+specific\b", re.IGNORECASE),
+            re.compile(r"\btargeted\s+assay\b", re.IGNORECASE),
+            re.compile(r"\bhydrolysis\s+probe(s)?\b", re.IGNORECASE),
+            re.compile(r"\bqPCR\b", re.IGNORECASE),
+            re.compile(r"\bddPCR\b", re.IGNORECASE),
+            re.compile(r"\bTaqMan\b", re.IGNORECASE),
+        ),
+    ),
+    (
+        "metabarcoding",
+        (
+            re.compile(r"\bmetabarcoding\b", re.IGNORECASE),
+            re.compile(r"\bcommunity\s+profiling\b", re.IGNORECASE),
+            re.compile(r"\bamplicon\s+sequencing\b", re.IGNORECASE),
+            re.compile(r"\bbiodiversity\s+assessment\b", re.IGNORECASE),
+            re.compile(r"\bhigh[-\s]+throughput\s+sequencing\b", re.IGNORECASE),
+            re.compile(r"\bmultiple\s+taxa\b", re.IGNORECASE),
+            re.compile(r"\buniversal\s+primers\b", re.IGNORECASE),
+            re.compile(r"\bHTS\b"),
+        ),
+    ),
+)
 
 
 def _snippets(text: str) -> Iterable[tuple[int, str]]:
@@ -678,6 +810,119 @@ def _match_controlled_terms(
     return values, evidence_quotes, match_metadata
 
 
+def _match_controlled_sentences(
+    field: ControlledSearchField,
+    texts: Iterable[tuple[str, str]],
+    locator_prefix: str,
+) -> tuple[list[str], list[str], list[dict]]:
+    patterns = [
+        (term, _term_pattern(term))
+        for term in sorted(field.search_terms, key=len, reverse=True)
+        if term.strip()
+    ]
+    values: list[str] = []
+    match_metadata: list[dict] = []
+    seen_sentences: set[str] = set()
+    for title, text in texts:
+        for snippet_index, snippet in _snippets(text):
+            matched_terms = tuple(
+                term
+                for term, pattern in patterns
+                if pattern.search(snippet)
+            )
+            if not matched_terms or snippet in seen_sentences:
+                continue
+            seen_sentences.add(snippet)
+            values.append(snippet)
+            match_metadata.append(
+                {
+                    "matched_terms": list(matched_terms),
+                    "source_locator": f"{locator_prefix}:{title}:sentence[{snippet_index}]",
+                }
+            )
+    return values, values, match_metadata
+
+
+def _match_biological_replicates(
+    field: ControlledSearchField,
+    texts: Iterable[tuple[str, str]],
+    locator_prefix: str,
+) -> tuple[list[str], list[str], list[dict]]:
+    values: list[str] = []
+    evidence_quotes: list[str] = []
+    match_metadata: list[dict] = []
+    seen_values: set[str] = set()
+    for title, text in texts:
+        for snippet_index, snippet in _snippets(text):
+            if _BIOLOGICAL_REPLICATE_EXCLUSION_RE.search(snippet):
+                continue
+            for pattern, options in _BIOLOGICAL_REPLICATE_PATTERNS:
+                match = pattern.search(snippet)
+                if match is None:
+                    continue
+                if options.get("needs_context") and not _BIOLOGICAL_REPLICATE_CONTEXT_RE.search(snippet):
+                    continue
+                value = options.get("value") or match.group("num")
+                if value in seen_values:
+                    continue
+                seen_values.add(value)
+                values.append(value)
+                if snippet not in evidence_quotes:
+                    evidence_quotes.append(snippet)
+                match_metadata.append(
+                    {
+                        "matched_value": value,
+                        "matched_pattern": pattern.pattern,
+                        "source_locator": f"{locator_prefix}:{title}:sentence[{snippet_index}]",
+                    }
+                )
+                break
+    return values, evidence_quotes, match_metadata
+
+
+def _classify_assay_type(
+    field: ControlledSearchField,
+    texts: Iterable[tuple[str, str]],
+    locator_prefix: str,
+) -> tuple[list[str], list[str], list[dict]]:
+    values: list[str] = []
+    evidence_quotes: list[str] = []
+    match_metadata: list[dict] = []
+    seen_values: set[str] = set()
+    for title, text in texts:
+        for snippet_index, snippet in _snippets(text):
+            for assay_type, patterns in _ASSAY_TYPE_CUES:
+                matches = _snippet_matches(patterns, snippet)
+                if not matches or assay_type in seen_values:
+                    continue
+                seen_values.add(assay_type)
+                values.append(assay_type)
+                if snippet not in evidence_quotes:
+                    evidence_quotes.append(snippet)
+                match_metadata.append(
+                    {
+                        "matched_value": assay_type,
+                        "matched_terms": list(matches),
+                        "source_locator": f"{locator_prefix}:{title}:sentence[{snippet_index}]",
+                    }
+                )
+    return values, evidence_quotes, match_metadata
+
+
+def _match_controlled_field(
+    field: ControlledSearchField,
+    texts: Iterable[tuple[str, str]],
+    locator_prefix: str,
+) -> tuple[list[str], list[str], list[dict]]:
+    if field.value_strategy == "evidence_sentences":
+        return _match_controlled_sentences(field, texts, locator_prefix)
+    if field.value_strategy == "biological_replicate_integer":
+        return _match_biological_replicates(field, texts, locator_prefix)
+    if field.value_strategy == "assay_type_classifier":
+        return _classify_assay_type(field, texts, locator_prefix)
+    return _match_controlled_terms(field, texts, locator_prefix)
+
+
 def detect_text_search_flags(
     texts: Iterable[tuple[str, str]],
     *,
@@ -737,7 +982,7 @@ def detect_controlled_search_facts(
     for field in CONTROLLED_SEARCH_FIELDS:
         if field.required_any_flags and not (field.required_any_flags & active_flags):
             continue
-        values, evidence_quotes, match_metadata = _match_controlled_terms(
+        values, evidence_quotes, match_metadata = _match_controlled_field(
             field,
             reusable_texts,
             locator_prefix,

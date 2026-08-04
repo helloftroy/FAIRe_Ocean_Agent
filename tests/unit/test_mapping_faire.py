@@ -786,6 +786,9 @@ def test_controlled_text_search_project_facts_map_to_faire_with_review(db_sessio
     _fact(db_session, study, field="probeReporter", value="FAM", entity_level="study")
     _fact(db_session, study, field="probeQuencher", value="BHQ-1 | quencher", entity_level="study")
     _fact(db_session, study, field="commercial_mm", value="TaqMan", entity_level="study")
+    _fact(db_session, study, field="sterilise_method", value="Bottles were rinsed with bleach.", entity_level="study")
+    _fact(db_session, study, field="biological_rep", value="3", entity_level="study")
+    _fact(db_session, study, field="assay_type", value="targeted | metabarcoding", entity_level="study")
     _fact(db_session, study, field="neg_cont_0_1", value="1", entity_level="study", support=SupportType.DETERMINISTICALLY_DERIVED)
     _fact(db_session, study, field="pos_cont_0_1", value="0", entity_level="study", support=SupportType.DETERMINISTICALLY_DERIVED)
     _fact(db_session, study, field="sample_type", value="water", entity_level="study")
@@ -802,6 +805,9 @@ def test_controlled_text_search_project_facts_map_to_faire_with_review(db_sessio
     assert values["probeReporter"].standardized_value == "FAM"
     assert values["probeQuencher"].standardized_value == "BHQ-1 | quencher"
     assert values["commercial_mm"].standardized_value == "TaqMan"
+    assert values["sterilise_method"].standardized_value == "Bottles were rinsed with bleach."
+    assert values["biological_rep"].standardized_value == "3"
+    assert values["assay_type"].standardized_value == "targeted | metabarcoding"
     assert values["neg_cont_0_1"].standardized_value == "1"
     assert values["pos_cont_0_1"].standardized_value == "0"
     assert "sample_type" not in values

@@ -249,7 +249,7 @@ def test_extract_facts_from_section_chunks_long_text_and_merges_facts():
 
 
 def test_prompt_version_is_stable_constant():
-    assert PROMPT_VERSION == "text-extraction-v13-control-flags"
+    assert PROMPT_VERSION == "text-extraction-v14-method-classifier-fields"
 
 
 def test_recall_second_pass_does_not_fire_when_first_pass_finds_any_facts():

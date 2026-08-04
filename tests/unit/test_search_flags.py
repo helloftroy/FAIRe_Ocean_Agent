@@ -112,3 +112,61 @@ def test_detect_controlled_search_facts_skips_conditional_fields_without_flag():
     )
 
     assert {fact.fact_type_candidate for fact in controlled} == set()
+
+
+def test_detect_controlled_search_facts_extracts_sterilise_method_as_direct_quotes():
+    text = (
+        "Sampling bottles were rinsed with 10% bleach and DI water. "
+        "Single-use equipment was used during filtration. "
+        "Sterile technique was used by all staff."
+    )
+    controlled = detect_controlled_search_facts(
+        (("Methods", text),),
+        locator_prefix="paper:PMC1",
+        active_flags=frozenset(),
+    )
+
+    by_type = {fact.fact_type_candidate: fact for fact in controlled}
+    assert by_type["sterilise_method"].raw_value == (
+        "Sampling bottles were rinsed with 10% bleach and DI water. | "
+        "Single-use equipment was used during filtration."
+    )
+    assert "Sterile technique was used" not in by_type["sterilise_method"].raw_value
+    assert by_type["sterilise_method"].evidence_quote == by_type["sterilise_method"].raw_value
+
+
+def test_detect_controlled_search_facts_extracts_biological_rep_integer_not_pcr_reps():
+    text = (
+        "At each station, three independent samples were collected. "
+        "PCR reactions were performed in triplicate."
+    )
+    controlled = detect_controlled_search_facts(
+        (("Methods", text),),
+        locator_prefix="paper:PMC1",
+        active_flags=frozenset(),
+    )
+
+    by_type = {fact.fact_type_candidate: fact for fact in controlled}
+    assert by_type["biological_rep"].raw_value == "3"
+    assert by_type["biological_rep"].evidence_quote == (
+        "At each station, three independent samples were collected."
+    )
+
+
+def test_detect_controlled_search_facts_classifies_assay_type_and_keeps_evidence():
+    text = (
+        "We used qPCR with a hydrolysis probe for species-specific detection. "
+        "A separate metabarcoding workflow used universal primers for community profiling."
+    )
+    controlled = detect_controlled_search_facts(
+        (("Methods", text),),
+        locator_prefix="paper:PMC1",
+        active_flags=frozenset(),
+    )
+
+    by_type = {fact.fact_type_candidate: fact for fact in controlled}
+    assert by_type["assay_type"].raw_value == "targeted | metabarcoding"
+    assert by_type["assay_type"].evidence_quote == (
+        "We used qPCR with a hydrolysis probe for species-specific detection. | "
+        "A separate metabarcoding workflow used universal primers for community profiling."
+    )

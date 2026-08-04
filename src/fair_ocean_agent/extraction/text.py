@@ -65,6 +65,12 @@ evidence, `0` only from explicit "none/not used" evidence, and otherwise
 stay absent so downstream missingness remains unresolved/not found rather
 than a false zero.
 
+**v13 -> v14:** the same centralized deterministic pass now captures
+`sterilise_method` as direct contamination-minimization sentence text,
+`biological_rep` as an integer only from collection/sample replicate
+phrasing, and `assay_type` as a fixed-vocabulary cue classifier that may
+return both targeted and metabarcoding when both are explicitly evidenced.
+
 **v9 -> v10: optional per-fact `assay_tag` for multi-assay papers.** A
 paper can describe more than one distinct assay run on the same samples
 (e.g. a 16S PCR assay and an 18S PCR assay), each with its own primers,
@@ -165,7 +171,7 @@ from fair_ocean_agent.llm.base import LLMBackend, LLMResponse
 from fair_ocean_agent.mapping.faire import TARGET_SCHEMA
 from fair_ocean_agent.sources.base import RawFactCandidate
 
-PROMPT_VERSION = "text-extraction-v13-control-flags"
+PROMPT_VERSION = "text-extraction-v14-method-classifier-fields"
 DEFAULT_MAX_SECTION_CHARS_PER_CALL = 1600
 
 ABSENT_RAW_VALUE_STRINGS = frozenset(
