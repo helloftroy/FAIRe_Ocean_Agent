@@ -62,7 +62,11 @@ from fair_ocean_agent.database.models import (
     Study,
     Task,
 )
-from fair_ocean_agent.extraction.search_flags import detect_controlled_search_facts, detect_text_search_flags
+from fair_ocean_agent.extraction.search_flags import (
+    detect_controlled_search_facts,
+    detect_llm_judged_search_facts,
+    detect_text_search_flags,
+)
 from fair_ocean_agent.extraction.text import (
     PROMPT_VERSION,
     extract_facts_from_section,
@@ -641,12 +645,27 @@ def handle_extract_supplement_text_facts(session: Session, task: Task) -> None:
             locator_prefix=locator_prefix,
             active_flags=frozenset(fact.fact_type_candidate for fact in flag_facts),
         )
+        llm_judged_search_facts = detect_llm_judged_search_facts(
+            backend,
+            prepared_texts,
+            locator_prefix=locator_prefix,
+            max_output_tokens=512,
+        )
         _persist_supplement_facts(
             session,
             study,
             source,
             [*flag_facts, *controlled_search_facts],
             extraction_method="supplement_deterministic_text_search_flagging",
+            prompt_version=PROMPT_VERSION,
+        )
+        _persist_supplement_facts(
+            session,
+            study,
+            source,
+            llm_judged_search_facts,
+            extraction_method="supplement_llm_judged_quote_search",
+            model_name=backend.label,
             prompt_version=PROMPT_VERSION,
         )
         _persist_supplement_facts(

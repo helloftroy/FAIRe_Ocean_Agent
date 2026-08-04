@@ -789,6 +789,10 @@ def test_controlled_text_search_project_facts_map_to_faire_with_review(db_sessio
     _fact(db_session, study, field="sterilise_method", value="Bottles were rinsed with bleach.", entity_level="study")
     _fact(db_session, study, field="biological_rep", value="3", entity_level="study")
     _fact(db_session, study, field="assay_type", value="targeted | metabarcoding", entity_level="study")
+    _fact(db_session, study, field="barcoding_pcr_appr", value="two-step PCR", entity_level="study")
+    _fact(db_session, study, field="lib_screen", value="cleaned with AMPure beads", entity_level="study")
+    _fact(db_session, study, field="adapter_forward", value="AATGATACGGCGACCACCGAGATCTACACGCT", entity_level="study")
+    _fact(db_session, study, field="adapter_reverse", value="CAAGCAGAAGACGGCATACGAGAT", entity_level="study")
     _fact(db_session, study, field="neg_cont_0_1", value="1", entity_level="study", support=SupportType.DETERMINISTICALLY_DERIVED)
     _fact(db_session, study, field="pos_cont_0_1", value="0", entity_level="study", support=SupportType.DETERMINISTICALLY_DERIVED)
     _fact(db_session, study, field="sample_type", value="water", entity_level="study")
@@ -808,6 +812,10 @@ def test_controlled_text_search_project_facts_map_to_faire_with_review(db_sessio
     assert values["sterilise_method"].standardized_value == "Bottles were rinsed with bleach."
     assert values["biological_rep"].standardized_value == "3"
     assert values["assay_type"].standardized_value == "targeted | metabarcoding"
+    assert values["barcoding_pcr_appr"].standardized_value == "two-step PCR"
+    assert values["lib_screen"].standardized_value == "cleaned with AMPure beads"
+    assert values["adapter_forward"].standardized_value == "AATGATACGGCGACCACCGAGATCTACACGCT"
+    assert values["adapter_reverse"].standardized_value == "CAAGCAGAAGACGGCATACGAGAT"
     assert values["neg_cont_0_1"].standardized_value == "1"
     assert values["pos_cont_0_1"].standardized_value == "0"
     assert "sample_type" not in values

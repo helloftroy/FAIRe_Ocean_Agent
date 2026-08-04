@@ -34,7 +34,11 @@ from fair_ocean_agent.discovery.text_identifiers import (
 )
 from fair_ocean_agent.extraction.sections import select_relevant_sections
 from fair_ocean_agent.extraction.publication_metadata import extract_publication_metadata_facts
-from fair_ocean_agent.extraction.search_flags import detect_controlled_search_facts, detect_text_search_flags
+from fair_ocean_agent.extraction.search_flags import (
+    detect_controlled_search_facts,
+    detect_llm_judged_search_facts,
+    detect_text_search_flags,
+)
 from fair_ocean_agent.extraction.text import (
     PROMPT_VERSION,
     extract_facts_from_section,
@@ -1018,6 +1022,22 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
         source.source_id,
         [*flag_facts, *controlled_search_facts],
         extraction_method="deterministic_text_search_flagging",
+        prompt_version=PROMPT_VERSION,
+        review_status=ReviewStatus.ACCEPTED.value,
+    )
+    llm_judged_search_facts = detect_llm_judged_search_facts(
+        backend,
+        section_texts,
+        locator_prefix=locator_prefix,
+        max_output_tokens=512,
+    )
+    _persist_candidate_facts(
+        session,
+        study.study_id,
+        source.source_id,
+        llm_judged_search_facts,
+        extraction_method="llm_judged_quote_search",
+        model_name=backend.label,
         prompt_version=PROMPT_VERSION,
         review_status=ReviewStatus.ACCEPTED.value,
     )

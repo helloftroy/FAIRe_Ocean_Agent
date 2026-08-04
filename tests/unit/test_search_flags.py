@@ -1,4 +1,12 @@
-from fair_ocean_agent.extraction.search_flags import detect_controlled_search_facts, detect_text_search_flags
+import json
+
+from fair_ocean_agent.extraction.search_flags import (
+    detect_controlled_search_facts,
+    detect_llm_judged_search_facts,
+    detect_text_search_flags,
+    quote_candidates_for_llm_judged_search,
+)
+from fair_ocean_agent.llm.mock import MockLLMBackend
 
 
 def test_detect_text_search_flags_records_pcr_and_probe_flags_once():
@@ -170,3 +178,88 @@ def test_detect_controlled_search_facts_classifies_assay_type_and_keeps_evidence
         "We used qPCR with a hydrolysis probe for species-specific detection. | "
         "A separate metabarcoding workflow used universal primers for community profiling."
     )
+
+
+def test_quote_candidates_for_llm_judged_library_prep_search_are_narrow():
+    candidates = quote_candidates_for_llm_judged_search(
+        (
+            (
+                "Library construction",
+                "A two-step PCR was used for library construction. "
+                "Libraries were cleaned with AMPure beads and quantified with Qubit. "
+                "Water samples were filtered on deck.",
+            ),
+        )
+    )
+
+    assert [candidate.quote_id for candidate in candidates] == ["Q001", "Q002"]
+    assert candidates[0].field_names == ("barcoding_pcr_appr",)
+    assert candidates[0].text == "A two-step PCR was used for library construction."
+    assert candidates[1].field_names == ("lib_screen",)
+    assert candidates[1].text == "Libraries were cleaned with AMPure beads and quantified with Qubit."
+
+
+def test_detect_llm_judged_search_facts_accepts_quote_id_and_stores_literal_quote():
+    def respond(prompt: str) -> str:
+        assert "Q001 [barcoding_pcr_appr]" in prompt
+        assert "Q002 [lib_screen]" in prompt
+        assert "Q003 [adapter_forward" in prompt
+        return json.dumps(
+            [
+                {"field": "barcoding_pcr_appr", "raw_value": "two-step PCR", "quote_id": "Q001"},
+                {"field": "lib_screen", "raw_value": "cleaned with AMPure beads", "quote_id": "Q002"},
+                {
+                    "field": "adapter_forward",
+                    "raw_value": "AATGATACGGCGACCACCGAGATCTACACGCT",
+                    "quote_id": "Q003",
+                },
+            ]
+        )
+
+    text = (
+        "A two-step PCR was used for library construction. "
+        "Libraries were cleaned with AMPure beads before sequencing. "
+        "The forward adapter sequence was AATGATACGGCGACCACCGAGATCTACACGCT."
+    )
+    backend = MockLLMBackend(label="judge", responses=respond)
+    facts = detect_llm_judged_search_facts(
+        backend,
+        (("Library construction", text),),
+        locator_prefix="paper:PMC1",
+    )
+
+    by_type = {fact.fact_type_candidate: fact for fact in facts}
+    assert by_type["barcoding_pcr_appr"].raw_value == "two-step PCR"
+    assert by_type["barcoding_pcr_appr"].evidence_quote == (
+        "A two-step PCR was used for library construction."
+    )
+    assert by_type["lib_screen"].raw_value == "cleaned with AMPure beads"
+    assert by_type["lib_screen"].evidence_quote == "Libraries were cleaned with AMPure beads before sequencing."
+    assert by_type["adapter_forward"].raw_value == "AATGATACGGCGACCACCGAGATCTACACGCT"
+    assert by_type["adapter_forward"].evidence_quote == (
+        "The forward adapter sequence was AATGATACGGCGACCACCGAGATCTACACGCT."
+    )
+    assert by_type["lib_screen"].confidence_metadata["matches"][0]["quote_id"] == "Q002"
+    assert backend.calls[0]["max_tokens"] == 512
+
+
+def test_detect_llm_judged_search_facts_rejects_bad_quote_ids_and_vocab_values():
+    backend = MockLLMBackend(
+        responses=[
+            json.dumps(
+                [
+                    {"field": "barcoding_pcr_appr", "raw_value": "banana", "quote_id": "Q001"},
+                    {"field": "lib_screen", "raw_value": "AMPure cleanup", "quote_id": "Q999"},
+                    {"field": "unknown_field", "raw_value": "two-step PCR", "quote_id": "Q001"},
+                ]
+            )
+        ]
+    )
+
+    facts = detect_llm_judged_search_facts(
+        backend,
+        (("Library construction", "A two-step PCR was used for library construction."),),
+        locator_prefix="paper:PMC1",
+    )
+
+    assert facts == []

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Iterable
 
 from fair_ocean_agent.database.enums import EntityLevel, SupportType
+from fair_ocean_agent.llm.base import LLMBackend, LLMBackendError
 from fair_ocean_agent.sources.base import RawFactCandidate
 
 
@@ -33,6 +34,25 @@ class ControlledSearchField:
     search_terms: tuple[str, ...]
     required_any_flags: frozenset[str] = frozenset()
     value_strategy: str = "literal_matches"
+
+
+@dataclass(frozen=True)
+class LLMJudgedSearchField:
+    term_name: str
+    section: str
+    description: str
+    search_terms: tuple[str, ...]
+    output_instructions: str
+    allowed_values: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class QuoteCandidate:
+    quote_id: str
+    field_names: tuple[str, ...]
+    title: str
+    snippet_index: int
+    text: str
 
 
 TEXT_SEARCH_FLAGS: tuple[TextSearchFlag, ...] = (
@@ -112,6 +132,112 @@ TEXT_SEARCH_FLAGS: tuple[TextSearchFlag, ...] = (
             re.compile(r"\bno\s+(?:reference|known|synthetic)\s+DNA\s+(?:was\s+|were\s+)?(?:used|included)\b", re.IGNORECASE),
             re.compile(r"\bno\s+gBlocks?\s+(?:were\s+)?(?:used|included)\b", re.IGNORECASE),
             re.compile(r"\bno\s+plasmid\s+controls?\s+(?:were\s+)?(?:used|included)\b", re.IGNORECASE),
+        ),
+    ),
+)
+
+LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
+    LLMJudgedSearchField(
+        term_name="barcoding_pcr_appr",
+        section="Library preparation sequencing",
+        description="PCR approach for metabarcoding/library construction.",
+        allowed_values=("one-step PCR", "two-step PCR", "ligation-based", "other"),
+        output_instructions=(
+            "Classify only the barcoding/indexing/library-construction approach for metabarcoding. "
+            "Use one of: one-step PCR, two-step PCR, ligation-based, other. If both one-step and "
+            "two-step or ligation approaches are explicitly described, join values with ' | '. Omit "
+            "the field if the quote only mentions ordinary PCR without a library/barcoding/indexing context."
+        ),
+        search_terms=(
+            "one-step PCR",
+            "single-step PCR",
+            "one-step library",
+            "fusion primer",
+            "fusion primers",
+            "tailed primer",
+            "indexed primer",
+            "two-step PCR",
+            "two-stage PCR",
+            "second PCR",
+            "indexing PCR",
+            "barcode PCR",
+            "adapter PCR",
+            "adapter ligation",
+            "barcode ligation",
+            "ligation",
+        ),
+    ),
+    LLMJudgedSearchField(
+        term_name="lib_screen",
+        section="Library preparation sequencing",
+        description="Specific enrichment or screening methods applied before and/or after creating libraries.",
+        output_instructions=(
+            "Return only explicit library screening, cleanup, enrichment, quantification, size-selection, "
+            "normalization, pooling, or QC methods. Copy the relevant phrase or sentence as close to the "
+            "quote text as possible; do not paraphrase."
+        ),
+        search_terms=(
+            "library screening",
+            "library QC",
+            "quality checked",
+            "quality control",
+            "size selected",
+            "fragment selection",
+            "gel purified",
+            "bead purified",
+            "AMPure",
+            "Bioanalyzer",
+            "TapeStation",
+            "Fragment Analyzer",
+            "Qubit",
+            "qPCR quantified",
+            "normalized",
+            "pooled",
+            "enriched",
+            "capture",
+            "hybridization",
+            "cleaned",
+        ),
+    ),
+    LLMJudgedSearchField(
+        term_name="adapter_forward",
+        section="Library preparation sequencing",
+        description="Forward sequencing adapter sequence.",
+        output_instructions=(
+            "Return only an explicit forward/read 1/P5/5-prime adapter sequence. Copy the sequence exactly "
+            "from the quote, preserving letters and order. Omit this field if the quote names an adapter but "
+            "does not give the sequence."
+        ),
+        search_terms=(
+            "adapter-containing forward primer",
+            "forward adapter",
+            "adapter sequence",
+            "read 1 adapter",
+            "R1 adapter",
+            "P5 adapter",
+            "Illumina adapter",
+            "sequencing adapter",
+            "5' adapter",
+        ),
+    ),
+    LLMJudgedSearchField(
+        term_name="adapter_reverse",
+        section="Library preparation sequencing",
+        description="Reverse sequencing adapter sequence.",
+        output_instructions=(
+            "Return only an explicit reverse/read 2/P7/3-prime adapter sequence. Copy the sequence exactly "
+            "from the quote, preserving letters and order. Omit this field if the quote names an adapter but "
+            "does not give the sequence."
+        ),
+        search_terms=(
+            "adapter-containing reverse primer",
+            "reverse adapter",
+            "read 2 adapter",
+            "R2 adapter",
+            "P7 adapter",
+            "Illumina adapter",
+            "sequencing adapter",
+            "3' adapter",
         ),
     ),
 )
@@ -921,6 +1047,179 @@ def _match_controlled_field(
     if field.value_strategy == "assay_type_classifier":
         return _classify_assay_type(field, texts, locator_prefix)
     return _match_controlled_terms(field, texts, locator_prefix)
+
+
+def _candidate_fields_for_snippet(snippet: str) -> tuple[str, ...]:
+    field_names: list[str] = []
+    for field in LLM_JUDGED_SEARCH_FIELDS:
+        if any(_term_pattern(term).search(snippet) for term in field.search_terms):
+            field_names.append(field.term_name)
+    return tuple(field_names)
+
+
+def quote_candidates_for_llm_judged_search(
+    texts: Iterable[tuple[str, str]],
+    *,
+    max_candidates: int = 40,
+) -> tuple[QuoteCandidate, ...]:
+    """Candidate source sentences for the small library-prep judgement LLM.
+
+    The LLM never receives whole sections for these fields: only sentences
+    that hit the user-supplied search terms. Final facts are accepted only
+    when the model cites one of these quote IDs.
+    """
+    candidates: list[QuoteCandidate] = []
+    seen_text: set[str] = set()
+    for title, text in texts:
+        for snippet_index, snippet in _snippets(text):
+            field_names = _candidate_fields_for_snippet(snippet)
+            if not field_names or snippet in seen_text:
+                continue
+            seen_text.add(snippet)
+            candidates.append(
+                QuoteCandidate(
+                    quote_id=f"Q{len(candidates) + 1:03d}",
+                    field_names=field_names,
+                    title=title,
+                    snippet_index=snippet_index,
+                    text=snippet,
+                )
+            )
+            if len(candidates) >= max_candidates:
+                return tuple(candidates)
+    return tuple(candidates)
+
+
+def build_llm_judged_search_prompt(candidates: tuple[QuoteCandidate, ...]) -> str:
+    field_reference = "\n".join(
+        (
+            f"- {field.term_name}: {field.description} "
+            f"{field.output_instructions}"
+            + (f" Allowed values: {', '.join(field.allowed_values)}." if field.allowed_values else "")
+        )
+        for field in LLM_JUDGED_SEARCH_FIELDS
+    )
+    quotes = "\n".join(
+        f"{candidate.quote_id} [{', '.join(candidate.field_names)}] {candidate.title}: {candidate.text}"
+        for candidate in candidates
+    )
+    return f"""You are judging candidate source quotes for FAIRe projectMetadata library-preparation fields.
+
+Use only the candidate quotes below. Do not use outside knowledge. Do not infer from a keyword alone.
+Return a field only if a quote explicitly supports it. For free-text fields, keep raw_value as close as possible to
+the quote text; copy exact phrases when possible. Do not rewrite adapter sequences. If multiple values for the same
+field are explicitly supported, return one object per value, each citing its supporting quote_id.
+
+Fields:
+{field_reference}
+
+Return ONLY a JSON array. Each object must be:
+{{"field": "<one listed field>", "raw_value": "<supported value>", "quote_id": "Q001"}}
+
+Candidate quotes:
+{quotes}
+"""
+
+
+def _allowed_field_lookup() -> dict[str, LLMJudgedSearchField]:
+    return {field.term_name: field for field in LLM_JUDGED_SEARCH_FIELDS}
+
+
+def _valid_llm_judged_value(field: LLMJudgedSearchField, value: str) -> bool:
+    stripped = value.strip()
+    if not stripped:
+        return False
+    if not field.allowed_values:
+        return True
+    parts = [part.strip() for part in stripped.split("|")]
+    return all(part in field.allowed_values for part in parts)
+
+
+def _facts_from_llm_judgement(
+    parsed,
+    candidates: tuple[QuoteCandidate, ...],
+    *,
+    locator_prefix: str,
+) -> list[RawFactCandidate]:
+    if not isinstance(parsed, list):
+        return []
+    fields = _allowed_field_lookup()
+    candidates_by_id = {candidate.quote_id: candidate for candidate in candidates}
+    grouped: dict[str, dict] = {}
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        field_name = str(item.get("field") or item.get("fact_type_candidate") or "").strip()
+        value = str(item.get("raw_value") or "").strip()
+        quote_id = str(item.get("quote_id") or item.get("evidence_id") or "").strip()
+        field = fields.get(field_name)
+        candidate = candidates_by_id.get(quote_id)
+        if field is None or candidate is None or not _valid_llm_judged_value(field, value):
+            continue
+        group = grouped.setdefault(
+            field_name,
+            {"values": [], "quotes": [], "matches": [], "seen_values": set()},
+        )
+        key = value.casefold()
+        if key in group["seen_values"]:
+            continue
+        group["seen_values"].add(key)
+        group["values"].append(value)
+        if candidate.text not in group["quotes"]:
+            group["quotes"].append(candidate.text)
+        group["matches"].append(
+            {
+                "raw_value": value,
+                "quote_id": quote_id,
+                "source_locator": f"{locator_prefix}:llm_judged_search:{field_name}:{quote_id}",
+            }
+        )
+
+    facts: list[RawFactCandidate] = []
+    for field_name, group in grouped.items():
+        field = fields[field_name]
+        facts.append(
+            RawFactCandidate(
+                entity_level=EntityLevel.STUDY,
+                fact_type_candidate=field_name,
+                raw_field_name=field_name,
+                raw_value=" | ".join(group["values"]),
+                source_locator=f"{locator_prefix}:llm_judged_search:{field_name}",
+                support_type=SupportType.EXPLICIT,
+                evidence_quote=" | ".join(group["quotes"]),
+                confidence_metadata={
+                    "detector": "llm_judged_quote_search",
+                    "section": field.section,
+                    "description": field.description,
+                    "matches": group["matches"],
+                },
+            )
+        )
+    return facts
+
+
+def detect_llm_judged_search_facts(
+    backend: LLMBackend,
+    texts: Iterable[tuple[str, str]],
+    *,
+    locator_prefix: str,
+    max_output_tokens: int | None = 512,
+) -> list[RawFactCandidate]:
+    reusable_texts = tuple(texts)
+    candidates = quote_candidates_for_llm_judged_search(reusable_texts)
+    if not candidates:
+        return []
+    parsed, response = backend.generate_json(
+        build_llm_judged_search_prompt(candidates),
+        system="You extract FAIRe library-preparation facts from supplied quote IDs only.",
+        temperature=0,
+        max_tokens=max_output_tokens,
+    )
+    if parsed is None:
+        raise LLMBackendError(
+            f"{backend.label}: library-prep quote judgement returned invalid JSON after retries"
+        )
+    return _facts_from_llm_judgement(parsed, candidates, locator_prefix=locator_prefix)
 
 
 def detect_text_search_flags(

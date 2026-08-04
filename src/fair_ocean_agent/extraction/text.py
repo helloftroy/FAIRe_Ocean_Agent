@@ -71,6 +71,13 @@ than a false zero.
 phrasing, and `assay_type` as a fixed-vocabulary cue classifier that may
 return both targeted and metabarcoding when both are explicitly evidenced.
 
+**v14 -> v15:** library-preparation sequencing fields that need judgement
+(`barcoding_pcr_appr`, `lib_screen`, `adapter_forward`,
+`adapter_reverse`) use a narrow candidate-quote LLM pass before the broad
+paper/supplement extraction. Python supplies only search-term-matched
+sentences with stable quote IDs, the model returns field/value/quote_id,
+and Python stores the literal supporting quote itself.
+
 **v9 -> v10: optional per-fact `assay_tag` for multi-assay papers.** A
 paper can describe more than one distinct assay run on the same samples
 (e.g. a 16S PCR assay and an 18S PCR assay), each with its own primers,
@@ -171,7 +178,7 @@ from fair_ocean_agent.llm.base import LLMBackend, LLMResponse
 from fair_ocean_agent.mapping.faire import TARGET_SCHEMA
 from fair_ocean_agent.sources.base import RawFactCandidate
 
-PROMPT_VERSION = "text-extraction-v14-method-classifier-fields"
+PROMPT_VERSION = "text-extraction-v15-library-prep-quote-judgement"
 DEFAULT_MAX_SECTION_CHARS_PER_CALL = 1600
 
 ABSENT_RAW_VALUE_STRINGS = frozenset(
