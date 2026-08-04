@@ -45,6 +45,38 @@ def test_does_not_duplicate_parent_and_child_text():
     assert "Materials and Methods" not in {s["title"] for s in sections}
 
 
+def test_method_parent_context_selects_leaf_children_with_non_method_titles():
+    xml = """<article><body>
+      <sec>
+        <title>Materials and Methods</title>
+        <sec><title>Caribbean spawn I</title><p>Larvae were collected from replicate colonies.</p></sec>
+        <sec><title>Pacific spawn I</title><p>Settlement tiles were conditioned before the assay.</p></sec>
+      </sec>
+    </body></article>"""
+
+    sections = select_relevant_sections(xml)
+
+    assert [s["title"] for s in sections] == ["Caribbean spawn I", "Pacific spawn I"]
+    assert all("Materials and Methods" not in s["title"] for s in sections)
+
+
+def test_does_not_select_result_leaf_only_because_title_mentions_samples():
+    xml = """<article><body>
+      <sec>
+        <title>Results</title>
+        <sec><title>Metabarcoding of cue samples</title><p>Read counts differed between samples.</p></sec>
+      </sec>
+      <sec>
+        <title>Materials and Methods</title>
+        <sec><title>Metabarcoding of cue communities</title><p>DNA libraries were sequenced.</p></sec>
+      </sec>
+    </body></article>"""
+
+    sections = select_relevant_sections(xml)
+
+    assert [s["title"] for s in sections] == ["Metabarcoding of cue communities"]
+
+
 def test_matches_experimental_procedures_heading():
     """Regression test: live validation against a real paper (PMC7820986,
     Environmental Microbiology 2020) found its entire Methods section

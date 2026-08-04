@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 import xml.etree.ElementTree as ET
+from typing import Iterable
 
 RELEVANT_SECTION_TITLE_PATTERNS = [
     re.compile(p, re.IGNORECASE)
@@ -59,6 +60,14 @@ RELEVANT_SECTION_TITLE_PATTERNS = [
         r"quality control",
     )
 ]
+RESULT_DISCUSSION_SECTION_TITLE_PATTERNS = [
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"\bresults?\b",
+        r"\bdiscussion\b",
+        r"\bconclusions?\b",
+    )
+]
 
 # A truncated fragment below this length is rarely worth its own LLM call --
 # not enough context for the model to report much, and it still costs a
@@ -66,6 +75,37 @@ RELEVANT_SECTION_TITLE_PATTERNS = [
 # section comes next in document order) rather than send a near-empty
 # section through the pipeline.
 MIN_FRAGMENT_CHARS = 500
+
+
+def _title_for(sec: ET.Element) -> str:
+    title_el = sec.find("title")
+    if title_el is None:
+        return ""
+    return " ".join(t.strip() for t in title_el.itertext() if t.strip())
+
+
+def _is_relevant_title(title: str) -> bool:
+    return bool(title and any(pattern.search(title) for pattern in RELEVANT_SECTION_TITLE_PATTERNS))
+
+
+def _is_result_or_discussion_title(title: str) -> bool:
+    return bool(title and any(pattern.search(title) for pattern in RESULT_DISCUSSION_SECTION_TITLE_PATTERNS))
+
+
+def _iter_leaf_sections(element: ET.Element, ancestor_titles: tuple[str, ...] = ()) -> Iterable[tuple[ET.Element, tuple[str, ...]]]:
+    if element.tag != "sec":
+        for child in list(element):
+            yield from _iter_leaf_sections(child, ancestor_titles)
+        return
+
+    title = _title_for(element)
+    path = (*ancestor_titles, title) if title else ancestor_titles
+    child_sections = [child for child in list(element) if child.tag == "sec"]
+    if not child_sections:
+        yield element, ancestor_titles
+        return
+    for child in child_sections:
+        yield from _iter_leaf_sections(child, path)
 
 
 def select_relevant_sections(fulltext_xml: str, max_chars: int = 40000) -> list[dict]:
@@ -93,7 +133,7 @@ def select_relevant_sections(fulltext_xml: str, max_chars: int = 40000) -> list[
 
     sections: list[dict] = []
     total_chars = 0
-    for sec in root.iter("sec"):
+    for sec, ancestor_titles in _iter_leaf_sections(root):
         if total_chars >= max_chars:
             break
 
@@ -102,14 +142,16 @@ def select_relevant_sections(fulltext_xml: str, max_chars: int = 40000) -> list[
         # extraction...</title></sec></sec>) -- a parent sec's itertext()
         # already includes all its children's text, so processing both
         # would duplicate every subsection's content. Only leaf sections
-        # (no nested <sec>) are considered, which also gives finer-grained,
-        # separately-titled chunks instead of one large blob per parent.
-        if sec.find("sec") is not None:
+        # are considered. A leaf can inherit relevance from a Methods-like
+        # parent: real papers often use child headings like "Caribbean spawn
+        # I" that are only recognizable as methods from the parent section.
+        title = _title_for(sec)
+        relevant_by_title = _is_relevant_title(title)
+        relevant_by_parent = any(_is_relevant_title(parent_title) for parent_title in ancestor_titles)
+        under_results_or_discussion = any(_is_result_or_discussion_title(parent_title) for parent_title in ancestor_titles)
+        if under_results_or_discussion:
             continue
-
-        title_el = sec.find("title")
-        title = (title_el.text or "").strip() if title_el is not None else ""
-        if not title or not any(p.search(title) for p in RELEVANT_SECTION_TITLE_PATTERNS):
+        if not title or not (relevant_by_title or relevant_by_parent):
             continue
 
         text = " ".join(t.strip() for t in sec.itertext() if t.strip())
