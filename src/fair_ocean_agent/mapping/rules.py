@@ -343,6 +343,30 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
     MappingRule("citation", EntityLevel.PROJECT.value, "projectMetadata", "bibliographicCitation",
                 MappingMethod.DETERMINISTIC_SYNONYM.value),
 
+    # --- Deterministic publication-metadata facts (extraction/publication_metadata.py) ---
+    # Literal FAIRe field names as fact_type_candidate (this module's own
+    # structured-adapter convention -- see extraction/publication_metadata.py's
+    # docstring), EntityLevel.STUDY since every fact here is a plain
+    # one-per-study value, no LLM/model-vocabulary coupling to guard
+    # against. Every one of these was marked "No LLM" in an explicit user
+    # review of a NOAA/SEUS-MBON FAIRe checklist.
+    MappingRule("license", EntityLevel.STUDY.value, "projectMetadata", "license",
+                MappingMethod.EXACT_LABEL.value),
+    MappingRule("rightsHolder", EntityLevel.STUDY.value, "projectMetadata", "rightsHolder",
+                MappingMethod.EXACT_LABEL.value),
+    MappingRule("accessRights", EntityLevel.STUDY.value, "projectMetadata", "accessRights",
+                MappingMethod.EXACT_LABEL.value),
+    MappingRule("bibliographicCitation", EntityLevel.STUDY.value, "projectMetadata", "bibliographicCitation",
+                MappingMethod.DETERMINISTIC_SYNONYM.value),
+    MappingRule("code_repo", EntityLevel.STUDY.value, "projectMetadata", "code_repo",
+                MappingMethod.EXACT_LABEL.value),
+    MappingRule("recordedBy", EntityLevel.STUDY.value, "projectMetadata", "recordedBy",
+                MappingMethod.EXACT_LABEL.value),
+    MappingRule("recordedByID", EntityLevel.STUDY.value, "projectMetadata", "recordedByID",
+                MappingMethod.EXACT_LABEL.value),
+    MappingRule("project_contact", EntityLevel.STUDY.value, "projectMetadata", "project_contact",
+                MappingMethod.EXACT_LABEL.value),
+
     # --- OBIS/GBIF DNA-derived-data / Darwin Core occurrence terms ---
     MappingRule("associatedSequences", EntityLevel.PROJECT.value, "experimentRunMetadata", "associatedSequences",
                 MappingMethod.EXACT_LABEL.value),
@@ -382,6 +406,8 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
                 "samp_store_method_additional", MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("sequencing_platform", EntityLevel.STUDY.value, "projectMetadata", "platform",
                 MappingMethod.SUGGESTED_SEMANTIC.value, enum_name="platform_enum", review_required=True),
+    MappingRule("seq_kit", EntityLevel.STUDY.value, "projectMetadata", "seq_kit",
+                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("collection_method", EntityLevel.STUDY.value, "sampleMetadata", "samp_collect_method",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
 
@@ -440,6 +466,12 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
                 "pcr_method_additional", MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("PCR_amplification_conditions_template", EntityLevel.STUDY.value, "projectMetadata",
                 "pcr_method_additional", MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
+    MappingRule("commercial_mm", EntityLevel.STUDY.value, "projectMetadata", "commercial_mm",
+                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
+    MappingRule("probeReporter", EntityLevel.STUDY.value, "projectMetadata", "probeReporter",
+                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
+    MappingRule("probeQuencher", EntityLevel.STUDY.value, "projectMetadata", "probeQuencher",
+                MappingMethod.SUGGESTED_SEMANTIC.value, enum_name="probeQuencher_enum", review_required=True),
     MappingRule("metabarcoding_region", EntityLevel.STUDY.value, "projectMetadata", "target_gene",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("bioinformatics_workflow", EntityLevel.STUDY.value, "projectMetadata",

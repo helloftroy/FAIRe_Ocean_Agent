@@ -130,7 +130,7 @@ def test_handler_persists_deterministic_text_search_flags(db_session, monkeypatc
             extraction_method="deterministic_text_search_flagging",
         )
     }
-    assert set(facts) == {"probe_based_qPCR_ddPCR_assay_0_1", "pcr_0_1"}
+    assert {"probe_based_qPCR_ddPCR_assay_0_1", "pcr_0_1"} <= set(facts)
     assert facts["probe_based_qPCR_ddPCR_assay_0_1"].raw_value == "true"
     assert facts["probe_based_qPCR_ddPCR_assay_0_1"].evidence_quote == (
         "Materials and Methods A TaqMan qPCR assay used a FAM reporter dye and BHQ quencher."

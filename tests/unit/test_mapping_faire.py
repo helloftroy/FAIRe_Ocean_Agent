@@ -359,6 +359,35 @@ def test_maps_citation_from_any_repository_adapter_to_bibliographic_citation(db_
     assert row.standardized_value == "Smith et al. 2024. Dataset X. OBIS."
 
 
+def test_maps_deterministic_publication_metadata_facts_to_faire(db_session):
+    """extraction/publication_metadata.py's deterministic (no-LLM) facts --
+    literal FAIRe field names at EntityLevel.STUDY -- all map through."""
+    study = _study(db_session, title="Deterministic publication metadata")
+    values = {
+        "license": "http://creativecommons.org/licenses/by/3.0/",
+        "rightsHolder": "Davies et al.",
+        "accessRights": "open access",
+        "bibliographicCitation": "Davies SW, et al. (2014). A cross-ocean comparison. PeerJ 2:e333.",
+        "code_repo": "https://github.com/someorg/somerepo",
+        "recordedBy": "Sarah W. Davies | Eli Meyer",
+        "recordedByID": "https://orcid.org/0000-0000-0000-0001",
+        "project_contact": "daviessw@gmail.com",
+    }
+    for field, value in values.items():
+        _fact(db_session, study, field=field, value=value, entity_level="study", support=SupportType.STRUCTURED_SOURCE)
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    rows = {
+        sv.target_field: sv.standardized_value
+        for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id, entity_id=None)
+    }
+    for field, value in values.items():
+        assert rows[field] == value, f"{field}: expected {value!r}, got {rows.get(field)!r}"
+
+
 def test_maps_repository_dna_derived_fields_to_faire_without_llm_review_flag(db_session):
     study = _study(db_session, title="DNA-derived repository facts")
     for field, value in {
@@ -718,6 +747,30 @@ def test_llm_atomic_assay_facts_map_to_faire_protocol_fields_with_review(db_sess
     assert values["pcr_primer_reverse"].standardized_value == "1406r"
     assert values["thermocycler"].standardized_value == "Veriti Thermal Cycler (Applied Biosystems)"
     assert values["bioinfo_method_additional"].standardized_value == "DADA2 (v1.16) in R"
+    assert all(row.review_required is True for row in values.values())
+
+
+def test_controlled_text_search_project_facts_map_to_faire_with_review(db_session):
+    study = _study(db_session, title="Controlled project searches")
+    _fact(db_session, study, field="seq_kit", value="MiSeq Reagent Kit v3", entity_level="study")
+    _fact(db_session, study, field="probeReporter", value="FAM", entity_level="study")
+    _fact(db_session, study, field="probeQuencher", value="BHQ-1 | quencher", entity_level="study")
+    _fact(db_session, study, field="commercial_mm", value="TaqMan", entity_level="study")
+    _fact(db_session, study, field="sample_type", value="water", entity_level="study")
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    values = {
+        sv.target_field: sv
+        for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id, entity_id=None)
+    }
+    assert values["seq_kit"].standardized_value == "MiSeq Reagent Kit v3"
+    assert values["probeReporter"].standardized_value == "FAM"
+    assert values["probeQuencher"].standardized_value == "BHQ-1 | quencher"
+    assert values["commercial_mm"].standardized_value == "TaqMan"
+    assert "sample_type" not in values
     assert all(row.review_required is True for row in values.values())
 
 

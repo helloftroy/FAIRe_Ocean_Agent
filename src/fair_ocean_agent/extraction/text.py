@@ -53,6 +53,12 @@ or ddPCR cues are present" so later targeted searches can be conditionally
 activated without asking the model to hunt for every optional branch on
 every paper.
 
+**v11 -> v12:** the deterministic pre-LLM pass also runs the controlled
+projectMetadata searches from the FAIRe-NOAA controlled-search sheet.
+Conditional searches activate only when their configured flag is found in
+the same paper/supplement text, and multiple literal source matches are
+stored as one pipe-delimited raw value.
+
 **v9 -> v10: optional per-fact `assay_tag` for multi-assay papers.** A
 paper can describe more than one distinct assay run on the same samples
 (e.g. a 16S PCR assay and an 18S PCR assay), each with its own primers,
@@ -153,7 +159,7 @@ from fair_ocean_agent.llm.base import LLMBackend, LLMResponse
 from fair_ocean_agent.mapping.faire import TARGET_SCHEMA
 from fair_ocean_agent.sources.base import RawFactCandidate
 
-PROMPT_VERSION = "text-extraction-v11-search-flags"
+PROMPT_VERSION = "text-extraction-v12-controlled-search"
 DEFAULT_MAX_SECTION_CHARS_PER_CALL = 1600
 
 ABSENT_RAW_VALUE_STRINGS = frozenset(
