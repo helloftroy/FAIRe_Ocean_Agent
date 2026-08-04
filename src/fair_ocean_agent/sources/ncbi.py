@@ -25,7 +25,7 @@ import hashlib
 import xml.etree.ElementTree as ET
 
 from fair_ocean_agent.clock import utcnow
-from fair_ocean_agent.database.enums import EntityLevel, IdentifierType, RelationshipType
+from fair_ocean_agent.database.enums import EntityLevel, IdentifierType, RelationshipType, SupportType
 from fair_ocean_agent.logging_setup import get_logger
 from fair_ocean_agent.sources.base import (
     RawFactCandidate,
@@ -36,6 +36,7 @@ from fair_ocean_agent.sources.base import (
     SourceRecord,
     SourceRecordNotFoundError,
 )
+from fair_ocean_agent.sources.replicate_grouping import detect_replicate_groups
 
 logger = get_logger(__name__)
 
@@ -253,6 +254,61 @@ class NcbiBioSampleAdapter(SourceAdapter):
                         entity_label=sample.get("title"),
                     )
                 )
+        facts.extend(self._biological_rep_relation_facts(r.get("samples", [])))
+        return facts
+
+    @staticmethod
+    def _biological_rep_relation_facts(samples: list[dict]) -> list[RawFactCandidate]:
+        """Detects replicate groupings from each BioSample's sample_name
+        attribute (falling back to its title when no sample_name attribute
+        was submitted) via sources/replicate_grouping.py's shared,
+        source-agnostic suffix-pattern detector, and emits one
+        biological_rep_relation fact per grouped sample. The BioSample
+        accession -- never the free-text name/title used only to detect the
+        pattern -- is what ends up in raw_value, since exports/faire.py uses
+        the accession as the exported samp_name for NCBI-sourced samples;
+        pipe-joining the name/title text instead would reference values that
+        never appear in that exported column."""
+        name_and_field_by_accession: dict[str, tuple[str, str]] = {}
+        titles_by_accession: dict[str, str | None] = {}
+        for sample in samples:
+            accession = sample.get("accession")
+            if not accession:
+                continue
+            titles_by_accession[accession] = sample.get("title")
+            sample_name_attr = sample.get("attributes", {}).get("sample_name")
+            if sample_name_attr:
+                name_and_field_by_accession[accession] = (sample_name_attr, "sample_name")
+            elif sample.get("title"):
+                name_and_field_by_accession[accession] = (sample["title"], "title")
+
+        replicate_group_by_accession = {
+            member: group
+            for group in detect_replicate_groups(
+                {accession: name for accession, (name, _field) in name_and_field_by_accession.items()}
+            )
+            for member in group.members
+        }
+
+        facts: list[RawFactCandidate] = []
+        for accession, group in replicate_group_by_accession.items():
+            _, raw_field_name = name_and_field_by_accession[accession]
+            facts.append(
+                RawFactCandidate(
+                    entity_level=EntityLevel.SAMPLE,
+                    fact_type_candidate="biological_rep_relation",
+                    raw_field_name=raw_field_name,
+                    raw_value=" | ".join(group.members),
+                    source_locator=f"ncbi_biosample.{accession}.biological_rep_relation",
+                    entity_external_id=accession,
+                    entity_label=titles_by_accession.get(accession),
+                    support_type=SupportType.DETERMINISTICALLY_DERIVED,
+                    confidence_metadata={
+                        "replicate_detection_signal": group.signal.value,
+                        "replicate_group_size": len(group.members),
+                    },
+                )
+            )
         return facts
 
     def find_related(self, record: SourceRecord) -> list[RelatedIdentifier]:

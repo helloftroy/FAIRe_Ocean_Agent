@@ -30,8 +30,9 @@ from dataclasses import dataclass, field
 from typing import Any
 import re
 
-from fair_ocean_agent.database.enums import EntityLevel, EntityRelationshipType
+from fair_ocean_agent.database.enums import EntityLevel, EntityRelationshipType, SupportType
 from fair_ocean_agent.sources.base import EntityLinkCandidate, RawFactCandidate
+from fair_ocean_agent.sources.replicate_grouping import ReplicateGroup, detect_replicate_groups
 
 # Canonical native_name -> header variants that should map to it. Modest and
 # curated rather than exhaustive -- expanding this table as real
@@ -216,7 +217,21 @@ def _facts_from_rows(
         else:
             result.unrecognized_columns.append(raw_header)
 
-    if not column_plan:
+    replicate_group_by_sample_id: dict[str, ReplicateGroup] = {}
+    if EntityLevel.SAMPLE in identifier_cols:
+        sample_id_index, _ = identifier_cols[EntityLevel.SAMPLE]
+        sample_names_by_id = {
+            str(row[sample_id_index]).strip(): str(row[sample_id_index]).strip()
+            for row in data_rows
+            if sample_id_index < len(row) and row[sample_id_index] not in (None, "")
+        }
+        replicate_group_by_sample_id = {
+            member: group
+            for group in detect_replicate_groups(sample_names_by_id)
+            for member in group.members
+        }
+
+    if not column_plan and not replicate_group_by_sample_id:
         return result
 
     locator_prefix = f"supplement.{file_name}"
@@ -333,6 +348,26 @@ def _facts_from_rows(
                     entity_links=experiment_links,
                 )
             )
+        if sample_id:
+            group = replicate_group_by_sample_id.get(sample_id)
+            if group is not None:
+                id_index, raw_header = identifier_cols[EntityLevel.SAMPLE]
+                result.facts.append(
+                    RawFactCandidate(
+                        entity_level=EntityLevel.SAMPLE,
+                        fact_type_candidate="biological_rep_relation",
+                        raw_field_name=raw_header,
+                        raw_value=" | ".join(group.members),
+                        source_locator=f"{locator_prefix}!{_column_letter(id_index)}{row_number}",
+                        entity_external_id=sample_id,
+                        entity_label=sample_id,
+                        support_type=SupportType.DETERMINISTICALLY_DERIVED,
+                        confidence_metadata={
+                            "replicate_detection_signal": group.signal.value,
+                            "replicate_group_size": len(group.members),
+                        },
+                    )
+                )
     return result
 
 

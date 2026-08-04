@@ -107,6 +107,18 @@ LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS = frozenset(
         # asked. A known, accepted precision/recall trade-off for this one
         # field in the gold benchmark (see llm/benchmark.py).
         "seq_kit",
+        # forward_sequencing_adapter/reverse_sequencing_adapter (native
+        # names) / adapter_forward/adapter_reverse (hints): duplicate
+        # search_flags.LLM_JUDGED_SEARCH_FIELDS's own "adapter_forward"/
+        # "adapter_reverse" entries, a narrower, quote-anchored LLM pass
+        # built specifically for these two fields (explicit instructions to
+        # copy the sequence verbatim and only accept a fact tied to a real
+        # quote_id). Running both would risk two independent LLM calls
+        # producing conflicting facts for the same adapter sequence under
+        # two different fact_type_candidate spellings. Excluded here in
+        # favor of the more precise mechanism, same pattern as seq_kit.
+        "adapter_forward",
+        "adapter_reverse",
     }
 )
 
@@ -248,7 +260,17 @@ FIELD_GROUPS: dict[str, tuple[FaireExtractionField, ...]] = {
     "Controls & replicates": (
         FaireExtractionField("negative_control_type", "type of negative control used", "neg_cont_type", "extraction blank"),
         FaireExtractionField("positive_control_type", "type of positive control used", "pos_cont_type", "synthetic DNA standard"),
-        FaireExtractionField("biological_replicate_count", "number of biological replicates collected per sample/treatment", "biological_rep", "3", required_any_flags=frozenset({"pcr_0_1"})),
+        # Unlike pcr_replicate_count below (a PCR-technical-replicate concept
+        # that only makes sense once a paper describes PCR at all),
+        # biological_rep is unconditional in the real FAIRe schema -- a
+        # general sample-design concept ("N biological replicates were
+        # collected") that applies to any study design, PCR or not (e.g.
+        # shotgun metagenomics). search_flags.CONTROLLED_SEARCH_FIELDS's own
+        # "biological_rep" entry is likewise ungated. A prior round gated
+        # this on pcr_0_1 by treating it the same as the genuinely
+        # PCR-specific overlap fields above; corrected after checking
+        # schema.yaml directly.
+        FaireExtractionField("biological_replicate_count", "number of biological replicates collected per sample/treatment", "biological_rep", "3"),
         FaireExtractionField("pcr_replicate_count", "number of PCR technical replicates per sample", "pcr_rep", "3", required_any_flags=frozenset({"pcr_0_1"})),
     ),
     "qPCR / standard curve": (

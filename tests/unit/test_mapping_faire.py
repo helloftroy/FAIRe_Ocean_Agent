@@ -68,6 +68,33 @@ def test_maps_sample_level_structured_facts(db_session):
     assert created == len(values)
 
 
+def test_maps_biological_rep_relation_sample_level_fact(db_session):
+    study = _study(db_session, title="Replicate mapping")
+    sample = Entity(study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="S01_1")
+    db_session.add(sample)
+    db_session.flush()
+    _fact(
+        db_session,
+        study,
+        entity=sample,
+        field="biological_rep_relation",
+        value="S01_1 | S01_2 | S01_3",
+        entity_level="sample",
+        support=SupportType.DETERMINISTICALLY_DERIVED,
+    )
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    values = {
+        sv.target_field: sv
+        for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id, entity_id=sample.entity_id)
+    }
+    assert values["biological_rep_relation"].standardized_value == "S01_1 | S01_2 | S01_3"
+    assert values["biological_rep_relation"].review_required is True
+
+
 def test_maps_depth_aliases_and_control_sample_category(db_session):
     study = _study(db_session, title="Depth aliases and controls")
     sample = Entity(study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN_CONTROL")

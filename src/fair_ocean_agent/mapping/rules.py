@@ -340,6 +340,13 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
                 MappingMethod.EXACT_LABEL.value),
     MappingRule("diss_oxygen", EntityLevel.SAMPLE.value, "sampleMetadata", "diss_oxygen",
                 MappingMethod.EXACT_LABEL.value),
+    # biological_rep_relation: emitted by sources/replicate_grouping.py's
+    # sample-name-suffix detector (via supplement_parsing.py and ncbi.py),
+    # never a literal source column -- review_required=True since this is a
+    # per-sample identity claim (which samples are replicates of which)
+    # worth a human sanity check regardless of which detection signal fired.
+    MappingRule("biological_rep_relation", EntityLevel.SAMPLE.value, "sampleMetadata", "biological_rep_relation",
+                MappingMethod.EXACT_LABEL.value, review_required=True),
 
     # --- Sequencing-run-level structured facts (ENA) ---
     MappingRule("instrument_platform", EntityLevel.SEQUENCING_RUN.value, "projectMetadata", "platform",

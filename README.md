@@ -1745,6 +1745,93 @@ the same cross-check after the fix: zero remaining mismatches across all
 since a `"PCR"`-titled test section with no active flags now correctly
 returns nothing for a gated field -- the entire point of this change).
 
+## Duplicate-call audit follow-up, and sample-name replicate detection
+
+**Audit requested**: double-check the PCR-gating work above against
+`biological_rep`, `sterilise_method`, `assay_type`, `neg_cont_0_1`/
+`pos_cont_0_1`, and the library-prep-sequencing fields for the same
+"two independent mechanisms fire for the same real fact" failure mode the
+collision-guard test was built to catch. `neg_cont_0_1`/`pos_cont_0_1`,
+`sterilise_method`, and `barcoding_pcr_appr`/`lib_screen` checked out clean
+(no LLM-taxonomy field maps to their hints at all); `neg_cont_type`/
+`pos_cont_type` were confirmed unrelated to `neg_cont_0_1`/`pos_cont_0_1` --
+the real schema conditions those two on `samp_category`, a different
+per-sample mechanism this task doesn't touch.
+
+**Two real problems found and fixed:**
+- `biological_replicate_count` had been gated on `pcr_0_1` in the prior
+  round under a blanket "same treatment as the other four overlap fields"
+  call. The real schema shows `biological_rep` has no conditional
+  requirement at all -- a general sample-design concept, unconditional even
+  for non-PCR papers (shotgun metagenomics, etc). Un-gated it (removed
+  `required_any_flags`). Verified against gold case
+  `controls-replicates-001` first: since the benchmark only exercises the
+  LLM checklist path (never the deterministic `CONTROLLED_SEARCH_FIELDS`
+  path), *excluding* the LLM field instead of un-gating it would have
+  silently broken that already-passing gold case -- concrete evidence for
+  un-gating over exclusion, not just schema-reading.
+- `forward_sequencing_adapter`/`reverse_sequencing_adapter` (general LLM
+  checklist, `adapter_forward`/`adapter_reverse` hints) exactly duplicated
+  `search_flags.LLM_JUDGED_SEARCH_FIELDS`'s own narrower, quote-anchored
+  pass for the same two fields (explicit "copy the sequence verbatim, only
+  accept a quote_id-backed fact" instructions) -- two independent LLM calls
+  risking conflicting facts for one real adapter sequence under two
+  different `fact_type_candidate` spellings. Excluded the general-checklist
+  versions via `LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS`, same pattern as
+  `seq_kit`, deferring to the more precise mechanism.
+
+**Collision-guard test extended** to also check
+`search_flags.LLM_JUDGED_SEARCH_FIELDS` (it previously only checked
+`CONTROLLED_SEARCH_FIELDS`) -- this is exactly the mechanism the adapter
+duplicate involved, so the guard would have caught it automatically had it
+covered this earlier. Also added `_ACCEPTED_UNCONDITIONAL_OVERLAPS` (just
+`biological_rep`) to both guard tests: an explicit, documented exception for
+the one field where both an unconditional deterministic detector and an
+unconditional LLM field deliberately coexist (a plain replicate count has
+low real risk of the two mechanisms disagreeing harmfully, unlike the
+adapter-sequence case), rather than silently allowing it to pass the
+exclude-or-gate check.
+
+**New feature: `sources/replicate_grouping.py`** -- detects biological
+replicate groupings directly from sample-NAME suffix patterns (e.g.
+`Site_A_rep1`/`Site_A_rep2`, or `Sample_A`/`Sample_B`/`Sample_C`) in
+structured per-sample data, feeding FAIRe's real `biological_rep_relation`
+sampleMetadata slot (a per-sample field listing every sibling replicate's
+`samp_name`, pipe-joined, per the schema's own worked example). Two
+independent, deliberately conservative signals, shared by both adapters
+rather than duplicated:
+- `EXPLICIT_REP_MARKER` -- an explicit `rep`/`replicate` token plus a digit
+  (`_rep1`, `-REP_2`, `_replicate3`), case-insensitive on the token only,
+  requires >=2 members.
+- `TRAILING_LETTER_SUFFIX` -- a single trailing letter after a separator
+  (`_A`, `-b`), gated by requiring >=3 members with consecutive letters so a
+  lone `Station_A`/`Station_B` pair (plausibly two different sites, not
+  replicates of one) never groups.
+
+Bare trailing digits (`Sample1` vs `Sample12`) are never a signal in either
+tier -- deliberately, since that's indistinguishable from arbitrary
+incrementing sample numbering. This means FAIRe's own schema example
+(`S01_1`/`S01_2`/`S01_3`) isn't itself detected unless the real names also
+carry a `rep` token or letter suffix -- an accepted precision-over-recall
+tradeoff, confirmed with the user directly (letter-suffix signal on by
+default, one fact type for both tiers, always `review_required=True` rather
+than splitting into a second, auto-trusted tier).
+
+Wired into `sources/ncbi.py`'s `NcbiBioSampleAdapter` (detects against each
+BioSample's `sample_name` attribute, falling back to its title when no
+`sample_name` was submitted -- the accession itself is never name-like, so
+it's only ever the returned group member/identifier, never the string
+matched against) and `sources/supplement_parsing.py` (detects against the
+sample-id column's own cell values). ENA is deliberately out of scope: its
+`sample_accession` is an INSDC accession, never a free-text name. One new
+`MappingRule` (`biological_rep_relation`, SAMPLE-level, `EXACT_LABEL`,
+`review_required=True`) routes both adapters' output through the same
+existing mapping path as any other structured-adapter fact.
+
+571 tests pass (18 new: `test_replicate_grouping.py`'s 10 pure-function
+cases plus adapter/mapping integration tests in
+`test_ncbi_ena_parsing.py`/`test_supplement_parsing.py`/`test_mapping_faire.py`).
+
 ## Mapping expansion: the rest of FAIRe's Environment section
 
 Beyond the 8 BioSample attributes already mapped (elev/samp_collect_device/

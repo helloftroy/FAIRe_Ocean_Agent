@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from fair_ocean_agent.database.enums import EntityLevel, EntityRelationshipType, IdentifierType
+from fair_ocean_agent.database.enums import EntityLevel, EntityRelationshipType, IdentifierType, SupportType
 from fair_ocean_agent.sources.base import SourceConfig, SourceRecord
 from fair_ocean_agent.sources.ena import EnaAdapter
 from fair_ocean_agent.sources.ncbi import NcbiBioProjectAdapter, NcbiBioSampleAdapter
@@ -110,6 +110,68 @@ def test_biosample_extract_structured_facts_notes_truncation(biosample_adapter):
     note = next(f for f in facts if f.fact_type_candidate == "biosample_coverage_note")
     assert "837" in note.raw_value
     assert note.entity_external_id is None  # a project-level note, not tied to one sample
+
+
+def test_biosample_extract_structured_facts_detects_biological_rep_relation_from_sample_name_attribute(
+    biosample_adapter,
+):
+    raw = {
+        "bioproject_accession": "PRJNA1425045",
+        "total_linked_samples": 2,
+        "truncated": False,
+        "samples": [
+            {
+                "accession": "SAMN1",
+                "title": "MIMS Environmental sample",
+                "attributes": {"sample_name": "Site_A_rep1"},
+            },
+            {
+                "accession": "SAMN2",
+                "title": "MIMS Environmental sample",
+                "attributes": {"sample_name": "Site_A_rep2"},
+            },
+        ],
+    }
+    facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw))
+
+    rep_facts = {f.entity_external_id: f for f in facts if f.fact_type_candidate == "biological_rep_relation"}
+    assert set(rep_facts) == {"SAMN1", "SAMN2"}
+    assert rep_facts["SAMN1"].raw_value == "SAMN1 | SAMN2"  # accessions, never the sample_name text
+    assert rep_facts["SAMN1"].raw_field_name == "sample_name"
+    assert rep_facts["SAMN1"].support_type == SupportType.DETERMINISTICALLY_DERIVED
+    assert rep_facts["SAMN1"].confidence_metadata == {
+        "replicate_detection_signal": "explicit_rep_marker",
+        "replicate_group_size": 2,
+    }
+
+
+def test_biosample_extract_structured_facts_falls_back_to_title_for_replicate_detection(biosample_adapter):
+    raw = {
+        "bioproject_accession": "PRJNA1425045",
+        "total_linked_samples": 2,
+        "truncated": False,
+        "samples": [
+            {"accession": "SAMN1", "title": "Site_A_rep1", "attributes": {}},
+            {"accession": "SAMN2", "title": "Site_A_rep2", "attributes": {}},
+        ],
+    }
+    facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw))
+
+    rep_facts = [f for f in facts if f.fact_type_candidate == "biological_rep_relation"]
+    assert len(rep_facts) == 2
+    assert rep_facts[0].raw_field_name == "title"
+
+
+def test_biosample_extract_structured_facts_no_biological_rep_relation_without_sibling(biosample_adapter):
+    raw = {
+        "bioproject_accession": "PRJNA1425045",
+        "total_linked_samples": 1,
+        "truncated": False,
+        "samples": [{"accession": "SAMN1", "title": "Site_A_rep1", "attributes": {}}],
+    }
+    facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw))
+
+    assert not any(f.fact_type_candidate == "biological_rep_relation" for f in facts)
 
 
 def test_biosample_find_related_returns_biosample_accessions(biosample_adapter):

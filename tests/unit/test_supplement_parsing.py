@@ -8,7 +8,7 @@ import zipfile
 import openpyxl
 import pytest
 
-from fair_ocean_agent.database.enums import EntityLevel, EntityRelationshipType
+from fair_ocean_agent.database.enums import EntityLevel, EntityRelationshipType, SupportType
 from fair_ocean_agent.sources.supplement_parsing import (
     ZipMemberTooLargeError,
     _column_letter,
@@ -49,6 +49,49 @@ def test_parse_delimited_table_binds_recognized_identifier_column_to_sample_enti
     assert fact.entity_level == EntityLevel.SAMPLE
     assert fact.entity_external_id == "S1"
     assert fact.entity_label == "S1"
+
+
+def test_parse_delimited_table_detects_biological_rep_relation_from_explicit_rep_suffix():
+    csv_content = b"sample_id,temp\nS01_rep1,18.2\nS01_rep2,18.4\nS02_rep1,17.9\n"
+    result = parse_delimited_table(csv_content, "t.csv")
+
+    rep_facts = {f.entity_external_id: f for f in result.facts if f.fact_type_candidate == "biological_rep_relation"}
+    assert set(rep_facts) == {"S01_rep1", "S01_rep2"}  # S02_rep1 has no sibling -> no fact
+    assert rep_facts["S01_rep1"].raw_value == "S01_rep1 | S01_rep2"
+    assert rep_facts["S01_rep2"].raw_value == "S01_rep1 | S01_rep2"
+    assert rep_facts["S01_rep1"].support_type == SupportType.DETERMINISTICALLY_DERIVED
+    assert rep_facts["S01_rep1"].confidence_metadata == {
+        "replicate_detection_signal": "explicit_rep_marker",
+        "replicate_group_size": 2,
+    }
+
+
+def test_parse_delimited_table_detects_biological_rep_relation_from_letter_suffix():
+    csv_content = b"sample_id,temp\nSample_A,18.2\nSample_B,18.4\nSample_C,18.1\n"
+    result = parse_delimited_table(csv_content, "t.csv")
+
+    rep_facts = [f for f in result.facts if f.fact_type_candidate == "biological_rep_relation"]
+    assert len(rep_facts) == 3
+    assert {f.entity_external_id for f in rep_facts} == {"Sample_A", "Sample_B", "Sample_C"}
+    assert all(f.raw_value == "Sample_A | Sample_B | Sample_C" for f in rep_facts)
+
+
+def test_parse_delimited_table_does_not_treat_bare_numeric_suffix_as_replicate():
+    csv_content = b"sample_id,temp\nS1,18.2\nS2,18.4\n"
+    result = parse_delimited_table(csv_content, "t.csv")
+
+    assert not any(f.fact_type_candidate == "biological_rep_relation" for f in result.facts)
+
+
+def test_parse_delimited_table_emits_biological_rep_relation_even_with_no_other_recognized_columns():
+    """Regression guard for the early-return-guard change: a table whose
+    only recognized header is the sample-id column itself (no aliased data
+    columns at all) must still reach replicate detection."""
+    csv_content = b"sample_id,notes\nSite_A_rep1,x\nSite_A_rep2,y\n"
+    result = parse_delimited_table(csv_content, "t.csv")
+
+    assert result.unrecognized_columns == ["notes"]
+    assert {f.fact_type_candidate for f in result.facts} == {"biological_rep_relation"}
 
 
 def test_parse_delimited_table_binds_library_columns_to_experiment_entity():

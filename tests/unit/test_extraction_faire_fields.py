@@ -117,6 +117,25 @@ def test_native_name_to_faire_hint_round_trips_a_known_field():
     assert mapping["standard_curve_r_squared"] == "r2"
 
 
+# biological_rep is the one deliberate exception to "exclude or gate":
+# search_flags.CONTROLLED_SEARCH_FIELDS's own "biological_rep" entry is
+# itself unconditional (matches the real FAIRe schema, which has no
+# conditional requirement for it -- a general sample-design concept, not a
+# PCR-specific one), and gold case controls-replicates-001 proves the LLM
+# checklist side must stay unconditionally active too (the benchmark only
+# exercises the LLM path, and that gold case expects
+# "biological_replicate_count" regardless of PCR content). Excluding the
+# LLM version would silently break that passing gold case; gating it (as a
+# prior round did) would wrongly hide it from non-PCR papers (e.g. shotgun
+# metagenomics) that still report replicate counts. Unlike the
+# adapter_forward/adapter_reverse duplicate this same guard caught (where
+# one mechanism could rewrite/mangle a sequence the other reports
+# verbatim), a plain replicate count has low real risk of the two
+# mechanisms disagreeing harmfully -- this is accepted, deliberate
+# redundancy for coverage, not an unreconciled gap.
+_ACCEPTED_UNCONDITIONAL_OVERLAPS = frozenset({"biological_rep"})
+
+
 def test_controlled_search_field_overlaps_are_excluded_or_flag_gated():
     """Standing guard against the exact failure mode this task fixed:
     search_flags.CONTROLLED_SEARCH_FIELDS and this taxonomy can both cover
@@ -125,12 +144,15 @@ def test_controlled_search_field_overlaps_are_excluded_or_flag_gated():
     CONTROLLED_SEARCH_FIELDS term_name that also appears here (as a
     native_name or a faire_hint) must be handled deliberately -- either
     fully excluded (LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS, when there's no
-    natural flag to gate on, e.g. seq_kit) or flag-gated
+    natural flag to gate on, e.g. seq_kit), flag-gated
     (required_any_flags, when the LLM should stay a richer complement,
-    e.g. target_gene/thermocycler/commercial_master_mix/assay_type) --
-    never left silently duplicated. Catches the next new deterministic
-    detector landing without its LLM-side twin being reconciled, the way
-    assay_type/biological_rep both did mid-development of this very test."""
+    e.g. target_gene/thermocycler/commercial_master_mix/assay_type), or an
+    explicitly documented accepted overlap
+    (_ACCEPTED_UNCONDITIONAL_OVERLAPS, e.g. biological_rep) -- never left
+    silently duplicated with no record of the decision. Catches the next
+    new deterministic detector landing without its LLM-side twin being
+    reconciled, the way assay_type/biological_rep both did mid-development
+    of this very test."""
     from fair_ocean_agent.extraction.search_flags import CONTROLLED_SEARCH_FIELDS
 
     controlled_names = {f.term_name for f in CONTROLLED_SEARCH_FIELDS}
@@ -138,12 +160,49 @@ def test_controlled_search_field_overlaps_are_excluded_or_flag_gated():
         for f in fields:
             if f.native_name not in controlled_names and f.faire_hint not in controlled_names:
                 continue
-            handled = f.faire_hint in LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS or bool(f.required_any_flags)
+            handled = (
+                f.faire_hint in LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS
+                or bool(f.required_any_flags)
+                or f.faire_hint in _ACCEPTED_UNCONDITIONAL_OVERLAPS
+                or f.native_name in _ACCEPTED_UNCONDITIONAL_OVERLAPS
+            )
             assert handled, (
                 f"{f.native_name!r} (hint {f.faire_hint!r}) duplicates a "
                 "search_flags.CONTROLLED_SEARCH_FIELDS entry but is neither "
-                "excluded nor flag-gated -- both mechanisms would fire for "
-                "the same real fact"
+                "excluded, flag-gated, nor a documented accepted overlap -- "
+                "both mechanisms would fire for the same real fact with no "
+                "record of that being intentional"
+            )
+
+
+def test_llm_judged_search_field_overlaps_are_excluded_or_flag_gated():
+    """Same guard as test_controlled_search_field_overlaps_are_excluded_or_flag_gated,
+    but for search_flags.LLM_JUDGED_SEARCH_FIELDS -- a second, separate
+    deterministic-ish mechanism (a narrow, quote-anchored LLM pass over
+    curated search_terms) that this taxonomy's general checklist can
+    equally duplicate. Real example this guard would have caught up front:
+    forward_sequencing_adapter/reverse_sequencing_adapter (general
+    checklist) duplicated LLM_JUDGED_SEARCH_FIELDS's own
+    adapter_forward/adapter_reverse entries -- two independent LLM calls
+    each able to produce a fact for the same real adapter sequence."""
+    from fair_ocean_agent.extraction.search_flags import LLM_JUDGED_SEARCH_FIELDS
+
+    judged_names = {f.term_name for f in LLM_JUDGED_SEARCH_FIELDS}
+    for fields in FIELD_GROUPS.values():
+        for f in fields:
+            if f.native_name not in judged_names and f.faire_hint not in judged_names:
+                continue
+            handled = (
+                f.faire_hint in LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS
+                or bool(f.required_any_flags)
+                or f.faire_hint in _ACCEPTED_UNCONDITIONAL_OVERLAPS
+                or f.native_name in _ACCEPTED_UNCONDITIONAL_OVERLAPS
+            )
+            assert handled, (
+                f"{f.native_name!r} (hint {f.faire_hint!r}) duplicates a "
+                "search_flags.LLM_JUDGED_SEARCH_FIELDS entry but is neither "
+                "excluded, flag-gated, nor a documented accepted overlap -- "
+                "two independent LLM calls would fire for the same real fact"
             )
 
 
@@ -239,6 +298,8 @@ def test_low_value_optional_fields_are_excluded_from_llm_only():
             "instrument",
             "lib_layout",
             "seq_kit",
+            "adapter_forward",
+            "adapter_reverse",
         }
     )
     rendered = render_field_reference()
