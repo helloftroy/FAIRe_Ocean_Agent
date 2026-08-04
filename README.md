@@ -1544,6 +1544,117 @@ Project metadata's own LLM checklist coverage (which fields the LLM
 *should* be asked about that it currently isn't) is a separate, explicitly
 deferred follow-up, not addressed here.
 
+## Deterministic (no-LLM) project-metadata extraction
+
+Direct follow-up to the checklist-narrowing above: a NOAA-specific FAIRe
+checklist review marked a further set of `projectMetadata` fields
+(`license`, `rightsHolder`, `accessRights`, `bibliographicCitation`,
+`code_repo`, `recordedBy`, `recordedByID`, `project_contact`) "No LLM"
+outright -- structured sources first, falling back to deterministic
+parsing of the paper's own text, never a model. Before this milestone none
+of these had *any* extraction path at all (confirmed against the real
+database: zero coverage for the validation paper below).
+
+**Real evidence driving the design, not assumed**: fetched the live
+Crossref record for DOI `10.7717/peerj.333` and found `license: null` --
+PeerJ always CC-BY-licenses its articles, but Crossref doesn't always
+carry that metadata. The paper's own cached JATS full-text XML has the
+real answer structurally:
+```xml
+<permissions><copyright-holder>Davies et al.</copyright-holder>
+<license license-type="open-access" xlink:href="http://creativecommons.org/licenses/by/3.0/">...</license>
+</permissions>
+```
+Crossref alone is insufficient; a real JATS-tree-structure parser is
+necessary, not optional. The same paper's XML also has two `<contrib-group>`
+elements -- one `contrib-type="author"`, one `contrib-type="editor"` -- a
+real, live-confirmed risk that a naive "grab every contrib-group" extractor
+would silently add the editor to `recordedBy`.
+
+**New module, `extraction/publication_metadata.py`**, three separate
+techniques rather than one grab-bag function:
+- **JATS tree-structure parsing** (`xml.etree.ElementTree`, not
+  flatten-then-regex): `<permissions>/<license>` -> `license` +
+  `accessRights`; `<permissions>/<copyright-holder>` -> `rightsHolder`;
+  `<contrib-group>/<contrib contrib-type="author">` -> `recordedBy`
+  (`" | "`-joined) and `<contrib-id contrib-id-type="orcid">` ->
+  `recordedByID` when present; `<contrib corresp="yes">/<email>` ->
+  `project_contact`. Explicitly filters to `contrib-type="author"` --
+  never editors.
+- **Flat-text regex fallback**, `code_repo` only: reuses
+  `discovery/text_identifiers.xml_to_text()` rather than reimplementing
+  XML flattening, then a GitHub/GitLab/Bitbucket URL pattern.
+- **Pure formatter, not extraction**: `bibliographicCitation` composed
+  directly from Crossref's own title/authors/year/journal/DOI -- every
+  piece already exists as a structured fact by the time this runs.
+
+Deliberately **not** building a JATS/Crossref-derived `institution`
+fallback: `map_study_to_faire`'s dedup is "first fact by `created_at` wins
+the value, a later disagreeing one only flags `review_required`, never
+corrects it" (that module's own docstring is explicit this is not a
+source-precedence policy) -- adding a second `institution` source risked
+a real ordering bug where a JATS-derived value could silently outrank
+ENA's `center_name`, which already covers the large majority of this
+pipeline's BioProject/ENA-linked studies structurally. Not worth the risk
+for marginal coverage gain.
+
+**`pcr_0_1` (the checklist's `targeted_qPCR_ddPCR_assay_0_1`) needed no
+new work at all** -- Codex had just landed
+`extraction/search_flags.py::detect_text_search_flags`, a tighter,
+better-designed deterministic detector than what this milestone would
+have built: technical terms only (PCR/qPCR/ddPCR/amplification/polymerase
+chain reaction), which correctly avoids a real false positive found while
+researching this -- the checklist's own suggested keywords
+("species-specific", "taxon-specific", "diagnostic assay") appear 6 times
+in the validation paper in an unrelated coral-settlement-behavior context,
+which would have wrongly flagged `pcr_0_1='1'` on a paper that has nothing
+to do with qPCR/ddPCR.
+
+**Schema extension**: `expedition_id`/`ship_crs_expocode` aren't part of
+the public FAIRe v1.0.2 checklist vendored from upstream -- confirmed via
+`grep`, absent from `classes.yaml`/`schema.yaml`/`enums.yaml` entirely.
+Added as an explicitly-documented NOAA/SEUS-MBON extension block in both
+files (asked the user first rather than silently forking or silently
+dropping the fields) -- necessary for more than CSV completeness:
+`standards/faire_registry.py::build_faire_registry()` reads only
+`schema.yaml`, and an existing test
+(`test_registry_validation_report_all_checks_pass_on_real_schemas`)
+actively asserts every `classes.yaml` slot has a matching `schema.yaml`
+term, so a `classes.yaml`-only addition would have both broken that test
+and silently dropped the field from the export CSV.
+
+**Corrects a decision from the prior round**: `platform`/`instrument`/
+`lib_layout` (native names `sequencing_platform_general`/
+`sequencing_instrument`/`library_layout`) are real `projectMetadata`
+fields (confirmed via `mapping/rules.py::_target_table_for_faire_field`),
+not experiment-scoped as previously assumed, and this checklist marks them
+"No LLM" too -- already 100% covered by ENA's own structured
+`instrument_platform`/`instrument_model`/`library_layout` facts wherever a
+study has one. Added to `LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS`.
+
+**Wiring**: new `workflow/handlers.py::_discover_publication_metadata_from_sources`,
+called inline from `handle_discover_identifiers` right after the existing
+`_discover_supplements_from_fulltext`, mirroring that function's exact
+shape -- pure parsing of already-fetched/disk-cached text (JATS full text
+plus a disk-cached Crossref re-fetch), no new network cost, no LLM, so
+(like that function) no reason to keep it manual-only. Idempotency-guarded
+via a dedicated `create_source()` existence check, same pattern as every
+other Source-creation call site.
+
+**Verified against the real, partially-processed validation paper end to
+end**, not just unit-by-unit: ran the new extraction against the real
+database (`STUDY-47b4f87d2234`, DOI `10.7717/peerj.333`, backed up first),
+then `map_study_to_faire`, then `export_faire`, and confirmed the real
+`projectMetadata.csv` row shows exactly the expected values --
+`license`/`rightsHolder`/`accessRights`/`bibliographicCitation`/
+`recordedBy`/`project_contact` newly populated correctly;
+`code_repo`/`recordedByID` correctly empty (this 2014 paper genuinely has
+neither a code repository link nor any author ORCID); `platform`/
+`instrument`/`lib_layout`/`checksum_method`/`institution` still populated
+from ENA exactly as before, untouched. 536 tests pass (16 new, including a
+`tests/unit/test_extraction_publication_metadata.py` suite that parses
+this same real cached JATS XML end to end).
+
 ## Mapping expansion: the rest of FAIRe's Environment section
 
 Beyond the 8 BioSample attributes already mapped (elev/samp_collect_device/

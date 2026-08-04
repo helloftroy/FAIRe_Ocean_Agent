@@ -202,6 +202,9 @@ def test_low_value_optional_fields_are_excluded_from_llm_only():
             "lib_conc",
             "lib_conc_unit",
             "lib_conc_meth",
+            "platform",
+            "instrument",
+            "lib_layout",
         }
     )
     rendered = render_field_reference()
@@ -209,6 +212,16 @@ def test_low_value_optional_fields_are_excluded_from_llm_only():
 
     assert LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS == expected_fields
     for field in expected_fields:
+        if field in ("instrument", "platform"):
+            # Too generic a substring: "instrument" appears inside an
+            # unrelated hint ("...instrument/method used to measure DNA
+            # concentration"), and "platform" is still legitimately present
+            # via the still-active sequencing_platform *fallback* narrative
+            # field (a different, unexcluded concept -- only the atomic
+            # sequencing_platform_general native name was excluded).
+            # test_platform_instrument_lib_layout_excluded_from_llm_checklist
+            # below checks these precisely via field name, not substring.
+            continue
         assert field not in rendered
     assert "sequencing_location" not in rendered
     assert "sequencing_location" not in allowed_names
@@ -258,3 +271,17 @@ def test_sample_metadata_llm_checklist_is_narrowed_to_location_date_depth():
     ):
         assert excluded not in names
     assert "samp_category" not in all_field_names()
+
+
+def test_platform_instrument_lib_layout_excluded_from_llm_checklist():
+    """Regression guard for a follow-up NOAA checklist review: these are
+    real projectMetadata fields (not experimentRunMetadata, contrary to an
+    earlier decision in this module's history), already 100% covered by
+    ENA's own structured instrument_platform/instrument_model/
+    library_layout facts wherever a study has one -- excluded from the LLM
+    checklist, kept in the taxonomy/registry/exports for structured
+    adapters."""
+    names = field_names_for_reference()
+    for excluded in ("sequencing_platform_general", "sequencing_instrument", "library_layout"):
+        assert excluded not in names
+    assert {"sequencing_platform_general", "sequencing_instrument", "library_layout"} <= all_field_names()

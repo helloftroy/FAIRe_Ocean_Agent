@@ -382,6 +382,10 @@ classes:
     - inhibition_check_0_1
     - institution
     - institutionID
+    # NOAA/SEUS-MBON extension, not part of the public FAIRe v1.0.2
+    # checklist -- see the matching comment in schema.yaml.
+    - expedition_id
+    - ship_crs_expocode
     - instrument
     - lib_layout
     - lib_screen

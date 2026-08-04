@@ -3960,6 +3960,76 @@ slots:
       - projectMetadata
       requirement_level: Recommended
       requirement_level_code: R
+  # --- NOAA/SEUS-MBON extension: not part of the public FAIRe v1.0.2
+  # checklist vendored from https://github.com/FAIR-eDNA/FAIRe_checklist
+  # (schemas/faire/README.md documents that repo as the sole upstream
+  # source normally mirrored exactly). Added deliberately, per an explicit
+  # user request, for two cruise/expedition fields the NOAA-AOML
+  # SEUS-MBON project checklist uses that upstream FAIRe does not define.
+  # If upstream ever adds equivalent slots, reconcile against them instead
+  # of keeping this local addition.
+  expedition_id:
+    name: expedition_id
+    description: Identifier for the cruise or expedition, with year in parentheses.
+    in_subset:
+    - Project
+    slot_uri: __TODO_ADD_SLOT_URI__
+    range: string
+    structured_pattern:
+      syntax: null
+      interpolated: null
+      partial_match: null
+    required: false
+    recommended: true
+    examples:
+    - value: SEUS-MBON-2023-01 (2023)
+      description: null
+    source:
+    - NOAA
+    mappings:
+      exact_mappings: []
+      close_mappings: []
+      related_mappings: []
+      narrow_mappings: []
+      broad_mappings: []
+    domain_of: []
+    annotations:
+      data_type:
+      - projectMetadata
+      requirement_level: Recommended
+      requirement_level_code: R
+  ship_crs_expocode:
+    name: ship_crs_expocode
+    description: The unique cruise identifier (EXPOCODE) assigned by CCHDO/CLIVAR
+      GO-SHIP, or an equivalent ship/cruise code.
+    in_subset:
+    - Project
+    slot_uri: __TODO_ADD_SLOT_URI__
+    range: string
+    structured_pattern:
+      syntax: null
+      interpolated: null
+      partial_match: null
+    required: false
+    recommended: true
+    examples:
+    - value: 33RO20220315
+      description: null
+    source:
+    - NOAA
+    mappings:
+      exact_mappings: []
+      close_mappings: []
+      related_mappings: []
+      narrow_mappings: []
+      broad_mappings: []
+    domain_of: []
+    annotations:
+      data_type:
+      - projectMetadata
+      requirement_level: Recommended
+      requirement_level_code: R
+  # --- end NOAA/SEUS-MBON extension ---
   instrument:
     name: instrument
     description: Sequencing instrument (manufacturer and model) used. Where possible

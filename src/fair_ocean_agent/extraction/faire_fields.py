@@ -63,6 +63,15 @@ from dataclasses import dataclass
 # decimalLatitude/decimalLongitude) remain -- everything else about a
 # sample, including which samples are controls, comes from APIs/structured
 # supplementary data, never the LLM.
+#
+# platform/instrument/lib_layout were added in a follow-up review of a
+# NOAA-specific FAIRe checklist that marks these (real projectMetadata
+# fields, confirmed via `_target_table_for_faire_field`) "No LLM" --
+# already 100% covered by ENA's own instrument_platform/instrument_model/
+# library_layout facts wherever a study has one (see mapping/rules.py's
+# EntityLevel.SEQUENCING_RUN rules). This corrects an earlier decision in
+# this same module's history that kept `platform` LLM-askable after
+# mis-scoping it as an "experiment" rather than "project" field.
 LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS = frozenset(
     {
         "informationWithheld",
@@ -85,6 +94,9 @@ LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS = frozenset(
         "lib_conc",
         "lib_conc_unit",
         "lib_conc_meth",
+        "platform",
+        "instrument",
+        "lib_layout",
     }
 )
 

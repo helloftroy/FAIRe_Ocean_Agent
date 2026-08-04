@@ -33,6 +33,7 @@ from fair_ocean_agent.discovery.text_identifiers import (
     xml_to_text,
 )
 from fair_ocean_agent.extraction.sections import select_relevant_sections
+from fair_ocean_agent.extraction.publication_metadata import extract_publication_metadata_facts
 from fair_ocean_agent.extraction.search_flags import detect_controlled_search_facts, detect_text_search_flags
 from fair_ocean_agent.extraction.text import (
     PROMPT_VERSION,
@@ -585,6 +586,84 @@ def _discover_supplements_from_fulltext(session: Session, study: Study, adapters
     return study
 
 
+def _discover_publication_metadata_from_sources(
+    session: Session, study: Study, adapters: dict[str, SourceAdapter], doi: str
+) -> Study:
+    """Deterministic (no-LLM) project-metadata extraction
+    (extraction/publication_metadata.py) from the same open full text used
+    for identifier/supplement mining above, plus a disk-cached re-fetch of
+    the Crossref record, so a DOI-driven DISCOVER_IDENTIFIERS pass also
+    resolves license/rightsHolder/accessRights/recordedBy/recordedByID/
+    project_contact/bibliographicCitation/code_repo for free.
+
+    Every field this produces was explicitly marked "No LLM" in a user
+    review of a NOAA/SEUS-MBON FAIRe checklist -- structured sources first
+    (Crossref, ENA's center_name for institution, ...), falling back to
+    deterministic JATS-structure/regex parsing of the paper's own text,
+    never the LLM checklist.
+
+    Deliberately mirrors _discover_supplements_from_fulltext's shape: pure
+    parsing of already-fetched/disk-cached text, no new network cost, no
+    LLM -- so, like that function, there's no cost reason to keep this
+    manual-only. Idempotency-guarded the same way _persist_source_and_facts
+    is (an early existence check on this function's own dedicated
+    `source_name`), checked before the (cheap but non-zero) re-fetch/parse
+    work rather than after.
+    """
+    already_recorded = (
+        session.query(Source.source_id)
+        .filter_by(study_id=study.study_id, source_name="publication_metadata_extraction", external_identifier=doi)
+        .first()
+        is not None
+    )
+    if already_recorded:
+        return study
+
+    europe_pmc = adapters.get("europe_pmc")
+    fulltext_xml: str | None = None
+    if isinstance(europe_pmc, EuropePmcAdapter):
+        pmcid = _identifier_value(session, study.study_id, IdentifierType.PMCID)
+        if pmcid is not None:
+            try:
+                fulltext_xml = europe_pmc.fetch_fulltext_xml(pmcid)
+            except SourceRecordNotFoundError:
+                fulltext_xml = None
+
+    crossref_raw: dict | None = None
+    crossref = adapters.get("crossref")
+    if crossref is not None:
+        try:
+            crossref_raw = crossref.fetch_record(doi).raw
+        except SourceRecordNotFoundError:
+            crossref_raw = None
+
+    facts = extract_publication_metadata_facts(fulltext_xml, crossref_raw, locator_prefix=f"publication_metadata:{doi}")
+    if not facts:
+        return study
+
+    source = create_source(
+        session,
+        Source(
+            study_id=study.study_id,
+            source_type=SourceType.PUBLICATION_API.value,
+            source_name="publication_metadata_extraction",
+            external_identifier=doi,
+            retrieved_at=utcnow(),
+            content_hash=hash_payload({"doi": doi, "fact_count": len(facts)}),
+            inspection_status=InspectionStatus.INSPECTED.value,
+            inspection_level=InspectionLevel.FULL.value,
+        ),
+    )
+    _persist_candidate_facts(
+        session,
+        study.study_id,
+        source.source_id,
+        facts,
+        extraction_method="deterministic_publication_metadata",
+    )
+    return study
+
+
 def _resolve_repository_sources(
     session: Session,
     study: Study,
@@ -766,6 +845,7 @@ def handle_discover_identifiers(session: Session, task: Task) -> None:
         study = _resolve_publication_sources(session, study, doi)
         study = _discover_identifiers_from_fulltext(session, study, _build_enabled_adapters())
         study = _discover_supplements_from_fulltext(session, study, _build_enabled_adapters())
+        study = _discover_publication_metadata_from_sources(session, study, _build_enabled_adapters(), doi)
 
     dataset_dois = _identifier_values(session, study.study_id, IdentifierType.DATASET_DOI)
     bioproject_accessions = _identifier_values(session, study.study_id, IdentifierType.BIOPROJECT_ACCESSION)

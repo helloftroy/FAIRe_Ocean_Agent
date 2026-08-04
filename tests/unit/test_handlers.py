@@ -342,6 +342,78 @@ def test_handler_discovers_supplements_inline_during_doi_driven_discovery(db_ses
     assert {a.file_name for a in assets} == {"Table_1.csv"}
 
 
+def test_handler_extracts_publication_metadata_inline_during_doi_driven_discovery(db_session, monkeypatch):
+    """A DOI-driven DISCOVER_IDENTIFIERS pass must also resolve
+    license/rightsHolder/accessRights/recordedBy/project_contact (from
+    JATS <permissions>/<contrib-group>) and bibliographicCitation (from
+    Crossref) for free -- no LLM, no extra network cost, same shape as the
+    inline supplement-discovery test above."""
+    study = _seeded_study_with_doi(db_session)
+    task = _task_for(db_session, study)
+
+    europe_pmc_adapter = FakeEuropePmcFullTextAdapter(
+        """<article><body><sec><permissions>
+        <copyright-holder>Test Authors</copyright-holder>
+        <license license-type="open-access" xmlns:xlink="http://www.w3.org/1999/xlink"
+        xlink:href="http://creativecommons.org/licenses/by/4.0/"></license>
+        </permissions>
+        <contrib-group><contrib contrib-type="author" corresp="yes">
+        <name><surname>Doe</surname><given-names>Jane</given-names></name>
+        <email>jane@example.org</email></contrib></contrib-group>
+        </sec></body></article>"""
+    )
+    crossref_adapter = FakeAdapter(
+        "crossref",
+        record=SourceRecord(
+            source_name="crossref",
+            external_identifier="10.1234/x",
+            raw={
+                "title": ["A test paper"],
+                "author": [{"given": "Jane", "family": "Doe"}],
+                "published": {"date-parts": [[2020]]},
+                "container-title": ["Test Journal"],
+                "DOI": "10.1234/x",
+            },
+            retrieved_at=datetime.now(timezone.utc),
+            content_hash="deadbeef",
+        ),
+    )
+    monkeypatch.setattr(
+        handlers, "_build_enabled_adapters", lambda: {"europe_pmc": europe_pmc_adapter, "crossref": crossref_adapter}
+    )
+
+    handlers.handle_discover_identifiers(db_session, task)
+    db_session.commit()
+
+    facts = {
+        f.fact_type_candidate: f.raw_value
+        for f in db_session.query(RawFact).filter_by(
+            study_id=study.study_id, extraction_method="deterministic_publication_metadata"
+        )
+    }
+    assert facts["license"] == "http://creativecommons.org/licenses/by/4.0/"
+    assert facts["rightsHolder"] == "Test Authors"
+    assert facts["accessRights"] == "open access"
+    assert facts["recordedBy"] == "Jane Doe"
+    assert facts["project_contact"] == "jane@example.org"
+    assert "Doe J" in facts["bibliographicCitation"]
+
+    fact_count = db_session.query(RawFact).filter_by(
+        study_id=study.study_id, extraction_method="deterministic_publication_metadata"
+    ).count()
+
+    # Idempotent: re-running the same (simulated retry) task must not
+    # duplicate facts.
+    handlers.handle_discover_identifiers(db_session, task)
+    db_session.commit()
+    assert (
+        db_session.query(RawFact)
+        .filter_by(study_id=study.study_id, extraction_method="deterministic_publication_metadata")
+        .count()
+        == fact_count
+    )
+
+
 def test_handler_raises_runtime_error_when_no_adapters_enabled(db_session, monkeypatch):
     study = _seeded_study_with_doi(db_session)
     task = _task_for(db_session, study)
