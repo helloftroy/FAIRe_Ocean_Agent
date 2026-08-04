@@ -29,6 +29,12 @@ MULTI_SECTION_XML = """<article><body>
 </sec>
 </body></article>"""
 
+PCR_FLAG_XML = """<article><body>
+<sec><title>Materials and Methods</title>
+<p>A TaqMan qPCR assay used a FAM reporter dye and BHQ quencher.</p>
+</sec>
+</body></article>"""
+
 
 class FakeEuropePmcAdapter:
     name = "europe_pmc"
@@ -101,6 +107,36 @@ def test_handler_extracts_and_persists_verified_facts(db_session, monkeypatch):
     assert facts[0].evidence_quote == "Sampling Water samples were collected on 4 January 2022 at a depth of 5 meters."
     assert facts[0].confidence_metadata == {"evidence_ids": ["SAMPLING.P001"]}
     assert facts[0].model_name == "mock-model"
+
+
+def test_handler_persists_deterministic_text_search_flags(db_session, monkeypatch):
+    study = _seeded_study_with_pmcid(db_session)
+    task = _task_for(db_session, study)
+
+    handlers._llm_backend_cache = MockLLMBackend(label="mock-model", responses=["[]"])
+    monkeypatch.setattr(
+        handlers,
+        "_build_enabled_adapters",
+        lambda: {"europe_pmc": FakeEuropePmcAdapter(fulltext_xml=PCR_FLAG_XML)},
+    )
+
+    handlers.handle_extract_text_facts(db_session, task)
+    db_session.commit()
+
+    facts = {
+        fact.fact_type_candidate: fact
+        for fact in db_session.query(RawFact).filter_by(
+            study_id=study.study_id,
+            extraction_method="deterministic_text_search_flagging",
+        )
+    }
+    assert set(facts) == {"probe_based_qPCR_ddPCR_assay_0_1", "pcr_0_1"}
+    assert facts["probe_based_qPCR_ddPCR_assay_0_1"].raw_value == "true"
+    assert facts["probe_based_qPCR_ddPCR_assay_0_1"].evidence_quote == (
+        "Materials and Methods A TaqMan qPCR assay used a FAM reporter dye and BHQ quencher."
+    )
+    assert facts["probe_based_qPCR_ddPCR_assay_0_1"].support_type == "deterministically_derived"
+    assert facts["probe_based_qPCR_ddPCR_assay_0_1"].prompt_version == handlers.PROMPT_VERSION
 
 
 def test_handler_materializes_a_real_entity_per_assay_tag(db_session, monkeypatch):

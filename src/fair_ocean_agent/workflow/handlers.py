@@ -33,6 +33,7 @@ from fair_ocean_agent.discovery.text_identifiers import (
     xml_to_text,
 )
 from fair_ocean_agent.extraction.sections import select_relevant_sections
+from fair_ocean_agent.extraction.search_flags import detect_text_search_flags
 from fair_ocean_agent.extraction.text import (
     PROMPT_VERSION,
     extract_facts_from_section,
@@ -922,6 +923,20 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
     session.flush()
     already_resolved = resolved_faire_fields_for_study(session, study.study_id)
     llm_config = load_config().llm
+
+    flag_facts = detect_text_search_flags(
+        ((section["title"], section["text"]) for section in sections),
+        locator_prefix=f"europe_pmc_fulltext:{pmcid}",
+    )
+    _persist_candidate_facts(
+        session,
+        study.study_id,
+        source.source_id,
+        flag_facts,
+        extraction_method="deterministic_text_search_flagging",
+        prompt_version=PROMPT_VERSION,
+        review_status=ReviewStatus.ACCEPTED.value,
+    )
 
     for section in sections:
         try:

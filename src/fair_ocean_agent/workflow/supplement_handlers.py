@@ -62,6 +62,7 @@ from fair_ocean_agent.database.models import (
     Study,
     Task,
 )
+from fair_ocean_agent.extraction.search_flags import detect_text_search_flags
 from fair_ocean_agent.extraction.text import (
     PROMPT_VERSION,
     extract_facts_from_section,
@@ -632,6 +633,18 @@ def handle_extract_supplement_text_facts(session: Session, task: Task) -> None:
         source = session.get(Source, prepared.source_id)
         if source is None:
             raise ValueError(f"Source {prepared.source_id} not found")
+        flag_facts = detect_text_search_flags(
+            ((prepared.title, prepared.text_content),),
+            locator_prefix=f"prepared_source_text:{prepared.prepared_source_text_id}",
+        )
+        _persist_supplement_facts(
+            session,
+            study,
+            source,
+            flag_facts,
+            extraction_method="supplement_deterministic_text_search_flagging",
+            prompt_version=PROMPT_VERSION,
+        )
         _persist_supplement_facts(
             session,
             study,

@@ -46,6 +46,13 @@ paper and supplement LLM checklists. The same policy also removes the
 generic PCR narrative fallback that mapped only to pcr_method_additional;
 the model still receives the atomic PCR fields that carry useful values.
 
+**v10 -> v11:** deterministic paper/supplement search flags now run before
+LLM extraction (see extraction/search_flags.py). They record cheap,
+evidence-bearing booleans such as "PCR is present" and "probe-based qPCR
+or ddPCR cues are present" so later targeted searches can be conditionally
+activated without asking the model to hunt for every optional branch on
+every paper.
+
 **v9 -> v10: optional per-fact `assay_tag` for multi-assay papers.** A
 paper can describe more than one distinct assay run on the same samples
 (e.g. a 16S PCR assay and an 18S PCR assay), each with its own primers,
@@ -146,7 +153,7 @@ from fair_ocean_agent.llm.base import LLMBackend, LLMResponse
 from fair_ocean_agent.mapping.faire import TARGET_SCHEMA
 from fair_ocean_agent.sources.base import RawFactCandidate
 
-PROMPT_VERSION = "text-extraction-v10-assay-tagging"
+PROMPT_VERSION = "text-extraction-v11-search-flags"
 DEFAULT_MAX_SECTION_CHARS_PER_CALL = 1600
 
 ABSENT_RAW_VALUE_STRINGS = frozenset(
