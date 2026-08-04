@@ -36,6 +36,50 @@ def test_detect_text_search_flags_does_not_invent_absent_flags():
     assert facts == []
 
 
+def test_detect_text_search_flags_records_control_booleans_from_explicit_evidence():
+    facts = detect_text_search_flags(
+        (
+            (
+                "Controls",
+                "Negative controls included field blanks and NTCs. "
+                "A positive control used synthetic DNA from a mock community.",
+            ),
+        ),
+        locator_prefix="paper:PMC1",
+    )
+
+    by_type = {fact.fact_type_candidate: fact for fact in facts}
+    assert by_type["neg_cont_0_1"].raw_value == "1"
+    assert by_type["neg_cont_0_1"].evidence_quote == "Negative controls included field blanks and NTCs."
+    assert by_type["neg_cont_0_1"].confidence_metadata["matched_terms"] == [
+        "field blanks",
+        "Negative controls",
+        "NTCs",
+    ]
+    assert by_type["pos_cont_0_1"].raw_value == "1"
+    assert by_type["pos_cont_0_1"].evidence_quote == (
+        "A positive control used synthetic DNA from a mock community."
+    )
+
+
+def test_detect_text_search_flags_sets_control_zero_only_from_explicit_none():
+    facts = detect_text_search_flags(
+        (
+            (
+                "Controls",
+                "No negative controls were used. Positive controls were not included.",
+            ),
+        ),
+        locator_prefix="paper:PMC1",
+    )
+
+    by_type = {fact.fact_type_candidate: fact for fact in facts}
+    assert by_type["neg_cont_0_1"].raw_value == "0"
+    assert by_type["neg_cont_0_1"].evidence_quote == "No negative controls were used."
+    assert by_type["pos_cont_0_1"].raw_value == "0"
+    assert by_type["pos_cont_0_1"].evidence_quote == "Positive controls were not included."
+
+
 def test_detect_controlled_search_facts_uses_active_flags_and_pipe_delimited_matches():
     text = (
         "PCR targeted 12S rRNA and COI with the MiFish-U assay. "

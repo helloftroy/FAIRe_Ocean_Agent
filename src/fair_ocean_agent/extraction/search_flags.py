@@ -19,7 +19,10 @@ from fair_ocean_agent.sources.base import RawFactCandidate
 class TextSearchFlag:
     fact_type_candidate: str
     description: str
-    patterns: tuple[re.Pattern[str], ...]
+    positive_patterns: tuple[re.Pattern[str], ...]
+    positive_value: str = "true"
+    explicit_none_patterns: tuple[re.Pattern[str], ...] = ()
+    explicit_none_value: str = "0"
 
 
 @dataclass(frozen=True)
@@ -35,7 +38,7 @@ TEXT_SEARCH_FLAGS: tuple[TextSearchFlag, ...] = (
     TextSearchFlag(
         fact_type_candidate="probe_based_qPCR_ddPCR_assay_0_1",
         description="probe-based qPCR/ddPCR assay keyword evidence",
-        patterns=(
+        positive_patterns=(
             re.compile(r"\bTaqMan\b", re.IGNORECASE),
             re.compile(r"\bhydrolysis\s+probe(s)?\b", re.IGNORECASE),
             re.compile(r"\bprobe[-\s]+based\b", re.IGNORECASE),
@@ -52,12 +55,62 @@ TEXT_SEARCH_FLAGS: tuple[TextSearchFlag, ...] = (
     TextSearchFlag(
         fact_type_candidate="pcr_0_1",
         description="PCR/amplification keyword evidence",
-        patterns=(
+        positive_patterns=(
             re.compile(r"\bPCR\b", re.IGNORECASE),
             re.compile(r"\bqPCR\b", re.IGNORECASE),
             re.compile(r"\bddPCR\b", re.IGNORECASE),
             re.compile(r"\bamplification\b", re.IGNORECASE),
             re.compile(r"\bpolymerase\s+chain\s+reaction\b", re.IGNORECASE),
+        ),
+    ),
+    TextSearchFlag(
+        fact_type_candidate="neg_cont_0_1",
+        description="explicit evidence that negative controls were or were not used",
+        positive_value="1",
+        positive_patterns=(
+            re.compile(r"\bnegative\s+controls?\b", re.IGNORECASE),
+            re.compile(r"\bfield\s+blanks?\b", re.IGNORECASE),
+            re.compile(r"\bequipment\s+blanks?\b", re.IGNORECASE),
+            re.compile(r"\bfiltration\s+blanks?\b", re.IGNORECASE),
+            re.compile(r"\bextraction\s+blanks?\b", re.IGNORECASE),
+            re.compile(r"\breagent\s+blanks?\b", re.IGNORECASE),
+            re.compile(r"\bPCR\s+blanks?\b", re.IGNORECASE),
+            re.compile(r"\bno[-\s]+template\s+controls?\b", re.IGNORECASE),
+            re.compile(r"\bNTC(?:s)?\b"),
+        ),
+        explicit_none_patterns=(
+            re.compile(r"\bno\s+negative\s+controls?\s+(?:were\s+)?(?:used|included|performed|run|analy[sz]ed)\b", re.IGNORECASE),
+            re.compile(r"\bwithout\s+negative\s+controls?\b", re.IGNORECASE),
+            re.compile(r"\bnegative\s+controls?\s+(?:were\s+)?(?:not\s+used|not\s+included|absent|omitted)\b", re.IGNORECASE),
+            re.compile(r"\bno\s+(?:field|equipment|filtration|extraction|reagent|PCR)\s+blanks?\s+(?:were\s+)?(?:used|included|performed|run|analy[sz]ed)\b", re.IGNORECASE),
+            re.compile(r"\bno\s+no[-\s]+template\s+controls?\s+(?:were\s+)?(?:used|included|performed|run|analy[sz]ed)\b", re.IGNORECASE),
+            re.compile(r"\bno\s+NTCs?\s+(?:were\s+)?(?:used|included|performed|run|analy[sz]ed)\b", re.IGNORECASE),
+        ),
+    ),
+    TextSearchFlag(
+        fact_type_candidate="pos_cont_0_1",
+        description="explicit evidence that positive controls were or were not used",
+        positive_value="1",
+        positive_patterns=(
+            re.compile(r"\bpositive\s+controls?\b", re.IGNORECASE),
+            re.compile(r"\bmock\s+communit(?:y|ies)\b", re.IGNORECASE),
+            re.compile(r"\breference\s+DNA\b", re.IGNORECASE),
+            re.compile(r"\bknown\s+DNA\b", re.IGNORECASE),
+            re.compile(r"\bsynthetic\s+DNA\b", re.IGNORECASE),
+            re.compile(r"\bgBlock(?:s)?\b", re.IGNORECASE),
+            re.compile(r"\bplasmid\s+controls?\b", re.IGNORECASE),
+            re.compile(r"\breference\s+tissue\b", re.IGNORECASE),
+            re.compile(r"\bpositive\s+template\b", re.IGNORECASE),
+            re.compile(r"\bpositive\s+amplification\s+controls?\b", re.IGNORECASE),
+        ),
+        explicit_none_patterns=(
+            re.compile(r"\bno\s+positive\s+controls?\s+(?:were\s+)?(?:used|included|performed|run|analy[sz]ed)\b", re.IGNORECASE),
+            re.compile(r"\bwithout\s+positive\s+controls?\b", re.IGNORECASE),
+            re.compile(r"\bpositive\s+controls?\s+(?:were\s+)?(?:not\s+used|not\s+included|absent|omitted)\b", re.IGNORECASE),
+            re.compile(r"\bno\s+mock\s+communit(?:y|ies)\s+(?:were\s+)?(?:used|included)\b", re.IGNORECASE),
+            re.compile(r"\bno\s+(?:reference|known|synthetic)\s+DNA\s+(?:was\s+|were\s+)?(?:used|included)\b", re.IGNORECASE),
+            re.compile(r"\bno\s+gBlocks?\s+(?:were\s+)?(?:used|included)\b", re.IGNORECASE),
+            re.compile(r"\bno\s+plasmid\s+controls?\s+(?:were\s+)?(?:used|included)\b", re.IGNORECASE),
         ),
     ),
 )
@@ -547,21 +600,34 @@ def _snippets(text: str) -> Iterable[tuple[int, str]]:
             yield index, cleaned
 
 
-def _match_flag(flag: TextSearchFlag, text: str) -> tuple[int, str, tuple[str, ...]] | None:
-    for index, snippet in _snippets(text):
-        matches = tuple(
-            sorted(
-                {
-                    match.group(0)
-                    for pattern in flag.patterns
-                    for match in pattern.finditer(snippet)
-                },
-                key=str.lower,
-            )
+def _snippet_matches(patterns: tuple[re.Pattern[str], ...], snippet: str) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            {
+                match.group(0)
+                for pattern in patterns
+                for match in pattern.finditer(snippet)
+            },
+            key=str.lower,
         )
+    )
+
+
+def _match_flag(flag: TextSearchFlag, text: str) -> tuple[int, str, str, tuple[str, ...]] | None:
+    explicit_none_match: tuple[int, str, tuple[str, ...]] | None = None
+    for index, snippet in _snippets(text):
+        none_matches = _snippet_matches(flag.explicit_none_patterns, snippet)
+        if none_matches and explicit_none_match is None:
+            explicit_none_match = (index, snippet, none_matches)
+        if none_matches:
+            continue
+        matches = _snippet_matches(flag.positive_patterns, snippet)
         if matches:
-            return index, snippet, matches
-    return None
+            return index, snippet, flag.positive_value, matches
+    if explicit_none_match is None:
+        return None
+    index, snippet, matches = explicit_none_match
+    return index, snippet, flag.explicit_none_value, matches
 
 
 def _term_pattern(term: str) -> re.Pattern[str]:
@@ -632,14 +698,14 @@ def detect_text_search_flags(
             match = _match_flag(flag, text)
             if match is None:
                 continue
-            snippet_index, snippet, matches = match
+            snippet_index, snippet, raw_value, matches = match
             seen.add(flag.fact_type_candidate)
             facts.append(
                 RawFactCandidate(
                     entity_level=EntityLevel.STUDY,
                     fact_type_candidate=flag.fact_type_candidate,
                     raw_field_name=flag.fact_type_candidate,
-                    raw_value="true",
+                    raw_value=raw_value,
                     source_locator=f"{locator_prefix}:{title}:sentence[{snippet_index}]",
                     support_type=SupportType.DETERMINISTICALLY_DERIVED,
                     evidence_quote=snippet,

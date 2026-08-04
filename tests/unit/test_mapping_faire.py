@@ -89,6 +89,36 @@ def test_maps_depth_aliases_and_control_sample_category(db_session):
     assert values["samp_category"].standardized_value == "negative control"
     assert values["samp_category"].review_required
 
+    project_values = {
+        sv.target_field: sv
+        for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id, entity_id=None)
+    }
+    assert project_values["neg_cont_0_1"].standardized_value == "1"
+    assert project_values["neg_cont_0_1"].mapping_method == "deterministic_synonym"
+    assert project_values["neg_cont_0_1"].review_required is False
+
+
+def test_maps_structured_control_type_facts_to_project_control_flags(db_session):
+    study = _study(db_session, title="Structured control flags")
+    sample = Entity(study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN_CONTROL")
+    db_session.add(sample)
+    db_session.flush()
+    _fact(db_session, study, entity=sample, field="neg_cont_type", value="PCR negative", entity_level="sample")
+    _fact(db_session, study, entity=sample, field="pos_cont_type", value="mock community", entity_level="sample")
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    project_values = {
+        sv.target_field: sv
+        for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id, entity_id=None)
+    }
+    assert project_values["neg_cont_0_1"].standardized_value == "1"
+    assert project_values["pos_cont_0_1"].standardized_value == "1"
+    assert project_values["neg_cont_0_1"].review_required is False
+    assert project_values["pos_cont_0_1"].review_required is False
+
 
 def test_maps_sample_level_biosample_attributes_not_previously_covered(db_session):
     """elev/samp_collect_device/samp_size/samp_size_unit/temp/salinity/ph/
@@ -756,6 +786,8 @@ def test_controlled_text_search_project_facts_map_to_faire_with_review(db_sessio
     _fact(db_session, study, field="probeReporter", value="FAM", entity_level="study")
     _fact(db_session, study, field="probeQuencher", value="BHQ-1 | quencher", entity_level="study")
     _fact(db_session, study, field="commercial_mm", value="TaqMan", entity_level="study")
+    _fact(db_session, study, field="neg_cont_0_1", value="1", entity_level="study", support=SupportType.DETERMINISTICALLY_DERIVED)
+    _fact(db_session, study, field="pos_cont_0_1", value="0", entity_level="study", support=SupportType.DETERMINISTICALLY_DERIVED)
     _fact(db_session, study, field="sample_type", value="water", entity_level="study")
     db_session.commit()
 
@@ -770,6 +802,8 @@ def test_controlled_text_search_project_facts_map_to_faire_with_review(db_sessio
     assert values["probeReporter"].standardized_value == "FAM"
     assert values["probeQuencher"].standardized_value == "BHQ-1 | quencher"
     assert values["commercial_mm"].standardized_value == "TaqMan"
+    assert values["neg_cont_0_1"].standardized_value == "1"
+    assert values["pos_cont_0_1"].standardized_value == "0"
     assert "sample_type" not in values
     assert all(row.review_required is True for row in values.values())
 

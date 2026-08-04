@@ -155,6 +155,72 @@ def _constant_md5(_value: str) -> str:
     return "MD5"
 
 
+def _control_flag_value(value: str, control_terms: tuple[str, ...]) -> str | None:
+    normalized = " ".join(value.strip().lower().replace("-", " ").split())
+    if normalized in {"0", "1"}:
+        return normalized
+    if not normalized:
+        return None
+    explicit_none_markers = ("none", "not used", "not included", "absent", "omitted", "without")
+    if any(marker in normalized for marker in explicit_none_markers):
+        return "0"
+    return "1" if any(term in normalized for term in control_terms) else None
+
+
+_NEGATIVE_CONTROL_TERMS = (
+    "negative control",
+    "negative controls",
+    "pcr negative",
+    "extraction negative",
+    "field blank",
+    "field blanks",
+    "equipment blank",
+    "equipment blanks",
+    "filtration blank",
+    "filtration blanks",
+    "extraction blank",
+    "extraction blanks",
+    "reagent blank",
+    "reagent blanks",
+    "pcr blank",
+    "pcr blanks",
+    "no template control",
+    "no template controls",
+    "ntc",
+    "blank sample",
+    "blank samples",
+)
+
+
+_POSITIVE_CONTROL_TERMS = (
+    "positive control",
+    "positive controls",
+    "pcr positive",
+    "extraction positive",
+    "mock community",
+    "mock communities",
+    "reference dna",
+    "known dna",
+    "synthetic dna",
+    "gblock",
+    "gblocks",
+    "plasmid control",
+    "plasmid controls",
+    "reference tissue",
+    "positive template",
+    "positive amplification control",
+    "positive amplification controls",
+)
+
+
+def _negative_control_flag(value: str) -> str | None:
+    return _control_flag_value(value, _NEGATIVE_CONTROL_TERMS)
+
+
+def _positive_control_flag(value: str) -> str | None:
+    return _control_flag_value(value, _POSITIVE_CONTROL_TERMS)
+
+
 def _normalize_lib_layout(value: str) -> str:
     """ENA's read_run report gives PAIRED/SINGLE; FAIRe's lib_layout_enum
     wants "paired end"/"single end". Falls back to the raw value
@@ -214,10 +280,28 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
     MappingRule("sample_type", EntityLevel.SAMPLE.value, "sampleMetadata", "samp_category",
                 MappingMethod.SUGGESTED_SEMANTIC.value, transform=_control_sample_category,
                 enum_name="samp_category_enum", review_required=True),
+    MappingRule("sample_type", EntityLevel.SAMPLE.value, "projectMetadata", "neg_cont_0_1",
+                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=_negative_control_flag,
+                enum_name="neg_cont_0_1_enum"),
+    MappingRule("sample_type", EntityLevel.SAMPLE.value, "projectMetadata", "pos_cont_0_1",
+                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=_positive_control_flag,
+                enum_name="pos_cont_0_1_enum"),
+    MappingRule("samp_category", EntityLevel.SAMPLE.value, "projectMetadata", "neg_cont_0_1",
+                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=_negative_control_flag,
+                enum_name="neg_cont_0_1_enum"),
+    MappingRule("samp_category", EntityLevel.SAMPLE.value, "projectMetadata", "pos_cont_0_1",
+                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=_positive_control_flag,
+                enum_name="pos_cont_0_1_enum"),
     MappingRule("neg_cont_type", EntityLevel.SAMPLE.value, "sampleMetadata", "neg_cont_type",
                 MappingMethod.EXACT_LABEL.value, enum_name="neg_cont_type_enum"),
+    MappingRule("neg_cont_type", EntityLevel.SAMPLE.value, "projectMetadata", "neg_cont_0_1",
+                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=_negative_control_flag,
+                enum_name="neg_cont_0_1_enum"),
     MappingRule("pos_cont_type", EntityLevel.SAMPLE.value, "sampleMetadata", "pos_cont_type",
                 MappingMethod.EXACT_LABEL.value, enum_name="pos_cont_type_enum"),
+    MappingRule("pos_cont_type", EntityLevel.SAMPLE.value, "projectMetadata", "pos_cont_0_1",
+                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=_positive_control_flag,
+                enum_name="pos_cont_0_1_enum"),
     MappingRule("env_broad_scale", EntityLevel.SAMPLE.value, "sampleMetadata", "env_broad_scale",
                 MappingMethod.EXACT_LABEL.value, enum_name="env_broad_scale_enum"),
     MappingRule("env_local_scale", EntityLevel.SAMPLE.value, "sampleMetadata", "env_local_scale",
@@ -408,6 +492,14 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
                 MappingMethod.SUGGESTED_SEMANTIC.value, enum_name="platform_enum", review_required=True),
     MappingRule("seq_kit", EntityLevel.STUDY.value, "projectMetadata", "seq_kit",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
+    MappingRule("neg_cont_0_1", EntityLevel.STUDY.value, "projectMetadata", "neg_cont_0_1",
+                MappingMethod.SUGGESTED_SEMANTIC.value, enum_name="neg_cont_0_1_enum", review_required=True),
+    MappingRule("pos_cont_0_1", EntityLevel.STUDY.value, "projectMetadata", "pos_cont_0_1",
+                MappingMethod.SUGGESTED_SEMANTIC.value, enum_name="pos_cont_0_1_enum", review_required=True),
+    MappingRule("neg_cont_0_1", EntityLevel.PROJECT.value, "projectMetadata", "neg_cont_0_1",
+                MappingMethod.EXACT_LABEL.value, enum_name="neg_cont_0_1_enum"),
+    MappingRule("pos_cont_0_1", EntityLevel.PROJECT.value, "projectMetadata", "pos_cont_0_1",
+                MappingMethod.EXACT_LABEL.value, enum_name="pos_cont_0_1_enum"),
     MappingRule("collection_method", EntityLevel.STUDY.value, "sampleMetadata", "samp_collect_method",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
 
