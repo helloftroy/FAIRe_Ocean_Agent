@@ -102,6 +102,9 @@ TEXT_SEARCH_FLAGS: tuple[TextSearchFlag, ...] = (
             re.compile(r"\breagent\s+blanks?\b", re.IGNORECASE),
             re.compile(r"\bPCR\s+blanks?\b", re.IGNORECASE),
             re.compile(r"\bno[-\s]+template\s+controls?\b", re.IGNORECASE),
+            re.compile(r"\bcontrol\s+wells?\b", re.IGNORECASE),
+            re.compile(r"\b(?:FSW|filtered\s+seawater)\s+controls?\b", re.IGNORECASE),
+            re.compile(r"\bcontrol\s+treatments?\b", re.IGNORECASE),
             re.compile(r"\bNTC(?:s)?\b"),
         ),
         explicit_none_patterns=(
@@ -330,9 +333,11 @@ CONTROLLED_SEARCH_FIELDS: tuple[ControlledSearchField, ...] = (
         term_name="seq_kit",
         section="Library preparation sequencing",
         description="the name of sequencing kit, free text",
+        value_strategy="sequencing_kit_phrase",
         search_terms=(
             "MiSeq Reagent Kit v3",
             "MiSeq Reagent Kit",
+            "Titanium chemistry",
             "NovaSeq kit",
             "ligation sequencing kit",
             "rapid sequencing kit",
@@ -344,7 +349,18 @@ CONTROLLED_SEARCH_FIELDS: tuple[ControlledSearchField, ...] = (
             "SMRTbell",
             "flow cell",
             "cartridge",
-            "chemistry",
+        ),
+    ),
+    ControlledSearchField(
+        term_name="sequencing_location",
+        section="Library preparation sequencing",
+        description="Facility, laboratory, or center where sequencing was performed.",
+        value_strategy="sequencing_location_phrase",
+        search_terms=(
+            "sequenced at",
+            "sequenced using",
+            "Genome Sequencing and Analysis Facility",
+            "GSAF",
         ),
     ),
     ControlledSearchField(
@@ -380,7 +396,6 @@ CONTROLLED_SEARCH_FIELDS: tuple[ControlledSearchField, ...] = (
             "nifH",
             "ITS1",
             "ITS2",
-            "ITS",
             "ND1",
             "ND2",
             "ND3",
@@ -447,11 +462,23 @@ CONTROLLED_SEARCH_FIELDS: tuple[ControlledSearchField, ...] = (
         section="PCR",
         description="Name, brand, and manufacture of commercial, pre-made master mix",
         required_any_flags=frozenset({"pcr_0_1"}),
+        # Bare manufacturer names ("Thermo Fisher", "Applied Biosystems",
+        # "Bio-Rad", "NEB", "KAPA") were removed: confirmed via a real gold
+        # paper (PeerJ 10.7717/peerj.333) that "Bio-Rad" matched a mention
+        # of the thermocycler manufacturer ("DNA Engine Tetrad2 Thermal
+        # Cycler (Bio-Rad, ...)"), not a master-mix product -- the paper's
+        # actual PCR mixture was custom-assembled from separate reagents
+        # (ExTaq buffer/polymerase, Pfu polymerase), the FAIRe concept
+        # `custom_mm` covers, not `commercial_mm`. These manufacturers all
+        # sell many non-master-mix products (thermocyclers, buffers,
+        # individual enzymes, kits), so a bare brand mention can't reliably
+        # signal "this paper used a commercial master mix" without further
+        # context. The remaining terms are specific product/chemistry names
+        # (TaqMan, SYBR, Luna, PowerUp, QuantiTect, SsoAdvanced) unlikely to
+        # refer to anything but a master mix.
         search_terms=(
             "PCR Master Mix",
             "qPCR Master Mix",
-            "Thermo Fisher",
-            "Applied Biosystems",
             "master mix",
             "mastermix",
             "PCR mix",
@@ -462,9 +489,6 @@ CONTROLLED_SEARCH_FIELDS: tuple[ControlledSearchField, ...] = (
             "PowerUp",
             "QuantiTect",
             "SsoAdvanced",
-            "KAPA",
-            "NEB",
-            "Bio-Rad",
         ),
     ),
     ControlledSearchField(
@@ -575,7 +599,10 @@ CONTROLLED_SEARCH_FIELDS: tuple[ControlledSearchField, ...] = (
         section="PCR",
         description="The manufacturer and model of a thermocycler used.",
         required_any_flags=frozenset({"pcr_0_1"}),
+        value_strategy="thermocycler_phrase",
         search_terms=(
+            "DNA Engine Tetrad2 Thermal Cycler",
+            "DNA Engine Tetrad 2 Thermal Cycler",
             "QuantStudio 12K Flex",
             "Thermal Cycler Dice Real Time System III",
             "Thermal Cycler Dice Real Time System II",
@@ -798,11 +825,7 @@ CONTROLLED_SEARCH_FIELDS: tuple[ControlledSearchField, ...] = (
 
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 _BIOLOGICAL_REPLICATE_EXCLUSION_RE = re.compile(
-    r"\b(PCR|technical|extraction|filtration|sequencing|analytical|library|qPCR|ddPCR)\s+replicates?\b",
-    re.IGNORECASE,
-)
-_BIOLOGICAL_REPLICATE_CONTEXT_RE = re.compile(
-    r"\b(biological|environmental|independent|collected|samples?|sites?|stations?|treatments?|water|sediment)\b",
+    r"\b(PCR|technical|extraction|filtration|sequencing|analytical|library|qPCR|ddPCR|well)\s+replicates?\b",
     re.IGNORECASE,
 )
 _BIOLOGICAL_REPLICATE_PATTERNS: tuple[tuple[re.Pattern[str], dict[str, str]], ...] = (
@@ -818,7 +841,23 @@ _BIOLOGICAL_REPLICATE_PATTERNS: tuple[tuple[re.Pattern[str], dict[str, str]], ..
     (re.compile(r"\bsamples?\s+per\s+(?:site|station|treatment)\s*(?:=|:|was|were)?\s*(?P<num>\d+)\b", re.IGNORECASE), {}),
     (re.compile(r"\b(?P<num>\d+)\s+replicates?\s+per\s+(?:site|station|treatment)\b", re.IGNORECASE), {}),
     (re.compile(r"\breplicates?\s+per\s+(?:site|station|treatment)\s*(?:=|:|was|were)?\s*(?P<num>\d+)\b", re.IGNORECASE), {}),
-    (re.compile(r"\bn\s*=\s*(?P<num>\d+)\b", re.IGNORECASE), {"needs_context": "1"}),
+    # A bare "n = <number>" / "N = <number>" pattern (gated only by a loose
+    # context check requiring the word "sample(s)" ANYWHERE in the same
+    # sentence) used to live here and was removed: confirmed via
+    # a real gold paper (PeerJ 10.7717/peerj.333) that it produced two
+    # unrelated false positives in the same methods paragraph -- "(n = 4
+    # well replicates per cue...)" (a technical well count, not a biological
+    # replicate) and "...x N-72 C 10 min, with N = 17-24 depending on the
+    # sample" (a PCR cycle count) -- both satisfied the loose context check
+    # via the bare word "sample"/"cue...samples" appearing elsewhere in the
+    # sentence, producing a nonsensical joined raw_value ("4 | 17"). No
+    # simple proximity regex reliably distinguishes a genuine "(n = 4
+    # biological replicates)" from these unrelated "n ="/"N =" usages that
+    # are extremely common in PCR/qPCR methods prose (well counts, cycle
+    # counts, dilution series); removed rather than further loosened or
+    # tightened. The LLM's unconditional biological_replicate_count
+    # checklist field remains the complementary source for well-phrased
+    # cases this narrower deterministic set no longer covers.
 )
 
 _ASSAY_TYPE_CUES: tuple[tuple[str, tuple[re.Pattern[str], ...]], ...] = (
@@ -827,8 +866,16 @@ _ASSAY_TYPE_CUES: tuple[tuple[str, tuple[re.Pattern[str], ...]], ...] = (
         (
             re.compile(r"\bquantitative\s+PCR\b", re.IGNORECASE),
             re.compile(r"\bdigital\s+PCR\b", re.IGNORECASE),
-            re.compile(r"\bspecies[-\s]+specific\b", re.IGNORECASE),
-            re.compile(r"\btaxon[-\s]+specific\b", re.IGNORECASE),
+            # "species-specific"/"taxon-specific" were removed as bare cues:
+            # confirmed via a real gold paper (PeerJ 10.7717/peerj.333) that
+            # both phrases appear routinely in non-assay contexts (e.g.
+            # "coral species-specific cue preferences", an ecological
+            # statement about coral behavior, not assay design) and falsely
+            # triggered "targeted" with no PCR/probe/qPCR content anywhere
+            # nearby. docs/architecture.md's Milestone 15 entry already
+            # flagged this exact pair as unreliable for a different field
+            # (pcr_0_1) in this same paper. "targeted\s+assay" below still
+            # catches genuine "targeted assay" phrasing.
             re.compile(r"\btargeted\s+assay\b", re.IGNORECASE),
             re.compile(r"\bhydrolysis\s+probe(s)?\b", re.IGNORECASE),
             re.compile(r"\bqPCR\b", re.IGNORECASE),
@@ -848,6 +895,31 @@ _ASSAY_TYPE_CUES: tuple[tuple[str, tuple[re.Pattern[str], ...]], ...] = (
             re.compile(r"\buniversal\s+primers\b", re.IGNORECASE),
             re.compile(r"\bHTS\b"),
         ),
+    ),
+)
+_SEQUENCING_KIT_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bMiSeq\s+Reagent\s+Kit(?:\s+v\d+)?\b", re.IGNORECASE),
+    re.compile(r"\bTitanium\s+chemistry\b", re.IGNORECASE),
+    re.compile(r"\b(?:v2|v3)\s+chemistry\b", re.IGNORECASE),
+)
+_THERMOCYCLER_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bDNA\s+Engine\s+Tetrad\s*2\s+Thermal\s+Cycler\b", re.IGNORECASE),
+    re.compile(
+        r"\b[A-Z][A-Za-z0-9-]*(?:\s+[A-Z0-9][A-Za-z0-9-]*){0,5}\s+"
+        r"(?:Thermal\s+Cycler|thermocycler|Cycler|PCR\s+System)\b(?:\s*\([^)]+\))?",
+        re.IGNORECASE,
+    ),
+)
+_SEQUENCING_LOCATION_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        r"\bsequenced\s+(?:using\s+[^.]*?\s+)?at\s+the\s+"
+        r"(?P<value>[A-Z][^.]*?(?:Facility|Center|Centre|Core|Institute|University)[^.]*)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?P<value>Genome\s+Sequencing\s+and\s+Analysis\s+Facility\s+\(GSAF\)\s+"
+        r"at\s+the\s+University\s+of\s+Texas\s+at\s+Austin)\b",
+        re.IGNORECASE,
     ),
 )
 
@@ -974,6 +1046,43 @@ def _match_controlled_sentences(
     return values, values, match_metadata
 
 
+def _match_regex_phrases(
+    field: ControlledSearchField,
+    texts: Iterable[tuple[str, str]],
+    locator_prefix: str,
+    patterns: tuple[re.Pattern[str], ...],
+) -> tuple[list[str], list[str], list[dict]]:
+    values: list[str] = []
+    evidence_quotes: list[str] = []
+    match_metadata: list[dict] = []
+    seen_values: set[str] = set()
+    for title, text in texts:
+        for snippet_index, snippet in _snippets(text):
+            accepted_spans: list[tuple[int, int]] = []
+            for pattern in patterns:
+                for match in pattern.finditer(snippet):
+                    span = match.span()
+                    if any(span[0] < end and start < span[1] for start, end in accepted_spans):
+                        continue
+                    value = (match.groupdict().get("value") or match.group(0)).strip(" .;,")
+                    key = value.casefold()
+                    if not value or key in seen_values:
+                        continue
+                    seen_values.add(key)
+                    accepted_spans.append(span)
+                    values.append(value)
+                    if snippet not in evidence_quotes:
+                        evidence_quotes.append(snippet)
+                    match_metadata.append(
+                        {
+                            "matched_value": value,
+                            "matched_pattern": pattern.pattern,
+                            "source_locator": f"{locator_prefix}:{title}:sentence[{snippet_index}]",
+                        }
+                    )
+    return values, evidence_quotes, match_metadata
+
+
 def _match_biological_replicates(
     field: ControlledSearchField,
     texts: Iterable[tuple[str, str]],
@@ -990,8 +1099,6 @@ def _match_biological_replicates(
             for pattern, options in _BIOLOGICAL_REPLICATE_PATTERNS:
                 match = pattern.search(snippet)
                 if match is None:
-                    continue
-                if options.get("needs_context") and not _BIOLOGICAL_REPLICATE_CONTEXT_RE.search(snippet):
                     continue
                 value = options.get("value") or match.group("num")
                 if value in seen_values:
@@ -1051,6 +1158,12 @@ def _match_controlled_field(
         return _match_biological_replicates(field, texts, locator_prefix)
     if field.value_strategy == "assay_type_classifier":
         return _classify_assay_type(field, texts, locator_prefix)
+    if field.value_strategy == "sequencing_kit_phrase":
+        return _match_regex_phrases(field, texts, locator_prefix, _SEQUENCING_KIT_PATTERNS)
+    if field.value_strategy == "thermocycler_phrase":
+        return _match_regex_phrases(field, texts, locator_prefix, _THERMOCYCLER_PATTERNS)
+    if field.value_strategy == "sequencing_location_phrase":
+        return _match_regex_phrases(field, texts, locator_prefix, _SEQUENCING_LOCATION_PATTERNS)
     return _match_controlled_terms(field, texts, locator_prefix)
 
 

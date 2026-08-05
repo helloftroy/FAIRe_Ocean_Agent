@@ -232,6 +232,10 @@ def _apply_env_overrides(raw: dict[str, Any]) -> dict[str, Any]:
     if llm_model:
         raw.setdefault("llm", {})["model"] = llm_model
 
+    llm_timeout_seconds = os.environ.get("LOCAL_LLM_TIMEOUT_SECONDS")
+    if llm_timeout_seconds:
+        raw.setdefault("llm", {})["timeout_seconds"] = int(llm_timeout_seconds)
+
     llm_max_output_tokens = os.environ.get("LOCAL_LLM_MAX_OUTPUT_TOKENS")
     if llm_max_output_tokens:
         raw.setdefault("llm", {})["max_output_tokens"] = int(llm_max_output_tokens)
@@ -257,6 +261,10 @@ def _apply_env_overrides(raw: dict[str, Any]) -> dict[str, Any]:
     verifier_model = os.environ.get("LOCAL_LLM_VERIFIER_MODEL")
     if verifier_model:
         raw.setdefault("llm_verifier", {})["model"] = verifier_model
+
+    verifier_timeout_seconds = os.environ.get("LOCAL_LLM_VERIFIER_TIMEOUT_SECONDS")
+    if verifier_timeout_seconds:
+        raw.setdefault("llm_verifier", {})["timeout_seconds"] = int(verifier_timeout_seconds)
 
     verifier_enabled = os.environ.get("LOCAL_LLM_VERIFIER_ENABLED")
     if verifier_enabled:

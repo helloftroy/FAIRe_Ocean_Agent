@@ -321,6 +321,54 @@ def test_ena_only_study_resolves_via_ena_study_accession(db_session, monkeypatch
     assert source.source_name == "ena"
 
 
+def test_sequencing_accession_discovered_bioproject_triggers_ncbi_loopback(db_session, monkeypatch):
+    study = _seeded_study(db_session)
+    db_session.add(
+        ExternalIdentifier(
+            study_id=study.study_id,
+            identifier_type=IdentifierType.SRA_STUDY_ACCESSION.value,
+            identifier_value=normalize_identifier(IdentifierType.SRA_STUDY_ACCESSION, "SRP040596"),
+        )
+    )
+    db_session.flush()
+    task = _task_for(db_session, study)
+
+    ena_adapter = FakeAdapter(
+        "ena",
+        record=_make_record("ena", external_identifier="SRP040596", raw={"study": {"study_title": "PeerJ reef"}}),
+        related=[
+            RelatedIdentifier(
+                identifier_type=IdentifierType.BIOPROJECT_ACCESSION,
+                value="PRJNA242644",
+                relationship_type=RelationshipType.RELATED_TO,
+                source="ena",
+            )
+        ],
+    )
+    biosample_adapter = FakeAdapter(
+        "ncbi_biosample",
+        record=_make_record("ncbi_biosample", external_identifier="PRJNA242644", raw={"samples": []}),
+        facts=_sample_facts("SAMN1", "Sample one", {"geo_loc_name": "USA: Florida Keys"}),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_build_enabled_adapters",
+        lambda: {"ena": ena_adapter, "ncbi_biosample": biosample_adapter},
+    )
+
+    handlers.handle_discover_identifiers(db_session, task)
+    db_session.commit()
+
+    sources = {source.source_name for source in db_session.query(Source).filter_by(study_id=study.study_id).all()}
+    assert sources == {"ena", "ncbi_biosample"}
+    assert (
+        db_session.query(RawFact)
+        .filter_by(study_id=study.study_id, extraction_method="adapter:ncbi_biosample", fact_type_candidate="geo_loc_name")
+        .count()
+        == 1
+    )
+
+
 def test_two_adapters_discovering_the_same_related_identifier_does_not_raise(db_session, monkeypatch):
     """Regression test: ncbi_biosample and ena commonly surface the exact
     same BioSample accessions for one study (both mirror the same INSDC

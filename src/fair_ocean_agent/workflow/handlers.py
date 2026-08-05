@@ -864,6 +864,27 @@ def handle_discover_identifiers(session: Session, task: Task) -> None:
         study = _resolve_repository_sources(session, study, bioproject_accession, None)
     for sequencing_accession in [*ena_accessions, *sra_accessions]:
         study = _resolve_repository_sources(session, study, None, sequencing_accession)
+    # ENA/SRA records often surface the BioProject accession only after the
+    # sequencing-accession pass above. Resolve any newly-added BioProject
+    # immediately so DOI-led runs also collect NCBI BioProject/BioSample
+    # sample metadata in the same worker task.
+    refreshed_bioproject_accessions = _identifier_values(session, study.study_id, IdentifierType.BIOPROJECT_ACCESSION)
+    for bioproject_accession in refreshed_bioproject_accessions:
+        if bioproject_accession in bioproject_accessions:
+            continue
+        for name in ("ncbi_bioproject", "ncbi_biosample"):
+            adapter = _build_enabled_adapters().get(name)
+            if adapter is None:
+                continue
+            try:
+                record = adapter.fetch_record(bioproject_accession)
+            except SourceRecordNotFoundError:
+                logger.info("no %s record for %s", name, bioproject_accession)
+                continue
+            _created, source = _persist_source_and_facts(
+                session, study, adapter, SourceType.REPOSITORY_API, bioproject_accession, record
+            )
+            study = _apply_related_identifiers(session, study, adapter.find_related(record), name, source)
     for dataset_doi in dataset_dois:
         study = _resolve_dataset_sources(
             session,

@@ -1832,6 +1832,103 @@ existing mapping path as any other structured-adapter fact.
 cases plus adapter/mapping integration tests in
 `test_ncbi_ena_parsing.py`/`test_supplement_parsing.py`/`test_mapping_faire.py`).
 
+## Live-run audit against a real paper (PeerJ 10.7717/peerj.333)
+
+**Requested**: the user ran the full pipeline against the same validation
+paper used throughout this project and pointed out six concrete-looking
+problems in the exported FAIRe CSV. Investigated each against the real
+cached PMC full text (fetched live) and the actual raw_facts, rather than
+guessing from the symptom alone -- three were real, fixable deterministic-
+detector bugs; one was already-correct behavior that needed explaining, not
+fixing; one was schema-correct blank output; and one was root-caused all
+the way to a live-reproduced LLM extraction failure, not a code bug.
+
+**Fixed, all three confirmed via the actual paper text before changing
+anything:**
+- `assay_type` returned `"metabarcoding | targeted"` when the paper never
+  describes a targeted assay. `_ASSAY_TYPE_CUES`'s bare `species-specific`
+  regex cue matched "coral **species-specific** cue preferences" in the
+  Discussion -- an ecological statement about coral behavior, not assay
+  design. Removed `species-specific`/`taxon-specific` as standalone cues
+  (docs/architecture.md's Milestone 15 had already flagged this exact pair
+  as unreliable for a different field, `pcr_0_1`, in this same paper); the
+  paper's genuine "metabarcoding" classification is untouched, confirmed
+  independently by both the deterministic detector and the LLM.
+- `commercial_mm` returned `"Bio-Rad"` for a paper whose PCR mixture is
+  custom-assembled from separate reagents (ExTaq buffer/polymerase, Pfu
+  polymerase) -- "Bio-Rad" only appears as the thermocycler's manufacturer
+  ("DNA Engine Tetrad2 Thermal Cycler (Bio-Rad, Hercules, CA, USA)").
+  Removed bare manufacturer names (`Thermo Fisher`, `Applied Biosystems`,
+  `Bio-Rad`, `NEB`, `KAPA`) from `commercial_mm`'s term list -- these
+  manufacturers all sell many non-master-mix products, so a bare brand
+  mention can't reliably signal "commercial master mix used." Kept specific
+  product/chemistry names (`TaqMan`, `SYBR`, `Luna`, `PowerUp`,
+  `QuantiTect`, `SsoAdvanced`) that are unlikely to mean anything else.
+- `biological_rep` returned the nonsensical `"4 | 17"`. Root cause: a bare
+  `n = <number>` / `N = <number>` pattern, gated only by a loose "the word
+  sample(s) appears somewhere in this sentence" context check, matched two
+  unrelated numbers in the same paragraph -- `"(n = 4 well replicates per
+  cue...)"` (a technical well count) and `"...x N-72C 10 min, with N =
+  17-24 depending on the sample"` (a PCR cycle count). Removed the pattern
+  (and the now-dead context-check scaffolding it alone used) rather than
+  further tighten it -- no simple proximity regex reliably separates a
+  genuine biological-replicate count from the many other legitimate uses of
+  "n ="/"N =" in PCR/qPCR methods prose. The LLM's unconditional
+  `biological_replicate_count` checklist field remains the complementary
+  source for well-phrased cases this narrower deterministic detector no
+  longer covers.
+
+All three fixes have a dedicated regression test in `test_search_flags.py`
+built directly from the real paper's sentences, plus a full-suite rerun
+(581 tests pass).
+
+**Investigated and explained, not fixed (already correct):**
+- `checksum_method = "MD5"`: not extracted from the paper at all -- it's
+  inferred from ENA's own repository metadata (`mapping/rules.py`'s
+  `_constant_md5`, whenever ENA's `fastq_md5` is present for a run, since
+  ENA's read_run report always uses MD5 but never states the algorithm
+  explicitly). Confirmed the real MD5 hex digests are genuinely present in
+  this paper's ENA-deposited runs. The user wouldn't see this "in the
+  paper" because it's sequencing-repository provenance, not an authorial
+  claim -- working as designed.
+- `code_repo` blank: the real FAIRe definition is "Link to public
+  repository where analysis code is archived" (e.g. a `github.com` URL).
+  This paper's only code mention -- "Perl script for rarefaction analysis
+  (cca_rarefaction.pl) and R script ... are available in Supplemental
+  Information 1" -- is not a public repository link at all, so leaving
+  `code_repo` blank is schema-correct, not a miss. `sop_bioinformatics`
+  (LLM native name `bioinformatics_sop_reference`) is the more plausible
+  target for this exact sentence, but it's also blank in this run -- root
+  cause traces to the same chunk-recall gap described next, not a mapping
+  bug.
+
+**Root-caused via a live reproduction, not fixed (an LLM extraction-quality
+gap, not a code bug)**: `ampliconSize`/`amplificationReactionVolume`/
+`annealingTemp` came back empty despite the paper explicitly stating a 30
+µl reaction volume and a 55 °C anneal step. Fetched the real cached
+full-text section ("Metabarcoding of cue communities", 4760 chars,
+splitting into 3 real chunks at this run's 2500-char/call setting) and
+replayed the exact same chunks against the live local model
+(`qwen3:4b-instruct-16k`) end to end. Confirmed: `pcr_0_1` correctly gates
+true (ruling out a gating bug); chunk 1 -- containing every PCR-mixture/
+thermocycler/cycling-profile detail -- returns a bare `[]` from the model
+on both the automatic first pass and the zero-facts recall retry, live,
+reproducibly, matching the original run's behavior exactly (chunk 2's
+bioinformatics content extracts fine; chunk 1 and chunk 3, the two
+densest/most jargon- and unicode-heavy chunks, both return nothing). Ruled
+out, with direct evidence, three more plausible causes before concluding
+this: no timeout (the original run's full log shows zero warnings/errors
+and every one of 21 chat-completion calls returned 200 OK; a real
+`LLMBackendError` from a timeout would have failed the whole task, not
+skipped a section, and it didn't), no JSON parse failure (same reasoning --
+an unparseable response also fails the task, not silently skips it), and no
+chunk-boundary truncation (the full chunk-1 text, replayed whole, still
+returns `[]`). This is a genuine small-local-model recall limitation on
+dense, multi-quantity PCR-parameter prose, not something a quick code
+change fixes -- flagged as a separate, larger follow-up (e.g. a more
+capable model for PCR-heavy chunks, or reverting to a focused per-topic
+pass for this content) rather than attempted here.
+
 ## Mapping expansion: the rest of FAIRe's Environment section
 
 Beyond the 8 BioSample attributes already mapped (elev/samp_collect_device/

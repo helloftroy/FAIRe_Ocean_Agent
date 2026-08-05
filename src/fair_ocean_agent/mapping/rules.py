@@ -499,6 +499,8 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
                 MappingMethod.SUGGESTED_SEMANTIC.value, enum_name="platform_enum", review_required=True),
     MappingRule("seq_kit", EntityLevel.STUDY.value, "projectMetadata", "seq_kit",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
+    MappingRule("sequencing_location", EntityLevel.STUDY.value, "projectMetadata", "sequencing_location",
+                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("sterilise_method", EntityLevel.STUDY.value, "projectMetadata", "sterilise_method",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("biological_rep", EntityLevel.STUDY.value, "projectMetadata", "biological_rep",

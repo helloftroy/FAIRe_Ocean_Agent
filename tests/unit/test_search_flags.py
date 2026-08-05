@@ -103,6 +103,17 @@ def test_detect_text_search_flags_sets_control_zero_only_from_explicit_none():
     assert by_type["pos_cont_0_1"].evidence_quote == "Positive controls were not included."
 
 
+def test_detect_text_search_flags_treats_control_treatments_as_negative_controls():
+    facts = detect_text_search_flags(
+        (("Methods", "Four FSW control treatments were also included."),),
+        locator_prefix="paper:PMC1",
+    )
+
+    by_type = {fact.fact_type_candidate: fact for fact in facts}
+    assert by_type["neg_cont_0_1"].raw_value == "1"
+    assert by_type["neg_cont_0_1"].evidence_quote == "Four FSW control treatments were also included."
+
+
 def test_detect_controlled_search_facts_uses_active_flags_and_pipe_delimited_matches():
     text = (
         "PCR targeted 12S rRNA and COI with the MiFish-U assay. "
@@ -121,7 +132,7 @@ def test_detect_controlled_search_facts_uses_active_flags_and_pipe_delimited_mat
     assert by_type["assay_name"].raw_value == "MiFish-U"
     assert by_type["probeReporter"].raw_value == "FAM | reporter"
     assert by_type["probeQuencher"].raw_value == "BHQ-1 | quencher"
-    assert by_type["seq_kit"].raw_value == "MiSeq Reagent Kit v3 | chemistry"
+    assert by_type["seq_kit"].raw_value == "MiSeq Reagent Kit v3"
     assert by_type["sample_type"].raw_value == "water | sediment"
     assert by_type["target_gene"].entity_level.value == "study"
     assert by_type["target_gene"].confidence_metadata["activated_by_flags"] == ["pcr_0_1"]
@@ -158,6 +169,42 @@ def test_detect_controlled_search_facts_extracts_sterilise_method_as_direct_quot
     assert by_type["sterilise_method"].evidence_quote == by_type["sterilise_method"].raw_value
 
 
+def test_detect_controlled_search_facts_keeps_full_method_phrases():
+    text = (
+        "PCR was conducted in a DNA Engine Tetrad2 Thermal Cycler. "
+        "Amplicons were pyrosequenced using 454-FLX with Titanium chemistry at the "
+        "Genome Sequencing and Analysis Facility (GSAF) at the University of Texas at Austin. "
+        "Control wells received no settlement cue."
+    )
+    flag_facts = detect_text_search_flags((("Methods", text),), locator_prefix="paper:PMC1")
+    controlled = detect_controlled_search_facts(
+        (("Methods", text),),
+        locator_prefix="paper:PMC1",
+        active_flags=frozenset(fact.fact_type_candidate for fact in flag_facts),
+    )
+
+    by_type = {fact.fact_type_candidate: fact for fact in [*flag_facts, *controlled]}
+    assert by_type["neg_cont_0_1"].raw_value == "1"
+    assert by_type["thermocycler"].raw_value == "DNA Engine Tetrad2 Thermal Cycler"
+    assert by_type["seq_kit"].raw_value == "Titanium chemistry"
+    assert by_type["sequencing_location"].raw_value == (
+        "Genome Sequencing and Analysis Facility (GSAF) at the University of Texas at Austin"
+    )
+
+
+def test_detect_controlled_search_facts_does_not_match_bare_its_as_target_gene():
+    text = "PCR amplified 18S rRNA; its sequence reads were clustered after filtering."
+    flag_facts = detect_text_search_flags((("Methods", text),), locator_prefix="paper:PMC1")
+    controlled = detect_controlled_search_facts(
+        (("Methods", text),),
+        locator_prefix="paper:PMC1",
+        active_flags=frozenset(fact.fact_type_candidate for fact in flag_facts),
+    )
+
+    by_type = {fact.fact_type_candidate: fact for fact in controlled}
+    assert by_type["target_gene"].raw_value == "18S rRNA"
+
+
 def test_detect_controlled_search_facts_extracts_biological_rep_integer_not_pcr_reps():
     text = (
         "At each station, three independent samples were collected. "
@@ -174,6 +221,79 @@ def test_detect_controlled_search_facts_extracts_biological_rep_integer_not_pcr_
     assert by_type["biological_rep"].evidence_quote == (
         "At each station, three independent samples were collected."
     )
+
+
+def test_detect_controlled_search_facts_does_not_treat_ecological_species_specific_as_targeted_assay():
+    """Regression guard for a real gold-data false positive
+    (PeerJ 10.7717/peerj.333): "species-specific"/"taxon-specific" alone
+    are too generic to imply a targeted PCR/qPCR assay -- the paper's own
+    Discussion says "coral species-specific cue preferences", an
+    ecological statement with zero PCR/probe/qPCR content nearby, which
+    previously still classified as assay_type "targeted"."""
+    text = (
+        "To visualize coral species-specific cue preferences, both principal "
+        "components analysis (PCA) and non-metric multidimensional scaling "
+        "(NMDS) ordination were used."
+    )
+    controlled = detect_controlled_search_facts(
+        (("Discussion", text),),
+        locator_prefix="paper:PMC1",
+        active_flags=frozenset({"pcr_0_1"}),
+    )
+
+    assert not any(fact.fact_type_candidate == "assay_type" for fact in controlled)
+
+
+def test_detect_controlled_search_facts_does_not_match_thermocycler_brand_as_commercial_master_mix():
+    """Regression guard for a real gold-data false positive
+    (PeerJ 10.7717/peerj.333): the paper describes a custom-assembled PCR
+    mixture (ExTaq buffer/polymerase, Pfu polymerase) amplified on a
+    "DNA Engine Tetrad2 Thermal Cycler (Bio-Rad, Hercules, CA, USA)" --
+    commercial_mm previously matched the bare "Bio-Rad" thermocycler-brand
+    mention as if it were a commercial master-mix product."""
+    text = (
+        "Each 30 ul PCR mixture contained 10 ng of DNA template, 0.1 uM "
+        "forward primer, 0.2 mM dNTP, 3 ul 10X ExTaq buffer, 0.025 U ExTaq "
+        "Polymerase (Takara Biotechnology) and 0.0125 U Pfu Polymerase "
+        "(Agilent Technologies), and was amplified using a DNA Engine "
+        "Tetrad2 Thermal Cycler (Bio-Rad, Hercules, CA, USA)."
+    )
+    controlled = detect_controlled_search_facts(
+        (("Methods", text),),
+        locator_prefix="paper:PMC1",
+        active_flags=frozenset({"pcr_0_1"}),
+    )
+
+    assert not any(fact.fact_type_candidate == "commercial_mm" for fact in controlled)
+    assert next(f for f in controlled if f.fact_type_candidate == "thermocycler").raw_value == (
+        "DNA Engine Tetrad2 Thermal Cycler"
+    )
+
+
+def test_detect_controlled_search_facts_does_not_match_well_or_cycle_counts_as_biological_rep():
+    """Regression guard for a real gold-data false positive
+    (PeerJ 10.7717/peerj.333): a bare "n = <number>"/"N = <number>" pattern
+    previously matched both "(n = 4 well replicates per cue...)" (a
+    technical well count) and "...with N = 17-24 depending on the sample"
+    (a PCR cycle count), producing a nonsensical joined biological_rep
+    value ("4 | 17") from two numbers that have nothing to do with
+    biological replication."""
+    text = (
+        "Cue samples were finely ground with a mortar and pestle shortly "
+        "before the settlement trials and a single drop of the resulting "
+        "uniform slurry was added to each well (n = 4 well replicates per "
+        "cue, randomly assigning cues to wells). The PCR mixture was "
+        "amplified with a cycling profile of 94 C 5 min-(94 C 40 s-55 C 2 "
+        "min-72 C 60 s) x N-72 C 10 min, with N = 17-24 depending on the "
+        "sample."
+    )
+    controlled = detect_controlled_search_facts(
+        (("Methods", text),),
+        locator_prefix="paper:PMC1",
+        active_flags=frozenset(),
+    )
+
+    assert not any(fact.fact_type_candidate == "biological_rep" for fact in controlled)
 
 
 def test_detect_controlled_search_facts_classifies_assay_type_and_keeps_evidence():

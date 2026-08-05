@@ -37,16 +37,19 @@ def test_env_override_wins_over_yaml(monkeypatch, tmp_path):
 
 def test_llm_size_env_overrides(monkeypatch, tmp_path):
     reset_config_cache()
+    monkeypatch.setenv("LOCAL_LLM_TIMEOUT_SECONDS", "360")
     monkeypatch.setenv("LOCAL_LLM_MAX_OUTPUT_TOKENS", "2048")
     monkeypatch.setenv("LOCAL_LLM_EXTRACTION_MAX_CHARS_PER_CALL", "1200")
     monkeypatch.setenv("LOCAL_LLM_NUM_CTX", "8192")
 
     config = load_config(env_file=tmp_path / "does-not-exist.env")
 
+    assert config.llm.timeout_seconds == 360
     assert config.llm.max_output_tokens == 2048
     assert config.llm.extraction_max_chars_per_call == 1200
     assert config.llm.num_ctx == 8192
     reset_config_cache()
+    monkeypatch.delenv("LOCAL_LLM_TIMEOUT_SECONDS", raising=False)
     monkeypatch.delenv("LOCAL_LLM_MAX_OUTPUT_TOKENS", raising=False)
     monkeypatch.delenv("LOCAL_LLM_EXTRACTION_MAX_CHARS_PER_CALL", raising=False)
     monkeypatch.delenv("LOCAL_LLM_NUM_CTX", raising=False)
@@ -57,6 +60,7 @@ def test_llm_verifier_env_overrides(monkeypatch, tmp_path):
     monkeypatch.setenv("LOCAL_LLM_VERIFIER_ENABLED", "true")
     monkeypatch.setenv("LOCAL_LLM_VERIFIER_BASE_URL", "http://localhost:11434/v1")
     monkeypatch.setenv("LOCAL_LLM_VERIFIER_MODEL", "granite3.3:8b")
+    monkeypatch.setenv("LOCAL_LLM_VERIFIER_TIMEOUT_SECONDS", "300")
     monkeypatch.setenv("LOCAL_LLM_VERIFIER_MAX_OUTPUT_TOKENS", "256")
     monkeypatch.setenv("LOCAL_LLM_VERIFIER_NUM_CTX", "4096")
     config = load_config(env_file=tmp_path / ".env")
@@ -64,6 +68,7 @@ def test_llm_verifier_env_overrides(monkeypatch, tmp_path):
     assert config.llm_verifier.enabled is True
     assert config.llm_verifier.base_url == "http://localhost:11434/v1"
     assert config.llm_verifier.model == "granite3.3:8b"
+    assert config.llm_verifier.timeout_seconds == 300
     assert config.llm_verifier.max_output_tokens == 256
     assert config.llm_verifier.num_ctx == 4096
 
@@ -71,6 +76,7 @@ def test_llm_verifier_env_overrides(monkeypatch, tmp_path):
     monkeypatch.delenv("LOCAL_LLM_VERIFIER_ENABLED", raising=False)
     monkeypatch.delenv("LOCAL_LLM_VERIFIER_BASE_URL", raising=False)
     monkeypatch.delenv("LOCAL_LLM_VERIFIER_MODEL", raising=False)
+    monkeypatch.delenv("LOCAL_LLM_VERIFIER_TIMEOUT_SECONDS", raising=False)
     monkeypatch.delenv("LOCAL_LLM_VERIFIER_MAX_OUTPUT_TOKENS", raising=False)
     monkeypatch.delenv("LOCAL_LLM_VERIFIER_NUM_CTX", raising=False)
 

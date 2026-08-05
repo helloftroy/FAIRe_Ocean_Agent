@@ -98,6 +98,35 @@ def test_biosample_extract_structured_facts_creates_per_sample_entities(biosampl
     assert {f.fact_type_candidate for f in sample_1_facts} == {"collection_date", "depth", "lat_lon"}
 
 
+def test_biosample_extract_structured_facts_normalizes_location_and_host_aliases(biosample_adapter):
+    raw = {
+        "bioproject_accession": "PRJNA242644",
+        "total_linked_samples": 1,
+        "truncated": False,
+        "samples": [
+            {
+                "accession": "SAMN02700077",
+                "title": "cue sample",
+                "organism": {"taxonomy_name": "coral metagenome", "taxonomy_id": "496922"},
+                "attributes": {
+                    "geographic location": "USA: Florida Keys",
+                    "cultivar": "crustose coralline algae (CCA)",
+                },
+            },
+        ],
+    }
+
+    facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw))
+    values = {fact.fact_type_candidate: fact for fact in facts}
+
+    assert values["geographic location"].raw_value == "USA: Florida Keys"
+    assert values["geo_loc_name"].raw_value == "USA: Florida Keys"
+    assert values["cultivar"].raw_value == "crustose coralline algae (CCA)"
+    assert values["host_species"].raw_value == "crustose coralline algae (CCA)"
+    assert values["organism"].raw_value == "coral metagenome"
+    assert values["geo_loc_name"].source_locator.endswith("Attributes.geo_loc_name")
+
+
 def test_biosample_extract_structured_facts_notes_truncation(biosample_adapter):
     raw = {
         "bioproject_accession": "PRJNA1425045",

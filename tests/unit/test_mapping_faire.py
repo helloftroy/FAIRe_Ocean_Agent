@@ -810,6 +810,13 @@ def test_llm_atomic_assay_facts_map_to_faire_protocol_fields_with_review(db_sess
 def test_controlled_text_search_project_facts_map_to_faire_with_review(db_session):
     study = _study(db_session, title="Controlled project searches")
     _fact(db_session, study, field="seq_kit", value="MiSeq Reagent Kit v3", entity_level="study")
+    _fact(
+        db_session,
+        study,
+        field="sequencing_location",
+        value="Genome Sequencing and Analysis Facility (GSAF) at the University of Texas at Austin",
+        entity_level="study",
+    )
     _fact(db_session, study, field="probeReporter", value="FAM", entity_level="study")
     _fact(db_session, study, field="probeQuencher", value="BHQ-1 | quencher", entity_level="study")
     _fact(db_session, study, field="commercial_mm", value="TaqMan", entity_level="study")
@@ -833,6 +840,9 @@ def test_controlled_text_search_project_facts_map_to_faire_with_review(db_sessio
         for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id, entity_id=None)
     }
     assert values["seq_kit"].standardized_value == "MiSeq Reagent Kit v3"
+    assert values["sequencing_location"].standardized_value == (
+        "Genome Sequencing and Analysis Facility (GSAF) at the University of Texas at Austin"
+    )
     assert values["probeReporter"].standardized_value == "FAM"
     assert values["probeQuencher"].standardized_value == "BHQ-1 | quencher"
     assert values["commercial_mm"].standardized_value == "TaqMan"

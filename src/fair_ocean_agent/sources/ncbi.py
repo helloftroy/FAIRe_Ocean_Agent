@@ -187,10 +187,13 @@ class NcbiBioSampleAdapter(SourceAdapter):
                 accession = bs.get("accession")
                 if not accession:
                     continue
+                organism_el = bs.find("Description/Organism")
+                organism = dict(organism_el.attrib) if organism_el is not None else {}
                 samples.append(
                     {
                         "accession": accession,
                         "title": bs.findtext("Description/Title"),
+                        "organism": {key: value for key, value in organism.items() if value},
                         "attributes": {
                             attr.get("attribute_name"): attr.text
                             for attr in bs.findall("Attributes/Attribute")
@@ -240,9 +243,21 @@ class NcbiBioSampleAdapter(SourceAdapter):
 
         for sample in r.get("samples", []):
             accession = sample["accession"]
+            normalized_attrs: dict[str, str] = {}
             for attr_name, attr_value in sample.get("attributes", {}).items():
                 if attr_value in (None, ""):
                     continue
+                normalized_attrs[attr_name] = str(attr_value)
+                if attr_name.casefold() == "geographic location":
+                    normalized_attrs["geo_loc_name"] = str(attr_value)
+                if attr_name.casefold() == "cultivar":
+                    normalized_attrs["host_species"] = str(attr_value)
+            organism = sample.get("organism") or {}
+            organism_name = organism.get("taxonomy_name") or organism.get("taxonomy_id")
+            if organism_name:
+                normalized_attrs.setdefault("organism", str(organism_name))
+                normalized_attrs.setdefault("host_species", str(organism_name))
+            for attr_name, attr_value in normalized_attrs.items():
                 facts.append(
                     RawFactCandidate(
                         entity_level=EntityLevel.SAMPLE,
