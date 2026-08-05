@@ -2060,6 +2060,81 @@ prepended column, one new end-to-end two-study traceability test). See
 README's "An internal_study_id column for tracing rows across multi-study
 exports".
 
+## Fixing a real taxon-extraction bug and two missed-field gaps, found via two more real papers
+
+The user ran two more real papers through the pipeline (ISME J
+10.1093/ismejo/wrae013, PLOS ONE 10.1371/journal.pone.0303937) and found
+four more concrete problems.
+
+**Fixed: `assay_target_taxa`/`targetTaxonomicAssay` producing outright
+garbage.** `extraction/taxonomic_assay.py` (a new module, built by Codex,
+that deliberately reads only title/abstract/keywords -- "easy to overfill
+from a whole paper" per its own docstring) pulled `"Diversity studies |
+The device was"` for the PLOS paper and nothing for the ISME paper.
+Root-caused directly against the real Crossref abstract: its
+`_taxa_from_metadata_item` fell back to `_taxon_mentions(sentence)` -- a
+whole-sentence scan for anything matching "Capitalized word + lowercase
+word(s)" (`_SCIENTIFIC_NAME_RE`, meant to catch genuine binomial species
+names) -- whenever a sentence passed the loose assay-context gate (mention
+of "PCR"/"amplicon"/etc.) without containing an explicit target/detect/
+amplify phrase. That fallback matches ordinary English constantly: the
+PLOS abstract's own opening two words ("Diversity studies") and a
+different sentence's opening three words ("The device was") both
+satisfied it, with zero relationship to any real taxon. Removed the
+fallback entirely -- only the narrower target-phrase capture (an explicit
+"targeting X"/"designed to amplify X"/etc. phrase) is now trusted for
+sentence-level extraction; a sentence with assay-context but no such
+phrase now correctly contributes nothing instead of guessing. Separately
+confirmed via the real ISME full text that its blank result was already
+correct, not a bug: its RT-qPCR methods only ever name the marker gene
+("16S rRNA", primers 515F/805R) -- a `target_gene` fact, not a taxon name
+-- and never state an explicit target taxon anywhere in the paper, so
+"nothing extracted" is the right, non-hallucinated answer for this paper
+specifically, independent of the abstract-only scoping choice.
+
+**Fixed: `seq_kit` missing "TruSeq Stranded mRNA kit (Illumina)".**
+`_SEQUENCING_KIT_PATTERNS` (`extraction/search_flags.py`) had no pattern
+for the TruSeq family (Stranded mRNA, Nano, PCR-Free, DNA, ...) -- one of
+the most common Illumina library-prep kit names in real papers. Added a
+generic `TruSeq <1-4 words> kit` pattern.
+
+**Investigated, partially improved: forward/reverse primer volume missed
+for "...and 1 uL of each primer".** The ISME paper's RT-qPCR mixture
+sentence states one aggregate volume covering both primers, never naming
+forward/reverse separately -- unlike `template_dna_volume`, which the
+model correctly pulled from the adjacent "1 uL of cDNA" in the same
+sentence. Added explicit guidance to `forward_primer_volume`/
+`reverse_primer_volume`/`forward_primer_concentration`/
+`reverse_primer_concentration`'s checklist descriptions: reuse an
+aggregate "each primer"/"both primers" value for both fields when the text
+doesn't name them separately. Confirmed live against the real sentence in
+isolation that the model now reliably fills both fields; in the full,
+busier chunk (competing with primer names/sequences/annealing temp/cycle
+count/master-mix name all in one call) it did not consistently pick this
+up on every replay -- a real, but harder to fully close, attention-budget
+effect distinct from the max_output_tokens truncation bug fixed last
+round.
+
+**A standing test caught two more real duplicate-mechanism gaps mid-task,
+exactly as designed**: Codex's new `adapter_trimming_method`/
+`length_filtering_tool`/`minimum_read_length` deterministic detectors
+(narrow Trimmomatic/MINLEN-specific regexes) duplicate the LLM taxonomy's
+own native names for the same three concepts, and the collision-guard test
+built earlier this session failed immediately on the current branch.
+Checked real data before resolving: excluding the LLM versions would have
+lost `adapter_trimming_method` entirely for the PeerJ paper (custom Perl
+script) and the ISME paper (SeqPrep) -- neither is Trimmomatic, so the
+narrow deterministic detector alone would never catch them; on the one
+real Trimmomatic paper (PLOS) both mechanisms already agree today. Added
+all three to `_ACCEPTED_UNCONDITIONAL_OVERLAPS`, the same low-conflict-risk,
+deliberate-redundancy precedent as `biological_rep`.
+
+607 tests pass (10 new since the last commit, including one
+taxonomic_assay.py false-positive regression test built from the real
+PLOS abstract and one primer-volume/concentration hint-wording test from
+this round). See README's "Fixing a real taxon-extraction bug and two
+missed-field gaps, found via two more real papers".
+
 ## Mapping expansion: the rest of FAIRe's Environment section
 
 Beyond the 8 BioSample attributes already mapped (elev/samp_collect_device/

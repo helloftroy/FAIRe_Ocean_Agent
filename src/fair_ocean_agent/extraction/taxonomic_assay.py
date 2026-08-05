@@ -177,7 +177,21 @@ def _taxa_from_metadata_item(kind: str, text: str) -> tuple[list[str], str | Non
             continue
         if not sentence or not _ASSAY_CONTEXT_RE.search(sentence):
             continue
-        sentence_values = _target_phrase_taxa(sentence) or _taxon_mentions(sentence)
+        # Deliberately NOT a `_target_phrase_taxa(sentence) or
+        # _taxon_mentions(sentence)` fallback: scanning a whole sentence for
+        # "looks like a binomial name" (_SCIENTIFIC_NAME_RE's Capitalized-
+        # word + lowercase-word pattern) matches ordinary English far too
+        # often -- confirmed on a real paper (PLOS ONE 10.1371/
+        # journal.pone.0303937), whose abstract mentions "PCR" and
+        # "amplicon" in sentences that have nothing to do with an assay's
+        # target taxon at all, false-positiving on "Diversity studies" (the
+        # sentence's own opening two words) and "The device was" (a
+        # different sentence's opening three words). Only the narrower
+        # target-phrase capture (an explicit "targeting X"/"designed to
+        # amplify X"/etc. phrase) is trusted for sentence-level extraction;
+        # a sentence with assay-context but no such phrase contributes
+        # nothing, rather than guessing from its raw text.
+        sentence_values = _target_phrase_taxa(sentence)
         if not sentence_values:
             continue
         values.extend(sentence_values)

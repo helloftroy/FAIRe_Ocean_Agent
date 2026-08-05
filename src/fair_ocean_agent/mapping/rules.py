@@ -89,6 +89,7 @@ names the assay, but no assay Entity/table-row model exists yet.
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Callable
@@ -115,6 +116,41 @@ def _lon_only(value: str) -> str | None:
 
 def _identity(value: str) -> str | None:
     return value
+
+
+def _license_url(value: str) -> str | None:
+    stripped = value.strip()
+    if not stripped:
+        return None
+    try:
+        parsed = json.loads(stripped)
+    except json.JSONDecodeError:
+        parsed = stripped
+
+    def first_url(item) -> str | None:
+        if isinstance(item, str):
+            return item.strip() or None
+        if isinstance(item, dict):
+            url = item.get("URL") or item.get("url")
+            return str(url).strip() if url else None
+        if isinstance(item, list):
+            for child in item:
+                url = first_url(child)
+                if url:
+                    return url
+        return None
+
+    return first_url(parsed)
+
+
+def _open_access_from_license(value: str) -> str | None:
+    url = _license_url(value)
+    if not url:
+        return None
+    normalized = url.casefold()
+    if "creativecommons.org/licenses/" in normalized or "creativecommons.org/publicdomain/" in normalized:
+        return "open access"
+    return None
 
 
 def _semicolon_parts(value: str) -> list[str]:
@@ -448,7 +484,9 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
     # against. Every one of these was marked "No LLM" in an explicit user
     # review of a NOAA/SEUS-MBON FAIRe checklist.
     MappingRule("license", EntityLevel.STUDY.value, "projectMetadata", "license",
-                MappingMethod.EXACT_LABEL.value),
+                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=_license_url),
+    MappingRule("license", EntityLevel.STUDY.value, "projectMetadata", "accessRights",
+                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=_open_access_from_license),
     MappingRule("rightsHolder", EntityLevel.STUDY.value, "projectMetadata", "rightsHolder",
                 MappingMethod.EXACT_LABEL.value),
     MappingRule("accessRights", EntityLevel.STUDY.value, "projectMetadata", "accessRights",

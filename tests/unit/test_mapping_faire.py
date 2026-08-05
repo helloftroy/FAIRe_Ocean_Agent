@@ -445,6 +445,32 @@ def test_maps_deterministic_publication_metadata_facts_to_faire(db_session):
         assert rows[field] == value, f"{field}: expected {value!r}, got {rows.get(field)!r}"
 
 
+def test_maps_crossref_license_json_to_url_and_open_access(db_session):
+    study = _study(db_session, title="Crossref license cleanup")
+    _fact(
+        db_session,
+        study,
+        field="license",
+        value=(
+            '[{"start": {"date-parts": [[2024, 1, 31]]}, '
+            '"content-version": "vor", "URL": "https://creativecommons.org/licenses/by/4.0/"}]'
+        ),
+        entity_level="study",
+        support=SupportType.STRUCTURED_SOURCE,
+    )
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    rows = {
+        sv.target_field: sv.standardized_value
+        for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id, entity_id=None)
+    }
+    assert rows["license"] == "https://creativecommons.org/licenses/by/4.0/"
+    assert rows["accessRights"] == "open access"
+
+
 def test_maps_repository_dna_derived_fields_to_faire_without_llm_review_flag(db_session):
     study = _study(db_session, title="DNA-derived repository facts")
     for field, value in {

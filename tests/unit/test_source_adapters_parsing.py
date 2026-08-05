@@ -118,6 +118,34 @@ def test_crossref_title_fact_is_a_plain_string_not_a_json_encoded_list(crossref_
     assert container_fact.raw_value == "Journal of Geophysical Research: Biogeosciences"
 
 
+def test_crossref_license_fact_is_url_not_json_encoded_list(crossref_adapter):
+    record = _record(
+        "crossref",
+        {
+            "DOI": "10.1/x",
+            "license": [{"URL": "https://creativecommons.org/licenses/by/4.0/", "content-version": "vor"}],
+        },
+    )
+    facts = {f.fact_type_candidate: f for f in crossref_adapter.extract_structured_facts(record)}
+
+    assert facts["license"].raw_value == "https://creativecommons.org/licenses/by/4.0/"
+    assert facts["accessRights"].raw_value == "open access"
+
+
+def test_crossref_license_url_does_not_invent_access_rights_for_non_open_terms(crossref_adapter):
+    record = _record(
+        "crossref",
+        {
+            "DOI": "10.1/x",
+            "license": [{"URL": "https://onlinelibrary.wiley.com/termsAndConditions"}],
+        },
+    )
+    facts = {f.fact_type_candidate: f for f in crossref_adapter.extract_structured_facts(record)}
+
+    assert facts["license"].raw_value == "https://onlinelibrary.wiley.com/termsAndConditions"
+    assert "accessRights" not in facts
+
+
 def test_europe_pmc_parse_publication_fields_open_access(europe_pmc_adapter):
     record = _record("europe_pmc", load_fixture("europe_pmc_result.json"))
     fields = europe_pmc_adapter.parse_publication_fields(record)

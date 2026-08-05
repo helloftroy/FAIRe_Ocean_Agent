@@ -21,6 +21,29 @@ def _stringify(value) -> str:
     return value if isinstance(value, str) else json.dumps(value, default=str)
 
 
+def _license_url(value) -> str | None:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        url = value.get("URL") or value.get("url")
+        return str(url) if url else None
+    if isinstance(value, list):
+        for item in value:
+            url = _license_url(item)
+            if url:
+                return url
+    return None
+
+
+def _access_rights_from_license_url(url: str | None) -> str | None:
+    if not url:
+        return None
+    normalized = url.casefold()
+    if "creativecommons.org/licenses/" in normalized or "creativecommons.org/publicdomain/" in normalized:
+        return "open access"
+    return None
+
+
 class CrossrefAdapter(SourceAdapter):
     name = "crossref"
 
@@ -87,7 +110,9 @@ class CrossrefAdapter(SourceAdapter):
         add("container-title", container_titles[0] if container_titles else None)
         add("publisher", m.get("publisher"))
         add("type", m.get("type"))
-        add("license", m.get("license"))
+        license_url = _license_url(m.get("license"))
+        add("license", license_url)
+        add("accessRights", _access_rights_from_license_url(license_url))
         add("published", m.get("published") or m.get("published-print") or m.get("published-online"))
         add("is-referenced-by-count", m.get("is-referenced-by-count"))
         return facts

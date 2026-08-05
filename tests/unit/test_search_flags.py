@@ -236,6 +236,48 @@ def test_detect_controlled_search_facts_does_not_match_bare_its_as_target_gene()
     assert by_type["target_gene"].raw_value == "18S rRNA"
 
 
+def test_detect_controlled_search_facts_prioritizes_specific_ssu_target_gene_names():
+    text = (
+        "PCR amplified 16S rRNA, 16S, and 18S markers. "
+        "The final assay targeted 16S SSU rRNA and 18S rRNA SSU regions."
+    )
+    flag_facts = detect_text_search_flags((("Methods", text),), locator_prefix="paper:PMC1")
+    controlled = detect_controlled_search_facts(
+        (("Methods", text),),
+        locator_prefix="paper:PMC1",
+        active_flags=frozenset(fact.fact_type_candidate for fact in flag_facts),
+    )
+
+    by_type = {fact.fact_type_candidate: fact for fact in controlled}
+    assert by_type["target_gene"].raw_value == "16S rRNA SSU | 18S rRNA SSU"
+
+
+def test_detect_controlled_search_facts_expands_coordinated_ssu_target_gene_names():
+    text = "Taxonomic classification extracted small subunit rRNA (16S and 18S SSU rRNA) reads."
+    flag_facts = detect_text_search_flags((("Methods", f"PCR was performed. {text}"),), locator_prefix="paper:PMC1")
+    controlled = detect_controlled_search_facts(
+        (("Methods", text),),
+        locator_prefix="paper:PMC1",
+        active_flags=frozenset(fact.fact_type_candidate for fact in flag_facts),
+    )
+
+    by_type = {fact.fact_type_candidate: fact for fact in controlled}
+    assert by_type["target_gene"].raw_value == "16S rRNA SSU | 18S rRNA SSU"
+
+
+def test_detect_controlled_search_facts_keeps_rrna_when_no_ssu_target_gene_name():
+    text = "The PCR assay amplified 16S rRNA and later refers to the 16S amplicons."
+    flag_facts = detect_text_search_flags((("Methods", text),), locator_prefix="paper:PMC1")
+    controlled = detect_controlled_search_facts(
+        (("Methods", text),),
+        locator_prefix="paper:PMC1",
+        active_flags=frozenset(fact.fact_type_candidate for fact in flag_facts),
+    )
+
+    by_type = {fact.fact_type_candidate: fact for fact in controlled}
+    assert by_type["target_gene"].raw_value == "16S rRNA"
+
+
 def test_detect_controlled_search_facts_extracts_biological_rep_integer_not_pcr_reps():
     text = (
         "At each station, three independent samples were collected. "
@@ -369,6 +411,41 @@ def test_detect_controlled_search_facts_classifies_assay_type_and_keeps_evidence
         "We used qPCR with a hydrolysis probe for species-specific detection. | "
         "A separate metabarcoding workflow used universal primers for community profiling."
     )
+
+
+def test_detect_controlled_search_facts_extracts_trimmomatic_minlen_parameter():
+    text = (
+        "Raw paired-end reads were processed with Trimmomatic using the parameters "
+        "ILLUMINACLIP:adapters.fa:2:30:10 SLIDINGWINDOW:4:20 MINLEN:80 before downstream analysis."
+    )
+    controlled = detect_controlled_search_facts(
+        (("Bioinformatics", text),),
+        locator_prefix="paper:PMC1",
+        active_flags=frozenset(),
+    )
+
+    by_type = {fact.fact_type_candidate: fact for fact in controlled}
+    assert by_type["adapter_trimming_method"].raw_value == "Trimmomatic"
+    assert by_type["length_filtering_tool"].raw_value == "Trimmomatic"
+    assert by_type["minimum_read_length"].raw_value == "80 bp"
+    assert by_type["minimum_read_length"].evidence_quote == text
+
+
+def test_detect_controlled_search_facts_extracts_trimmomatic_reads_below_phrase():
+    text = (
+        "The sequence libraries were trimmed using trimmomatic, removing all reads below 500 bp, "
+        "with a phred quality below 3 for the start and the end of the reads."
+    )
+    controlled = detect_controlled_search_facts(
+        (("Bioinformatics", text),),
+        locator_prefix="paper:PMC1",
+        active_flags=frozenset(),
+    )
+
+    by_type = {fact.fact_type_candidate: fact for fact in controlled}
+    assert by_type["adapter_trimming_method"].raw_value == "trimmomatic"
+    assert by_type["length_filtering_tool"].raw_value == "trimmomatic"
+    assert by_type["minimum_read_length"].raw_value == "500 bp"
 
 
 def test_quote_candidates_for_llm_judged_library_prep_search_are_narrow():

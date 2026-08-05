@@ -369,12 +369,17 @@ CONTROLLED_SEARCH_FIELDS: tuple[ControlledSearchField, ...] = (
         section="PCR",
         description="Field type: controlled vocabulary, list all that find in paper.",
         required_any_flags=frozenset({"pcr_0_1"}),
+        value_strategy="target_gene_phrase",
         search_terms=(
             "12S rRNA (SSU mitochondria)",
             "16S rRNA (LSU mitochondria)",
             "16S rRNA (SSU prokaryote)",
+            "16S SSU rRNA",
+            "16S rRNA SSU",
             "23S rRNA (LSU prokaryote)",
             "18S rRNA (SSU eukaryote)",
+            "18S SSU rRNA",
+            "18S rRNA SSU",
             "28S rRNA (LSU eukaryote)",
             "cytochrome c oxidase I",
             "cytochrome b",
@@ -870,6 +875,27 @@ CONTROLLED_SEARCH_FIELDS: tuple[ControlledSearchField, ...] = (
             "Air",
         ),
     ),
+    ControlledSearchField(
+        term_name="adapter_trimming_method",
+        section="Bioinformatics",
+        description="Primer/adapter trimming method, including software and version.",
+        value_strategy="trimmomatic_tool",
+        search_terms=("Trimmomatic",),
+    ),
+    ControlledSearchField(
+        term_name="length_filtering_tool",
+        section="Bioinformatics",
+        description="Software used to filter reads by length.",
+        value_strategy="trimmomatic_tool",
+        search_terms=("Trimmomatic", "MINLEN"),
+    ),
+    ControlledSearchField(
+        term_name="minimum_read_length",
+        section="Bioinformatics",
+        description="Minimum read length threshold used for filtering.",
+        value_strategy="trimmomatic_minimum_read_length",
+        search_terms=("MINLEN", "minimum read length", "reads below", "reads shorter than"),
+    ),
 )
 
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
@@ -950,6 +976,10 @@ _SEQUENCING_KIT_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bMiSeq\s+Reagent\s+Kit(?:\s+v\d+)?\b", re.IGNORECASE),
     re.compile(r"\bTitanium\s+chemistry\b", re.IGNORECASE),
     re.compile(r"\b(?:v2|v3)\s+chemistry\b", re.IGNORECASE),
+    # TruSeq is a whole family of Illumina library prep kits (Stranded
+    # mRNA, Nano, PCR-Free, DNA, ...) -- confirmed missing on a real paper
+    # (ISME J 10.1093/ismejo/wrae013: "TruSeq Stranded mRNA kit (Illumina)").
+    re.compile(r"\bTruSeq\s+\w+(?:\s+\w+){0,3}\s+[Kk]it\b"),
 )
 _THERMOCYCLER_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bDNA\s+Engine\s+Tetrad\s*2\s+Thermal\s+Cycler\b", re.IGNORECASE),
@@ -970,6 +1000,28 @@ _SEQUENCING_LOCATION_PATTERNS: tuple[re.Pattern[str], ...] = (
         r"at\s+the\s+University\s+of\s+Texas\s+at\s+Austin)\b",
         re.IGNORECASE,
     ),
+)
+_TRIMMOMATIC_RE = re.compile(
+    r"\bTrimmomatic(?:\s+(?:v(?:ersion)?\.?\s*)?\d+(?:\.\d+)*)?\b",
+    re.IGNORECASE,
+)
+_TRIMMOMATIC_MINLEN_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bMINLEN\s*:\s*(?P<value>\d+)\b", re.IGNORECASE),
+    re.compile(
+        r"\b(?:remov(?:e|ed|ing)|discard(?:ed|ing)?|filter(?:ed|ing)?)\s+"
+        r"(?:all\s+)?reads?\s+(?:shorter\s+than|below|less\s+than|under)\s+"
+        r"(?P<value>\d+)\s*(?P<unit>bp|base\s+pairs?|bases?|nt|nucleotides?)?\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bminimum\s+read\s+length\s+(?:of|=|:)?\s*"
+        r"(?P<value>\d+)\s*(?P<unit>bp|base\s+pairs?|bases?|nt|nucleotides?)?\b",
+        re.IGNORECASE,
+    ),
+)
+_COORDINATED_SSU_RRNA_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\b16S\s+(?:and|/|,)\s+18S\s+SSU\s+rRNA\b", re.IGNORECASE),
+    re.compile(r"\b16S\s+(?:and|/|,)\s+18S\s+rRNA\s+SSU\b", re.IGNORECASE),
 )
 _PRIMER_SEQUENCE_RE = re.compile(
     r"\b5\s*[′'’`]\s*(?P<sequence>[ACGTRYSWKMBDHVN\s*]+?)\s*3\s*[′'’`]",
@@ -1073,6 +1125,86 @@ def _match_controlled_terms(
                     }
                 )
     return values, evidence_quotes, match_metadata
+
+
+def _canonical_target_gene(value: str) -> tuple[str, int, str] | None:
+    normalized = value.casefold()
+    for marker in ("16s", "18s"):
+        if marker not in normalized:
+            continue
+        display_marker = marker.upper()
+        if "ssu" in normalized:
+            return display_marker, 3, f"{display_marker} rRNA SSU"
+        if "rrna" in normalized:
+            return display_marker, 2, f"{display_marker} rRNA"
+        return display_marker, 1, display_marker
+    return None
+
+
+def _match_target_gene_terms(
+    field: ControlledSearchField,
+    texts: Iterable[tuple[str, str]],
+    locator_prefix: str,
+) -> tuple[list[str], list[str], list[dict]]:
+    values, evidence_quotes, match_metadata = _match_controlled_terms(field, texts, locator_prefix)
+    coordinated_values: list[str] = []
+    coordinated_quotes: list[str] = []
+    coordinated_metadata: list[dict] = []
+    for title, text in texts:
+        for snippet_index, snippet in _snippets(text):
+            for pattern in _COORDINATED_SSU_RRNA_PATTERNS:
+                if pattern.search(snippet) is None:
+                    continue
+                for value in ("16S rRNA SSU", "18S rRNA SSU"):
+                    coordinated_values.append(value)
+                    coordinated_metadata.append(
+                        {
+                            "matched_value": value,
+                            "matched_pattern": pattern.pattern,
+                            "source_locator": f"{locator_prefix}:{title}:sentence[{snippet_index}]",
+                        }
+                    )
+                if snippet not in coordinated_quotes:
+                    coordinated_quotes.append(snippet)
+                break
+    values = [*coordinated_values, *values]
+    evidence_quotes = [*coordinated_quotes, *evidence_quotes]
+    match_metadata = [*coordinated_metadata, *match_metadata]
+    best_by_marker: dict[str, tuple[int, str, int]] = {}
+    output_values: list[str | None] = []
+
+    for index, value in enumerate(values):
+        canonical = _canonical_target_gene(value)
+        if canonical is None:
+            output_values.append(value)
+            continue
+        marker, rank, canonical_value = canonical
+        previous = best_by_marker.get(marker)
+        if previous is None:
+            best_by_marker[marker] = (rank, canonical_value, index)
+            output_values.append(canonical_value)
+            continue
+        previous_rank, _previous_value, previous_index = previous
+        if rank > previous_rank:
+            output_values[previous_index] = None
+            best_by_marker[marker] = (rank, canonical_value, index)
+            output_values.append(canonical_value)
+        else:
+            output_values.append(None)
+
+    collapsed_values: list[str] = []
+    collapsed_metadata: list[dict] = []
+    seen_values: set[str] = set()
+    for value, metadata in zip(output_values, match_metadata):
+        if value is None:
+            continue
+        key = value.casefold()
+        if key in seen_values:
+            continue
+        seen_values.add(key)
+        collapsed_values.append(value)
+        collapsed_metadata.append({**metadata, "normalized_value": value})
+    return collapsed_values, evidence_quotes, collapsed_metadata
 
 
 def _match_controlled_sentences(
@@ -1300,6 +1432,82 @@ def _match_pcr_mixture_phrase(
     return values, evidence_quotes, match_metadata
 
 
+def _format_minimum_read_length(match: re.Match[str]) -> str:
+    value = match.group("value")
+    unit = (match.groupdict().get("unit") or "bp").strip().lower()
+    if unit in {"base pair", "base pairs", "base", "bases", "nt", "nucleotide", "nucleotides"}:
+        unit = "bp"
+    return f"{value} {unit}"
+
+
+def _match_trimmomatic_tool(
+    field: ControlledSearchField,
+    texts: Iterable[tuple[str, str]],
+    locator_prefix: str,
+) -> tuple[list[str], list[str], list[dict]]:
+    values: list[str] = []
+    evidence_quotes: list[str] = []
+    match_metadata: list[dict] = []
+    seen_values: set[str] = set()
+    for title, text in texts:
+        for snippet_index, snippet in _snippets(text):
+            match = _TRIMMOMATIC_RE.search(snippet)
+            if match is None:
+                continue
+            value = match.group(0)
+            key = value.casefold()
+            if key in seen_values:
+                continue
+            seen_values.add(key)
+            values.append(value)
+            if snippet not in evidence_quotes:
+                evidence_quotes.append(snippet)
+            match_metadata.append(
+                {
+                    "matched_value": value,
+                    "matched_pattern": _TRIMMOMATIC_RE.pattern,
+                    "source_locator": f"{locator_prefix}:{title}:sentence[{snippet_index}]",
+                }
+            )
+    return values, evidence_quotes, match_metadata
+
+
+def _match_trimmomatic_minimum_read_length(
+    field: ControlledSearchField,
+    texts: Iterable[tuple[str, str]],
+    locator_prefix: str,
+) -> tuple[list[str], list[str], list[dict]]:
+    values: list[str] = []
+    evidence_quotes: list[str] = []
+    match_metadata: list[dict] = []
+    seen_values: set[str] = set()
+    for title, text in texts:
+        for snippet_index, snippet in _snippets(text):
+            if "minlen" not in snippet.casefold() and not _TRIMMOMATIC_RE.search(snippet):
+                continue
+            for pattern in _TRIMMOMATIC_MINLEN_PATTERNS:
+                match = pattern.search(snippet)
+                if match is None:
+                    continue
+                value = _format_minimum_read_length(match)
+                key = value.casefold()
+                if key in seen_values:
+                    break
+                seen_values.add(key)
+                values.append(value)
+                if snippet not in evidence_quotes:
+                    evidence_quotes.append(snippet)
+                match_metadata.append(
+                    {
+                        "matched_value": value,
+                        "matched_pattern": pattern.pattern,
+                        "source_locator": f"{locator_prefix}:{title}:sentence[{snippet_index}]",
+                    }
+                )
+                break
+    return values, evidence_quotes, match_metadata
+
+
 def _classify_assay_type(
     field: ControlledSearchField,
     texts: Iterable[tuple[str, str]],
@@ -1350,6 +1558,12 @@ def _match_controlled_field(
         return _match_regex_phrases(field, texts, locator_prefix, _THERMOCYCLER_PATTERNS)
     if field.value_strategy == "sequencing_location_phrase":
         return _match_regex_phrases(field, texts, locator_prefix, _SEQUENCING_LOCATION_PATTERNS)
+    if field.value_strategy == "trimmomatic_tool":
+        return _match_trimmomatic_tool(field, texts, locator_prefix)
+    if field.value_strategy == "trimmomatic_minimum_read_length":
+        return _match_trimmomatic_minimum_read_length(field, texts, locator_prefix)
+    if field.value_strategy == "target_gene_phrase":
+        return _match_target_gene_terms(field, texts, locator_prefix)
     if field.value_strategy == "forward_primer_name_phrase":
         return _match_primer_phrase(field, texts, locator_prefix, direction="forward", value_kind="name")
     if field.value_strategy == "reverse_primer_name_phrase":

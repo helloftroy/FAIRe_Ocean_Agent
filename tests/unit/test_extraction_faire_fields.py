@@ -74,6 +74,24 @@ def test_render_field_reference_includes_faire_hints():
         assert hint in rendered
 
 
+def test_primer_volume_and_concentration_hints_cover_the_aggregate_each_primer_phrasing():
+    """Regression guard: a real paper (ISME J 10.1093/ismejo/wrae013) states
+    "...and 1 uL of each primer" -- one aggregate volume covering both
+    primers, never naming forward/reverse separately. Confirmed live that
+    the model reliably fills both forward_primer_volume/
+    reverse_primer_volume from this phrasing once explicitly told to reuse
+    an aggregate 'each primer'/'both primers' value for both fields."""
+    rendered = render_field_reference(active_flags=frozenset({"pcr_0_1"}))
+    for native_name in (
+        "forward_primer_volume",
+        "reverse_primer_volume",
+        "forward_primer_concentration",
+        "reverse_primer_concentration",
+    ):
+        line = next(line for line in rendered.splitlines() if line.startswith(f"- {native_name}:"))
+        assert "each primer" in line
+
+
 def test_render_field_reference_includes_fallback_section():
     rendered = render_field_reference()
     assert "General narrative fallback" in rendered
@@ -133,7 +151,23 @@ def test_native_name_to_faire_hint_round_trips_a_known_field():
 # verbatim), a plain replicate count has low real risk of the two
 # mechanisms disagreeing harmfully -- this is accepted, deliberate
 # redundancy for coverage, not an unreconciled gap.
-_ACCEPTED_UNCONDITIONAL_OVERLAPS = frozenset({"biological_rep"})
+#
+# trim_method/min_len_tool/min_len_cutoff (LLM native names
+# adapter_trimming_method/length_filtering_tool/minimum_read_length):
+# CONTROLLED_SEARCH_FIELDS' own entries here are narrow, tool-name-specific
+# regex matches (only "Trimmomatic"/"MINLEN"), not general free-text
+# tool-name extraction. Confirmed on two real papers: excluding the LLM
+# version would have lost adapter_trimming_method entirely for a paper
+# using a custom Perl script (PeerJ 10.7717/peerj.333) or SeqPrep (ISME J
+# 10.1093/ismejo/wrae013) -- neither Trimmomatic, so the deterministic
+# detector alone would never catch them. On a real Trimmomatic paper (PLOS
+# ONE 10.1371/journal.pone.0303937) both mechanisms already fire today and
+# agree ("trimmomatic"/"trimmomatic", "500 bp"/"500 bp"), confirming this
+# is the same low-conflict-risk pattern as biological_rep, not a genuine
+# unreconciled gap.
+_ACCEPTED_UNCONDITIONAL_OVERLAPS = frozenset(
+    {"biological_rep", "trim_method", "min_len_tool", "min_len_cutoff"}
+)
 
 
 def test_controlled_search_field_overlaps_are_excluded_or_flag_gated():

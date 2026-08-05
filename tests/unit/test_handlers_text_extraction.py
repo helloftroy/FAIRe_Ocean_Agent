@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from fair_ocean_agent.database.enums import EntityLevel, IdentifierType, TaskStatus, TaskType
+from fair_ocean_agent.database.enums import EntityLevel, IdentifierType, ReviewStatus, TaskStatus, TaskType
 from fair_ocean_agent.database.models import Entity, ExternalIdentifier, RawFact, Source, Study
 from fair_ocean_agent.llm.base import LLMBackendError
 from fair_ocean_agent.llm.disabled import DisabledLLMBackend
@@ -237,15 +237,28 @@ def test_handler_is_idempotent_on_retry(db_session, monkeypatch):
 def test_handler_reprocesses_fulltext_with_new_prompt_version_or_model(db_session, monkeypatch):
     study = _seeded_study_with_pmcid(db_session)
     task = _task_for(db_session, study)
-    db_session.add(
-        Source(
-            study_id=study.study_id,
-            source_type="article_fulltext",
-            source_name="europe_pmc_fulltext",
-            external_identifier="PMC1234567",
-            source_version="text-extraction-v3:older-model",
-        )
+    old_source = Source(
+        study_id=study.study_id,
+        source_type="article_fulltext",
+        source_name="europe_pmc_fulltext",
+        external_identifier="PMC1234567",
+        source_version="text-extraction-v3:older-model",
     )
+    db_session.add(old_source)
+    db_session.flush()
+    old_fact = RawFact(
+        study_id=study.study_id,
+        source_id=old_source.source_id,
+        raw_field_name="target_gene",
+        raw_value="16S rRNA | 16S",
+        fact_type_candidate="target_gene",
+        entity_level=EntityLevel.STUDY.value,
+        support_type="explicit",
+        extraction_method="deterministic_text_search_flagging",
+        prompt_version="text-extraction-v3",
+        review_status=ReviewStatus.ACCEPTED.value,
+    )
+    db_session.add(old_fact)
     db_session.commit()
 
     response = json.dumps(
@@ -269,6 +282,8 @@ def test_handler_reprocesses_fulltext_with_new_prompt_version_or_model(db_sessio
         == 1
     )
     assert db_session.query(RawFact).filter_by(study_id=study.study_id, model_name="new-model").count() == 1
+    db_session.refresh(old_fact)
+    assert old_fact.review_status == ReviewStatus.REJECTED.value
 
 
 def test_handler_fails_atomically_when_later_section_times_out(db_session, monkeypatch):

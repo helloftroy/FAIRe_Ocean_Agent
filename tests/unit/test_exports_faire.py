@@ -48,6 +48,8 @@ def test_export_faire_writes_expected_files_and_rows(db_session, tmp_path):
     db_session.commit()
     map_study_to_faire(db_session, study.study_id)
     db_session.commit()
+    for class_name in EMPTY_CLASSES:
+        (tmp_path / f"{class_name}.csv").write_text("stale header-only file\n")
 
     counts = export_faire(db_session, tmp_path)
 
@@ -55,8 +57,8 @@ def test_export_faire_writes_expected_files_and_rows(db_session, tmp_path):
     assert counts["sampleMetadata"] == 1
     assert counts["experimentRunMetadata"] == 1
     for class_name in EMPTY_CLASSES:
-        assert counts[class_name] == 0
-        assert (tmp_path / f"{class_name}.csv").exists()
+        assert class_name not in counts
+        assert not (tmp_path / f"{class_name}.csv").exists()
 
     with (tmp_path / "projectMetadata.csv").open() as f:
         rows = list(csv.DictReader(f))

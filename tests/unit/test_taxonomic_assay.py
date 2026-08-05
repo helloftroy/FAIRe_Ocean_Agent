@@ -75,6 +75,31 @@ def test_extract_assay_target_taxa_from_crossref_abstract_when_jats_absent():
     assert facts[0].confidence_metadata["scope"] == "title_abstract_keywords_only"
 
 
+def test_extract_assay_target_taxa_does_not_treat_sentence_openers_as_species_names():
+    """Regression guard for a real false positive (PLOS ONE
+    10.1371/journal.pone.0303937): its abstract mentions "PCR" and
+    "amplicon" in sentences that pass the loose assay-context gate but
+    describe a filtration device, not an assay's target taxon. The old
+    `_target_phrase_taxa(sentence) or _taxon_mentions(sentence)` fallback
+    scanned the whole sentence for anything matching the "looks like a
+    binomial name" regex and produced "Diversity studies" (the abstract's
+    own opening two words) and "The device was" (a different sentence's
+    opening three words) as if they were taxa."""
+    crossref_raw = {
+        "abstract": (
+            "<jats:p>Diversity studies of aquatic picoplankton communities using size-class "
+            "filtration, DNA extraction, PCR and sequencing of phylogenetic markers, require a "
+            "robust methodological pipeline. The device was tested using freshwater plankton of "
+            "Lake Constance, and total DNA was extracted and an 16S rDNA amplicon was "
+            "sequenced.</jats:p>"
+        )
+    }
+
+    facts = extract_assay_target_taxa_from_publication_metadata(None, crossref_raw, locator_prefix="t")
+
+    assert facts == []
+
+
 def test_extract_assay_target_taxa_returns_empty_without_taxa_or_context():
     xml = """
     <article><front><article-meta>

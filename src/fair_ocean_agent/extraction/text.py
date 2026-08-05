@@ -205,7 +205,7 @@ from fair_ocean_agent.llm.base import LLMBackend, LLMResponse
 from fair_ocean_agent.mapping.faire import TARGET_SCHEMA
 from fair_ocean_agent.sources.base import RawFactCandidate
 
-PROMPT_VERSION = "text-extraction-v16-flag-gated-pcr-checklist"
+PROMPT_VERSION = "text-extraction-v18-canonical-target-gene"
 DEFAULT_MAX_SECTION_CHARS_PER_CALL = 1600
 
 ABSENT_RAW_VALUE_STRINGS = frozenset(

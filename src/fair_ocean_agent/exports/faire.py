@@ -1,18 +1,12 @@
-"""FAIRe checklist export: one CSV per class (`projectMetadata`,
-`sampleMetadata`, `ampData`, `stdData`, `experimentRunMetadata`,
-`eLowQuantData`, `taxaRaw`, `taxaFinal`), matching the sheet names and
-column order of the vendored `FAIRe_checklist_v1.0.2_FULLtemplate.xlsx`
-(confirmed by inspecting that workbook directly during Milestone 6
-development -- see schemas/faire/README.md). CSV rather than a combined
-.xlsx workbook: the template's sheet-per-class structure maps directly
-onto one-CSV-per-class, and this pipeline's other exports
-(exports/raw_facts.py) are already CSV, so this keeps the export format
-consistent across the codebase rather than introducing a second format for
-one command.
+"""FAIRe checklist export: CSVs for the populated classes
+(`projectMetadata`, `sampleMetadata`, `experimentRunMetadata`), matching
+the sheet names and column order of the vendored
+`FAIRe_checklist_v1.0.2_FULLtemplate.xlsx` where this pipeline has data.
 
 `ampData`, `stdData`, `eLowQuantData`, `taxaRaw`, and `taxaFinal` are
-written header-only: no source adapter or extraction step in this pipeline
-currently produces amplification/standard-curve/taxonomic-assignment data.
+omitted from exports for now: no source adapter or extraction step in this
+pipeline currently produces amplification/standard-curve/taxonomic-
+assignment records, so writing them would only create empty files.
 `experimentRunMetadata` is populated from sample/assay-specific
 experiment_run (library) entities. Sequencing runs remain separate linked
 entities, so many library rows may correctly share one `seq_run_id`.
@@ -47,7 +41,10 @@ from fair_ocean_agent.standards.faire_registry import build_faire_registry
 
 FAIRE_SCHEMA_DIR = REPO_ROOT / "schemas" / "faire"
 
-EMPTY_CLASSES = ("ampData", "stdData", "eLowQuantData", "taxaRaw", "taxaFinal")
+OMITTED_EMPTY_CLASSES = ("ampData", "stdData", "eLowQuantData", "taxaRaw", "taxaFinal")
+# Backward-compatible alias for callers/tests that need to know which FAIRe
+# classes are intentionally omitted until the pipeline has row-shaped data.
+EMPTY_CLASSES = OMITTED_EMPTY_CLASSES
 
 # Pipeline-internal traceability column, not a real FAIRe field -- deliberately
 # NOT added to schemas/faire/classes.yaml (unlike expedition_id/
@@ -163,6 +160,10 @@ def _write_field_reference(output_dir: Path, columns_by_class: dict[str, list[st
 def export_faire(session: Session, output_dir: str | Path) -> dict[str, int]:
     output_dir = Path(output_dir)
     counts: dict[str, int] = {}
+    for class_name in OMITTED_EMPTY_CLASSES:
+        stale_path = output_dir / f"{class_name}.csv"
+        if stale_path.exists():
+            stale_path.unlink()
 
     studies = list(session.scalars(select(Study)))
 
@@ -277,15 +278,11 @@ def export_faire(session: Session, output_dir: str | Path) -> dict[str, int]:
         experiment_rows,
     )
 
-    for class_name in EMPTY_CLASSES:
-        counts[class_name] = _write_csv(output_dir / f"{class_name}.csv", class_columns(class_name), [])
-
     columns_by_class = {
         "projectMetadata": project_columns,
         "sampleMetadata": sample_columns,
         "experimentRunMetadata": experiment_columns,
     }
-    columns_by_class.update({name: class_columns(name) for name in EMPTY_CLASSES})
     counts["field_reference"] = _write_field_reference(output_dir, columns_by_class)
 
     return counts

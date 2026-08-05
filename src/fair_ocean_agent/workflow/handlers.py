@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from fair_ocean_agent.clock import utcnow
@@ -1028,6 +1028,33 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
             inspection_level=InspectionLevel.FULL.value,
         ),
     )
+    old_fulltext_source_ids = [
+        source_id
+        for (source_id,) in session.execute(
+            select(Source.source_id).where(
+                Source.study_id == study.study_id,
+                Source.source_name == "europe_pmc_fulltext",
+                Source.external_identifier == pmcid,
+                Source.source_version != extraction_version,
+            )
+        )
+    ]
+    if old_fulltext_source_ids:
+        session.execute(
+            update(RawFact)
+            .where(
+                RawFact.study_id == study.study_id,
+                RawFact.source_id.in_(old_fulltext_source_ids),
+                RawFact.extraction_method.in_(
+                    (
+                        "deterministic_text_search_flagging",
+                        "llm_judged_quote_search",
+                        "llm_text_extraction",
+                    )
+                ),
+            )
+            .values(review_status=ReviewStatus.REJECTED.value)
+        )
 
     # Rebuild mapping immediately before extraction so this ordering does
     # not depend on a caller remembering to run a separate MAP_FAIRE task.
