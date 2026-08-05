@@ -2000,6 +2000,66 @@ under a reasonable token budget, independent of the config fix above.
 recovery, minus 1 renamed rather than added). See README's "Fixing
 code_repo, commercial_mm, and the real cause of the missing PCR fields".
 
+## An internal_study_id column for tracing rows across multi-study exports
+
+**The problem**: `export_faire()` (`exports/faire.py`) has always merged
+every study currently in the database into one shared set of output CSVs
+-- `projectMetadata.csv`/`sampleMetadata.csv`/`experimentRunMetadata.csv`
+each get rows from every study appended together, with no per-study filter
+or grouping anywhere. This was invisible with one study at a time, but the
+user is now running multiple papers concurrently (PeerJ 10.7717/peerj.333
+plus two more via a parallel process) and had no way to tell, just from
+the exported CSVs, which sample/experiment rows belonged to which project
+row.
+
+**Investigated whether "the same real sample shared across two papers"
+already has a home before designing the fix**: it doesn't. `Entity.study_id`
+(`database/models.py`) is a single-valued foreign key with a unique
+constraint on `(study_id, entity_level, external_identifier)`. `Source`
+already has an explicit `StudySource` many-to-many join table for exactly
+the "one real thing referenced by multiple studies" case -- there is no
+equivalent for `Entity`. So today, if two different papers reference the
+same real NCBI BioSample or ENA run, the pipeline creates two independent
+`Entity` rows, not one shared one. The user's own request anticipated a
+pipe-separated multi-study column for this exact scenario; presented the
+real correctness wrinkle directly before building anything: grouping rows
+across studies by a shared `external_identifier` string is only safe for a
+genuine global repository accession (NCBI/ENA), never for a paper-native
+label a supplement table or the LLM assigned (e.g. two papers could both
+independently use "S1" without meaning the same physical sample). User
+confirmed: build the simple, always-correct version now (one
+`internal_study_id` value per row, matching its real owner), treat true
+cross-study entity merging as a separate future feature.
+
+**Implementation**: a new `internal_study_id` column, prepended as the
+first column in all three CSVs, set from the already-in-scope `study` in
+each of `export_faire`'s three row-building loops. Deliberately **not** a
+real FAIRe field -- not added to `schemas/faire/classes.yaml` (unlike the
+genuine NOAA/SEUS-MBON domain extensions `expedition_id`/
+`ship_crs_expocode` added in an earlier milestone, this must never be
+mistaken for something submittable to NOAA/GBIF/OBIS as part of the real
+checklist) and deliberately excluded from `field_reference.csv` (which
+documents real FAIRe fields with real requirement levels/`exact_mappings`
+-- this column has neither). The three `_write_csv` call sites prepend the
+column inline (`[INTERNAL_STUDY_ID_FIELD, *project_columns]`, etc.)
+without mutating the underlying `project_columns`/`sample_columns`/
+`experiment_columns` variables, since those same lists are reused
+afterward to build `field_reference.csv`'s column inventory -- keeping
+that file scoped to genuine FAIRe fields only.
+
+**Verified against the user's own real two-study database**
+(`fair_ocean_audit_2_current_rerun`, containing exactly the two papers
+mentioned above): `projectMetadata.csv`'s two rows each carry their own
+distinct `internal_study_id`; all 68 combined sample/experiment rows
+correctly split 25/43 across the two studies by `internal_study_id`,
+matching each row's real owner; confirmed `internal_study_id` does not
+appear in `field_reference.csv`.
+
+597 tests pass (2 new: one exact-column-order test updated for the new
+prepended column, one new end-to-end two-study traceability test). See
+README's "An internal_study_id column for tracing rows across multi-study
+exports".
+
 ## Mapping expansion: the rest of FAIRe's Environment section
 
 Beyond the 8 BioSample attributes already mapped (elev/samp_collect_device/

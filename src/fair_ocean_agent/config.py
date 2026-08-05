@@ -18,6 +18,8 @@ from pydantic import BaseModel, Field
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = REPO_ROOT / "config"
+MIN_LLM_MAX_OUTPUT_TOKENS = 2048
+MIN_LLM_EXTRACTION_MAX_CHARS_PER_CALL = 16000
 
 
 class DatabaseConfig(BaseModel):
@@ -49,8 +51,8 @@ class LLMConfig(BaseModel):
     timeout_seconds: int = 180
     max_retries: int = 3
     temperature: float = 0
-    max_output_tokens: int | None = None
-    extraction_max_chars_per_call: int = 1600
+    max_output_tokens: int | None = MIN_LLM_MAX_OUTPUT_TOKENS
+    extraction_max_chars_per_call: int = MIN_LLM_EXTRACTION_MAX_CHARS_PER_CALL
     max_concurrency: int = 1
     # Sent as {"options": {"num_ctx": ...}} in the request body -- an extra
     # field most OpenAI-compatible servers simply ignore, so this stays
@@ -238,11 +240,17 @@ def _apply_env_overrides(raw: dict[str, Any]) -> dict[str, Any]:
 
     llm_max_output_tokens = os.environ.get("LOCAL_LLM_MAX_OUTPUT_TOKENS")
     if llm_max_output_tokens:
-        raw.setdefault("llm", {})["max_output_tokens"] = int(llm_max_output_tokens)
+        raw.setdefault("llm", {})["max_output_tokens"] = max(
+            int(llm_max_output_tokens),
+            MIN_LLM_MAX_OUTPUT_TOKENS,
+        )
 
     llm_extraction_max_chars = os.environ.get("LOCAL_LLM_EXTRACTION_MAX_CHARS_PER_CALL")
     if llm_extraction_max_chars:
-        raw.setdefault("llm", {})["extraction_max_chars_per_call"] = int(llm_extraction_max_chars)
+        raw.setdefault("llm", {})["extraction_max_chars_per_call"] = max(
+            int(llm_extraction_max_chars),
+            MIN_LLM_EXTRACTION_MAX_CHARS_PER_CALL,
+        )
 
     llm_num_ctx = os.environ.get("LOCAL_LLM_NUM_CTX")
     if llm_num_ctx:

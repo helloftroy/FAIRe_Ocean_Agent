@@ -49,6 +49,19 @@ FAIRE_SCHEMA_DIR = REPO_ROOT / "schemas" / "faire"
 
 EMPTY_CLASSES = ("ampData", "stdData", "eLowQuantData", "taxaRaw", "taxaFinal")
 
+# Pipeline-internal traceability column, not a real FAIRe field -- deliberately
+# NOT added to schemas/faire/classes.yaml (unlike expedition_id/
+# ship_crs_expocode, a genuine NOAA/SEUS-MBON domain extension, this must
+# never be mistaken for something submittable to NOAA/GBIF/OBIS as part of
+# the real checklist) and deliberately excluded from field_reference.csv
+# (which documents real FAIRe fields with real requirement levels/
+# exact_mappings -- this column has neither). export_faire() merges every
+# study in the database into one shared set of output CSVs with no
+# per-study filter; this is the only thing that lets an outside observer
+# trace which project/sample/experiment rows belong to the same study once
+# more than one is being processed at once.
+INTERNAL_STUDY_ID_FIELD = "internal_study_id"
+
 
 @lru_cache(maxsize=1)
 def _load_classes() -> dict:
@@ -189,6 +202,7 @@ def export_faire(session: Session, output_dir: str | Path) -> dict[str, int]:
                 continue  # nothing at all mapped for this study -- don't emit an all-blank row
             row = dict(broadcast)
             row["project_id"] = project_id or ""
+            row[INTERNAL_STUDY_ID_FIELD] = study.study_id
             project_rows.append(row)
             continue
         for assay in assays_with_values:
@@ -196,8 +210,11 @@ def export_faire(session: Session, output_dir: str | Path) -> dict[str, int]:
             row.update(_entity_values(session, assay.entity_id))
             row.setdefault("assay_name", assay.external_identifier or assay.label or assay.entity_id)
             row["project_id"] = project_id or ""
+            row[INTERNAL_STUDY_ID_FIELD] = study.study_id
             project_rows.append(row)
-    counts["projectMetadata"] = _write_csv(output_dir / "projectMetadata.csv", project_columns, project_rows)
+    counts["projectMetadata"] = _write_csv(
+        output_dir / "projectMetadata.csv", [INTERNAL_STUDY_ID_FIELD, *project_columns], project_rows
+    )
 
     sample_columns = class_columns("sampleMetadata")
     sample_rows = []
@@ -210,8 +227,11 @@ def export_faire(session: Session, output_dir: str | Path) -> dict[str, int]:
             row = dict(broadcast)
             row.update(_entity_values(session, entity.entity_id))
             row["samp_name"] = entity.external_identifier or entity.entity_id
+            row[INTERNAL_STUDY_ID_FIELD] = study.study_id
             sample_rows.append(row)
-    counts["sampleMetadata"] = _write_csv(output_dir / "sampleMetadata.csv", sample_columns, sample_rows)
+    counts["sampleMetadata"] = _write_csv(
+        output_dir / "sampleMetadata.csv", [INTERNAL_STUDY_ID_FIELD, *sample_columns], sample_rows
+    )
 
     experiment_columns = class_columns("experimentRunMetadata")
     experiment_rows = []
@@ -249,9 +269,12 @@ def export_faire(session: Session, output_dir: str | Path) -> dict[str, int]:
                 row.setdefault("seq_run_id", sequencing_run.external_identifier or sequencing_run.entity_id)
             if entity.external_identifier and not entity.external_identifier.startswith("internal:"):
                 row.setdefault("lib_id", entity.external_identifier)
+            row[INTERNAL_STUDY_ID_FIELD] = study.study_id
             experiment_rows.append(row)
     counts["experimentRunMetadata"] = _write_csv(
-        output_dir / "experimentRunMetadata.csv", experiment_columns, experiment_rows
+        output_dir / "experimentRunMetadata.csv",
+        [INTERNAL_STUDY_ID_FIELD, *experiment_columns],
+        experiment_rows,
     )
 
     for class_name in EMPTY_CLASSES:

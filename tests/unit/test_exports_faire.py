@@ -4,7 +4,7 @@ import pytest
 
 from fair_ocean_agent.database.enums import EntityLevel, EntityRelationshipType, IdentifierType, SupportType
 from fair_ocean_agent.database.models import Entity, EntityRelationship, ExternalIdentifier, RawFact, Study
-from fair_ocean_agent.exports.faire import EMPTY_CLASSES, class_columns, export_faire
+from fair_ocean_agent.exports.faire import EMPTY_CLASSES, INTERNAL_STUDY_ID_FIELD, class_columns, export_faire
 from fair_ocean_agent.mapping.faire import map_study_to_faire
 
 
@@ -73,6 +73,70 @@ def test_export_faire_writes_expected_files_and_rows(db_session, tmp_path):
     assert rows[0]["samp_name"] == "SAMN1"
     assert rows[0]["associatedSequences"] == "SRR1"
     assert rows[0]["input_read_count"] == "1000"
+
+
+def test_export_faire_internal_study_id_traces_rows_across_two_studies(db_session, tmp_path):
+    """export_faire() merges every study in the database into one shared
+    set of output CSVs with no per-study filter -- internal_study_id is the
+    only column that lets an outside observer trace which project/sample/
+    experiment rows belong to the same study once more than one paper is
+    being processed at once."""
+    study_a = Study(title="Paper A")
+    study_b = Study(title="Paper B")
+    db_session.add_all([study_a, study_b])
+    db_session.flush()
+    db_session.add_all(
+        [
+            ExternalIdentifier(study_id=study_a.study_id, identifier_type=IdentifierType.BIOPROJECT_ACCESSION.value, identifier_value="PRJNA_A"),
+            ExternalIdentifier(study_id=study_b.study_id, identifier_type=IdentifierType.BIOPROJECT_ACCESSION.value, identifier_value="PRJNA_B"),
+        ]
+    )
+    sample_a = Entity(study_id=study_a.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN_A")
+    sample_b = Entity(study_id=study_b.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN_B")
+    run_a = Entity(study_id=study_a.study_id, entity_level=EntityLevel.SEQUENCING_RUN.value, external_identifier="SRR_A")
+    run_b = Entity(study_id=study_b.study_id, entity_level=EntityLevel.SEQUENCING_RUN.value, external_identifier="SRR_B")
+    db_session.add_all([sample_a, sample_b, run_a, run_b])
+    db_session.flush()
+    for study, sample, run in ((study_a, sample_a, run_a), (study_b, sample_b, run_b)):
+        db_session.add(
+            RawFact(
+                study_id=study.study_id, entity_id=run.entity_id, raw_field_name="run_accession",
+                raw_value=run.external_identifier, fact_type_candidate="run_accession", entity_level="sequencing_run",
+                support_type=SupportType.STRUCTURED_SOURCE.value,
+            )
+        )
+        db_session.add(
+            RawFact(
+                study_id=study.study_id, entity_id=run.entity_id, raw_field_name="sample_accession",
+                raw_value=sample.external_identifier, fact_type_candidate="sample_accession", entity_level="sequencing_run",
+                support_type=SupportType.STRUCTURED_SOURCE.value,
+            )
+        )
+    db_session.commit()
+    map_study_to_faire(db_session, study_a.study_id)
+    map_study_to_faire(db_session, study_b.study_id)
+    db_session.commit()
+
+    export_faire(db_session, tmp_path)
+
+    with (tmp_path / "projectMetadata.csv").open() as f:
+        project_rows = {row["project_id"]: row for row in csv.DictReader(f)}
+    assert project_rows["PRJNA_A"][INTERNAL_STUDY_ID_FIELD] == study_a.study_id
+    assert project_rows["PRJNA_B"][INTERNAL_STUDY_ID_FIELD] == study_b.study_id
+
+    with (tmp_path / "sampleMetadata.csv").open() as f:
+        sample_rows = {row["samp_name"]: row for row in csv.DictReader(f)}
+    assert sample_rows["SAMN_A"][INTERNAL_STUDY_ID_FIELD] == study_a.study_id
+    assert sample_rows["SAMN_B"][INTERNAL_STUDY_ID_FIELD] == study_b.study_id
+
+    with (tmp_path / "experimentRunMetadata.csv").open() as f:
+        experiment_rows = {row["seq_run_id"]: row for row in csv.DictReader(f)}
+    assert experiment_rows["SRR_A"][INTERNAL_STUDY_ID_FIELD] == study_a.study_id
+    assert experiment_rows["SRR_B"][INTERNAL_STUDY_ID_FIELD] == study_b.study_id
+
+    with (tmp_path / "field_reference.csv").open() as f:
+        field_names = {row["faire_field"] for row in csv.DictReader(f)}
+    assert INTERNAL_STUDY_ID_FIELD not in field_names
 
 
 def test_export_still_emits_one_project_row_when_assay_entity_has_no_direct_values(db_session, tmp_path):
@@ -269,7 +333,9 @@ def test_export_faire_column_order_matches_classes_yaml(db_session, tmp_path):
     export_faire(db_session, tmp_path)
     with (tmp_path / "sampleMetadata.csv").open() as f:
         header = next(csv.reader(f))
-    assert header == class_columns("sampleMetadata")
+    # internal_study_id is a pipeline-internal traceability column, prepended
+    # ahead of the real FAIRe columns -- not itself part of classes.yaml.
+    assert header == [INTERNAL_STUDY_ID_FIELD, *class_columns("sampleMetadata")]
 
 
 def test_export_faire_writes_field_reference_with_exact_mappings(db_session, tmp_path):
