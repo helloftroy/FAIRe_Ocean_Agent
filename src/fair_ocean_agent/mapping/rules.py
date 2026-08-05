@@ -157,8 +157,10 @@ def _constant_md5(_value: str) -> str:
 
 def _control_flag_value(value: str, control_terms: tuple[str, ...]) -> str | None:
     normalized = " ".join(value.strip().lower().replace("-", " ").split())
-    if normalized in {"0", "1"}:
-        return normalized
+    if normalized in {"1", "true", "yes", "y"}:
+        return "1"
+    if normalized in {"0", "false", "no", "n"}:
+        return "0"
     if not normalized:
         return None
     explicit_none_markers = ("none", "not used", "not included", "absent", "omitted", "without")
@@ -211,6 +213,10 @@ _POSITIVE_CONTROL_TERMS = (
     "positive amplification control",
     "positive amplification controls",
 )
+
+
+def _pcr_flag(value: str) -> str | None:
+    return _control_flag_value(value, ("pcr", "qpcr", "ddpcr", "amplification", "polymerase chain reaction"))
 
 
 def _negative_control_flag(value: str) -> str | None:
@@ -517,10 +523,15 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("adapter_reverse", EntityLevel.STUDY.value, "projectMetadata", "adapter_reverse",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
+    MappingRule("pcr_0_1", EntityLevel.STUDY.value, "projectMetadata", "pcr_0_1",
+                MappingMethod.SUGGESTED_SEMANTIC.value, transform=_pcr_flag, enum_name="pcr_0_1_enum",
+                review_required=True),
     MappingRule("neg_cont_0_1", EntityLevel.STUDY.value, "projectMetadata", "neg_cont_0_1",
                 MappingMethod.SUGGESTED_SEMANTIC.value, enum_name="neg_cont_0_1_enum", review_required=True),
     MappingRule("pos_cont_0_1", EntityLevel.STUDY.value, "projectMetadata", "pos_cont_0_1",
                 MappingMethod.SUGGESTED_SEMANTIC.value, enum_name="pos_cont_0_1_enum", review_required=True),
+    MappingRule("pcr_0_1", EntityLevel.PROJECT.value, "projectMetadata", "pcr_0_1",
+                MappingMethod.EXACT_LABEL.value, transform=_pcr_flag, enum_name="pcr_0_1_enum"),
     MappingRule("neg_cont_0_1", EntityLevel.PROJECT.value, "projectMetadata", "neg_cont_0_1",
                 MappingMethod.EXACT_LABEL.value, enum_name="neg_cont_0_1_enum"),
     MappingRule("pos_cont_0_1", EntityLevel.PROJECT.value, "projectMetadata", "pos_cont_0_1",

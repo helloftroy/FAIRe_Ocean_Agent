@@ -827,6 +827,14 @@ def test_controlled_text_search_project_facts_map_to_faire_with_review(db_sessio
     _fact(db_session, study, field="lib_screen", value="cleaned with AMPure beads", entity_level="study")
     _fact(db_session, study, field="adapter_forward", value="AATGATACGGCGACCACCGAGATCTACACGCT", entity_level="study")
     _fact(db_session, study, field="adapter_reverse", value="CAAGCAGAAGACGGCATACGAGAT", entity_level="study")
+    _fact(
+        db_session,
+        study,
+        field="pcr_0_1",
+        value="true",
+        entity_level="study",
+        support=SupportType.DETERMINISTICALLY_DERIVED,
+    )
     _fact(db_session, study, field="neg_cont_0_1", value="1", entity_level="study", support=SupportType.DETERMINISTICALLY_DERIVED)
     _fact(db_session, study, field="pos_cont_0_1", value="0", entity_level="study", support=SupportType.DETERMINISTICALLY_DERIVED)
     _fact(db_session, study, field="sample_type", value="water", entity_level="study")
@@ -853,6 +861,7 @@ def test_controlled_text_search_project_facts_map_to_faire_with_review(db_sessio
     assert values["lib_screen"].standardized_value == "cleaned with AMPure beads"
     assert values["adapter_forward"].standardized_value == "AATGATACGGCGACCACCGAGATCTACACGCT"
     assert values["adapter_reverse"].standardized_value == "CAAGCAGAAGACGGCATACGAGAT"
+    assert values["pcr_0_1"].standardized_value == "1"
     assert values["neg_cont_0_1"].standardized_value == "1"
     assert values["pos_cont_0_1"].standardized_value == "0"
     assert "sample_type" not in values

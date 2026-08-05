@@ -76,6 +76,7 @@ TEXT_SEARCH_FLAGS: tuple[TextSearchFlag, ...] = (
     TextSearchFlag(
         fact_type_candidate="pcr_0_1",
         description="PCR/amplification keyword evidence",
+        positive_value="1",
         positive_patterns=(
             re.compile(r"\bPCR\b", re.IGNORECASE),
             re.compile(r"\bqPCR\b", re.IGNORECASE),
