@@ -217,14 +217,52 @@ FIELD_GROUPS: dict[str, tuple[FaireExtractionField, ...]] = {
         FaireExtractionField("forward_primer_volume", "forward primer volume per reaction -- if the text gives one aggregate volume for 'each primer'/'both primers' rather than naming forward/reverse separately, use that same value here too", "pcr_primer_vol_forward", "1 uL", required_any_flags=frozenset({"pcr_0_1"})),
         FaireExtractionField("reverse_primer_volume", "reverse primer volume per reaction -- if the text gives one aggregate volume for 'each primer'/'both primers' rather than naming forward/reverse separately, use that same value here too", "pcr_primer_vol_reverse", "1 uL", required_any_flags=frozenset({"pcr_0_1"})),
         FaireExtractionField("amplicon_size", "expected amplicon length in base pairs, excluding primers/adapters", "ampliconSize", "411 bp", required_any_flags=frozenset({"pcr_0_1"})),
-        FaireExtractionField("pcr_reaction_volume", "total PCR reaction volume", "amplificationReactionVolume", "25 uL", required_any_flags=frozenset({"pcr_0_1"})),
-        FaireExtractionField("template_dna_volume", "template DNA volume added per PCR reaction", "pcr_dna_vol", "2 uL", required_any_flags=frozenset({"pcr_0_1"})),
-        FaireExtractionField("thermocycler", "thermocycler manufacturer and model", "thermocycler", required_any_flags=frozenset({"pcr_0_1"})),
-        FaireExtractionField("annealing_temperature", "PCR annealing temperature", "annealingTemp", "55C", required_any_flags=frozenset({"pcr_0_1"})),
-        FaireExtractionField("pcr_cycle_count", "number of PCR cycles", "pcr_cycles", "35", required_any_flags=frozenset({"pcr_0_1"})),
-        FaireExtractionField("pcr_conditions", "full description of PCR reaction conditions/thermal profile", "pcr_cond", required_any_flags=frozenset({"pcr_0_1"})),
-        FaireExtractionField("commercial_master_mix", "commercial master mix name/brand, if one was used", "commercial_mm", required_any_flags=frozenset({"pcr_0_1"})),
-        FaireExtractionField("custom_master_mix", "custom master mix composition, if a commercial one was not used", "custom_mm", required_any_flags=frozenset({"pcr_0_1"})),
+        FaireExtractionField("pcr_reaction_volume", "total PCR reaction volume -- if the text separately describes a second/index PCR, this is the FIRST PCR's own volume only, never the second PCR's", "amplificationReactionVolume", "25 uL", required_any_flags=frozenset({"pcr_0_1"})),
+        FaireExtractionField("template_dna_volume", "template DNA volume added per PCR reaction -- if the text separately describes a second/index PCR, this is the FIRST PCR's own template volume only, never the second PCR's", "pcr_dna_vol", "2 uL", required_any_flags=frozenset({"pcr_0_1"})),
+        FaireExtractionField("thermocycler", "thermocycler manufacturer and model -- if the text separately describes a second/index PCR run on a different thermocycler, this is the FIRST PCR's own thermocycler only", "thermocycler", required_any_flags=frozenset({"pcr_0_1"})),
+        FaireExtractionField("annealing_temperature", "PCR annealing temperature -- if the text separately describes a second/index PCR, this is the FIRST PCR's own annealing temperature only, never the second PCR's", "annealingTemp", "55C", required_any_flags=frozenset({"pcr_0_1"})),
+        FaireExtractionField("pcr_cycle_count", "number of PCR cycles -- if the text separately describes a second/index PCR, this is the FIRST PCR's own cycle count only, never the second PCR's", "pcr_cycles", "35", required_any_flags=frozenset({"pcr_0_1"})),
+        FaireExtractionField("pcr_conditions", "full description of PCR reaction conditions/thermal profile -- if the text separately describes a second/index PCR, this is the FIRST PCR's own conditions only, never the second PCR's", "pcr_cond", required_any_flags=frozenset({"pcr_0_1"})),
+        FaireExtractionField("commercial_master_mix", "commercial master mix name/brand, if one was used -- if the text separately describes a second/index PCR using a different master mix, this is the FIRST PCR's own master mix only", "commercial_mm", required_any_flags=frozenset({"pcr_0_1"})),
+        FaireExtractionField("custom_master_mix", "custom master mix composition, if a commercial one was not used -- if the text separately describes a second/index PCR using a different mixture, this is the FIRST PCR's own mixture only", "custom_mm", required_any_flags=frozenset({"pcr_0_1"})),
+        # A two-step metabarcoding protocol (barcoding_pcr_appr =
+        # "two-step PCR", e.g. search_flags.LLM_JUDGED_SEARCH_FIELDS'
+        # barcoding_pcr_appr entry) runs a SECOND PCR to add
+        # indices/barcodes/sequencing adapters to the first PCR's product --
+        # confirmed on two real papers (PeerJ 10.7717/peerj.333's "second
+        # PCR to incorporate 454-Titanium primers and unique barcodes";
+        # PLOS ONE 10.1371/journal.pone.0303937's "...required for the
+        # second PCR"). The real FAIRe checklist has a dedicated pcr2_*
+        # field for every one of these second-PCR concepts, mirroring the
+        # first PCR's own fields one for one -- gated on pcr_0_1 like the
+        # rest of this group rather than a dedicated two-step-only flag,
+        # since a one-step-PCR paper simply won't have any second-PCR text
+        # for the model to (correctly) find nothing in.
+        # pcr2_analysis_software/pcr2_method_additional are deliberately
+        # excluded (see LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS above), matching
+        # the first PCR's own pcr_analysis_software/pcr_method_additional
+        # exclusion.
+        #
+        # No example values below (unlike their first-PCR counterparts):
+        # confirmed live against a real paper's second-PCR text (PeerJ
+        # 10.7717/peerj.333) that the model copied this module's own
+        # example strings verbatim into raw_value when the real text didn't
+        # state that quantity for the second PCR at all -- exactly the
+        # "never copy an example into raw_value" failure mode
+        # extraction/text.py's own prompt already warns against, just
+        # triggered here in practice. Omitting the example removes the
+        # temptation; every other field in this module already omits one
+        # where a concise, unambiguous example wasn't obviously safe (e.g.
+        # forward_primer_sequence).
+        FaireExtractionField("second_pcr_reaction_volume", "total reaction volume of the second-step (barcoding/indexing) PCR, if a two-step PCR protocol was used -- the SECOND PCR's own volume only, never the first PCR's", "pcr2_amplificationReactionVolume", required_any_flags=frozenset({"pcr_0_1"})),
+        FaireExtractionField("second_pcr_template_dna_volume", "volume of the first PCR's cleaned product used as template in the second-step PCR, if a two-step PCR protocol was used -- the SECOND PCR's own template volume only, never the first PCR's", "pcr2_dna_vol", required_any_flags=frozenset({"pcr_0_1"})),
+        FaireExtractionField("second_pcr_thermocycler", "thermocycler manufacturer and model used for the second-step PCR, if a two-step PCR protocol was used -- the SECOND PCR's own thermocycler only, never the first PCR's", "pcr2_thermocycler", required_any_flags=frozenset({"pcr_0_1"})),
+        FaireExtractionField("second_pcr_annealing_temperature", "annealing temperature of the second-step PCR, if a two-step PCR protocol was used -- the SECOND PCR's own annealing temperature only, never the first PCR's", "pcr2_annealingTemp", required_any_flags=frozenset({"pcr_0_1"})),
+        FaireExtractionField("second_pcr_cycle_count", "number of cycles in the second-step PCR, if a two-step PCR protocol was used -- the SECOND PCR's own cycle count only, never the first PCR's", "pcr2_cycles", required_any_flags=frozenset({"pcr_0_1"})),
+        FaireExtractionField("second_pcr_conditions", "full description of the second-step PCR's reaction conditions/thermal profile, if a two-step PCR protocol was used -- the SECOND PCR's own conditions only, never the first PCR's", "pcr2_cond", required_any_flags=frozenset({"pcr_0_1"})),
+        FaireExtractionField("second_pcr_commercial_master_mix", "commercial master mix name/brand used in the second-step PCR, if one was used -- the SECOND PCR's own master mix only, never the first PCR's", "pcr2_commercial_mm", required_any_flags=frozenset({"pcr_0_1"})),
+        FaireExtractionField("second_pcr_custom_master_mix", "custom master mix composition used in the second-step PCR, if a commercial one was not used -- the SECOND PCR's own mixture only, never the first PCR's", "pcr2_custom_mm", required_any_flags=frozenset({"pcr_0_1"})),
+        FaireExtractionField("second_pcr_plate_id", "plate ID used for the second-step PCR, if a two-step PCR protocol was used -- the SECOND PCR's own plate ID only, never the first PCR's", "pcr2_plate_id", required_any_flags=frozenset({"pcr_0_1"})),
         FaireExtractionField(
             "probe_sequence",
             "hydrolysis/TaqMan probe sequence, 5' to 3', if a probe-based qPCR/ddPCR assay was used",

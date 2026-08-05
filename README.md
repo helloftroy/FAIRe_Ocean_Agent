@@ -2135,6 +2135,84 @@ PLOS abstract and one primer-volume/concentration hint-wording test from
 this round). See README's "Fixing a real taxon-extraction bug and two
 missed-field gaps, found via two more real papers".
 
+## Disambiguating trim tools, catching a reagent-listing gap, and building out the second-PCR field family
+
+Direct follow-up after the user reviewed the previous round's fixes
+against the same two real papers.
+
+**Fixed: Trimmomatic wrongly stamped onto `adapter_trimming_method` too.**
+The user pointed out the ISME paper genuinely uses *both* SeqPrep (adapter
+removal) and Trimmomatic (quality/length trimming) -- but only Trimmomatic
+was showing up, and it was showing up for BOTH fields. Root cause: the
+deterministic Trimmomatic detector was completely context-blind -- it
+fired on both `adapter_trimming_method` and `length_filtering_tool`
+whenever "Trimmomatic" appeared anywhere in the text, regardless of what
+the surrounding sentence said it was used for. Rewrote it as a single
+`_match_trim_tool(purpose=...)` function that only attributes a tool name
+to a field when context matching that purpose ("adapter"/"ILLUMINACLIP"/
+"barcode" vs. "quality"/"length"/"MINLEN"/"LEADING"/"TRAILING") appears
+within `_TRIM_TOOL_CONTEXT_WINDOW` (90 chars) of that specific mention --
+a whole-sentence check wasn't tight enough, since the real paper describes
+both tools in one long compound sentence with numbered clauses
+("(i) ...SeqPrep...; (ii) ...; and (iii) ...Trimmomatic..."), ~250
+characters apart. Added a `_SEQPREP_RE` pattern so `adapter_trimming_method`
+can now recognize SeqPrep at all (it previously had no adapter-tool
+pattern beyond Trimmomatic itself). Confirmed live: `adapter_trimming_method`
+now correctly gets "SeqPrep 1.2" and `length_filtering_tool` gets
+"Trimmomatic 0.39" for this exact paper -- no pipe-joining needed, since
+each tool now lands on the field matching what the text actually says it
+was used for.
+
+**Fixed: `custom_mm` missing a reagent-listing sentence with no "mixture"
+word at all.** The PLOS ONE paper's real PCR-composition sentence --
+"...performed with 0.02 U/ul of Phusion High Fidelity DNA polymerase, 1X
+Phusion HF Buffer and 200 uM of dNTPs (New England Biolabs, USA)" -- never
+uses "mixture"/"mix", so the existing `_PCR_MIXTURE_MARKERS_RE` trigger
+(built two rounds ago) missed it entirely. Added a second, ANDed trigger:
+a sentence naming a polymerase (a known brand -- Taq/Phusion/Pfu/ExTaq/
+KAPA/Q5/GoTaq/Platinum/AmpliTaq/HotStar/iProof -- or a generic "X
+polymerase" phrase) together with "buffer" or "dNTP" is just as much a
+PCR-mixture description as one using the word "mixture" itself. Confirmed
+live: this sentence now correctly populates `custom_mm` (no master-mix
+brand named, so not `commercial_mm`).
+
+**Built out the second-PCR (`pcr2_*`) field family**, per the user's
+request after noticing the PLOS ONE paper's two-step protocol has "quite a
+few open fields" with nowhere to go. Added 9 new native names --
+`second_pcr_reaction_volume`/`second_pcr_template_dna_volume`/
+`second_pcr_thermocycler`/`second_pcr_annealing_temperature`/
+`second_pcr_cycle_count`/`second_pcr_conditions`/
+`second_pcr_commercial_master_mix`/`second_pcr_custom_master_mix`/
+`second_pcr_plate_id` -- mirroring the first PCR's own fields one for one
+against the real FAIRe schema's `pcr2_*` slots (`pcr2_analysis_software`/
+`pcr2_method_additional` were already deliberately excluded from an
+earlier round, matching the first PCR's own exclusion of those two
+concepts). Gated on `pcr_0_1` like the rest of the group, rather than a
+dedicated two-step-only flag -- a one-step-PCR paper simply won't have any
+second-PCR text for the model to (correctly) find nothing in.
+
+**A live validation of the new fields caught a real hallucination bug
+before it shipped**: replaying the real PeerJ second-PCR text showed the
+model copying this module's own example values ("22 uL", "2 uL") verbatim
+into `raw_value` when the real text didn't state those specific
+quantities for the second PCR -- exactly the "never copy an example into
+raw_value" failure mode the extraction prompt already warns against, just
+newly visible here. Removed the example values from the four new
+quantity-shaped second-PCR fields (matching how other fields in this
+module already omit an example rather than risk one), and added explicit
+"the SECOND PCR's own X only, never the first PCR's" (and the reverse, on
+every corresponding first-PCR field) disambiguation to prevent
+cross-attribution when a paper describes both PCR steps together.
+Re-verified live against the full first+second-PCR paragraph: all 18
+facts extract correctly, each quantity attributed to the right PCR step,
+zero hallucinated examples.
+
+610 tests pass (3 new: two Trimmomatic/SeqPrep disambiguation regression
+tests, one reagent-listing-without-"mixture" regression test -- the
+second-PCR field additions are covered by the existing
+`test_render_field_reference_includes_faire_hints`-style completeness
+tests, which enumerate every native name/hint automatically).
+
 ## Mapping expansion: the rest of FAIRe's Environment section
 
 Beyond the 8 BioSample attributes already mapped (elev/samp_collect_device/

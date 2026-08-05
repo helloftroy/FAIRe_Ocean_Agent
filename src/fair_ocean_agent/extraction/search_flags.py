@@ -879,14 +879,14 @@ CONTROLLED_SEARCH_FIELDS: tuple[ControlledSearchField, ...] = (
         term_name="adapter_trimming_method",
         section="Bioinformatics",
         description="Primer/adapter trimming method, including software and version.",
-        value_strategy="trimmomatic_tool",
-        search_terms=("Trimmomatic",),
+        value_strategy="adapter_trim_tool",
+        search_terms=("SeqPrep", "Trimmomatic"),
     ),
     ControlledSearchField(
         term_name="length_filtering_tool",
         section="Bioinformatics",
         description="Software used to filter reads by length.",
-        value_strategy="trimmomatic_tool",
+        value_strategy="length_quality_trim_tool",
         search_terms=("Trimmomatic", "MINLEN"),
     ),
     ControlledSearchField(
@@ -1003,6 +1003,26 @@ _SEQUENCING_LOCATION_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 _TRIMMOMATIC_RE = re.compile(
     r"\bTrimmomatic(?:\s+(?:v(?:ersion)?\.?\s*)?\d+(?:\.\d+)*)?\b",
+    re.IGNORECASE,
+)
+# SeqPrep is a distinct, common adapter-trimming/read-merging tool --
+# confirmed missing on a real paper (ISME J 10.1093/ismejo/wrae013) that
+# uses SeqPrep specifically for adapter removal and Trimmomatic separately
+# for quality/length trimming (LEADING/TRAILING/MINLEN) in the same
+# pipeline. Before this fix, the (context-blind) Trimmomatic-only detector
+# wrongly stamped "Trimmomatic" onto adapter_trimming_method too, even
+# though that paper's own text explicitly attributes adapter removal to
+# SeqPrep, not Trimmomatic.
+_SEQPREP_RE = re.compile(r"\bSeqPrep(?:\s+(?:v(?:ersion)?\.?\s*)?\d+(?:\.\d+)*)?\b", re.IGNORECASE)
+# A single trim-tool mention can serve either purpose (or both, if a tool
+# genuinely does both in one invocation) -- disambiguated by what the same
+# sentence says the tool was used FOR, not by which tool it happens to be.
+_ADAPTER_TRIM_CONTEXT_RE = re.compile(
+    r"\badapter(?:s)?\b|\bILLUMINACLIP\b|\bbarcodes?\b|\bprimers?\s+(?:removal|sequences)\b",
+    re.IGNORECASE,
+)
+_LENGTH_QUALITY_TRIM_CONTEXT_RE = re.compile(
+    r"\bquality\b|\bshort\s+reads?\b|\blength\b|\bMINLEN\b|\bLEADING\b|\bTRAILING\b|\bSLIDINGWINDOW\b",
     re.IGNORECASE,
 )
 _TRIMMOMATIC_MINLEN_PATTERNS: tuple[re.Pattern[str], ...] = (
@@ -1392,6 +1412,20 @@ _PCR_MIXTURE_MARKERS_RE = re.compile(
     r"|\bpolymerase\s+chain\s+reaction\s*\(?PCR\)?\s+mixture\b",
     re.IGNORECASE,
 )
+# Some real papers list PCR reagents (polymerase, buffer, dNTPs) without
+# ever using the word "mixture"/"mix" at all -- confirmed missing on a
+# real paper (PLOS ONE 10.1371/journal.pone.0303937: "...performed with
+# 0.02 U/ul of Phusion High Fidelity DNA polymerase, 1X Phusion HF Buffer
+# and 200 uM of dNTPs (New England Biolabs, USA)."). A sentence naming a
+# polymerase AND a buffer/dNTP is just as much a PCR-mixture-composition
+# description as one using the word "mixture" -- both trigger the same
+# commercial-vs-custom classification below.
+_PCR_POLYMERASE_MENTION_RE = re.compile(
+    r"\b(?:Taq|Phusion|Pfu|ExTaq|KAPA|Q5|GoTaq|Platinum|AmpliTaq|HotStar(?:Taq)?|iProof)\b"
+    r"|\b\w+\s+(?:DNA\s+)?[Pp]olymerase\b",
+    re.IGNORECASE,
+)
+_PCR_BUFFER_OR_DNTP_RE = re.compile(r"\bbuffer\b|\bdNTPs?\b", re.IGNORECASE)
 # A PCR-mixture sentence is "commercial" only if it also names a specific
 # master-mix product/brand or says "master mix"/"mastermix" outright --
 # otherwise (buffer/dNTP/enzyme-by-enzyme composition, e.g. "3 ul 10X ExTaq
@@ -1414,7 +1448,10 @@ def _match_pcr_mixture_phrase(
     match_metadata: list[dict] = []
     for title, text in texts:
         for snippet_index, snippet in _snippets(text):
-            if not _PCR_MIXTURE_MARKERS_RE.search(snippet):
+            is_mixture_sentence = _PCR_MIXTURE_MARKERS_RE.search(snippet) or (
+                _PCR_POLYMERASE_MENTION_RE.search(snippet) and _PCR_BUFFER_OR_DNTP_RE.search(snippet)
+            )
+            if not is_mixture_sentence:
                 continue
             is_commercial = bool(_COMMERCIAL_MASTER_MIX_BRAND_RE.search(snippet))
             if ("commercial" if is_commercial else "custom") != classification:
@@ -1440,35 +1477,60 @@ def _format_minimum_read_length(match: re.Match[str]) -> str:
     return f"{value} {unit}"
 
 
-def _match_trimmomatic_tool(
+_TRIM_TOOL_CONTEXT_WINDOW = 90
+
+
+def _match_trim_tool(
     field: ControlledSearchField,
     texts: Iterable[tuple[str, str]],
     locator_prefix: str,
+    *,
+    purpose: str,
 ) -> tuple[list[str], list[str], list[dict]]:
+    """`purpose` is "adapter" (adapter_trimming_method) or "length_quality"
+    (length_filtering_tool) -- the same tool name (Trimmomatic especially,
+    which can do both) is only attributed to a given field when context
+    NEAR that specific mention (within _TRIM_TOOL_CONTEXT_WINDOW chars, not
+    just anywhere in the same snippet) says what it was used for. A
+    snippet-wide check is not tight enough: a real paper (ISME J 10.1093/
+    ismejo/wrae013) describes adapter removal (SeqPrep) and quality/length
+    trimming (Trimmomatic) as two numbered clauses "(i) ...; (ii) ...; and
+    (iii) ..." inside ONE long compound sentence -- a snippet-wide context
+    check would see both "adapter" and "Trimmomatic" in that one sentence
+    and wrongly attribute Trimmomatic to adapter_trimming_method too, even
+    though the two mentions are ~250 characters apart and describe
+    different clauses. See _SEQPREP_RE's comment for the same real paper."""
+    context_re = _ADAPTER_TRIM_CONTEXT_RE if purpose == "adapter" else _LENGTH_QUALITY_TRIM_CONTEXT_RE
+    tool_patterns = (_SEQPREP_RE, _TRIMMOMATIC_RE) if purpose == "adapter" else (_TRIMMOMATIC_RE,)
     values: list[str] = []
     evidence_quotes: list[str] = []
     match_metadata: list[dict] = []
     seen_values: set[str] = set()
     for title, text in texts:
         for snippet_index, snippet in _snippets(text):
-            match = _TRIMMOMATIC_RE.search(snippet)
-            if match is None:
-                continue
-            value = match.group(0)
-            key = value.casefold()
-            if key in seen_values:
-                continue
-            seen_values.add(key)
-            values.append(value)
-            if snippet not in evidence_quotes:
-                evidence_quotes.append(snippet)
-            match_metadata.append(
-                {
-                    "matched_value": value,
-                    "matched_pattern": _TRIMMOMATIC_RE.pattern,
-                    "source_locator": f"{locator_prefix}:{title}:sentence[{snippet_index}]",
-                }
-            )
+            for pattern in tool_patterns:
+                match = pattern.search(snippet)
+                if match is None:
+                    continue
+                window_start = max(0, match.start() - _TRIM_TOOL_CONTEXT_WINDOW)
+                window_end = match.end() + _TRIM_TOOL_CONTEXT_WINDOW
+                if not context_re.search(snippet[window_start:window_end]):
+                    continue
+                value = match.group(0)
+                key = value.casefold()
+                if key in seen_values:
+                    continue
+                seen_values.add(key)
+                values.append(value)
+                if snippet not in evidence_quotes:
+                    evidence_quotes.append(snippet)
+                match_metadata.append(
+                    {
+                        "matched_value": value,
+                        "matched_pattern": pattern.pattern,
+                        "source_locator": f"{locator_prefix}:{title}:sentence[{snippet_index}]",
+                    }
+                )
     return values, evidence_quotes, match_metadata
 
 
@@ -1558,8 +1620,10 @@ def _match_controlled_field(
         return _match_regex_phrases(field, texts, locator_prefix, _THERMOCYCLER_PATTERNS)
     if field.value_strategy == "sequencing_location_phrase":
         return _match_regex_phrases(field, texts, locator_prefix, _SEQUENCING_LOCATION_PATTERNS)
-    if field.value_strategy == "trimmomatic_tool":
-        return _match_trimmomatic_tool(field, texts, locator_prefix)
+    if field.value_strategy == "adapter_trim_tool":
+        return _match_trim_tool(field, texts, locator_prefix, purpose="adapter")
+    if field.value_strategy == "length_quality_trim_tool":
+        return _match_trim_tool(field, texts, locator_prefix, purpose="length_quality")
     if field.value_strategy == "trimmomatic_minimum_read_length":
         return _match_trimmomatic_minimum_read_length(field, texts, locator_prefix)
     if field.value_strategy == "target_gene_phrase":

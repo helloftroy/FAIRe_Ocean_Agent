@@ -272,8 +272,11 @@ def test_assay_scoped_field_names_includes_pcr_and_qpcr_fields():
 
 def test_render_field_reference_omits_excluded_faire_hints():
     rendered = render_field_reference(exclude_faire_hints=frozenset({"annealingTemp"}), active_flags=_ALL_FLAGS)
-    assert "annealing_temperature" not in rendered
-    assert "annealingTemp" not in rendered
+    # Substring containment isn't precise enough here: "second_pcr_annealing_temperature"
+    # (a different field, different hint) legitimately contains
+    # "annealing_temperature" as a substring of its own name.
+    assert "- annealing_temperature:" not in rendered
+    assert "[FAIRe hint: annealingTemp]" not in rendered
     # An unrelated concept in the same group must still be present.
     assert "target_gene" in rendered
 

@@ -345,6 +345,27 @@ def test_detect_controlled_search_facts_classifies_custom_pcr_mixture_not_commer
     assert by_type["custom_mm"].evidence_quote == text
 
 
+def test_detect_controlled_search_facts_classifies_reagent_listing_without_the_word_mixture_as_custom():
+    """Regression guard for a real miss (PLOS ONE 10.1371/
+    journal.pone.0303937): the paper lists PCR reagents (a named
+    polymerase, buffer, dNTPs) without ever using the word "mixture"/"mix"
+    at all -- the old _PCR_MIXTURE_MARKERS_RE-only trigger required one of
+    those words and missed this sentence entirely."""
+    text = (
+        "16S rRNA gene was performed with 0.02 ul of Phusion High Fidelity DNA polymerase, "
+        "1X Phusion HF Buffer and 200 uM of dNTPs (New England Biolabs, USA)."
+    )
+    controlled = detect_controlled_search_facts(
+        (("Methods", text),),
+        locator_prefix="paper:PMC1",
+        active_flags=frozenset({"pcr_0_1"}),
+    )
+
+    by_type = {fact.fact_type_candidate: fact for fact in controlled}
+    assert "commercial_mm" not in by_type
+    assert by_type["custom_mm"].raw_value == text
+
+
 def test_detect_controlled_search_facts_classifies_named_master_mix_product_as_commercial():
     text = "PCR was performed using PowerUp SYBR Green Master Mix according to the manufacturer's instructions."
     controlled = detect_controlled_search_facts(
@@ -432,6 +453,11 @@ def test_detect_controlled_search_facts_extracts_trimmomatic_minlen_parameter():
 
 
 def test_detect_controlled_search_facts_extracts_trimmomatic_reads_below_phrase():
+    """This text never mentions "adapter" at all -- Trimmomatic is
+    described purely as a length/quality filter, so adapter_trimming_method
+    must correctly stay unpopulated (see the real-paper regression test
+    below for the case where the same tool genuinely does both, in
+    separately-worded clauses)."""
     text = (
         "The sequence libraries were trimmed using trimmomatic, removing all reads below 500 bp, "
         "with a phred quality below 3 for the start and the end of the reads."
@@ -443,9 +469,54 @@ def test_detect_controlled_search_facts_extracts_trimmomatic_reads_below_phrase(
     )
 
     by_type = {fact.fact_type_candidate: fact for fact in controlled}
-    assert by_type["adapter_trimming_method"].raw_value == "trimmomatic"
+    assert "adapter_trimming_method" not in by_type
     assert by_type["length_filtering_tool"].raw_value == "trimmomatic"
     assert by_type["minimum_read_length"].raw_value == "500 bp"
+
+
+def test_detect_controlled_search_facts_distinguishes_seqprep_adapter_removal_from_trimmomatic_length_filtering():
+    """Regression guard for a real paper (ISME J 10.1093/ismejo/wrae013):
+    describes adapter removal via SeqPrep and quality/length trimming via
+    Trimmomatic as separate numbered clauses inside one long compound
+    sentence. Confirmed this exact shape previously made the (context-blind)
+    Trimmomatic detector wrongly stamp "Trimmomatic" onto
+    adapter_trimming_method too, ~250 characters away from any adapter
+    mention -- proximity-gated context checking (not just "somewhere in the
+    same sentence") is required to tell the two clauses apart."""
+    text = (
+        "Quality trimming was conducted by: (i) removing Illumina adapters using SeqPrep 1.2 with "
+        "default settings targeting the adapter sequences; (ii) remove any leftover PhiX control "
+        "sequences by mapping the reads to the PhiX genome using bowtie2 2.3.5.1, and (iii) remove "
+        "low quality and short reads using Trimmomatic 0.39 with settings: LEADING:20, TRAILING:20, "
+        "and MINLEN:80."
+    )
+    controlled = detect_controlled_search_facts(
+        (("Bioinformatics", text),),
+        locator_prefix="paper:PMC1",
+        active_flags=frozenset(),
+    )
+
+    by_type = {fact.fact_type_candidate: fact for fact in controlled}
+    assert by_type["adapter_trimming_method"].raw_value == "SeqPrep 1.2"
+    assert by_type["length_filtering_tool"].raw_value == "Trimmomatic 0.39"
+    assert by_type["minimum_read_length"].raw_value == "80 bp"
+
+
+def test_detect_controlled_search_facts_attributes_trimmomatic_to_both_fields_when_both_are_nearby():
+    """When Trimmomatic genuinely does both jobs in one invocation
+    (adapter clipping AND quality/length trimming, both named close
+    together), both fields should correctly get it -- the fix gates on
+    nearby context, not on "never allow the same tool in both fields"."""
+    text = "Reads were processed with Trimmomatic to remove adapters and trim low quality bases."
+    controlled = detect_controlled_search_facts(
+        (("Bioinformatics", text),),
+        locator_prefix="paper:PMC1",
+        active_flags=frozenset(),
+    )
+
+    by_type = {fact.fact_type_candidate: fact for fact in controlled}
+    assert by_type["adapter_trimming_method"].raw_value == "Trimmomatic"
+    assert by_type["length_filtering_tool"].raw_value == "Trimmomatic"
 
 
 def test_quote_candidates_for_llm_judged_library_prep_search_are_narrow():
