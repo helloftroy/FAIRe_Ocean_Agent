@@ -192,6 +192,35 @@ def test_detect_controlled_search_facts_keeps_full_method_phrases():
     )
 
 
+def test_detect_controlled_search_facts_extracts_directional_primer_names_and_sequences():
+    text = (
+        "Each PCR contained 0.1 uM of the universal Btn-SPR-F forward primer "
+        "(5′ CCTATCCCCTGTGTGCCTTGGCAGTCTCAGTCTCAAAGACTAAGCCATGC 3′, "
+        "underlined stretch matches SP-F-30 primer) and 0.1 uM of unique "
+        "reverse primer containing a 4-bp barcode "
+        "(5′ CCATCTCATCCCTGCGTGTCTCCGACTCAG**TACT**TTACAGAGCTGGAATTACCG 3′, "
+        "underlined stretch matches SP-R-540 primer, bold indicates 4 bp barcode)."
+    )
+    flag_facts = detect_text_search_flags((("Methods", text),), locator_prefix="paper:PMC1")
+    controlled = detect_controlled_search_facts(
+        (("Methods", text),),
+        locator_prefix="paper:PMC1",
+        active_flags=frozenset(fact.fact_type_candidate for fact in flag_facts),
+    )
+
+    by_type = {fact.fact_type_candidate: fact for fact in controlled}
+    assert by_type["forward_primer_name"].raw_value == "Btn-SPR-F | SP-F-30"
+    assert by_type["reverse_primer_name"].raw_value == "SP-R-540"
+    assert by_type["forward_primer_sequence"].raw_value == (
+        "CCTATCCCCTGTGTGCCTTGGCAGTCTCAGTCTCAAAGACTAAGCCATGC"
+    )
+    assert by_type["reverse_primer_sequence"].raw_value == (
+        "CCATCTCATCCCTGCGTGTCTCCGACTCAGTACTTTACAGAGCTGGAATTACCG"
+    )
+    assert by_type["forward_primer_sequence"].evidence_quote == text
+    assert by_type["reverse_primer_name"].evidence_quote == text
+
+
 def test_detect_controlled_search_facts_does_not_match_bare_its_as_target_gene():
     text = "PCR amplified 18S rRNA; its sequence reads were clustered after filtering."
     flag_facts = detect_text_search_flags((("Methods", text),), locator_prefix="paper:PMC1")

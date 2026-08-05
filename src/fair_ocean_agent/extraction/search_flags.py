@@ -595,6 +595,38 @@ CONTROLLED_SEARCH_FIELDS: tuple[ControlledSearchField, ...] = (
         ),
     ),
     ControlledSearchField(
+        term_name="forward_primer_name",
+        section="PCR",
+        description="Forward primer name explicitly reported in the paper.",
+        required_any_flags=frozenset({"pcr_0_1"}),
+        value_strategy="forward_primer_name_phrase",
+        search_terms=("forward primer", "forward primers", "primer"),
+    ),
+    ControlledSearchField(
+        term_name="reverse_primer_name",
+        section="PCR",
+        description="Reverse primer name explicitly reported in the paper.",
+        required_any_flags=frozenset({"pcr_0_1"}),
+        value_strategy="reverse_primer_name_phrase",
+        search_terms=("reverse primer", "reverse primers", "primer"),
+    ),
+    ControlledSearchField(
+        term_name="forward_primer_sequence",
+        section="PCR",
+        description="Forward primer nucleotide sequence explicitly reported in the paper.",
+        required_any_flags=frozenset({"pcr_0_1"}),
+        value_strategy="forward_primer_sequence_phrase",
+        search_terms=("forward primer", "5'", "5′", "primer sequence"),
+    ),
+    ControlledSearchField(
+        term_name="reverse_primer_sequence",
+        section="PCR",
+        description="Reverse primer nucleotide sequence explicitly reported in the paper.",
+        required_any_flags=frozenset({"pcr_0_1"}),
+        value_strategy="reverse_primer_sequence_phrase",
+        search_terms=("reverse primer", "5'", "5′", "primer sequence"),
+    ),
+    ControlledSearchField(
         term_name="thermocycler",
         section="PCR",
         description="The manufacturer and model of a thermocycler used.",
@@ -922,6 +954,19 @@ _SEQUENCING_LOCATION_PATTERNS: tuple[re.Pattern[str], ...] = (
         re.IGNORECASE,
     ),
 )
+_PRIMER_SEQUENCE_RE = re.compile(
+    r"\b5\s*[′'’`]\s*(?P<sequence>[ACGTRYSWKMBDHVN\s*]+?)\s*3\s*[′'’`]",
+    re.IGNORECASE,
+)
+_PRIMER_NAME_BEFORE_DIRECTION_RE = re.compile(
+    r"\b(?P<name>[A-Za-z0-9][A-Za-z0-9_.-]{1,50})\s+(?:forward|reverse)\s+primers?\b",
+    re.IGNORECASE,
+)
+_PRIMER_NAME_MATCHES_RE = re.compile(
+    r"\bmatches\s+(?P<name>[A-Za-z0-9][A-Za-z0-9_.-]{1,50})\s+primers?\b",
+    re.IGNORECASE,
+)
+_PRIMER_NAME_EXCLUSIONS = frozenset({"unique", "universal", "indexed", "tailed"})
 
 
 def _snippets(text: str) -> Iterable[tuple[int, str]]:
@@ -1083,6 +1128,73 @@ def _match_regex_phrases(
     return values, evidence_quotes, match_metadata
 
 
+def _primer_window(snippet: str, direction: str) -> str | None:
+    reverse_match = re.search(r"\breverse\s+primers?\b", snippet, re.IGNORECASE)
+    if direction == "forward":
+        window = snippet[: reverse_match.start()] if reverse_match else snippet
+        return window if re.search(r"\bforward\s+primers?\b|\bSP[-_]?F\b", window, re.IGNORECASE) else None
+    if reverse_match:
+        window = snippet[reverse_match.start() :]
+        return window if re.search(r"\breverse\s+primers?\b|\bSP[-_]?R\b", window, re.IGNORECASE) else None
+    return snippet if re.search(r"\bSP[-_]?R\b", snippet, re.IGNORECASE) else None
+
+
+def _clean_primer_sequence(value: str) -> str:
+    return re.sub(r"[^ACGTRYSWKMBDHVN]", "", value.upper())
+
+
+def _match_primer_phrase(
+    field: ControlledSearchField,
+    texts: Iterable[tuple[str, str]],
+    locator_prefix: str,
+    *,
+    direction: str,
+    value_kind: str,
+) -> tuple[list[str], list[str], list[dict]]:
+    values: list[str] = []
+    evidence_quotes: list[str] = []
+    match_metadata: list[dict] = []
+    seen_values: set[str] = set()
+
+    for title, text in texts:
+        for snippet_index, snippet in _snippets(text):
+            if "primer" not in snippet.casefold():
+                continue
+            window = _primer_window(snippet, direction)
+            if not window:
+                continue
+            if value_kind == "sequence":
+                matches = [
+                    (_clean_primer_sequence(match.group("sequence")), _PRIMER_SEQUENCE_RE.pattern)
+                    for match in _PRIMER_SEQUENCE_RE.finditer(window)
+                ]
+            else:
+                name_matches: list[tuple[str, str]] = []
+                for pattern in (_PRIMER_NAME_BEFORE_DIRECTION_RE, _PRIMER_NAME_MATCHES_RE):
+                    for match in pattern.finditer(window):
+                        name = match.group("name").strip(" .;,")
+                        if name.casefold() not in _PRIMER_NAME_EXCLUSIONS:
+                            name_matches.append((name, pattern.pattern))
+                matches = name_matches
+            for value, pattern in matches:
+                key = value.casefold()
+                if not value or key in seen_values:
+                    continue
+                seen_values.add(key)
+                values.append(value)
+                if snippet not in evidence_quotes:
+                    evidence_quotes.append(snippet)
+                match_metadata.append(
+                    {
+                        "matched_value": value,
+                        "matched_pattern": pattern,
+                        "source_locator": f"{locator_prefix}:{title}:sentence[{snippet_index}]",
+                    }
+                )
+
+    return values, evidence_quotes, match_metadata
+
+
 def _match_biological_replicates(
     field: ControlledSearchField,
     texts: Iterable[tuple[str, str]],
@@ -1164,6 +1276,14 @@ def _match_controlled_field(
         return _match_regex_phrases(field, texts, locator_prefix, _THERMOCYCLER_PATTERNS)
     if field.value_strategy == "sequencing_location_phrase":
         return _match_regex_phrases(field, texts, locator_prefix, _SEQUENCING_LOCATION_PATTERNS)
+    if field.value_strategy == "forward_primer_name_phrase":
+        return _match_primer_phrase(field, texts, locator_prefix, direction="forward", value_kind="name")
+    if field.value_strategy == "reverse_primer_name_phrase":
+        return _match_primer_phrase(field, texts, locator_prefix, direction="reverse", value_kind="name")
+    if field.value_strategy == "forward_primer_sequence_phrase":
+        return _match_primer_phrase(field, texts, locator_prefix, direction="forward", value_kind="sequence")
+    if field.value_strategy == "reverse_primer_sequence_phrase":
+        return _match_primer_phrase(field, texts, locator_prefix, direction="reverse", value_kind="sequence")
     return _match_controlled_terms(field, texts, locator_prefix)
 
 

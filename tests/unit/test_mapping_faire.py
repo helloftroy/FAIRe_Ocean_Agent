@@ -902,6 +902,10 @@ def test_v3_native_atomic_facts_map_through_faire_hints_with_review(db_session):
         "dna_extraction_kit": "DNeasy PowerWater Kit",
         "assay_name": "16S-V4",
         "target_gene": "16S rRNA",
+        "forward_primer_name": "515F",
+        "reverse_primer_name": "806R",
+        "forward_primer_sequence": "GTGYCAGCMGCCGCGGTAA",
+        "reverse_primer_sequence": "GGACTACNVGGGTWTCTAAT",
         "denoising_tool": "DADA2 v1.16",
         "reference_database": "SILVA 138",
         "standard_curve_r_squared": "0.997",
@@ -920,6 +924,10 @@ def test_v3_native_atomic_facts_map_through_faire_hints_with_review(db_session):
     assert values["nucl_acid_ext_kit"].standardized_value == "DNeasy PowerWater Kit"
     assert values["assay_name"].standardized_value == "16S-V4"
     assert values["target_gene"].standardized_value == "16S rRNA"
+    assert values["pcr_primer_name_forward"].standardized_value == "515F"
+    assert values["pcr_primer_name_reverse"].standardized_value == "806R"
+    assert values["pcr_primer_forward"].standardized_value == "GTGYCAGCMGCCGCGGTAA"
+    assert values["pcr_primer_reverse"].standardized_value == "GGACTACNVGGGTWTCTAAT"
     assert values["error_rate_tool"].standardized_value == "DADA2 v1.16"
     assert values["otu_db"].standardized_value == "SILVA 138"
     assert values["r2"].standardized_value == "0.997"
