@@ -57,11 +57,21 @@ def test_authors_includes_paper_authors_excludes_editor(real_fulltext_xml):
     assert "recordedByID" not in facts
 
 
-def test_code_repo_correctly_absent_for_this_paper(real_fulltext_xml):
+def test_code_repo_captures_availability_statement_for_this_paper(real_fulltext_xml):
     """This 2014 paper predates common in-text GitHub citation and has no
-    code-repository link anywhere in its full text (confirmed) -- a real
-    no-false-positive test, not just a happy-path one."""
-    assert extract_code_repo_from_text(real_fulltext_xml, locator_prefix="t") == []
+    public-repository link anywhere in its full text (confirmed) -- but it
+    does say where its custom scripts live ("... are available in
+    Supplemental Information 1"). A prior round of this test asserted
+    code_repo should stay blank for this paper, which was schema-correct
+    (code_repo's real definition is a public-repository link) but silently
+    dropped this real, useful pointer -- fixed to capture the whole
+    sentence instead of requiring a URL."""
+    facts = extract_code_repo_from_text(real_fulltext_xml, locator_prefix="t")
+    assert len(facts) == 1
+    assert facts[0].raw_value == facts[0].evidence_quote
+    assert "cca_rarefaction.pl" in facts[0].raw_value
+    assert "available in Supplemental Information 1" in facts[0].raw_value
+    assert facts[0].support_type == SupportType.DETERMINISTICALLY_DERIVED
 
 
 def test_code_repo_detects_a_real_github_url():
@@ -70,6 +80,40 @@ def test_code_repo_detects_a_real_github_url():
     assert len(facts) == 1
     assert facts[0].raw_value == "https://github.com/someorg/somerepo"
     assert facts[0].support_type == SupportType.DETERMINISTICALLY_DERIVED
+
+
+def test_code_repo_prefers_a_real_url_over_an_availability_statement():
+    xml = (
+        "<article><body><p>Custom scripts are available in Supplemental Information 1. "
+        "The full pipeline is also archived at https://github.com/someorg/somerepo.</p></body></article>"
+    )
+    facts = extract_code_repo_from_text(xml, locator_prefix="t")
+    assert len(facts) == 1
+    assert facts[0].raw_value == "https://github.com/someorg/somerepo"
+
+
+def test_code_repo_availability_statement_survives_periods_inside_filenames():
+    """Regression guard: a naive "no periods until the sentence ends"
+    approach breaks on this exact real sentence shape, which has two
+    embedded periods in filenames (cca_rarefaction.pl, rarefaction_figs.R)
+    before ever reaching the word "available"."""
+    xml = (
+        "<article><body><p>Perl script for rarefaction analysis (cca_rarefaction.pl) and R script for "
+        "plotting rarefaction curves (rarefaction_figs.R) are available in Supplemental Information 1. "
+        "A separate unrelated sentence follows here.</p></body></article>"
+    )
+    facts = extract_code_repo_from_text(xml, locator_prefix="t")
+    assert len(facts) == 1
+    assert "unrelated sentence" not in facts[0].raw_value
+    assert facts[0].raw_value.endswith("Supplemental Information 1.")
+
+
+def test_code_repo_does_not_false_positive_on_unrelated_availability_mentions():
+    xml = (
+        "<article><body><p>Samples were available at each of the seven sites surveyed. "
+        "Software packages used in this study include R and Python.</p></body></article>"
+    )
+    assert extract_code_repo_from_text(xml, locator_prefix="t") == []
 
 
 def test_bibliographic_citation_composed_from_crossref(real_crossref_raw):
@@ -98,6 +142,7 @@ def test_extract_publication_metadata_facts_merges_everything(real_fulltext_xml,
         "recordedBy",
         "project_contact",
         "bibliographicCitation",
+        "code_repo",
     }
 
 

@@ -52,12 +52,43 @@ _CODE_REPO_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Fallback for a paper whose analysis code isn't in a public repository at
+# all (schemas/faire/schema.yaml's own code_repo description is "Link to
+# public repository where analysis code is archived") but the authors still
+# say where it lives -- e.g. "available in Supplemental Information 1",
+# "available upon request", a non-GitHub/GitLab/Bitbucket URL. Confirmed via
+# a real paper (PeerJ 10.7717/peerj.333) whose only code mention is exactly
+# this shape ("Perl script for rarefaction analysis (cca_rarefaction.pl)
+# ... are available in Supplemental Information 1.") -- leaving code_repo
+# blank for a paper like this silently drops a real, useful pointer to
+# where the code can be found, even though it isn't a public-repository
+# link. Captures the whole sentence as the value/evidence so a reviewer can
+# see exactly what the paper said, not just a bare "supplement" flag.
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+_CODE_AVAILABILITY_KEYWORDS_RE = re.compile(r"\b(?:script|code|software)s?\b.*\bavailable\b", re.IGNORECASE)
+
+
+def _find_code_availability_sentence(text: str) -> str | None:
+    """Scans real sentence boundaries (splitting only on punctuation
+    followed by whitespace) rather than a single regex spanning the whole
+    sentence -- a naive "no periods until the sentence ends" regex breaks on
+    this exact real paper, whose sentence contains two embedded periods in
+    filenames (cca_rarefaction.pl, rarefaction_figs.R) before ever reaching
+    "available"."""
+    normalized = " ".join(text.split())
+    for sentence in _SENTENCE_SPLIT_RE.split(normalized):
+        sentence = sentence.strip()
+        if _CODE_AVAILABILITY_KEYWORDS_RE.search(sentence):
+            return sentence
+    return None
+
 
 def _candidate(
     fact_type: str,
     raw_value: str,
     locator: str,
     support_type: SupportType = SupportType.STRUCTURED_SOURCE,
+    evidence_quote: str | None = None,
 ) -> RawFactCandidate:
     return RawFactCandidate(
         entity_level=EntityLevel.STUDY,
@@ -66,6 +97,7 @@ def _candidate(
         raw_value=raw_value,
         source_locator=locator,
         support_type=support_type,
+        evidence_quote=evidence_quote,
     )
 
 
@@ -160,19 +192,35 @@ def extract_from_jats_authors(xml: str, *, locator_prefix: str) -> list[RawFactC
 
 
 def extract_code_repo_from_text(xml: str, *, locator_prefix: str) -> list[RawFactCandidate]:
-    """`code_repo` via a flat-text URL regex -- the one field in this
-    module without a reliable structured JATS element to read instead."""
+    """`code_repo` via a flat-text regex -- the one field in this module
+    without a reliable structured JATS element to read instead. Prefers a
+    real public-repository URL (GitHub/GitLab/Bitbucket); falls back to the
+    whole sentence describing where the code/scripts are available (e.g.
+    "available in Supplemental Information 1") when no such URL exists, so
+    a real pointer isn't silently dropped just because it isn't a public
+    repository link -- see _CODE_AVAILABILITY_SENTENCE_RE's own comment."""
     text = xml_to_text(xml)
-    match = _CODE_REPO_PATTERN.search(text)
-    if not match:
+    url_match = _CODE_REPO_PATTERN.search(text)
+    if url_match:
+        url = url_match.group(0).rstrip(".,;:)")
+        return [
+            _candidate(
+                "code_repo",
+                url,
+                f"{locator_prefix}:fulltext_regex",
+                support_type=SupportType.DETERMINISTICALLY_DERIVED,
+            )
+        ]
+    sentence = _find_code_availability_sentence(text)
+    if not sentence:
         return []
-    url = match.group(0).rstrip(".,;:)")
     return [
         _candidate(
             "code_repo",
-            url,
-            f"{locator_prefix}:fulltext_regex",
+            sentence,
+            f"{locator_prefix}:fulltext_regex_availability_statement",
             support_type=SupportType.DETERMINISTICALLY_DERIVED,
+            evidence_quote=sentence,
         )
     ]
 

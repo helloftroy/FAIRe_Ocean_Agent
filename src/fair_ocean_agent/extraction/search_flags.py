@@ -463,33 +463,49 @@ CONTROLLED_SEARCH_FIELDS: tuple[ControlledSearchField, ...] = (
         section="PCR",
         description="Name, brand, and manufacture of commercial, pre-made master mix",
         required_any_flags=frozenset({"pcr_0_1"}),
-        # Bare manufacturer names ("Thermo Fisher", "Applied Biosystems",
-        # "Bio-Rad", "NEB", "KAPA") were removed: confirmed via a real gold
-        # paper (PeerJ 10.7717/peerj.333) that "Bio-Rad" matched a mention
-        # of the thermocycler manufacturer ("DNA Engine Tetrad2 Thermal
-        # Cycler (Bio-Rad, ...)"), not a master-mix product -- the paper's
-        # actual PCR mixture was custom-assembled from separate reagents
-        # (ExTaq buffer/polymerase, Pfu polymerase), the FAIRe concept
-        # `custom_mm` covers, not `commercial_mm`. These manufacturers all
-        # sell many non-master-mix products (thermocyclers, buffers,
-        # individual enzymes, kits), so a bare brand mention can't reliably
-        # signal "this paper used a commercial master mix" without further
-        # context. The remaining terms are specific product/chemistry names
-        # (TaqMan, SYBR, Luna, PowerUp, QuantiTect, SsoAdvanced) unlikely to
-        # refer to anything but a master mix.
+        value_strategy="commercial_pcr_mixture_phrase",
+        # No longer literal-substring matched -- see _match_pcr_mixture_phrase.
+        # A bare brand mention (bare manufacturer names like "Thermo Fisher",
+        # "Applied Biosystems", "Bio-Rad", "NEB", "KAPA" used to be literal
+        # search_terms here) isn't reliable evidence on its own: confirmed
+        # via a real gold paper (PeerJ 10.7717/peerj.333) that "Bio-Rad"
+        # matched a mention of the thermocycler manufacturer ("DNA Engine
+        # Tetrad2 Thermal Cycler (Bio-Rad, ...)"), not a master-mix product
+        # -- that paper's actual PCR mixture was custom-assembled from
+        # separate reagents (ExTaq buffer/polymerase, Pfu polymerase), which
+        # `custom_mm` (below) now correctly captures instead. Detection is
+        # now sentence-level: find a real PCR-mixture-description sentence
+        # (via `_PCR_MIXTURE_MARKERS_RE`, e.g. "PCR mixture"/"polymerase
+        # chain reaction (PCR) mixture"), then classify it as commercial
+        # only if it also names a specific master-mix product/brand
+        # (`_COMMERCIAL_MASTER_MIX_BRAND_RE`) -- otherwise it's `custom_mm`'s
+        # job. The whole matched sentence becomes the value/evidence (a
+        # bare brand/product name alone loses the actual reagent
+        # composition a reviewer would want to see).
         search_terms=(
             "PCR Master Mix",
             "qPCR Master Mix",
             "master mix",
             "mastermix",
-            "PCR mix",
-            "qPCR mix",
             "TaqMan",
             "SYBR",
             "Luna",
             "PowerUp",
             "QuantiTect",
             "SsoAdvanced",
+        ),
+    ),
+    ControlledSearchField(
+        term_name="custom_mm",
+        section="PCR",
+        description="Composition of a custom (non-commercial) PCR master mix, if a commercial one was not used",
+        required_any_flags=frozenset({"pcr_0_1"}),
+        value_strategy="custom_pcr_mixture_phrase",
+        search_terms=(
+            "PCR mixture",
+            "PCR mix",
+            "reaction mixture",
+            "polymerase chain reaction (PCR) mixture",
         ),
     ),
     ControlledSearchField(
@@ -1231,6 +1247,59 @@ def _match_biological_replicates(
     return values, evidence_quotes, match_metadata
 
 
+# Broad "there's a PCR-mixture-composition sentence here" trigger, shared
+# by commercial_mm and custom_mm -- which field it belongs to is decided
+# afterward by _COMMERCIAL_MASTER_MIX_BRAND_RE, not by this regex. Matches
+# "PCR mixture"/"PCR mix"/"reaction mixture"/"master mix"/"mastermix" and
+# the parenthetical "polymerase chain reaction (PCR) mixture" phrasing (a
+# real gold paper, PeerJ 10.7717/peerj.333, uses exactly that shape, with
+# "(PCR)" breaking a simpler "reaction\s+mixture" match).
+_PCR_MIXTURE_MARKERS_RE = re.compile(
+    r"\b(?:PCR|qPCR|reaction)\s+mix(?:ture)?\b"
+    r"|\bmaster\s*mix\b"
+    r"|\bpolymerase\s+chain\s+reaction\s*\(?PCR\)?\s+mixture\b",
+    re.IGNORECASE,
+)
+# A PCR-mixture sentence is "commercial" only if it also names a specific
+# master-mix product/brand or says "master mix"/"mastermix" outright --
+# otherwise (buffer/dNTP/enzyme-by-enzyme composition, e.g. "3 ul 10X ExTaq
+# buffer, 0.025 U ExTaq Polymerase...") it's custom_mm's job.
+_COMMERCIAL_MASTER_MIX_BRAND_RE = re.compile(
+    r"\bmaster\s*mix\b|\bTaqMan\b|\bSYBR\b|\bLuna\b|\bPowerUp\b|\bQuantiTect\b|\bSsoAdvanced\b",
+    re.IGNORECASE,
+)
+
+
+def _match_pcr_mixture_phrase(
+    field: ControlledSearchField,
+    texts: Iterable[tuple[str, str]],
+    locator_prefix: str,
+    *,
+    classification: str,
+) -> tuple[list[str], list[str], list[dict]]:
+    values: list[str] = []
+    evidence_quotes: list[str] = []
+    match_metadata: list[dict] = []
+    for title, text in texts:
+        for snippet_index, snippet in _snippets(text):
+            if not _PCR_MIXTURE_MARKERS_RE.search(snippet):
+                continue
+            is_commercial = bool(_COMMERCIAL_MASTER_MIX_BRAND_RE.search(snippet))
+            if ("commercial" if is_commercial else "custom") != classification:
+                continue
+            if snippet in evidence_quotes:
+                continue
+            values.append(snippet)
+            evidence_quotes.append(snippet)
+            match_metadata.append(
+                {
+                    "matched_value": snippet,
+                    "source_locator": f"{locator_prefix}:{title}:sentence[{snippet_index}]",
+                }
+            )
+    return values, evidence_quotes, match_metadata
+
+
 def _classify_assay_type(
     field: ControlledSearchField,
     texts: Iterable[tuple[str, str]],
@@ -1271,6 +1340,10 @@ def _match_controlled_field(
         return _match_biological_replicates(field, texts, locator_prefix)
     if field.value_strategy == "assay_type_classifier":
         return _classify_assay_type(field, texts, locator_prefix)
+    if field.value_strategy == "commercial_pcr_mixture_phrase":
+        return _match_pcr_mixture_phrase(field, texts, locator_prefix, classification="commercial")
+    if field.value_strategy == "custom_pcr_mixture_phrase":
+        return _match_pcr_mixture_phrase(field, texts, locator_prefix, classification="custom")
     if field.value_strategy == "sequencing_kit_phrase":
         return _match_regex_phrases(field, texts, locator_prefix, _SEQUENCING_KIT_PATTERNS)
     if field.value_strategy == "thermocycler_phrase":

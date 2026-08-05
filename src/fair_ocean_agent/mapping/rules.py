@@ -596,6 +596,8 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
                 "pcr_method_additional", MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("commercial_mm", EntityLevel.STUDY.value, "projectMetadata", "commercial_mm",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
+    MappingRule("custom_mm", EntityLevel.STUDY.value, "projectMetadata", "custom_mm",
+                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("probeReporter", EntityLevel.STUDY.value, "projectMetadata", "probeReporter",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("probeQuencher", EntityLevel.STUDY.value, "projectMetadata", "probeQuencher",

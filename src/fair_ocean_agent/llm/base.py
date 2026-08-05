@@ -109,4 +109,36 @@ def try_parse_json(text: str):
     try:
         return json.loads(text)
     except (json.JSONDecodeError, ValueError):
+        return _try_parse_truncated_json_array(text)
+
+
+def _try_parse_truncated_json_array(text: str) -> list | None:
+    """Recovers as many complete objects as possible from a top-level JSON
+    array cut off mid-object by a max_tokens budget -- confirmed live
+    against a real dense PCR-methods paragraph (PeerJ 10.7717/peerj.333):
+    the model correctly extracted 8+ facts in order before being cut off
+    mid-object at the configured token limit, and the single invalid-JSON
+    check in try_parse_json discarded the entire response, losing every
+    fact the model got right along with the one it didn't finish. Only
+    ever attempted for a bare top-level array (the only shape
+    generate_json's callers ever produce) -- never for any other malformed
+    JSON shape, where a partial/best-effort parse would be more likely to
+    fabricate structure the model never actually produced."""
+    stripped = text.strip()
+    if not stripped.startswith("["):
         return None
+    decoder = json.JSONDecoder()
+    index = 1
+    length = len(stripped)
+    items: list = []
+    while index < length:
+        while index < length and stripped[index] in " \t\n\r,":
+            index += 1
+        if index >= length or stripped[index] == "]":
+            break
+        try:
+            item, index = decoder.raw_decode(stripped, index)
+        except json.JSONDecodeError:
+            break  # the rest is a truncated fragment -- stop, keep what parsed
+        items.append(item)
+    return items or None

@@ -1902,32 +1902,103 @@ built directly from the real paper's sentences, plus a full-suite rerun
   cause traces to the same chunk-recall gap described next, not a mapping
   bug.
 
-**Root-caused via a live reproduction, not fixed (an LLM extraction-quality
-gap, not a code bug)**: `ampliconSize`/`amplificationReactionVolume`/
+**Investigated via a live reproduction; correctly ruled out timeout/parse/
+truncation bugs, but the "genuine model recall limitation" conclusion below
+was wrong -- see the follow-up section right after this one, which found
+and fixed the real cause**: `ampliconSize`/`amplificationReactionVolume`/
 `annealingTemp` came back empty despite the paper explicitly stating a 30
 µl reaction volume and a 55 °C anneal step. Fetched the real cached
 full-text section ("Metabarcoding of cue communities", 4760 chars,
 splitting into 3 real chunks at this run's 2500-char/call setting) and
 replayed the exact same chunks against the live local model
-(`qwen3:4b-instruct-16k`) end to end. Confirmed: `pcr_0_1` correctly gates
-true (ruling out a gating bug); chunk 1 -- containing every PCR-mixture/
-thermocycler/cycling-profile detail -- returns a bare `[]` from the model
-on both the automatic first pass and the zero-facts recall retry, live,
-reproducibly, matching the original run's behavior exactly (chunk 2's
-bioinformatics content extracts fine; chunk 1 and chunk 3, the two
-densest/most jargon- and unicode-heavy chunks, both return nothing). Ruled
-out, with direct evidence, three more plausible causes before concluding
-this: no timeout (the original run's full log shows zero warnings/errors
-and every one of 21 chat-completion calls returned 200 OK; a real
-`LLMBackendError` from a timeout would have failed the whole task, not
-skipped a section, and it didn't), no JSON parse failure (same reasoning --
-an unparseable response also fails the task, not silently skips it), and no
-chunk-boundary truncation (the full chunk-1 text, replayed whole, still
-returns `[]`). This is a genuine small-local-model recall limitation on
-dense, multi-quantity PCR-parameter prose, not something a quick code
-change fixes -- flagged as a separate, larger follow-up (e.g. a more
-capable model for PCR-heavy chunks, or reverting to a focused per-topic
-pass for this content) rather than attempted here.
+(`qwen3:4b-instruct-16k`) end to end. Confirmed `pcr_0_1` correctly gates
+true (ruling out a gating bug) and that chunk 1/chunk 3 return nothing
+while chunk 2 extracts fine, matching the original run exactly.
+
+## Fixing code_repo, commercial_mm, and the real cause of the missing PCR fields
+
+Direct follow-up to the audit above, after the user reviewed those findings
+against the same live pipeline run and asked for three more fixes.
+
+**`code_repo` now captures a non-repository availability statement.**
+FAIRe's real definition (`extraction/publication_metadata.py`'s
+`extract_code_repo_from_text`) still prefers a genuine GitHub/GitLab/
+Bitbucket URL when one exists, but now falls back to the whole sentence
+describing where the code/scripts/software are available (e.g. "Perl
+script for rarefaction analysis (cca_rarefaction.pl) ... are available in
+Supplemental Information 1") when no such URL is present, rather than
+leaving the field blank just because it isn't a public-repository link.
+Sentence-boundary detection deliberately isn't a single "no periods until
+the sentence ends" regex -- this exact real sentence has two periods
+embedded in filenames (`cca_rarefaction.pl`, `rarefaction_figs.R`) that
+would break a naive version; splits on punctuation-followed-by-whitespace
+instead, matching search_flags.py's own `_snippets` approach. Prefers a
+real URL over an availability statement when both exist in one text (a
+real repo link is always more useful than a pointer to "look in the
+supplement").
+
+**`commercial_mm`/new `custom_mm`: broadened detection, whole-sentence
+capture, and a commercial-vs-custom classifier.** The user's own
+suggestion: search for "PCR mixture"/"PCR mix"/"polymerase chain reaction
+(PCR) mixture" and capture the whole quote. Implemented as a new shared
+`_match_pcr_mixture_phrase` in `extraction/search_flags.py`: finds a
+sentence matching `_PCR_MIXTURE_MARKERS_RE` (PCR/qPCR/reaction mix(ture),
+master mix/mastermix, or the parenthetical "polymerase chain reaction
+(PCR) mixture" phrasing), then classifies it as `commercial_mm` only if it
+also names a specific master-mix product/brand or says "master mix"
+outright (`_COMMERCIAL_MASTER_MIX_BRAND_RE`) -- otherwise it's `custom_mm`
+(a brand-new `CONTROLLED_SEARCH_FIELDS` entry; FAIRe's real definition is
+"custom master mix composition, if a commercial one was not used", exactly
+matching this paper's own ExTaq-buffer/Pfu-polymerase composition). One
+new `custom_mm` `MappingRule`, mirroring `commercial_mm`'s own existing
+one. Verified against the real paper: the PCR-mixture sentence now
+populates `custom_mm` with the full composition (not `commercial_mm`,
+since no product/brand is named), matching what the user described.
+
+**Root-caused for real this time: the missing PCR fields were a token-
+budget truncation bug, not a model recall limitation.** Replayed the exact
+same real chunk against the live model with the production prompt
+completely unchanged, but printing the model's raw completion instead of
+only whether it parsed. The model was NOT returning `[]` -- it was
+correctly extracting facts in order (assay_type, target_gene, primer
+name/sequence/concentration, ...) and got cut off mid-object at exactly
+`max_output_tokens=1024` tokens, producing invalid JSON that the old
+all-or-nothing parser discarded entirely, losing every fact the model got
+right along with the one it didn't finish. Confirmed the fix by rerunning
+with `max_output_tokens=2048` (no prompt changes at all): a complete, valid
+15-fact response, including all three missing fields
+(`amplicon_size: "~550 bp"`, `pcr_reaction_volume: "30 ul"`,
+`annealing_temperature: "55 C"`). Then ran the real `extract_facts_from_section`
+end to end using the codebase's own actual `config/local.yaml` defaults
+(`max_output_tokens: 2048`, `extraction_max_chars_per_call: 16000`) with no
+manual overrides at all -- the whole 4760-char section now fits in ONE
+chunk instead of three, and all 17 facts extract correctly. The audit run
+script's own `LOCAL_LLM_EXTRACTION_MAX_CHARS_PER_CALL=2500`/
+`LOCAL_LLM_MAX_OUTPUT_TOKENS=1024` env overrides had silently shrunk both
+values well below `config/local.yaml`'s own already-tuned, already-documented
+defaults -- not a codebase bug, but a real, fixable pipeline-configuration
+issue. No prompt engineering was needed or attempted; the existing prompt
+handles this content correctly once given enough output budget.
+
+**Added a real defense-in-depth hardening regardless of config**:
+`llm/base.py`'s `try_parse_json` now recovers as many complete objects as
+possible from a top-level JSON array that got cut off mid-object
+(`_try_parse_truncated_json_array`, using `json.JSONDecoder.raw_decode` to
+decode one complete object at a time and stop cleanly at the first
+incomplete fragment), rather than discarding a real, mostly-correct
+response just because its last object didn't finish. Only ever applies to
+a bare top-level array (the only shape `generate_json`'s callers produce);
+a truncated single object, or an array with zero complete objects, still
+correctly returns `None` and triggers the existing retry-on-invalid-JSON
+path. `generate_json` accepts a partial recovery as final (no wasted retry
+call) since a retry at the same token budget is unlikely to fully
+succeed either. This protects against a similarly dense paragraph even
+under a reasonable token budget, independent of the config fix above.
+
+595 tests pass (9 new: 4 for `code_repo`'s new fallback path, 2 for the
+`commercial_mm`/`custom_mm` reclassification, 4 for the JSON-truncation
+recovery, minus 1 renamed rather than added). See README's "Fixing
+code_repo, commercial_mm, and the real cause of the missing PCR fields".
 
 ## Mapping expansion: the rest of FAIRe's Environment section
 

@@ -275,15 +275,17 @@ def test_detect_controlled_search_facts_does_not_treat_ecological_species_specif
     assert not any(fact.fact_type_candidate == "assay_type" for fact in controlled)
 
 
-def test_detect_controlled_search_facts_does_not_match_thermocycler_brand_as_commercial_master_mix():
+def test_detect_controlled_search_facts_classifies_custom_pcr_mixture_not_commercial_master_mix():
     """Regression guard for a real gold-data false positive
     (PeerJ 10.7717/peerj.333): the paper describes a custom-assembled PCR
     mixture (ExTaq buffer/polymerase, Pfu polymerase) amplified on a
     "DNA Engine Tetrad2 Thermal Cycler (Bio-Rad, Hercules, CA, USA)" --
     commercial_mm previously matched the bare "Bio-Rad" thermocycler-brand
-    mention as if it were a commercial master-mix product."""
+    mention as if it were a commercial master-mix product. Now the whole
+    PCR-mixture sentence is captured, classified as custom_mm (no
+    master-mix product/brand named) rather than commercial_mm."""
     text = (
-        "Each 30 ul PCR mixture contained 10 ng of DNA template, 0.1 uM "
+        "Each 30 ul polymerase chain reaction (PCR) mixture contained 10 ng of DNA template, 0.1 uM "
         "forward primer, 0.2 mM dNTP, 3 ul 10X ExTaq buffer, 0.025 U ExTaq "
         "Polymerase (Takara Biotechnology) and 0.0125 U Pfu Polymerase "
         "(Agilent Technologies), and was amplified using a DNA Engine "
@@ -295,10 +297,33 @@ def test_detect_controlled_search_facts_does_not_match_thermocycler_brand_as_com
         active_flags=frozenset({"pcr_0_1"}),
     )
 
-    assert not any(fact.fact_type_candidate == "commercial_mm" for fact in controlled)
-    assert next(f for f in controlled if f.fact_type_candidate == "thermocycler").raw_value == (
-        "DNA Engine Tetrad2 Thermal Cycler"
+    by_type = {fact.fact_type_candidate: fact for fact in controlled}
+    assert "commercial_mm" not in by_type
+    assert by_type["custom_mm"].raw_value == text
+    assert by_type["custom_mm"].evidence_quote == text
+
+
+def test_detect_controlled_search_facts_classifies_named_master_mix_product_as_commercial():
+    text = "PCR was performed using PowerUp SYBR Green Master Mix according to the manufacturer's instructions."
+    controlled = detect_controlled_search_facts(
+        (("Methods", text),),
+        locator_prefix="paper:PMC1",
+        active_flags=frozenset({"pcr_0_1"}),
     )
+
+    by_type = {fact.fact_type_candidate: fact for fact in controlled}
+    assert "custom_mm" not in by_type
+    assert by_type["commercial_mm"].raw_value == text
+
+
+def test_detect_controlled_search_facts_pcr_mixture_phrase_requires_pcr_0_1_flag():
+    controlled = detect_controlled_search_facts(
+        (("Methods", "The PCR mixture contained 10 ng of DNA template and 0.2 mM dNTP."),),
+        locator_prefix="paper:PMC1",
+        active_flags=frozenset(),
+    )
+
+    assert {fact.fact_type_candidate for fact in controlled} == set()
 
 
 def test_detect_controlled_search_facts_does_not_match_well_or_cycle_counts_as_biological_rep():
