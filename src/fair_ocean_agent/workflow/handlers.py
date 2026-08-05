@@ -39,6 +39,9 @@ from fair_ocean_agent.extraction.search_flags import (
     detect_llm_judged_search_facts,
     detect_text_search_flags,
 )
+from fair_ocean_agent.extraction.taxonomic_assay import (
+    extract_assay_target_taxa_from_publication_metadata,
+)
 from fair_ocean_agent.extraction.text import (
     PROMPT_VERSION,
     extract_facts_from_section,
@@ -641,7 +644,15 @@ def _discover_publication_metadata_from_sources(
         except SourceRecordNotFoundError:
             crossref_raw = None
 
-    facts = extract_publication_metadata_facts(fulltext_xml, crossref_raw, locator_prefix=f"publication_metadata:{doi}")
+    locator_prefix = f"publication_metadata:{doi}"
+    facts = extract_publication_metadata_facts(fulltext_xml, crossref_raw, locator_prefix=locator_prefix)
+    facts.extend(
+        extract_assay_target_taxa_from_publication_metadata(
+            fulltext_xml,
+            crossref_raw,
+            locator_prefix=locator_prefix,
+        )
+    )
     if not facts:
         return study
 

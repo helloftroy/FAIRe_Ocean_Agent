@@ -915,6 +915,7 @@ def test_v3_native_atomic_facts_map_through_faire_hints_with_review(db_session):
         "reverse_primer_name": "806R",
         "forward_primer_sequence": "GTGYCAGCMGCCGCGGTAA",
         "reverse_primer_sequence": "GGACTACNVGGGTWTCTAAT",
+        "assay_target_taxa": "Chordata | Crustose coralline algae",
         "denoising_tool": "DADA2 v1.16",
         "reference_database": "SILVA 138",
         "standard_curve_r_squared": "0.997",
@@ -937,6 +938,7 @@ def test_v3_native_atomic_facts_map_through_faire_hints_with_review(db_session):
     assert values["pcr_primer_name_reverse"].standardized_value == "806R"
     assert values["pcr_primer_forward"].standardized_value == "GTGYCAGCMGCCGCGGTAA"
     assert values["pcr_primer_reverse"].standardized_value == "GGACTACNVGGGTWTCTAAT"
+    assert values["targetTaxonomicAssay"].standardized_value == "Chordata | Crustose coralline algae"
     assert values["error_rate_tool"].standardized_value == "DADA2 v1.16"
     assert values["otu_db"].standardized_value == "SILVA 138"
     assert values["r2"].standardized_value == "0.997"
