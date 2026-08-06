@@ -2,7 +2,7 @@ import csv
 
 import pytest
 
-from fair_ocean_agent.database.enums import EntityLevel, EntityRelationshipType, IdentifierType, RelationshipType, SupportType
+from fair_ocean_agent.database.enums import EntityLevel, EntityRelationshipType, EntityRootStatus, IdentifierType, RelationshipType, SupportType
 from fair_ocean_agent.database.models import (
     Entity,
     EntityRelationship,
@@ -17,11 +17,16 @@ from fair_ocean_agent.mapping.faire import TARGET_SCHEMA, TARGET_SCHEMA_VERSION,
 
 
 def _home_entity_study(entity: Entity) -> EntityStudy:
-    """Every production Entity gets a home entity_studies row at creation
+    """Every production Entity gets a home entity_studies row AND its own
+    root_status/root_study_id set eagerly at creation
     (identity/entity_linking.py::create_entity) -- direct Entity(...)
-    construction in these fixtures bypasses that, so tests that need
+    construction in these fixtures bypasses both, so tests that need
     exports/faire.py's per-entity internal_study_id/broadcast-gating logic
-    to see a real home link must add one explicitly."""
+    to see a real home link (and a real, determined root) must add one
+    explicitly. Mutates `entity` in place (root fields) and returns the
+    corresponding EntityStudy row for the caller to add separately."""
+    entity.root_status = EntityRootStatus.DETERMINED.value
+    entity.root_study_id = entity.study_id
     return EntityStudy(
         entity_id=entity.entity_id,
         study_id=entity.study_id,
@@ -167,24 +172,27 @@ def test_export_faire_internal_study_id_traces_rows_across_two_studies(db_sessio
     assert INTERNAL_STUDY_ID_FIELD not in field_names
 
 
-def test_shared_sample_gets_pipe_joined_study_ids_and_no_broadcast(db_session, tmp_path):
+def test_shared_sample_gets_pipe_joined_study_ids_and_no_broadcast_while_root_pending(db_session, tmp_path):
     """The actual point of the whole multi-study entity-sharing mechanism:
     a real BioSample two different papers both cite must appear exactly
     once in sampleMetadata.csv, with internal_study_id listing BOTH
-    studies (pipe-joined) -- and must NOT carry either study's own
-    paper-specific broadcast default, since merging one arbitrary study's
-    interpretive defaults onto a row shared with another study would
-    misrepresent it. Its own entity-level fact stays unconditional."""
+    studies (pipe-joined) -- and while root determination is still
+    PENDING (settle hasn't run yet), must NOT carry either study's own
+    paper-specific broadcast default, since guessing which one is
+    authoritative before it's actually decided would misrepresent it. Its
+    own entity-level fact stays unconditional regardless."""
     study_a = Study(title="Original paper")
     study_b = Study(title="Reanalysis paper reusing the same data")
     db_session.add_all([study_a, study_b])
     db_session.flush()
 
     shared_sample = Entity(
-        study_id=study_a.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN_SHARED"
+        study_id=study_a.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN_SHARED",
+        root_status=EntityRootStatus.PENDING.value,
     )
     unshared_sample = Entity(
-        study_id=study_a.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN_UNSHARED"
+        study_id=study_a.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN_UNSHARED",
+        root_status=EntityRootStatus.DETERMINED.value, root_study_id=study_a.study_id,
     )
     db_session.add_all([shared_sample, unshared_sample])
     db_session.flush()
@@ -237,6 +245,116 @@ def test_shared_sample_gets_pipe_joined_study_ids_and_no_broadcast(db_session, t
     unshared_row = rows["SAMN_UNSHARED"]
     assert unshared_row[INTERNAL_STUDY_ID_FIELD] == study_a.study_id
     assert unshared_row["env_broad_scale"] == "marine biome", "single-study sample still gets its broadcast default"
+
+
+def test_shared_sample_gets_roots_broadcast_once_determined(db_session, tmp_path):
+    """Once identity/root_determination.py has settled on study_a as root,
+    its broadcast default fills the shared sample's blanks -- study_b's own
+    broadcast (even though it also links to the same sample) never does."""
+    study_a = Study(title="Original paper, root")
+    study_b = Study(title="Reanalysis paper reusing the same data")
+    db_session.add_all([study_a, study_b])
+    db_session.flush()
+
+    shared_sample = Entity(
+        study_id=study_a.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN_ROOTED",
+        root_status=EntityRootStatus.DETERMINED.value, root_study_id=study_a.study_id,
+    )
+    db_session.add(shared_sample)
+    db_session.flush()
+    db_session.add_all(
+        [
+            EntityStudy(
+                entity_id=shared_sample.entity_id, study_id=study_a.study_id,
+                relationship_type=RelationshipType.IS_HOME_OF.value, confidence=SupportType.STRUCTURED_SOURCE.value,
+            ),
+            EntityStudy(
+                entity_id=shared_sample.entity_id, study_id=study_b.study_id,
+                relationship_type=RelationshipType.SHARES_ACCESSION_WITH.value, confidence=SupportType.STRUCTURED_SOURCE.value,
+            ),
+        ]
+    )
+    db_session.add(
+        StandardizedValue(
+            study_id=study_a.study_id, entity_id=None, target_schema=TARGET_SCHEMA,
+            target_schema_version=TARGET_SCHEMA_VERSION, target_field="env_broad_scale",
+            standardized_value="marine biome (root study)", mapping_method="deterministic_synonym",
+        )
+    )
+    db_session.add(
+        StandardizedValue(
+            study_id=study_b.study_id, entity_id=None, target_schema=TARGET_SCHEMA,
+            target_schema_version=TARGET_SCHEMA_VERSION, target_field="env_broad_scale",
+            standardized_value="marine biome (non-root study, must not show)", mapping_method="deterministic_synonym",
+        )
+    )
+    db_session.commit()
+
+    export_faire(db_session, tmp_path)
+
+    with (tmp_path / "sampleMetadata.csv").open() as f:
+        rows = {row["samp_name"]: row for row in csv.DictReader(f)}
+
+    assert rows["SAMN_ROOTED"]["env_broad_scale"] == "marine biome (root study)"
+
+
+def test_analysis_only_study_excluded_from_project_metadata(db_session, tmp_path):
+    """A study that links to shared samples/runs but is home to none of
+    them did no original data collection -- must not get a projectMetadata
+    row, even though it has its own project_id and its own broadcast
+    facts. Its Study/EntityStudy rows still exist (network membership is
+    untouched); sampleMetadata/experimentRunMetadata already correctly
+    never emit rows for entities it doesn't home."""
+    root_study = Study(title="Original paper")
+    analysis_only_study = Study(title="Pure reanalysis, no original data")
+    db_session.add_all([root_study, analysis_only_study])
+    db_session.flush()
+    db_session.add(
+        ExternalIdentifier(
+            study_id=analysis_only_study.study_id,
+            identifier_type=IdentifierType.BIOPROJECT_ACCESSION.value,
+            identifier_value="PRJNA_ANALYSIS_ONLY",
+        )
+    )
+
+    shared_sample = Entity(
+        study_id=root_study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN_X",
+        root_status=EntityRootStatus.DETERMINED.value, root_study_id=root_study.study_id,
+    )
+    db_session.add(shared_sample)
+    db_session.flush()
+    db_session.add_all(
+        [
+            EntityStudy(
+                entity_id=shared_sample.entity_id, study_id=root_study.study_id,
+                relationship_type=RelationshipType.IS_HOME_OF.value, confidence=SupportType.STRUCTURED_SOURCE.value,
+            ),
+            EntityStudy(
+                entity_id=shared_sample.entity_id, study_id=analysis_only_study.study_id,
+                relationship_type=RelationshipType.SHARES_ACCESSION_WITH.value, confidence=SupportType.STRUCTURED_SOURCE.value,
+            ),
+        ]
+    )
+    # analysis_only_study's own broadcast fact -- still must not produce a
+    # projectMetadata row for it, despite having real data mapped.
+    db_session.add(
+        StandardizedValue(
+            study_id=analysis_only_study.study_id, entity_id=None, target_schema=TARGET_SCHEMA,
+            target_schema_version=TARGET_SCHEMA_VERSION, target_field="env_broad_scale",
+            standardized_value="marine biome", mapping_method="deterministic_synonym",
+        )
+    )
+    db_session.commit()
+
+    export_faire(db_session, tmp_path)
+
+    with (tmp_path / "projectMetadata.csv").open() as f:
+        rows = list(csv.DictReader(f))
+    internal_study_ids = {row[INTERNAL_STUDY_ID_FIELD] for row in rows}
+    assert analysis_only_study.study_id not in internal_study_ids
+    # The root study, which DOES home the shared sample, must still be unaffected.
+    assert db_session.query(Study).filter_by(study_id=analysis_only_study.study_id).count() == 1
+    assert db_session.query(EntityStudy).filter_by(study_id=analysis_only_study.study_id).count() == 1
 
 
 def test_export_still_emits_one_project_row_when_assay_entity_has_no_direct_values(db_session, tmp_path):

@@ -18,6 +18,7 @@ from fair_ocean_agent.config import load_config, load_sources_config
 from fair_ocean_agent.database.enums import (
     AccessStatus,
     CanonicalStatus,
+    ComponentStatus,
     EntityLevel,
     EntityRelationshipType,
     IdentifierType,
@@ -43,6 +44,7 @@ from fair_ocean_agent.discovery.text_identifiers import (
     xml_to_text,
 )
 from fair_ocean_agent.extraction.sections import select_relevant_sections
+from fair_ocean_agent.extraction.faire_fields import suppress_resolved_faire_hints_for_text
 from fair_ocean_agent.extraction.publication_metadata import extract_publication_metadata_facts
 from fair_ocean_agent.extraction.search_flags import (
     detect_controlled_search_facts,
@@ -968,6 +970,15 @@ def handle_discover_identifiers(session: Session, task: Task) -> None:
             idempotency_key=f"DISCOVER_CITING_STUDIES:bioproject:{bioproject_accession}",
         )
 
+    # Two-phase discovery/mapping: for a study with any shareable-level
+    # entity, start (or no-op if already started) the settle-check poll
+    # that gates root determination and MAP_FAIRE until this study's whole
+    # connected component (identity/component.py) stops growing -- see
+    # workflow/settle_handlers.py.
+    from fair_ocean_agent.workflow.settle_handlers import maybe_enqueue_settle_check
+
+    maybe_enqueue_settle_check(session, study.study_id)
+
     session.flush()
 
 
@@ -1129,6 +1140,17 @@ def handle_discover_citing_studies(session: Session, task: Task) -> None:
             extra={"excess_pmid_count": len(over_cap)},
         )
 
+    # A component that already SETTLED (root determination ran, MAP_FAIRE
+    # enqueued) can grow again right here -- a brand-new citing study just
+    # got added to it. Reopen so root determination re-runs against the
+    # now-larger, correct membership instead of going stale. No-op if the
+    # parent's component was never settled in the first place (still
+    # PENDING, or NOT_APPLICABLE because nothing shareable exists yet).
+    if new_study_count > 0 and parent.entity_component_status == ComponentStatus.SETTLED.value:
+        from fair_ocean_agent.workflow.settle_handlers import reopen_component_settle_check
+
+        reopen_component_settle_check(session, parent.study_id)
+
     session.flush()
     logger.info(
         "citation discovery for %s: %d citing PMIDs, %d new studies created, %d capped",
@@ -1250,7 +1272,9 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
     # already-resolved structured value.
     map_study_to_faire(session, study.study_id)
     session.flush()
-    already_resolved = resolved_faire_fields_for_study(session, study.study_id)
+    already_resolved = suppress_resolved_faire_hints_for_text(
+        resolved_faire_fields_for_study(session, study.study_id)
+    )
     llm_config = load_config().llm
 
     section_texts = tuple((section["title"], section["text"]) for section in sections)

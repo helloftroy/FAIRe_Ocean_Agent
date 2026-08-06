@@ -34,7 +34,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from fair_ocean_agent.config import REPO_ROOT
-from fair_ocean_agent.database.enums import EntityLevel, EntityRelationshipType
+from fair_ocean_agent.database.enums import EntityLevel, EntityRelationshipType, EntityRootStatus, SHAREABLE_ENTITY_LEVELS
 from fair_ocean_agent.database.models import Entity, EntityRelationship, EntityStudy, StandardizedValue, Study
 from fair_ocean_agent.mapping.faire import TARGET_SCHEMA, resolve_project_id
 from fair_ocean_agent.standards.faire_registry import build_faire_registry
@@ -93,6 +93,19 @@ def _linked_study_ids(session: Session, entity_id: str) -> list[str]:
     created. Sorted for a deterministic pipe-joined internal_study_id
     column."""
     return sorted(session.scalars(select(EntityStudy.study_id).where(EntityStudy.entity_id == entity_id)))
+
+
+def _entity_broadcast_is_authoritative(entity: Entity, study: Study) -> bool:
+    """A shared entity's broadcast-style (study-wide LLM/text) facts only
+    fill this entity's blanks from the study identity/root_determination.py
+    determined to be its root -- never from a non-root linked study, and
+    never while root determination is still pending/ambiguous ("unknown is
+    preferable to guessing", same stance as identity/consistency.py).
+    Subsumes the pre-root-determination "len(linked_study_ids) == 1" gate
+    exactly for the non-shared case: root_status is eagerly DETERMINED/self
+    at entity creation (identity/entity_linking.py::create_entity), so an
+    entity that was never shared always satisfies this."""
+    return entity.root_status == EntityRootStatus.DETERMINED.value and entity.root_study_id == study.study_id
 
 
 def _entity_values(session: Session, entity_id: str) -> dict[str, str]:
@@ -180,6 +193,31 @@ def export_faire(session: Session, output_dir: str | Path) -> dict[str, int]:
     project_columns = class_columns("projectMetadata")
     project_rows = []
     for study in studies:
+        # Analysis-only paper: links to shared samples/runs (EntityStudy)
+        # but is home to none of them -- did no original data collection of
+        # its own, just reanalysis. Still exists in the network (Study row,
+        # EntityStudy links, sampleMetadata/experimentRunMetadata rows for
+        # anything it DOES home -- none, by this same condition), but never
+        # gets a projectMetadata row. Evaluated unconditionally (not gated
+        # on entity_component_status): this is a structural fact about
+        # entity ownership, not a cross-study priority judgment like root
+        # determination, so it's correct to check at any time.
+        homed_entity_exists = (
+            session.query(Entity.entity_id)
+            .filter(
+                Entity.study_id == study.study_id,
+                Entity.entity_level.in_([level.value for level in SHAREABLE_ENTITY_LEVELS]),
+            )
+            .first()
+            is not None
+        )
+        linked_entity_exists = (
+            session.query(EntityStudy.entity_study_id).filter(EntityStudy.study_id == study.study_id).first()
+            is not None
+        )
+        if linked_entity_exists and not homed_entity_exists:
+            continue
+
         broadcast = _study_wide_values(session, study.study_id)
         project_id = resolve_project_id(session, study.study_id)
         # Real FAIRe's own projectMetadata export layout is one row per
@@ -239,12 +277,12 @@ def export_faire(session: Session, output_dir: str | Path) -> dict[str, int]:
         )
         for entity in sample_entities:
             linked_study_ids = _linked_study_ids(session, entity.entity_id)
-            # A shared sample's row must not carry any ONE study's
-            # paper-specific interpretive broadcast defaults (matches
-            # identity/consistency.py's "unknown is preferable to guessing"
-            # stance) -- only its own entity-level facts are unconditionally
-            # safe to show regardless of how many studies link to it.
-            broadcast = _study_wide_values(session, study.study_id) if len(linked_study_ids) == 1 else {}
+            # A shared sample's row must not carry any non-root study's
+            # paper-specific interpretive broadcast defaults -- only the
+            # root study's (identity/root_determination.py), or its own
+            # entity-level facts, which are unconditionally safe regardless
+            # of how many studies link to it.
+            broadcast = _study_wide_values(session, study.study_id) if _entity_broadcast_is_authoritative(entity, study) else {}
             row = dict(broadcast)
             row.update(_entity_values(session, entity.entity_id))
             row["samp_name"] = entity.external_identifier or entity.entity_id
@@ -265,7 +303,7 @@ def export_faire(session: Session, output_dir: str | Path) -> dict[str, int]:
         )
         for entity in experiment_entities:
             linked_study_ids = _linked_study_ids(session, entity.entity_id)
-            broadcast = _study_wide_values(session, study.study_id) if len(linked_study_ids) == 1 else {}
+            broadcast = _study_wide_values(session, study.study_id) if _entity_broadcast_is_authoritative(entity, study) else {}
             row = dict(broadcast)
             row.update(_entity_values(session, entity.entity_id))
             sample = _linked_entity(

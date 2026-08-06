@@ -132,6 +132,36 @@ class EntityLevel(str, enum.Enum):
 SHAREABLE_ENTITY_LEVELS = frozenset({EntityLevel.SAMPLE, EntityLevel.EXPERIMENT_RUN, EntityLevel.SEQUENCING_RUN})
 
 
+class EntityRootStatus(str, enum.Enum):
+    """Which linked Study is the authoritative ("root") source for a
+    shared Entity's broadcast-style (study-wide LLM/text) facts --
+    identity/root_determination.py. Distinct from Entity.study_id ("home"),
+    which is just whichever study's discovery happened to create the row
+    first; root is a deliberate, evidence-based answer, decided only once
+    every Study sharing this Entity has finished discovering (see
+    ComponentStatus below)."""
+
+    NOT_SHARED = "not_shared"  # exactly one linked study -- root by definition, no algorithm needed
+    PENDING = "pending"  # shared, component not yet settled
+    DETERMINED = "determined"  # root_study_id is authoritative
+    AMBIGUOUS = "ambiguous"  # settled, but no signal could pick a root -- flagged for review, never guessed
+
+
+class ComponentStatus(str, enum.Enum):
+    """Study.entity_component_status: whether the connected component of
+    Studies this Study belongs to (via shared entities and/or citation-
+    discovery lineage -- identity/component.py) has stopped growing.
+    MAP_FAIRE is deferred until SETTLED for any study with shareable
+    entities (workflow/mapping_handlers.py), so root determination always
+    runs against the full, final component membership, never a partial
+    one."""
+
+    NOT_APPLICABLE = "not_applicable"  # zero shareable-level entities -- never enters this machinery
+    PENDING = "pending"  # still discovering / component may still grow
+    SETTLED = "settled"  # no in-flight discovery work anywhere in the component
+    STALLED = "stalled"  # exceeded max poll generations -- flagged rather than polled forever
+
+
 class EntityRelationshipType(str, enum.Enum):
     DERIVED_FROM_SAMPLE = "derived_from_sample"
     USES_ASSAY = "uses_assay"
@@ -213,6 +243,7 @@ class TaskType(str, enum.Enum):
     INGEST_SEED = "INGEST_SEED"
     DISCOVER_IDENTIFIERS = "DISCOVER_IDENTIFIERS"
     DISCOVER_CITING_STUDIES = "DISCOVER_CITING_STUDIES"
+    CHECK_COMPONENT_SETTLED = "CHECK_COMPONENT_SETTLED"
     FETCH_SOURCE = "FETCH_SOURCE"
     BUILD_SOURCE_GRAPH = "BUILD_SOURCE_GRAPH"
     RESOLVE_STUDY_IDENTITY = "RESOLVE_STUDY_IDENTITY"

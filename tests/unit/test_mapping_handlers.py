@@ -1,5 +1,5 @@
-from fair_ocean_agent.database.enums import EntityLevel, SupportType, TaskStatus, TaskType
-from fair_ocean_agent.database.models import Entity, RawFact, StandardizedValue, Study, Task
+from fair_ocean_agent.database.enums import EntityLevel, RelationshipType, SupportType, TaskStatus, TaskType
+from fair_ocean_agent.database.models import Entity, EntityStudy, RawFact, StandardizedValue, Study, Task
 from fair_ocean_agent.workflow.mapping_handlers import MAPPING_VERSION, enqueue_mapping_backfill, handle_map_faire
 from fair_ocean_agent.workflow.task_queue import enqueue_task
 
@@ -82,6 +82,43 @@ def test_enqueue_mapping_backfill_queues_one_per_study_with_facts(db_session):
     enqueue_mapping_backfill(db_session)  # idempotent
     db_session.commit()
     assert db_session.query(Task).filter_by(task_type=TaskType.MAP_FAIRE.value).count() == 1
+
+
+def test_enqueue_mapping_backfill_defers_studies_with_shareable_entities(db_session):
+    """A study with a SAMPLE/EXPERIMENT_RUN/SEQUENCING_RUN entity gets
+    routed through the settle-check machinery instead of MAP_FAIRE
+    directly -- exports/faire.py's root-aware broadcast gate needs the
+    whole connected component settled first (see workflow/settle_handlers.py).
+    A study with no shareable entity (this file's other tests) is
+    unaffected and proceeds immediately, exactly as before."""
+    study_with_sample = Study(title="Has a shareable entity")
+    db_session.add(study_with_sample)
+    db_session.flush()
+    sample = Entity(
+        study_id=study_with_sample.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN1"
+    )
+    db_session.add(sample)
+    db_session.flush()
+    db_session.add(
+        EntityStudy(
+            entity_id=sample.entity_id, study_id=study_with_sample.study_id,
+            relationship_type=RelationshipType.IS_HOME_OF.value, confidence=SupportType.STRUCTURED_SOURCE.value,
+        )
+    )
+    db_session.add(
+        RawFact(
+            study_id=study_with_sample.study_id, entity_id=sample.entity_id, raw_field_name="x", raw_value="y",
+            fact_type_candidate="x", entity_level="sample", support_type=SupportType.STRUCTURED_SOURCE.value,
+        )
+    )
+    db_session.commit()
+
+    count = enqueue_mapping_backfill(db_session)
+    db_session.commit()
+
+    assert count == 0  # not queued immediately -- deferred
+    assert db_session.query(Task).filter_by(task_type=TaskType.MAP_FAIRE.value).count() == 0
+    assert db_session.query(Task).filter_by(task_type=TaskType.CHECK_COMPONENT_SETTLED.value).count() == 1
 
 
 def test_versioned_mapping_backfill_requeues_after_legacy_task_completed(db_session):

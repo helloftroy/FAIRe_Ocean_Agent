@@ -128,6 +128,19 @@ class DiscoveryConfig(BaseModel):
     # review-flagged RawFacts, never silently dropped.
     max_citing_papers_per_bioproject: int = 25
     keyword_search_enabled: bool = False
+    # workflow/settle_handlers.py's self-rescheduling CHECK_COMPONENT_SETTLED
+    # poll: how long to wait before re-checking whether a connected
+    # component (identity/component.py) has stopped growing. Cheap (no
+    # network calls, just a handful of DB queries), so safe to check fairly
+    # often; MAP_FAIRE for every study in the component stays deferred
+    # until it settles (workflow/mapping_handlers.py).
+    component_settle_poll_interval_seconds: int = 300
+    # Caps how many times one component gets re-polled before giving up and
+    # marking it `stalled` (flagged, not polled forever) -- protects against
+    # a pathological case (e.g. a permanently-stuck manual-review task)
+    # blocking root determination/MAP_FAIRE indefinitely for an entire
+    # component.
+    max_settle_check_generations: int = 100
 
 
 class SchedulingConfig(BaseModel):

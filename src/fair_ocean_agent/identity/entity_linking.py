@@ -16,7 +16,14 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from fair_ocean_agent.database.enums import EntityLevel, RelationshipType, SHAREABLE_ENTITY_LEVELS, SupportType
+from fair_ocean_agent.clock import utcnow
+from fair_ocean_agent.database.enums import (
+    EntityLevel,
+    EntityRootStatus,
+    RelationshipType,
+    SHAREABLE_ENTITY_LEVELS,
+    SupportType,
+)
 from fair_ocean_agent.database.models import Entity, EntityStudy
 
 
@@ -29,7 +36,15 @@ def create_entity(
     this study's own extraction pipeline is what caused the entity to exist
     at all -- regardless of whether the specific facts landing on it later
     turn out to be structured or LLM-derived (same reasoning as
-    create_source's own default)."""
+    create_source's own default).
+
+    A brand-new entity is unambiguously its own root (identity/
+    root_determination.py) -- set eagerly here rather than left `pending`,
+    since the common (non-shared) case needs no algorithm at all and
+    shouldn't wait on a settle-check that may never even fire for it."""
+    entity.root_study_id = entity.study_id
+    entity.root_status = EntityRootStatus.DETERMINED.value
+    entity.root_determined_at = utcnow()
     session.add(entity)
     session.flush()  # entity.entity_id must exist before the FK below
     session.add(
@@ -125,6 +140,15 @@ def get_or_create_entity(
                     relationship_type=RelationshipType.SHARES_ACCESSION_WITH,
                     confidence=SupportType.STRUCTURED_SOURCE,
                 )
+                # A genuinely NEW claimant invalidates whatever root answer
+                # was previously settled (or eagerly set at creation) --
+                # identity/root_determination.py only re-runs once this
+                # entity's whole component has settled again. Not flipped
+                # for an idempotent retry of a study that already links to
+                # this entity (already_linked would be non-None then).
+                existing.root_status = EntityRootStatus.PENDING.value
+                existing.root_study_id = None
+                existing.root_determined_at = None
         return existing
 
     return create_entity(

@@ -36,6 +36,7 @@ from fair_ocean_agent.workflow.worker import run_worker
 import fair_ocean_agent.workflow.handlers  # noqa: F401 -- side effect: registers TASK_HANDLERS
 import fair_ocean_agent.workflow.mapping_handlers  # noqa: F401 -- side effect: registers TASK_HANDLERS
 import fair_ocean_agent.workflow.refresh_handlers  # noqa: F401 -- side effect: registers TASK_HANDLERS
+import fair_ocean_agent.workflow.settle_handlers  # noqa: F401 -- side effect: registers TASK_HANDLERS
 import fair_ocean_agent.workflow.supplement_handlers  # noqa: F401 -- side effect: registers TASK_HANDLERS
 import fair_ocean_agent.workflow.validation_handlers  # noqa: F401 -- side effect: registers TASK_HANDLERS
 

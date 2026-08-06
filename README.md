@@ -2490,6 +2490,136 @@ node-adding backfill (accession-scoped idempotency, cadence gating in
 (discovery-lineage suppression, BIOSAMPLE_ACCESSION never merging or
 flagging) built directly from the real live-run findings above.
 
+## Root-paper determination and two-phase discovery/mapping gating
+
+Direct follow-up after reviewing the previous section's live results. Two
+sharp questions from the user: for a shared entity, which linked study's
+facts should actually fill its blanks (today, none did, arbitrarily) --
+and shouldn't the whole discovery network settle before any table-filling
+happens at all, even if that takes a long time for one heavily-reused
+seed.
+
+**Clarifying how seeding actually works, first.** The user's mental model
+was "we process one paper's whole network before starting the next" --
+not true. All ~3,000 seeded papers get their own `Study` row up front, in
+one pass, before any discovery runs; every one of them gets a
+`DISCOVER_IDENTIFIERS` task enqueued at the same time, same priority.
+Whichever task the worker happens to claim first decides `Entity.study_id`
+("home") for any accession the two share. For a citation-discovered pair
+specifically (one paper found via citing another's BioProject), the cited
+paper is guaranteed to resolve first by construction -- but for two
+*independently seeded* papers that happen to share a BioProject with no
+citation relationship between them, home is pure queue-order luck, not a
+claim about who collected the data. `discovery_depth==0` means "was in the
+initial seed batch," nothing more -- a depth-0 seed can itself be a
+reanalysis paper if the seed file happens to include one.
+
+**Root-determination algorithm**, exactly as scoped with the user:
+earliest publication year among linked studies wins outright (reusing the
+existing `_publication_year_for_study` helper, not duplicating it -- a
+paper cannot analyze data that doesn't exist yet); the BioProject's own
+registration date is read as corroboration/plausibility context only,
+never used to override the year-based pick on its own; submitter/
+institution matching is explicitly deferred, since no adapter in this
+codebase parses structured author affiliations into anything usable today
+(Crossref only captures given/family name; OpenAlex's raw `authorships`
+blob, which does carry institutions in the real API, is stored unparsed
+here); genuinely ambiguous cases (same year, or no publication-date signal
+at all for the tied studies) get flagged `NEEDS_REVIEW`, never guessed.
+`identity/entity_linking.py::create_entity` sets an entity's root to
+itself, eagerly, at creation -- the common (non-shared) case needs no
+algorithm at all -- and flips back to `PENDING` the moment a second study
+links to it, so a stale answer never lingers past the point it stopped
+being true.
+
+**Two-phase gating, without touching the already-live-validated discovery
+machinery.** A background design agent explored the exact task-chaining
+structure before anything was built, and confirmed `MAP_FAIRE` really is
+only ever enqueued from one place (`enqueue_mapping_backfill`) -- discovery
+never auto-chains into it, already true and deliberate. That made the
+right insertion point clear: gate the *existing* mapping boundary, not
+rewrite `DISCOVER_IDENTIFIERS`/`DISCOVER_CITING_STUDIES` themselves. New
+`identity/component.py::compute_study_component` computes the connected
+component a study belongs to via BFS over two edge types -- shared
+`EntityStudy` links AND discovery-lineage columns -- because neither alone
+is sufficient: two independently-seeded siblings sharing an entity have no
+lineage edge between them at all, while a freshly-created citing study has
+*zero* `EntityStudy` rows until its own discovery task actually completes,
+so shared-entity edges alone would miss it. A new self-rescheduling poll
+task, `CHECK_COMPONENT_SETTLED`, is the barrier mechanism this flat,
+dependency-free task queue doesn't otherwise have: it recomputes the
+component, checks for anything still discovering anywhere in it, and
+either reschedules itself (fresh idempotency key per poll generation, a
+delayed `available_after`) or -- once nothing is left in flight and
+membership stopped changing -- runs root determination and finally
+enqueues `MAP_FAIRE` for every member. A capped generation count marks a
+pathologically stuck component `stalled` rather than polling forever; a
+settled component that grows again later (a new citing paper found by the
+existing quarterly rediscovery pass) flips back to `PENDING` and starts a
+fresh cycle. `enqueue_mapping_backfill` now routes any study with a
+shareable entity through this gate instead of enqueueing `MAP_FAIRE`
+directly; a study with none never touches this machinery and proceeds
+immediately, exactly as before -- satisfying "studies with no shareable
+entities proceed immediately, no waiting" precisely.
+
+That gate turned out to be the efficiency layer, not the sole correctness
+guarantee, though -- the same design agent's exploration caught a real
+fact worth escalating rather than quietly designing around:
+`handle_extract_text_facts` (Codex's concurrent work) calls
+`map_study_to_faire` *inline*, a second, independent `StandardizedValue`
+writer that lives entirely outside the `MAP_FAIRE` task type. That means
+gating only `MAP_FAIRE` cannot, by itself, guarantee a shared entity's
+broadcast is always root-aware. `exports/faire.py`'s own read-time gate
+(`_entity_broadcast_is_authoritative`, checked at export time regardless
+of when or how many times mapping ran for a study) is what actually
+guarantees correctness -- replacing the previous milestone's blunt "suppress
+if linked to more than one study" rule with "show only the *root* study's
+broadcast, never a non-root's, never while determination is still pending
+or ambiguous." A genuinely new, unconditional (not settle-gated, since
+it's a structural fact about entity ownership rather than a cross-study
+priority judgment) rule was added alongside it per the user's own explicit
+ask: a study that links to shared samples/runs but is home to none of them
+did no original data collection, just reanalysis, and never gets a
+`projectMetadata` row -- its `Study` row and `EntityStudy` links stay
+untouched in the network; `sampleMetadata`/`experimentRunMetadata` already
+correctly never emitted rows for entities such a study doesn't home.
+
+**A real bug caught immediately, before it ever reached a live run.**
+Adding `Entity.root_study_id` (a second foreign key from `entities` to
+`studies`, alongside the existing `study_id`) broke the ORM the moment the
+full test suite ran: `AmbiguousForeignKeysError` on the `Study.entities`/
+`Entity.study` relationship, since SQLAlchemy could no longer infer which
+column to join on. Fixed with an explicit `foreign_keys=` on both sides,
+pinning the relationship to `study_id` specifically -- `root_study_id`
+stays a plain reference column, never used for ORM traversal.
+
+**Live end-to-end re-run**, same real s42003/PNAS pair already used to
+validate the previous milestone, now pushed all the way through the new
+pipeline: discovery -> settle-check drain -> root determination ->
+`MAP_FAIRE` -> export. The result was genuinely informative, not just a
+pass/fail: root determination picked the **PNAS paper (published 2020) as
+root**, not s42003 (published 2024, the actual seed paper) -- direct proof
+that root is decided by real publication-date evidence, completely
+independent of which paper happened to be seeded or discovered first,
+exactly the decoupling the user asked for between `Entity.study_id`
+("home," an implementation detail) and `root_study_id` (a deliberate
+answer). The same run *naturally* exercised the analysis-only exclusion
+without it being specifically engineered for the test: PNAS links to all
+83 shared samples but is home to none of them, so it correctly produced
+zero `projectMetadata` rows, while `sampleMetadata.csv` still correctly
+listed all 83 samples exactly once each with pipe-joined
+`internal_study_id`; both studies reached `entity_component_status=settled`
+with zero ambiguity flags raised.
+
+668 tests pass (18 new): component BFS (both edge types, including the
+case lineage-only would miss); root determination (earliest-year wins,
+same-year tie flags ambiguous, non-shared entities skip the algorithm
+entirely); the settle-check handler (reschedule-while-in-flight, settle-
+and-enqueue-MAP_FAIRE, the stalled-generation cap, component reopening);
+`exports/faire.py`'s root-aware broadcast gate and the analysis-only
+`projectMetadata` exclusion; and `enqueue_mapping_backfill`'s deferral
+behavior for studies with shareable entities.
+
 ## Mapping expansion: the rest of FAIRe's Environment section
 
 Beyond the 8 BioSample attributes already mapped (elev/samp_collect_device/

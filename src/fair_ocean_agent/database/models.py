@@ -31,7 +31,9 @@ from fair_ocean_agent.database.enums import (
     CandidateMatchMethod,
     CandidateMatchReviewStatus,
     CanonicalStatus,
+    ComponentStatus,
     EntityLevel,
+    EntityRootStatus,
     IdentifierType,
     InspectionLevel,
     InspectionStatus,
@@ -108,12 +110,29 @@ class Study(Base, TimestampMixin):
     discovery_parent_study_id: Mapped[str | None] = mapped_column(ForeignKey("studies.study_id"))
     discovery_root_study_id: Mapped[str | None] = mapped_column(ForeignKey("studies.study_id"))
     discovery_trigger: Mapped[str | None] = mapped_column(String)
+    # Connected-component bookkeeping for root determination
+    # (identity/component.py, identity/root_determination.py,
+    # workflow/settle_handlers.py). A component is the transitive closure
+    # of studies linked either by a shared Entity (EntityStudy) or by
+    # discovery lineage (discovery_parent_study_id/discovery_root_study_id
+    # above) -- lineage ALONE misses two independently-seeded studies that
+    # happen to share an entity with no citation relationship between them;
+    # EntityStudy ALONE misses a freshly-created citing study that hasn't
+    # run its own DISCOVER_IDENTIFIERS yet, so component computation always
+    # walks both edge types. entity_component_id is the lexicographically-
+    # smallest study_id currently in the component -- a stable, cheap key,
+    # not a foreign key to a real row. MAP_FAIRE is deferred
+    # (workflow/mapping_handlers.py) until entity_component_status=SETTLED
+    # for any study with >=1 shareable-level entity.
+    entity_component_id: Mapped[str | None] = mapped_column(String)
+    entity_component_status: Mapped[str] = mapped_column(String, default=ComponentStatus.NOT_APPLICABLE.value)
+    entity_component_settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     external_identifiers: Mapped[list["ExternalIdentifier"]] = relationship(
         back_populates="study", cascade="all, delete-orphan"
     )
     entities: Mapped[list["Entity"]] = relationship(
-        back_populates="study", cascade="all, delete-orphan"
+        back_populates="study", cascade="all, delete-orphan", foreign_keys="Entity.study_id"
     )
     sources: Mapped[list["Source"]] = relationship(
         back_populates="study", cascade="all, delete-orphan"
@@ -306,8 +325,22 @@ class Entity(Base, TimestampMixin):
     label: Mapped[str | None] = mapped_column(String)
     external_identifier: Mapped[str | None] = mapped_column(String, index=True)
     parent_entity_id: Mapped[str | None] = mapped_column(ForeignKey("entities.entity_id"))
+    # Which linked Study is the authoritative ("root") source for this
+    # entity's broadcast-style (study-wide LLM/text) facts --
+    # identity/root_determination.py. Deliberately distinct from study_id
+    # ("home" above): home is just whichever study's discovery created this
+    # row first, an accident of task-queue processing order; root_study_id
+    # is a deliberate, evidence-based answer (earliest publication date,
+    # primarily), decided only once every study sharing this entity has
+    # settled (Study.entity_component_status). Set eagerly to
+    # (study_id, DETERMINED) at creation for the common (non-shared) case --
+    # identity/entity_linking.py::create_entity -- and reset to PENDING the
+    # moment a second study links to this entity, pending settle.
+    root_study_id: Mapped[str | None] = mapped_column(ForeignKey("studies.study_id"))
+    root_status: Mapped[str] = mapped_column(String, default=EntityRootStatus.NOT_SHARED.value)
+    root_determined_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
-    study: Mapped["Study"] = relationship(back_populates="entities")
+    study: Mapped["Study"] = relationship(back_populates="entities", foreign_keys=[study_id])
 
 
 class EntityStudy(Base, TimestampMixin):
