@@ -111,6 +111,27 @@ class EntityLevel(str, enum.Enum):
     DATA_ASSET = "data_asset"
 
 
+# Entity levels that can be linked to more than one Study (via the
+# `EntityStudy` join table, database/models.py) because they describe a
+# physically invariant real-world object -- a BioSample, an experiment
+# library, a sequencing run -- that a second paper reusing the same
+# deposited data would cite unchanged. PROJECT stays single-study
+# deliberately: a BioProject accession claimed by two studies is already
+# handled by identity/resolution.py's merge/sibling-split machinery, and a
+# paper's own bioinformatics-pipeline/assay-interpretation facts (PROJECT-
+# level) are paper-specific, not physical -- making PROJECT shareable would
+# create a second, competing mechanism for the same situation. ASSAY stays
+# single-study too (interpretive, not physical). The remaining levels are
+# typically unaccessioned (Entity.external_identifier null) so there's no
+# stable matching key to share on regardless.
+#
+# The exact same three values are baked into
+# database/models.py::Entity's partial unique index
+# ("uq_entity_shareable_level_external_id") -- built FROM this constant,
+# not duplicated as separate string literals, so the two can never drift.
+SHAREABLE_ENTITY_LEVELS = frozenset({EntityLevel.SAMPLE, EntityLevel.EXPERIMENT_RUN, EntityLevel.SEQUENCING_RUN})
+
+
 class EntityRelationshipType(str, enum.Enum):
     DERIVED_FROM_SAMPLE = "derived_from_sample"
     USES_ASSAY = "uses_assay"
@@ -191,6 +212,7 @@ class RawOrProcessed(str, enum.Enum):
 class TaskType(str, enum.Enum):
     INGEST_SEED = "INGEST_SEED"
     DISCOVER_IDENTIFIERS = "DISCOVER_IDENTIFIERS"
+    DISCOVER_CITING_STUDIES = "DISCOVER_CITING_STUDIES"
     FETCH_SOURCE = "FETCH_SOURCE"
     BUILD_SOURCE_GRAPH = "BUILD_SOURCE_GRAPH"
     RESOLVE_STUDY_IDENTITY = "RESOLVE_STUDY_IDENTITY"

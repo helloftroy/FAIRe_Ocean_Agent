@@ -14,7 +14,7 @@ from fair_ocean_agent.database.enums import (
     RelationshipType,
     SupportType,
 )
-from fair_ocean_agent.database.models import Entity, EntityRelationship, ExternalIdentifier, RawFact, Source, Study
+from fair_ocean_agent.database.models import CandidateMatch, Entity, EntityRelationship, ExternalIdentifier, RawFact, Source, Study
 from fair_ocean_agent.database.enums import TaskType
 from fair_ocean_agent.identity.identifiers import normalize_identifier
 from fair_ocean_agent.sources.base import (
@@ -146,6 +146,78 @@ def test_biosample_facts_create_per_sample_entities(db_session, monkeypatch):
 
     sample_one_facts = db_session.query(RawFact).filter_by(entity_id=sample_one_entity.entity_id).all()
     assert {f.raw_field_name for f in sample_one_facts} == {"collection_date", "depth"}
+
+
+def test_bioproject_resolution_enqueues_citation_discovery_once_per_accession(db_session, monkeypatch):
+    """After DISCOVER_IDENTIFIERS resolves a BioProject accession, a
+    DISCOVER_CITING_STUDIES task must be enqueued for it -- the hook that
+    drives node-adding discovery. Idempotency key is the accession alone,
+    so a second study independently resolving the same accession (a very
+    plausible case: two papers reusing the same public dataset) must not
+    create a second citation-discovery task for it."""
+    from fair_ocean_agent.database.models import Task
+
+    study_a = _seeded_study(db_session, bioproject_accession="PRJNA1425045")
+    task_a = _task_for(db_session, study_a)
+    biosample_adapter = FakeAdapter("ncbi_biosample", record=_make_record("ncbi_biosample"), facts=[])
+    monkeypatch.setattr(handlers, "_build_enabled_adapters", lambda: {"ncbi_biosample": biosample_adapter})
+    handlers.handle_discover_identifiers(db_session, task_a)
+    db_session.commit()
+
+    citing_tasks = db_session.query(Task).filter_by(task_type=TaskType.DISCOVER_CITING_STUDIES.value).all()
+    assert len(citing_tasks) == 1
+    assert citing_tasks[0].study_id == study_a.study_id
+    assert citing_tasks[0].payload == {"bioproject_accession": "PRJNA1425045"}
+    assert citing_tasks[0].idempotency_key == "DISCOVER_CITING_STUDIES:bioproject:PRJNA1425045"
+
+    study_b = _seeded_study(db_session, bioproject_accession="PRJNA1425045")
+    task_b = _task_for(db_session, study_b)
+    handlers.handle_discover_identifiers(db_session, task_b)
+    db_session.commit()
+
+    citing_tasks_after = db_session.query(Task).filter_by(task_type=TaskType.DISCOVER_CITING_STUDIES.value).all()
+    assert len(citing_tasks_after) == 1, "same accession must not enqueue a second citation-discovery task"
+
+
+def test_second_study_resolving_same_biosample_links_not_duplicates_entity(db_session, monkeypatch):
+    """Two different studies (two different papers) independently resolving
+    the SAME real BioSample accession -- the core case this whole multi-
+    study entity-sharing mechanism exists for (a second paper reusing
+    already-deposited data) -- must end up sharing one Entity row via
+    entity_studies, never two independent rows for the same physical
+    sample."""
+    from fair_ocean_agent.database.models import EntityStudy
+
+    study_a = _seeded_study(db_session, bioproject_accession="PRJNA1425045")
+    task_a = _task_for(db_session, study_a)
+    facts = _sample_facts("SAMN1", "Sample one", {"depth": "1"})
+    biosample_adapter = FakeAdapter("ncbi_biosample", record=_make_record("ncbi_biosample"), facts=facts)
+    monkeypatch.setattr(handlers, "_build_enabled_adapters", lambda: {"ncbi_biosample": biosample_adapter})
+    handlers.handle_discover_identifiers(db_session, task_a)
+    db_session.commit()
+
+    study_b = _seeded_study(db_session, bioproject_accession="PRJNA9999999")
+    task_b = _task_for(db_session, study_b)
+    reused_facts = _sample_facts("SAMN1", "Sample one (reused)", {"depth": "1"})
+    biosample_adapter_b = FakeAdapter("ncbi_biosample", record=_make_record("ncbi_biosample"), facts=reused_facts)
+    monkeypatch.setattr(handlers, "_build_enabled_adapters", lambda: {"ncbi_biosample": biosample_adapter_b})
+    handlers.handle_discover_identifiers(db_session, task_b)
+    db_session.commit()
+
+    entities = db_session.query(Entity).filter_by(entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN1").all()
+    assert len(entities) == 1, "must not create a second Entity row for the same real BioSample"
+    entity = entities[0]
+    assert entity.study_id == study_a.study_id, "home study stays with whichever study created it first"
+
+    links = db_session.query(EntityStudy).filter_by(entity_id=entity.entity_id).all()
+    assert {link.study_id for link in links} == {study_a.study_id, study_b.study_id}
+    home_link = next(link for link in links if link.study_id == study_a.study_id)
+    shared_link = next(link for link in links if link.study_id == study_b.study_id)
+    assert home_link.relationship_type == RelationshipType.IS_HOME_OF.value
+    assert shared_link.relationship_type == RelationshipType.SHARES_ACCESSION_WITH.value
+
+    facts_for_entity = db_session.query(RawFact).filter_by(entity_id=entity.entity_id).all()
+    assert {f.study_id for f in facts_for_entity} == {study_a.study_id, study_b.study_id}
 
 
 def test_experiment_library_links_sample_assay_and_shared_sequencing_run(db_session, monkeypatch):
@@ -580,9 +652,20 @@ def test_gbif_only_study_resolves_via_gbif_dataset_key(db_session, monkeypatch):
     assert db_session.query(RawFact).filter_by(study_id=study.study_id, fact_type_candidate="recordCount").count() == 1
 
 
-def test_repository_related_identifier_merges_into_existing_study(db_session, monkeypatch):
+def test_repository_related_identifier_shared_biosample_does_not_merge_studies(db_session, monkeypatch):
+    """A BioSample accession shared with another study is expected now, not
+    a study-identity signal (real BioSamples legitimately get reused by a
+    second, genuinely different paper -- EntityStudy is what represents
+    that sharing, at the Entity level, independent of Study identity).
+    Regression test for a real finding from a live end-to-end run: this
+    used to unconditionally merge the two studies together (NcbiBioSample
+    Adapter/EnaAdapter's find_related() reports every sample accession as a
+    default-STRUCTURED_SOURCE RelatedIdentifier), which would have silently
+    collapsed two independently-confirmed different real papers
+    (10.1038/s42003-024-06136-2 / 10.1073/pnas.2005917117, both citing
+    PRJNA529480) into one Study."""
     study = _seeded_study(db_session, bioproject_accession="PRJNA1425045")
-    other_study = Study(title="Found earlier by BioSample accession")
+    other_study = Study(title="A different paper that also cites this BioSample")
     db_session.add(other_study)
     db_session.flush()
     db_session.add(
@@ -613,7 +696,13 @@ def test_repository_related_identifier_merges_into_existing_study(db_session, mo
     db_session.commit()
 
     refreshed_other = db_session.get(Study, other_study.study_id)
-    assert refreshed_other.canonical_status == CanonicalStatus.MERGED.value
+    assert refreshed_other.canonical_status == CanonicalStatus.CANDIDATE.value  # NOT merged away
+
+    recorded = db_session.query(ExternalIdentifier).filter_by(
+        study_id=study.study_id, identifier_type=IdentifierType.BIOSAMPLE_ACCESSION.value, identifier_value="SAMN1"
+    ).one()
+    assert recorded.relationship_type == RelationshipType.SHARES_ACCESSION_WITH.value
+    assert db_session.query(CandidateMatch).count() == 0  # not flagged as ambiguous either -- this is expected
 
 
 def test_bioproject_only_study_without_doi_does_not_raise(db_session, monkeypatch):

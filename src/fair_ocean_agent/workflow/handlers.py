@@ -17,6 +17,7 @@ from fair_ocean_agent.clock import utcnow
 from fair_ocean_agent.config import load_config, load_sources_config
 from fair_ocean_agent.database.enums import (
     AccessStatus,
+    CanonicalStatus,
     EntityLevel,
     EntityRelationshipType,
     IdentifierType,
@@ -24,9 +25,18 @@ from fair_ocean_agent.database.enums import (
     InspectionStatus,
     ReviewStatus,
     SourceType,
+    SupportType,
     TaskType,
 )
-from fair_ocean_agent.database.models import Entity, EntityRelationship, ExternalIdentifier, RawFact, Source, Study, Task
+from fair_ocean_agent.database.models import (
+    Entity,
+    EntityRelationship,
+    ExternalIdentifier,
+    RawFact,
+    Source,
+    Study,
+    Task,
+)
 from fair_ocean_agent.discovery.text_identifiers import (
     extract_repository_identifiers_from_text,
     verify_deterministic_identifier,
@@ -47,6 +57,9 @@ from fair_ocean_agent.extraction.text import (
     extract_facts_from_section,
     resolved_faire_fields_for_study,
 )
+from fair_ocean_agent.identity.deduplication import find_existing_study_by_identifier
+from fair_ocean_agent.identity.entity_linking import get_or_create_entity as _get_or_create_entity
+from fair_ocean_agent.identity.identifiers import IdentifierError, normalize_identifier
 from fair_ocean_agent.identity.resolution import resolve_or_create_study
 from fair_ocean_agent.identity.source_linking import create_source
 from fair_ocean_agent.llm.base import LLMBackend, LLMBackendError, try_parse_json
@@ -69,7 +82,13 @@ from fair_ocean_agent.sources.datacite import DataCiteAdapter
 from fair_ocean_agent.sources.ena import EnaAdapter
 from fair_ocean_agent.sources.europe_pmc import EuropePmcAdapter
 from fair_ocean_agent.sources.gbif import GbifAdapter
-from fair_ocean_agent.sources.ncbi import NcbiBioProjectAdapter, NcbiBioSampleAdapter
+from fair_ocean_agent.sources.ncbi import (
+    NcbiBioProjectAdapter,
+    NcbiBioSampleAdapter,
+    _elink_ids,
+    _esearch_verified_uid,
+    _esummary_records,
+)
 from fair_ocean_agent.sources.obis import ObisAdapter
 from fair_ocean_agent.sources.openalex import OpenAlexAdapter
 from fair_ocean_agent.sources.pangaea import PangaeaAdapter
@@ -207,34 +226,6 @@ def _apply_publication_fields(source: Source, fields: dict) -> None:
         source.access_status = AccessStatus.OPEN.value
 
 
-def _get_or_create_entity(
-    session: Session,
-    study_id: str,
-    entity_level: EntityLevel,
-    external_identifier: str,
-    label: str | None,
-) -> Entity:
-    existing = (
-        session.query(Entity)
-        .filter_by(study_id=study_id, entity_level=entity_level.value, external_identifier=external_identifier)
-        .one_or_none()
-    )
-    if existing is not None:
-        if label and not existing.label:
-            existing.label = label
-        return existing
-
-    entity = Entity(
-        study_id=study_id,
-        entity_level=entity_level.value,
-        external_identifier=external_identifier,
-        label=label,
-    )
-    session.add(entity)
-    session.flush()
-    return entity
-
-
 def _get_or_create_entity_relationship(
     session: Session,
     study_id: str,
@@ -242,9 +233,23 @@ def _get_or_create_entity_relationship(
     to_entity_id: str,
     relationship_type: EntityRelationshipType,
 ) -> EntityRelationship:
+    """Looked up GLOBALLY (no study_id filter), matching entity_relationships'
+    own uq_entity_relationship constraint (from_entity_id, to_entity_id,
+    relationship_type -- database/models.py, no study_id in it): from/to
+    entity_ids can now be shared entities (SHAREABLE_ENTITY_LEVELS,
+    database/enums.py) resolved by more than one Study, and the physical
+    relationship between two such entities (this run WAS sequenced from
+    this sample, structurally) doesn't change depending on which study is
+    asking -- it's exactly as physically invariant as the entities
+    themselves (same reasoning the user gave for sample/experiment facts
+    not changing on reuse). A study-scoped lookup here would try to
+    reinsert the identical (from, to, type) triple every time a SECOND
+    study's own resolution pass reaches the same shared entities, hitting
+    that unique constraint -- confirmed live against a real citing-paper
+    pair (10.1038/s42003-024-06136-2 / 10.1073/pnas.2005917117) whose
+    shared run/sample/experiment entities triggered exactly this."""
     existing = session.scalar(
         select(EntityRelationship).where(
-            EntityRelationship.study_id == study_id,
             EntityRelationship.from_entity_id == from_entity_id,
             EntityRelationship.to_entity_id == to_entity_id,
             EntityRelationship.relationship_type == relationship_type.value,
@@ -449,7 +454,7 @@ def _persist_source_and_facts(
                 entity_level=fact.entity_level.value,
                 support_type=fact.support_type.value,
                 extraction_method=f"adapter:{adapter.name}",
-                review_status=ReviewStatus.ACCEPTED.value,
+                review_status=fact.review_status or ReviewStatus.ACCEPTED.value,
                 confidence_metadata=fact.confidence_metadata,
             )
         )
@@ -947,7 +952,188 @@ def handle_discover_identifiers(session: Session, task: Task) -> None:
             gbif_key=gbif_key,
         )
 
+    # Node-adding discovery hook: for every BioProject accession this study
+    # now has (however it got resolved above), enqueue a citation-discovery
+    # pass. idempotency_key is the accession alone -- two different studies
+    # resolving the same BioProject only trigger this once for free, no new
+    # dedup table needed (see handle_discover_citing_studies).
+    from fair_ocean_agent.workflow.task_queue import enqueue_task
+
+    for bioproject_accession in _identifier_values(session, study.study_id, IdentifierType.BIOPROJECT_ACCESSION):
+        enqueue_task(
+            session,
+            TaskType.DISCOVER_CITING_STUDIES,
+            study_id=study.study_id,
+            payload={"bioproject_accession": bioproject_accession},
+            idempotency_key=f"DISCOVER_CITING_STUDIES:bioproject:{bioproject_accession}",
+        )
+
     session.flush()
+
+
+def _pubmed_doi_from_esummary(record: dict) -> str | None:
+    for article_id in record.get("articleids", []):
+        if article_id.get("idtype") == "doi":
+            return article_id.get("value")
+    return None
+
+
+def _record_citation_expansion_capped_fact(
+    session: Session, study: Study, bioproject_accession: str, *, reason: str, extra: dict | None = None
+) -> None:
+    """Records a review-flagged PROJECT-level RawFact instead of silently
+    dropping citing papers that exceeded a safety-valve cap
+    (citation_expansion_max_depth or max_citing_papers_per_bioproject, see
+    config.py's DiscoveryConfig) -- matches this codebase's established
+    "flag, never silently drop" convention (identity/resolution.py's own
+    CandidateMatch-on-ambiguity, sources/ncbi.py's ambiguous_uid_resolution).
+    source_id is None: this isn't attributable to one Source row, it's a
+    property of the citation-discovery pass itself."""
+    session.add(
+        RawFact(
+            study_id=study.study_id,
+            source_id=None,
+            source_locator=f"ncbi_bioproject_pubmed_citation.{bioproject_accession}",
+            raw_field_name="citation_expansion_capped",
+            raw_value=reason,
+            fact_type_candidate="citing_pmid_not_expanded",
+            entity_level=EntityLevel.PROJECT.value,
+            support_type=SupportType.STRUCTURED_SOURCE.value,
+            extraction_method="ncbi_bioproject_pubmed_citation",
+            review_status=ReviewStatus.NEEDS_REVIEW.value,
+            confidence_metadata=extra,
+        )
+    )
+
+
+def handle_discover_citing_studies(session: Session, task: Task) -> None:
+    """Forward citation-discovery: given a BioProject accession this study
+    already resolved, finds NEW papers that cite/reuse this exact
+    BioProject's data via one bioproject->pubmed elink call (returns every
+    citing PMID at once -- cheap by construction, no per-sample fan-out).
+    This is the "node-adding" half of discovery the user asked for
+    (new research is linking to old samples if they use the data) --
+    independent of sources/ncbi.py's biosample->bioproject reverse-elink,
+    which verifies a single resolution rather than discovering new studies.
+
+    Auto-expansion is deliberately aggressive per an explicit user scoping
+    decision: a newly-discovered citing paper not already in the database
+    gets its own full Study row and re-enters the normal
+    DISCOVER_IDENTIFIERS pipeline recursively -- via the task queue's own
+    idempotency/resumability, not an in-process recursive BFS, so a citing
+    paper that itself cites further BioProjects keeps expanding through
+    ordinary task processing. citation_expansion_max_depth and
+    max_citing_papers_per_bioproject (config.py's DiscoveryConfig) are the
+    real safety valves that make this safe at ~3000-paper batch scale --
+    capped work is flagged for review (_record_citation_expansion_capped_fact),
+    never silently dropped.
+    """
+    parent = session.get(Study, task.study_id)
+    if parent is None:
+        raise ValueError(f"Study {task.study_id} not found")
+
+    bioproject_accession = (task.payload or {}).get("bioproject_accession")
+    if not bioproject_accession:
+        raise ValueError("DISCOVER_CITING_STUDIES task requires a bioproject_accession in its payload")
+
+    adapters = _build_enabled_adapters()
+    bioproject_adapter = adapters.get("ncbi_bioproject")
+    if bioproject_adapter is None:
+        logger.info(
+            "ncbi_bioproject adapter disabled; skipping citation discovery for %s", bioproject_accession
+        )
+        return
+
+    discovery_config = load_config().discovery
+    if parent.discovery_depth >= discovery_config.citation_expansion_max_depth:
+        _record_citation_expansion_capped_fact(
+            session, parent, bioproject_accession,
+            reason=(
+                f"discovery_depth {parent.discovery_depth} >= "
+                f"citation_expansion_max_depth {discovery_config.citation_expansion_max_depth}: "
+                "citing papers not expanded"
+            ),
+        )
+        session.flush()
+        return
+
+    # Shares the same rate-limited http client _build_enabled_adapters()
+    # already constructed for ncbi_bioproject/ncbi_biosample -- NCBI's rate
+    # limit is per-IP across all eutils calls combined (see that function's
+    # own comment); a separate client here would silently double the real
+    # request rate.
+    http = bioproject_adapter.http
+    base_url = bioproject_adapter.config.base_url
+
+    resolution = _esearch_verified_uid(
+        http, base_url, "bioproject", bioproject_accession, expected_accession=bioproject_accession
+    )
+    if resolution is None:
+        logger.info("no BioProject UID found for %s during citation discovery", bioproject_accession)
+        return
+
+    citing_pmids = _elink_ids(http, base_url, "bioproject", "pubmed", resolution.uid)
+    if not citing_pmids:
+        return
+
+    max_citing = discovery_config.max_citing_papers_per_bioproject
+    within_cap, over_cap = citing_pmids[:max_citing], citing_pmids[max_citing:]
+    pubmed_records = _esummary_records(http, base_url, "pubmed", within_cap)
+    root_study_id = parent.discovery_root_study_id or parent.study_id
+
+    new_study_count = 0
+    for pmid in within_cap:
+        record = pubmed_records.get(pmid)
+        doi = _pubmed_doi_from_esummary(record) if record else None
+        if doi is None:
+            continue
+        try:
+            normalized_doi = normalize_identifier(IdentifierType.DOI, doi)
+        except IdentifierError:
+            continue
+        if find_existing_study_by_identifier(session, IdentifierType.DOI, normalized_doi) is not None:
+            continue  # already known, whether via this same accession or independently
+
+        citing_study = Study(
+            canonical_status=CanonicalStatus.CANDIDATE.value,
+            discovery_depth=parent.discovery_depth + 1,
+            discovery_parent_study_id=parent.study_id,
+            discovery_root_study_id=root_study_id,
+            discovery_trigger="bioproject_pubmed_citation",
+        )
+        session.add(citing_study)
+        session.flush()
+        session.add(
+            ExternalIdentifier(
+                study_id=citing_study.study_id,
+                identifier_type=IdentifierType.DOI.value,
+                identifier_value=normalized_doi,
+                source="ncbi_bioproject_pubmed_citation",
+                verified=True,
+            )
+        )
+        session.flush()
+
+        from fair_ocean_agent.workflow.task_queue import enqueue_task
+
+        enqueue_task(session, TaskType.DISCOVER_IDENTIFIERS, study_id=citing_study.study_id)
+        new_study_count += 1
+
+    if over_cap:
+        _record_citation_expansion_capped_fact(
+            session, parent, bioproject_accession,
+            reason=(
+                f"{len(over_cap)} of {len(citing_pmids)} citing PMIDs exceeded "
+                f"max_citing_papers_per_bioproject ({max_citing})"
+            ),
+            extra={"excess_pmid_count": len(over_cap)},
+        )
+
+    session.flush()
+    logger.info(
+        "citation discovery for %s: %d citing PMIDs, %d new studies created, %d capped",
+        bioproject_accession, len(citing_pmids), new_study_count, len(over_cap),
+    )
 
 
 def handle_extract_text_facts(session: Session, task: Task) -> None:
@@ -1166,4 +1352,5 @@ def enqueue_text_extraction_backfill(session: Session) -> int:
 
 
 TASK_HANDLERS[TaskType.DISCOVER_IDENTIFIERS] = handle_discover_identifiers
+TASK_HANDLERS[TaskType.DISCOVER_CITING_STUDIES] = handle_discover_citing_studies
 TASK_HANDLERS[TaskType.EXTRACT_TEXT_FACTS] = handle_extract_text_facts

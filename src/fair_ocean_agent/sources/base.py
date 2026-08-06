@@ -120,6 +120,16 @@ class RawFactCandidate(BaseModel):
     # left None for structured API/XML facts, where source_locator (a
     # JSON/XML path) already pins down the evidence.
     evidence_quote: str | None = None
+    # Overrides the default review_status a structured-adapter fact is
+    # persisted with (ACCEPTED, see workflow/handlers.py's
+    # _persist_source_and_facts) -- None keeps that default unchanged.
+    # Set to ReviewStatus.NEEDS_REVIEW.value by sources/ncbi.py when a
+    # BioProject/BioSample UID resolution was ambiguous (esearch returned
+    # more than one UID and none of their own accessions matched what was
+    # searched for) or the biosample->bioproject reverse-elink signal
+    # disagreed with the UID esearch picked -- flagging the fact rather than
+    # silently trusting a guess, see that module's _esearch_verified_uid.
+    review_status: str | None = None
     # Optional, non-authoritative metadata about this fact -- currently used
     # by extraction/text.py to carry a candidate_standard_fields hint (e.g.
     # {"candidate_standard_fields": {"faire": "annealingTemp"}}) suggesting

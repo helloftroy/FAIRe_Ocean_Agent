@@ -154,6 +154,94 @@ def test_tier2_inconsistent_dates_creates_sibling_and_flags(db_session):
     assert sibling_identifier.relationship_type == RelationshipType.SHARES_ACCESSION_WITH.value
 
 
+def test_shared_biosample_accession_never_merges_or_flags(db_session):
+    """BIOSAMPLE_ACCESSION is excluded from Study-identity resolution
+    entirely, at ANY confidence tier -- unlike every other identifier type
+    (see resolve_or_create_study's own carve-out). Regression test for a
+    real finding from a live end-to-end run: two genuinely different papers
+    sharing a real BioSample (confirmed live:
+    10.1038/s42003-024-06136-2 / 10.1073/pnas.2005917117, both citing
+    PRJNA529480) got silently merged via this exact code path, since
+    NcbiBioSampleAdapter/EnaAdapter's find_related() reports every sample
+    accession as a default-STRUCTURED_SOURCE RelatedIdentifier."""
+    other_study = _study(db_session, title="Other paper, real different study")
+    db_session.add(
+        ExternalIdentifier(study_id=other_study.study_id, identifier_type=IdentifierType.BIOSAMPLE_ACCESSION.value, identifier_value="SAMN1")
+    )
+    db_session.commit()
+
+    study = _study(db_session, title="Current paper, also cites SAMN1")
+    rel = _rel(IdentifierType.BIOSAMPLE_ACCESSION, "SAMN1", confidence=SupportType.STRUCTURED_SOURCE, source="ncbi_biosample")
+
+    original_study_count = db_session.query(Study).count()
+    result = resolve_or_create_study(db_session, study, [rel], source=None)
+    db_session.commit()
+
+    assert result.study_id == study.study_id
+    assert db_session.query(Study).count() == original_study_count  # no merge, no sibling
+    db_session.refresh(other_study)
+    assert other_study.canonical_status == CanonicalStatus.CANDIDATE.value  # not merged away
+    assert db_session.query(CandidateMatch).count() == 0  # not flagged as ambiguous either
+
+    recorded = db_session.query(ExternalIdentifier).filter_by(
+        study_id=study.study_id, identifier_type=IdentifierType.BIOSAMPLE_ACCESSION.value, identifier_value="SAMN1"
+    ).one()
+    assert recorded.relationship_type == RelationshipType.SHARES_ACCESSION_WITH.value
+
+
+def test_tier2_inconsistent_dates_but_discovery_lineage_skips_sibling(db_session):
+    """Regression test for a real finding from a live end-to-end run: a
+    citation-discovered Study's own full-text scan re-mentions the exact
+    BioProject accession that discovery already used to link it to its
+    parent -- this must NOT be treated as an identity conflict (no sibling,
+    no CandidateMatch), since the two studies are already known, by
+    construction, to be a citing-paper/cited-paper pair that must stay
+    separate regardless. Confirmed live: 10.1038/s42003-024-06136-2 /
+    10.1073/pnas.2005917117 both resolving PRJNA529480 hit exactly this."""
+    parent_study = _study(db_session, title="Original paper")
+    db_session.add(
+        ExternalIdentifier(study_id=parent_study.study_id, identifier_type=IdentifierType.BIOPROJECT_ACCESSION.value, identifier_value="PRJNA1")
+    )
+    db_session.add(
+        RawFact(
+            study_id=parent_study.study_id, entity_level=EntityLevel.SAMPLE.value,
+            fact_type_candidate="collection_date", raw_value="2010-01-01",
+            support_type=SupportType.STRUCTURED_SOURCE.value,
+        )
+    )
+    db_session.commit()
+
+    # citing_study was created by handle_discover_citing_studies -- its own
+    # discovery_parent_study_id already establishes the relationship.
+    citing_study = _study(
+        db_session, title="Citing paper", discovery_depth=1,
+        discovery_parent_study_id=parent_study.study_id, discovery_root_study_id=parent_study.study_id,
+        discovery_trigger="bioproject_pubmed_citation",
+    )
+    # No date evidence on citing_study at all -- if the lineage check didn't
+    # fire, check_study_consistency would have nothing to compare and this
+    # would degrade to a sibling+flag exactly like the no-single-Source case.
+
+    original_study_count = db_session.query(Study).count()
+    rel = _rel(IdentifierType.BIOPROJECT_ACCESSION, "PRJNA1", confidence=SupportType.DETERMINISTICALLY_DERIVED)
+    result = resolve_or_create_study(db_session, citing_study, [rel], source=None)
+    db_session.commit()
+
+    assert result.study_id == citing_study.study_id
+    assert db_session.query(Study).count() == original_study_count  # no sibling created
+    assert db_session.query(CandidateMatch).count() == 0  # no review-queue noise
+
+    recorded = db_session.query(ExternalIdentifier).filter_by(
+        study_id=citing_study.study_id, identifier_type=IdentifierType.BIOPROJECT_ACCESSION.value
+    ).one()
+    assert recorded.identifier_value == "PRJNA1"
+    assert recorded.relationship_type == RelationshipType.SHARES_ACCESSION_WITH.value
+
+    # parent_study is provably untouched -- not merged, not modified.
+    db_session.refresh(parent_study)
+    assert parent_study.canonical_status == CanonicalStatus.CANDIDATE.value
+
+
 def test_tier3_never_merges_alone_even_when_consistent(db_session):
     other_study = _study(db_session, title="Other")
     db_session.add(

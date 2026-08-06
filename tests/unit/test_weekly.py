@@ -18,6 +18,8 @@ def _fake_config(**scheduling_overrides):
         retry_failed_after_hours=24,
         monthly_unresolved_retry=True,
         quarterly_full_rediscovery=False,  # off by default in tests -- exercised in its own test
+        citation_rediscovery_enabled=False,  # off by default in tests -- exercised in its own test
+        citation_rediscovery_interval_days=90,
     )
     defaults.update(scheduling_overrides)
     return SimpleNamespace(scheduling=SimpleNamespace(**defaults))
@@ -127,6 +129,65 @@ def test_second_weekly_run_does_not_refire_quarterly_rediscovery(db_session, mon
 
     assert second.sources_queried["quarterly_rediscovery_ran"] is False
     assert db_session.query(WorkflowRun).filter_by(run_type="quarterly_full_rediscovery").count() == 1
+
+
+def _study_with_bioproject(session, accession="PRJNA1") -> Study:
+    study = Study(title=None)
+    session.add(study)
+    session.flush()
+    session.add(
+        ExternalIdentifier(
+            study_id=study.study_id, identifier_type=IdentifierType.BIOPROJECT_ACCESSION.value, identifier_value=accession
+        )
+    )
+    session.flush()
+    return study
+
+
+def test_live_run_skips_citation_rediscovery_when_disabled(db_session, monkeypatch):
+    monkeypatch.setattr(weekly, "load_config", lambda: _fake_config(citation_rediscovery_enabled=False))
+    monkeypatch.setattr(handlers, "_build_enabled_adapters", lambda: {})
+    _study_with_bioproject(db_session)
+    db_session.commit()
+
+    run = weekly.run_weekly_update(db_session, dry_run=False)
+    db_session.commit()
+
+    assert run.sources_queried["citation_rediscovery_ran"] is False
+    assert db_session.query(WorkflowRun).filter_by(run_type="citation_rediscovery").count() == 0
+
+
+def test_live_run_fires_citation_rediscovery_when_enabled_and_due(db_session, monkeypatch):
+    monkeypatch.setattr(weekly, "load_config", lambda: _fake_config(citation_rediscovery_enabled=True))
+    monkeypatch.setattr(handlers, "_build_enabled_adapters", lambda: {})
+    _study_with_bioproject(db_session)
+    db_session.commit()
+
+    run = weekly.run_weekly_update(db_session, dry_run=False)
+    db_session.commit()
+
+    assert run.sources_queried["citation_rediscovery_ran"] is True
+    assert run.sources_queried["citation_rediscovery_tasks_enqueued"] == 1
+    citation_run = db_session.query(WorkflowRun).filter_by(run_type="citation_rediscovery").one()
+    assert citation_run.status == WorkflowRunStatus.COMPLETED.value
+    assert citation_run.sources_queried["triggered_by_run_id"] == run.run_id
+    citing_task = db_session.query(Task).filter_by(task_type=TaskType.DISCOVER_CITING_STUDIES.value).one()
+    assert citing_task.payload == {"bioproject_accession": "PRJNA1"}
+
+
+def test_second_weekly_run_does_not_refire_citation_rediscovery(db_session, monkeypatch):
+    monkeypatch.setattr(weekly, "load_config", lambda: _fake_config(citation_rediscovery_enabled=True))
+    monkeypatch.setattr(handlers, "_build_enabled_adapters", lambda: {})
+    _study_with_bioproject(db_session)
+    db_session.commit()
+
+    weekly.run_weekly_update(db_session, dry_run=False)
+    db_session.commit()
+    second = weekly.run_weekly_update(db_session, dry_run=False)
+    db_session.commit()
+
+    assert second.sources_queried["citation_rediscovery_ran"] is False
+    assert db_session.query(WorkflowRun).filter_by(run_type="citation_rediscovery").count() == 1
 
 
 def test_failed_run_marks_workflow_run_failed_and_reraises(db_session, monkeypatch):

@@ -24,10 +24,11 @@ from __future__ import annotations
 import hashlib
 import re
 from collections import defaultdict
+from typing import NamedTuple
 import xml.etree.ElementTree as ET
 
 from fair_ocean_agent.clock import utcnow
-from fair_ocean_agent.database.enums import EntityLevel, IdentifierType, RelationshipType, SupportType
+from fair_ocean_agent.database.enums import EntityLevel, IdentifierType, RelationshipType, ReviewStatus, SupportType
 from fair_ocean_agent.logging_setup import get_logger
 from fair_ocean_agent.sources.base import (
     RawFactCandidate,
@@ -50,10 +51,67 @@ MAX_SAMPLES_PER_PROJECT = 300
 EFETCH_BATCH_SIZE = 100
 
 
-def _esearch_first_uid(http, base_url: str, db: str, term: str) -> str | None:
+class UidResolution(NamedTuple):
+    """Result of _esearch_verified_uid. `ambiguous=True` means esearch
+    returned more than one UID and none of their own accessions (per
+    esummary) matched what was searched for -- `uid` is then esearch's own
+    first-ranked result used as a last-resort fallback, and
+    `candidate_accessions` (uid -> that uid's own accession) is carried
+    along so the caller can attach it to a review-flagged RawFact instead of
+    trusting the fallback silently."""
+
+    uid: str
+    ambiguous: bool
+    candidate_accessions: dict[str, str] | None
+
+
+# esummary's own accession-bearing field differs per db -- confirmed live
+# against real PRJNA529480/PRJEB73262/SAMN11268098 records.
+_ESUMMARY_ACCESSION_FIELD = {"bioproject": "project_acc", "biosample": "accession"}
+
+
+def _esummary_records(http, base_url: str, db: str, uids: list[str]) -> dict[str, dict]:
+    if not uids:
+        return {}
+    payload, _ = http.get_json(
+        f"{base_url}/esummary.fcgi", params={"db": db, "id": ",".join(uids), "retmode": "json"}
+    )
+    result = payload.get("result", {})
+    return {uid: result[uid] for uid in result.get("uids", []) if uid in result}
+
+
+def _esearch_verified_uid(http, base_url: str, db: str, term: str, expected_accession: str) -> UidResolution | None:
+    """Replaces the old _esearch_first_uid, which blindly trusted esearch's
+    first UID -- confirmed live to pick the WRONG BioProject for a real
+    paper (esearch for "PRJNA529480" returns two UIDs; the first, 1356142,
+    is actually PRJEB73262, a downstream MAG-only reanalysis project that
+    just mentions the real accession in its own title; the correct UID,
+    529480, is the second one). A single UID needs no extra call -- esearch
+    already disambiguated for us. Multiple UIDs get resolved by fetching
+    each candidate's own accession via esummary and matching it against
+    what was actually searched for, rather than trusting esearch's
+    relevance ranking."""
     payload, _ = http.get_json(f"{base_url}/esearch.fcgi", params={"db": db, "term": term, "retmode": "json"})
     ids = payload.get("esearchresult", {}).get("idlist", [])
-    return ids[0] if ids else None
+    if not ids:
+        return None
+    if len(ids) == 1:
+        return UidResolution(uid=ids[0], ambiguous=False, candidate_accessions=None)
+
+    accession_field = _ESUMMARY_ACCESSION_FIELD[db]
+    records = _esummary_records(http, base_url, db, ids)
+    candidate_accessions = {uid: (records.get(uid, {}).get(accession_field) or "") for uid in ids}
+    normalized_expected = expected_accession.strip().upper()
+    for uid, accession in candidate_accessions.items():
+        if accession.strip().upper() == normalized_expected:
+            return UidResolution(uid=uid, ambiguous=False, candidate_accessions=None)
+
+    logger.warning(
+        "esearch for %s=%s returned %d UIDs and none of their own accessions "
+        "(%s) matched -- falling back to the first UID (%s), flagged for review",
+        db, term, len(ids), candidate_accessions, ids[0],
+    )
+    return UidResolution(uid=ids[0], ambiguous=True, candidate_accessions=candidate_accessions)
 
 
 def _elink_ids(http, base_url: str, dbfrom: str, db: str, uid: str) -> list[str]:
@@ -188,13 +246,50 @@ def _derive_depth_from_source_material_id(value: str) -> str | None:
     return match.group(0).strip() if match else None
 
 
+def _uid_verification_fact(
+    *,
+    bioproject_accession: str,
+    uid_resolution_ambiguous: bool,
+    uid_resolution_candidates: dict[str, str] | None,
+    reverse_elink_verified: bool | None = None,
+    source_locator: str,
+) -> RawFactCandidate | None:
+    """Emits a PROJECT-level, review-flagged RawFact when this BioProject's
+    UID resolution wasn't fully trustworthy -- either the esearch/esummary
+    cross-check (_esearch_verified_uid) had to fall back to an unconfirmed
+    UID, or (BioSample adapter only) the independent biosample->bioproject
+    reverse-elink signal disagreed. Both signals are recorded together in
+    confidence_metadata even when only one fired, so a reviewer sees the
+    full picture rather than just whichever check happened to trip.
+    Returns None when both signals are clean -- most BioProjects only have
+    one esearch UID and never need this at all."""
+    if not uid_resolution_ambiguous and reverse_elink_verified is not False:
+        return None
+    return RawFactCandidate(
+        entity_level=EntityLevel.PROJECT,
+        fact_type_candidate="ambiguous_uid_resolution",
+        raw_field_name="bioproject_uid_verification",
+        raw_value=f"bioproject_accession={bioproject_accession}",
+        source_locator=source_locator,
+        review_status=ReviewStatus.NEEDS_REVIEW.value,
+        confidence_metadata={
+            "esearch_uid_ambiguous": uid_resolution_ambiguous,
+            "esearch_uid_candidates": uid_resolution_candidates,
+            "reverse_elink_verified": reverse_elink_verified,
+        },
+    )
+
+
 class NcbiBioProjectAdapter(SourceAdapter):
     name = "ncbi_bioproject"
 
     def fetch_record(self, identifier: str) -> SourceRecord:
-        uid = _esearch_first_uid(self.http, self.config.base_url, "bioproject", identifier)
-        if uid is None:
+        resolution = _esearch_verified_uid(
+            self.http, self.config.base_url, "bioproject", identifier, expected_accession=identifier
+        )
+        if resolution is None:
             raise SourceRecordNotFoundError(f"No BioProject UID found for {identifier}")
+        uid = resolution.uid
 
         xml_text, from_cache = self.http.get_text(
             f"{self.config.base_url}/efetch.fcgi", params={"db": "bioproject", "id": uid, "retmode": "xml"}
@@ -215,6 +310,8 @@ class NcbiBioProjectAdapter(SourceAdapter):
             "description": summary.findtext("Project/ProjectDescr/Description"),
             "organism": summary.findtext(".//ProjectType//Organism/OrganismName"),
             "submitted": (summary.find("Submission").get("submitted") if summary.find("Submission") is not None else None),
+            "uid_resolution_ambiguous": resolution.ambiguous,
+            "uid_resolution_candidates": resolution.candidate_accessions,
         }
 
         return SourceRecord(
@@ -263,6 +360,15 @@ class NcbiBioProjectAdapter(SourceAdapter):
         add("description", r.get("description"))
         add("organism", r.get("organism"))
         add("submitted", r.get("submitted"))
+
+        verification_fact = _uid_verification_fact(
+            bioproject_accession=r.get("accession") or "",
+            uid_resolution_ambiguous=bool(r.get("uid_resolution_ambiguous")),
+            uid_resolution_candidates=r.get("uid_resolution_candidates"),
+            source_locator="ncbi_bioproject.esearch.idlist",
+        )
+        if verification_fact is not None:
+            facts.append(verification_fact)
         return facts
 
 
@@ -275,13 +381,26 @@ class NcbiBioSampleAdapter(SourceAdapter):
     name = "ncbi_biosample"
 
     def fetch_record(self, identifier: str) -> SourceRecord:
-        project_uid = _esearch_first_uid(self.http, self.config.base_url, "bioproject", identifier)
-        if project_uid is None:
+        resolution = _esearch_verified_uid(
+            self.http, self.config.base_url, "bioproject", identifier, expected_accession=identifier
+        )
+        if resolution is None:
             raise SourceRecordNotFoundError(f"No BioProject UID found for {identifier}")
+        project_uid = resolution.uid
 
         sample_uids = _elink_ids(self.http, self.config.base_url, "bioproject", "biosample", project_uid)
         if not sample_uids:
             raise SourceRecordNotFoundError(f"No linked BioSamples for BioProject {identifier}")
+
+        # Second, independent signal: this is the check that would have
+        # caught PRJEB73262 directly. One extra call per project (using a
+        # single already-fetched sample's UID), not per sample -- confirming
+        # that BioSample actually links back to the same BioProject UID we
+        # used to fetch it, rather than trusting esearch/esummary alone.
+        reverse_bioproject_uids = _elink_ids(
+            self.http, self.config.base_url, "biosample", "bioproject", sample_uids[0]
+        )
+        reverse_elink_verified = project_uid in reverse_bioproject_uids
 
         total_linked_samples = len(sample_uids)
         truncated = total_linked_samples > MAX_SAMPLES_PER_PROJECT
@@ -343,6 +462,9 @@ class NcbiBioSampleAdapter(SourceAdapter):
             "total_linked_samples": total_linked_samples,
             "truncated": truncated,
             "samples": samples,
+            "uid_resolution_ambiguous": resolution.ambiguous,
+            "uid_resolution_candidates": resolution.candidate_accessions,
+            "reverse_elink_verified": reverse_elink_verified,
         }
 
         return SourceRecord(
@@ -362,6 +484,16 @@ class NcbiBioSampleAdapter(SourceAdapter):
     def extract_structured_facts(self, record: SourceRecord) -> list[RawFactCandidate]:
         r = record.raw
         facts: list[RawFactCandidate] = []
+
+        verification_fact = _uid_verification_fact(
+            bioproject_accession=r.get("bioproject_accession") or "",
+            uid_resolution_ambiguous=bool(r.get("uid_resolution_ambiguous")),
+            uid_resolution_candidates=r.get("uid_resolution_candidates"),
+            reverse_elink_verified=r.get("reverse_elink_verified"),
+            source_locator="ncbi_biosample.uid_verification",
+        )
+        if verification_fact is not None:
+            facts.append(verification_fact)
 
         if r.get("truncated"):
             facts.append(

@@ -2,10 +2,32 @@ import csv
 
 import pytest
 
-from fair_ocean_agent.database.enums import EntityLevel, EntityRelationshipType, IdentifierType, SupportType
-from fair_ocean_agent.database.models import Entity, EntityRelationship, ExternalIdentifier, RawFact, Study
+from fair_ocean_agent.database.enums import EntityLevel, EntityRelationshipType, IdentifierType, RelationshipType, SupportType
+from fair_ocean_agent.database.models import (
+    Entity,
+    EntityRelationship,
+    EntityStudy,
+    ExternalIdentifier,
+    RawFact,
+    StandardizedValue,
+    Study,
+)
 from fair_ocean_agent.exports.faire import EMPTY_CLASSES, INTERNAL_STUDY_ID_FIELD, class_columns, export_faire
-from fair_ocean_agent.mapping.faire import map_study_to_faire
+from fair_ocean_agent.mapping.faire import TARGET_SCHEMA, TARGET_SCHEMA_VERSION, map_study_to_faire
+
+
+def _home_entity_study(entity: Entity) -> EntityStudy:
+    """Every production Entity gets a home entity_studies row at creation
+    (identity/entity_linking.py::create_entity) -- direct Entity(...)
+    construction in these fixtures bypasses that, so tests that need
+    exports/faire.py's per-entity internal_study_id/broadcast-gating logic
+    to see a real home link must add one explicitly."""
+    return EntityStudy(
+        entity_id=entity.entity_id,
+        study_id=entity.study_id,
+        relationship_type=RelationshipType.IS_HOME_OF.value,
+        confidence=SupportType.STRUCTURED_SOURCE.value,
+    )
 
 
 def test_export_faire_writes_expected_files_and_rows(db_session, tmp_path):
@@ -99,6 +121,10 @@ def test_export_faire_internal_study_id_traces_rows_across_two_studies(db_sessio
     run_b = Entity(study_id=study_b.study_id, entity_level=EntityLevel.SEQUENCING_RUN.value, external_identifier="SRR_B")
     db_session.add_all([sample_a, sample_b, run_a, run_b])
     db_session.flush()
+    db_session.add_all(
+        [_home_entity_study(e) for e in (sample_a, sample_b, run_a, run_b)]
+    )
+    db_session.flush()
     for study, sample, run in ((study_a, sample_a, run_a), (study_b, sample_b, run_b)):
         db_session.add(
             RawFact(
@@ -139,6 +165,78 @@ def test_export_faire_internal_study_id_traces_rows_across_two_studies(db_sessio
     with (tmp_path / "field_reference.csv").open() as f:
         field_names = {row["faire_field"] for row in csv.DictReader(f)}
     assert INTERNAL_STUDY_ID_FIELD not in field_names
+
+
+def test_shared_sample_gets_pipe_joined_study_ids_and_no_broadcast(db_session, tmp_path):
+    """The actual point of the whole multi-study entity-sharing mechanism:
+    a real BioSample two different papers both cite must appear exactly
+    once in sampleMetadata.csv, with internal_study_id listing BOTH
+    studies (pipe-joined) -- and must NOT carry either study's own
+    paper-specific broadcast default, since merging one arbitrary study's
+    interpretive defaults onto a row shared with another study would
+    misrepresent it. Its own entity-level fact stays unconditional."""
+    study_a = Study(title="Original paper")
+    study_b = Study(title="Reanalysis paper reusing the same data")
+    db_session.add_all([study_a, study_b])
+    db_session.flush()
+
+    shared_sample = Entity(
+        study_id=study_a.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN_SHARED"
+    )
+    unshared_sample = Entity(
+        study_id=study_a.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN_UNSHARED"
+    )
+    db_session.add_all([shared_sample, unshared_sample])
+    db_session.flush()
+    db_session.add_all(
+        [
+            EntityStudy(
+                entity_id=shared_sample.entity_id, study_id=study_a.study_id,
+                relationship_type=RelationshipType.IS_HOME_OF.value, confidence=SupportType.STRUCTURED_SOURCE.value,
+            ),
+            EntityStudy(
+                entity_id=shared_sample.entity_id, study_id=study_b.study_id,
+                relationship_type=RelationshipType.SHARES_ACCESSION_WITH.value, confidence=SupportType.STRUCTURED_SOURCE.value,
+            ),
+            _home_entity_study(unshared_sample),
+        ]
+    )
+    # study_a's own paper-specific broadcast default (e.g. an
+    # interpretive env_broad_scale guess) -- must not leak onto the shared
+    # sample's row, but must still appear on the unshared sample's row.
+    db_session.add(
+        StandardizedValue(
+            study_id=study_a.study_id, entity_id=None, target_schema=TARGET_SCHEMA,
+            target_schema_version=TARGET_SCHEMA_VERSION, target_field="env_broad_scale",
+            standardized_value="marine biome", mapping_method="deterministic_synonym",
+        )
+    )
+    # The shared sample's own entity-level fact -- always safe to show
+    # regardless of how many studies link to it.
+    db_session.add(
+        StandardizedValue(
+            study_id=study_a.study_id, entity_id=shared_sample.entity_id, target_schema=TARGET_SCHEMA,
+            target_schema_version=TARGET_SCHEMA_VERSION, target_field="geo_loc_name",
+            standardized_value="USA: California", mapping_method="exact_identifier",
+        )
+    )
+    db_session.commit()
+
+    export_faire(db_session, tmp_path)
+
+    with (tmp_path / "sampleMetadata.csv").open() as f:
+        rows = {row["samp_name"]: row for row in csv.DictReader(f)}
+
+    assert set(rows) == {"SAMN_SHARED", "SAMN_UNSHARED"}, "shared sample must appear exactly once"
+
+    shared_row = rows["SAMN_SHARED"]
+    assert shared_row[INTERNAL_STUDY_ID_FIELD] == "|".join(sorted([study_a.study_id, study_b.study_id]))
+    assert shared_row["env_broad_scale"] == "", "study_a's broadcast default must not leak onto a shared row"
+    assert shared_row["geo_loc_name"] == "USA: California", "the entity's own fact is always shown"
+
+    unshared_row = rows["SAMN_UNSHARED"]
+    assert unshared_row[INTERNAL_STUDY_ID_FIELD] == study_a.study_id
+    assert unshared_row["env_broad_scale"] == "marine biome", "single-study sample still gets its broadcast default"
 
 
 def test_export_still_emits_one_project_row_when_assay_entity_has_no_direct_values(db_session, tmp_path):

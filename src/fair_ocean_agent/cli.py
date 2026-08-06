@@ -171,6 +171,31 @@ def enqueue_faire_completeness_backfill_command() -> None:
     console.print(f"Queued VALIDATE_FAIRE_COMPLETENESS for {count} stud(y/ies).")
 
 
+@app.command("enqueue-citation-rediscovery-backfill")
+def enqueue_citation_rediscovery_backfill_command() -> None:
+    """Node-adding discovery, run on demand: re-checks every already-known
+    BioProject accession for NEW citing papers (workflow/handlers.py's
+    DISCOVER_CITING_STUDIES is normally only triggered once per accession,
+    the first time it's resolved -- this is what catches a paper published
+    or indexed by PubMed AFTER that first resolution). `weekly-update` also
+    runs this automatically every citation_rediscovery_interval_days
+    (config.py's SchedulingConfig); this command is for triggering it
+    immediately instead of waiting for that cadence."""
+    from fair_ocean_agent.clock import utcnow
+    from fair_ocean_agent.database.enums import WorkflowRunStatus
+    from fair_ocean_agent.scheduling.rediscovery import enqueue_citation_rediscovery_backfill
+
+    with session_scope() as session:
+        run = WorkflowRun(run_type="citation_rediscovery", status=WorkflowRunStatus.RUNNING.value)
+        session.add(run)
+        session.flush()
+        count = enqueue_citation_rediscovery_backfill(session, run.run_id)
+        run.candidates_found = count
+        run.status = WorkflowRunStatus.COMPLETED.value
+        run.ended_at = utcnow()
+    console.print(f"Queued DISCOVER_CITING_STUDIES for {count} BioProject accession(s).")
+
+
 @app.command("worker")
 def worker_command(
     max_tasks: int | None = typer.Option(None, help="Stop after processing this many tasks"),

@@ -35,7 +35,7 @@ from sqlalchemy.orm import Session
 
 from fair_ocean_agent.config import REPO_ROOT
 from fair_ocean_agent.database.enums import EntityLevel, EntityRelationshipType
-from fair_ocean_agent.database.models import Entity, EntityRelationship, StandardizedValue, Study
+from fair_ocean_agent.database.models import Entity, EntityRelationship, EntityStudy, StandardizedValue, Study
 from fair_ocean_agent.mapping.faire import TARGET_SCHEMA, resolve_project_id
 from fair_ocean_agent.standards.faire_registry import build_faire_registry
 
@@ -83,6 +83,16 @@ def _study_wide_values(session: Session, study_id: str) -> dict[str, str]:
         )
     ).all()
     return {field: value for field, value in rows if value is not None}
+
+
+def _linked_study_ids(session: Session, entity_id: str) -> list[str]:
+    """Every Study this entity is linked to, home or shared (see EntityStudy's
+    docstring in database/models.py) -- for SHAREABLE_ENTITY_LEVELS
+    (sample/experiment_run/sequencing_run), this can be more than one when a
+    second paper reuses the same real BioSample/run another study already
+    created. Sorted for a deterministic pipe-joined internal_study_id
+    column."""
+    return sorted(session.scalars(select(EntityStudy.study_id).where(EntityStudy.entity_id == entity_id)))
 
 
 def _entity_values(session: Session, entity_id: str) -> dict[str, str]:
@@ -220,15 +230,25 @@ def export_faire(session: Session, output_dir: str | Path) -> dict[str, int]:
     sample_columns = class_columns("sampleMetadata")
     sample_rows = []
     for study in studies:
-        broadcast = _study_wide_values(session, study.study_id)
+        # entities are keyed by home study_id (Entity.study_id, unchanged),
+        # so a shared entity is still visited exactly once here, under its
+        # home study -- no double-counting despite an entity now possibly
+        # being linked to more than one Study.
         sample_entities = session.scalars(
             select(Entity).where(Entity.study_id == study.study_id, Entity.entity_level == EntityLevel.SAMPLE.value)
         )
         for entity in sample_entities:
+            linked_study_ids = _linked_study_ids(session, entity.entity_id)
+            # A shared sample's row must not carry any ONE study's
+            # paper-specific interpretive broadcast defaults (matches
+            # identity/consistency.py's "unknown is preferable to guessing"
+            # stance) -- only its own entity-level facts are unconditionally
+            # safe to show regardless of how many studies link to it.
+            broadcast = _study_wide_values(session, study.study_id) if len(linked_study_ids) == 1 else {}
             row = dict(broadcast)
             row.update(_entity_values(session, entity.entity_id))
             row["samp_name"] = entity.external_identifier or entity.entity_id
-            row[INTERNAL_STUDY_ID_FIELD] = study.study_id
+            row[INTERNAL_STUDY_ID_FIELD] = "|".join(linked_study_ids)
             sample_rows.append(row)
     counts["sampleMetadata"] = _write_csv(
         output_dir / "sampleMetadata.csv", [INTERNAL_STUDY_ID_FIELD, *sample_columns], sample_rows
@@ -237,7 +257,6 @@ def export_faire(session: Session, output_dir: str | Path) -> dict[str, int]:
     experiment_columns = class_columns("experimentRunMetadata")
     experiment_rows = []
     for study in studies:
-        broadcast = _study_wide_values(session, study.study_id)
         experiment_entities = session.scalars(
             select(Entity).where(
                 Entity.study_id == study.study_id,
@@ -245,6 +264,8 @@ def export_faire(session: Session, output_dir: str | Path) -> dict[str, int]:
             )
         )
         for entity in experiment_entities:
+            linked_study_ids = _linked_study_ids(session, entity.entity_id)
+            broadcast = _study_wide_values(session, study.study_id) if len(linked_study_ids) == 1 else {}
             row = dict(broadcast)
             row.update(_entity_values(session, entity.entity_id))
             sample = _linked_entity(
@@ -270,7 +291,7 @@ def export_faire(session: Session, output_dir: str | Path) -> dict[str, int]:
                 row.setdefault("seq_run_id", sequencing_run.external_identifier or sequencing_run.entity_id)
             if entity.external_identifier and not entity.external_identifier.startswith("internal:"):
                 row.setdefault("lib_id", entity.external_identifier)
-            row[INTERNAL_STUDY_ID_FIELD] = study.study_id
+            row[INTERNAL_STUDY_ID_FIELD] = "|".join(linked_study_ids)
             experiment_rows.append(row)
     counts["experimentRunMetadata"] = _write_csv(
         output_dir / "experimentRunMetadata.csv",

@@ -113,7 +113,20 @@ class SupplementConfig(BaseModel):
 
 
 class DiscoveryConfig(BaseModel):
+    # Caps how many discovery_depth hops a citing-paper chain (Study ->
+    # cites its BioProject -> new citing Study -> cites ITS OWN BioProject
+    # -> ...) is allowed to auto-expand before workflow/handlers.py's
+    # handle_discover_citing_studies stops creating new Study rows and
+    # instead just flags the remainder for review. Kept at 1 for the
+    # initial ~3000-paper discovery run; raise only after inspecting real
+    # fan-out numbers from a pilot subset (see docs/architecture.md).
     citation_expansion_max_depth: int = 1
+    # Caps how many of one BioProject's citing PMIDs get auto-expanded into
+    # new Studies per handle_discover_citing_studies run -- the real
+    # protection against one highly-reused public dataset (very plausible
+    # in this domain) exploding a discovery batch. The rest are recorded as
+    # review-flagged RawFacts, never silently dropped.
+    max_citing_papers_per_bioproject: int = 25
     keyword_search_enabled: bool = False
 
 
@@ -122,6 +135,14 @@ class SchedulingConfig(BaseModel):
     retry_failed_after_hours: int = 24
     monthly_unresolved_retry: bool = True
     quarterly_full_rediscovery: bool = True
+    # The "node-adding" pass: periodically re-checks every already-known
+    # BioProject accession for NEW citing papers (workflow/handlers.py's
+    # handle_discover_citing_studies is normally triggered once per
+    # accession at first resolution -- this is what catches a paper
+    # published/indexed AFTER that first resolution, months or years
+    # later). Same 90-day default cadence as quarterly_full_rediscovery.
+    citation_rediscovery_enabled: bool = True
+    citation_rediscovery_interval_days: int = 90
 
 
 class LoggingConfig(BaseModel):

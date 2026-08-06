@@ -13,6 +13,7 @@ from fair_ocean_agent.database.models import (
     CandidateMatch,
     DataAsset,
     Entity,
+    EntityStudy,
     ExternalIdentifier,
     RawFact,
     Source,
@@ -132,6 +133,29 @@ def merge_study_into(session: Session, absorb: Study, into: Study) -> Study:
             session.delete(study_source)
         else:
             study_source.study_id = into.study_id
+    session.flush()
+
+    # EntityStudy is the same shape of problem as StudySource above (and for
+    # the identical reason): `Entity` IS in _STUDY_FK_MODELS, so every
+    # absorbed entity's home study_id pointer already got bulk-reassigned to
+    # `into.study_id` by the loop above -- but its EntityStudy home row still
+    # points at `absorb.study_id` and must be re-pointed too, or the two
+    # desync. `into` may already independently have its own EntityStudy row
+    # for the same entity_id (the entity was shared between the two studies
+    # even before this merge), which would violate uq_entity_study under a
+    # blind bulk UPDATE -- same drop-on-collision pattern.
+    for entity_study in list(
+        session.scalars(select(EntityStudy).where(EntityStudy.study_id == absorb.study_id))
+    ):
+        collision = (
+            session.query(EntityStudy)
+            .filter_by(study_id=into.study_id, entity_id=entity_study.entity_id)
+            .first()
+        )
+        if collision is not None:
+            session.delete(entity_study)
+        else:
+            entity_study.study_id = into.study_id
     session.flush()
 
     session.query(CandidateMatch).filter(CandidateMatch.study_a_id == absorb.study_id).update(

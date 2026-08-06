@@ -20,6 +20,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -39,6 +40,7 @@ from fair_ocean_agent.database.enums import (
     RelationshipType,
     RelevanceStatus,
     ReviewStatus,
+    SHAREABLE_ENTITY_LEVELS,
     SourceType,
     SupportType,
     TaskStatus,
@@ -47,6 +49,11 @@ from fair_ocean_agent.database.enums import (
     ValidationStatus,
     WorkflowRunStatus,
     WorkflowRunType,
+)
+
+_SHAREABLE_ENTITY_LEVELS_SQL_LIST = ", ".join(f"'{level.value}'" for level in SHAREABLE_ENTITY_LEVELS)
+_SHAREABLE_ENTITY_LEVEL_WHERE_CLAUSE = (
+    f"entity_level IN ({_SHAREABLE_ENTITY_LEVELS_SQL_LIST}) AND external_identifier IS NOT NULL"
 )
 from fair_ocean_agent.database.ids import new_id
 from fair_ocean_agent.clock import utcnow as _utcnow
@@ -87,6 +94,20 @@ class Study(Base, TimestampMixin):
     review_status: Mapped[str] = mapped_column(
         String, default=ReviewStatus.UNREVIEWED.value
     )
+    # Discovery provenance for citation-expansion (identity/... discovering
+    # a NEW study because it cites/reuses an already-known BioProject's
+    # data, see workflow/handlers.py's handle_discover_citing_studies).
+    # discovery_depth=0 for every seed-file-provided study; N+1 for a study
+    # auto-discovered via a depth-N study's own expansion. Enforced against
+    # DiscoveryConfig.citation_expansion_max_depth as a real cap, not just
+    # bookkeeping -- see that handler for where this is read.
+    # discovery_root_study_id is deliberately denormalized (not derived via
+    # a recursive CTE) since it's read on every fan-out/depth cap check, a
+    # hot path across a large discovery run.
+    discovery_depth: Mapped[int] = mapped_column(Integer, default=0)
+    discovery_parent_study_id: Mapped[str | None] = mapped_column(ForeignKey("studies.study_id"))
+    discovery_root_study_id: Mapped[str | None] = mapped_column(ForeignKey("studies.study_id"))
+    discovery_trigger: Mapped[str | None] = mapped_column(String)
 
     external_identifiers: Mapped[list["ExternalIdentifier"]] = relationship(
         back_populates="study", cascade="all, delete-orphan"
@@ -248,6 +269,18 @@ class Entity(Base, TimestampMixin):
     NULL values are exempt from a UNIQUE constraint in both SQLite and
     PostgreSQL (NULL <> NULL), so any number of entities without an
     external identifier is fine.
+
+    `study_id` stays the fast "home" read path (same rationale as
+    `Source.study_id`'s own docstring) even though SAMPLE/EXPERIMENT_RUN/
+    SEQUENCING_RUN entities can now be linked to more than one Study via
+    the `EntityStudy` join table below -- see identity/entity_linking.py.
+    The second, partial unique index below (shareable levels only) is what
+    makes a *global* (not per-study) get-or-create-by-accession lookup safe
+    for exactly those three levels; PROJECT/ASSAY and the unaccessioned
+    levels keep the original study-scoped constraint as their only one,
+    since a BioProject accession claimed by two studies is already handled
+    by identity/resolution.py's merge/sibling-split machinery, not entity
+    sharing (see EntityStudy's own docstring for the full reasoning).
     """
 
     __tablename__ = "entities"
@@ -255,6 +288,13 @@ class Entity(Base, TimestampMixin):
         UniqueConstraint(
             "study_id", "entity_level", "external_identifier",
             name="uq_entity_study_level_external_id",
+        ),
+        Index(
+            "uq_entity_shareable_level_external_id",
+            "entity_level", "external_identifier",
+            unique=True,
+            sqlite_where=text(_SHAREABLE_ENTITY_LEVEL_WHERE_CLAUSE),
+            postgresql_where=text(_SHAREABLE_ENTITY_LEVEL_WHERE_CLAUSE),
         ),
     )
 
@@ -268,6 +308,48 @@ class Entity(Base, TimestampMixin):
     parent_entity_id: Mapped[str | None] = mapped_column(ForeignKey("entities.entity_id"))
 
     study: Mapped["Study"] = relationship(back_populates="entities")
+
+
+class EntityStudy(Base, TimestampMixin):
+    """Join table: which Study(ies) an Entity belongs to, for the
+    SHAREABLE_ENTITY_LEVELS (SAMPLE/EXPERIMENT_RUN/SEQUENCING_RUN, see
+    database/enums.py) -- exact structural mirror of StudySource above,
+    same rationale: `Entity.study_id` stays the fast "home" read path
+    unchanged everywhere else in the codebase; this table is what makes an
+    Entity belonging to more than one Study representable at all.
+
+    Every Entity gets a home row here (relationship_type=IS_HOME_OF) at
+    creation time, not just multiply-linked ones -- written by
+    identity/entity_linking.py's create_entity(), the single choke point
+    all Entity-creation call sites route through (mirroring
+    identity/source_linking.py's create_source()). A second, non-home row
+    (relationship_type=SHARES_ACCESSION_WITH) is added by that same
+    module's link_entity_to_study() when workflow/handlers.py's
+    _get_or_create_entity finds an existing shareable-level Entity (by
+    entity_level + external_identifier, no study_id in the lookup) that a
+    *different* study is also resolving -- no duplicate Entity row gets
+    created for the same real BioSample/run.
+
+    Making every entity's home link explicit here (not just a special case
+    of Entity.study_id) is what lets exports/faire.py treat this table as
+    the single source of truth for "which studies is this entity linked
+    to," rather than having to UNION Entity.study_id with this table as a
+    special case.
+
+    `relationship_type`/`confidence` reuse RelationshipType/SupportType,
+    same as StudySource's own columns -- not a second parallel vocabulary.
+    """
+
+    __tablename__ = "entity_studies"
+    __table_args__ = (UniqueConstraint("study_id", "entity_id", name="uq_entity_study"),)
+
+    entity_study_id: Mapped[str] = mapped_column(
+        String, primary_key=True, default=lambda: new_id("ENTSTUDY")
+    )
+    entity_id: Mapped[str] = mapped_column(ForeignKey("entities.entity_id"), index=True)
+    study_id: Mapped[str] = mapped_column(ForeignKey("studies.study_id"), index=True)
+    relationship_type: Mapped[str] = mapped_column(String)
+    confidence: Mapped[str] = mapped_column(String)
 
 
 class EntityRelationship(Base, TimestampMixin):

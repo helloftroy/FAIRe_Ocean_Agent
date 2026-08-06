@@ -36,7 +36,12 @@ from fair_ocean_agent.config import load_config
 from fair_ocean_agent.database.enums import CanonicalStatus, IdentifierType, TaskStatus, WorkflowRunStatus
 from fair_ocean_agent.database.models import ExternalIdentifier, Study, Task, WorkflowRun
 from fair_ocean_agent.logging_setup import get_logger
-from fair_ocean_agent.scheduling.rediscovery import enqueue_full_rediscovery, is_rediscovery_due
+from fair_ocean_agent.scheduling.rediscovery import (
+    enqueue_citation_rediscovery_backfill,
+    enqueue_full_rediscovery,
+    is_citation_rediscovery_due,
+    is_rediscovery_due,
+)
 from fair_ocean_agent.scheduling.retry_policies import retry_stale_failed_tasks, retry_stale_manual_review_tasks
 from fair_ocean_agent.workflow import handlers
 from fair_ocean_agent.workflow.refresh_handlers import enqueue_refresh_backfill
@@ -55,6 +60,8 @@ class WeeklyUpdatePlan:
     stale_manual_review_count: int
     quarterly_rediscovery_due: bool
     quarterly_rediscovery_candidate_count: int
+    citation_rediscovery_due: bool
+    citation_rediscovery_candidate_count: int
 
 
 def _refreshable_study_count(session: Session) -> int:
@@ -77,6 +84,18 @@ def _count_stale(session: Session, status: TaskStatus, older_than_hours: int) ->
     return session.query(Task).filter(Task.status == status.value, Task.updated_at <= cutoff).count()
 
 
+def _citation_rediscovery_candidate_count(session: Session) -> int:
+    return len(
+        set(
+            session.scalars(
+                select(ExternalIdentifier.identifier_value).where(
+                    ExternalIdentifier.identifier_type == IdentifierType.BIOPROJECT_ACCESSION.value
+                )
+            )
+        )
+    )
+
+
 def plan_weekly_update(session: Session) -> WeeklyUpdatePlan:
     """Read-only: the exact same selection logic the real run uses, so
     --dry-run can never drift from what a real run would actually do."""
@@ -85,6 +104,12 @@ def plan_weekly_update(session: Session) -> WeeklyUpdatePlan:
     quarterly_candidates = (
         session.query(Study).filter(Study.canonical_status == CanonicalStatus.CANDIDATE.value).count()
         if quarterly_due and scheduling_config.quarterly_full_rediscovery
+        else 0
+    )
+    citation_due = is_citation_rediscovery_due(session, scheduling_config.citation_rediscovery_interval_days)
+    citation_candidates = (
+        _citation_rediscovery_candidate_count(session)
+        if citation_due and scheduling_config.citation_rediscovery_enabled
         else 0
     )
     return WeeklyUpdatePlan(
@@ -97,6 +122,8 @@ def plan_weekly_update(session: Session) -> WeeklyUpdatePlan:
         ),
         quarterly_rediscovery_due=quarterly_due and scheduling_config.quarterly_full_rediscovery,
         quarterly_rediscovery_candidate_count=quarterly_candidates,
+        citation_rediscovery_due=citation_due and scheduling_config.citation_rediscovery_enabled,
+        citation_rediscovery_candidate_count=citation_candidates,
     )
 
 
@@ -117,6 +144,8 @@ def run_weekly_update(session: Session, *, dry_run: bool = False) -> WorkflowRun
                 "stale_manual_review_tasks_would_retry": plan.stale_manual_review_count,
                 "quarterly_rediscovery_would_run": plan.quarterly_rediscovery_due,
                 "quarterly_rediscovery_study_count": plan.quarterly_rediscovery_candidate_count,
+                "citation_rediscovery_would_run": plan.citation_rediscovery_due,
+                "citation_rediscovery_accession_count": plan.citation_rediscovery_candidate_count,
             }
         else:
             released = release_stale_claims(session, STALE_CLAIM_MINUTES)
@@ -146,6 +175,20 @@ def run_weekly_update(session: Session, *, dry_run: bool = False) -> WorkflowRun
                 )
                 session.add(rediscovery_run)
 
+            citation_rediscovery_enqueued = 0
+            citation_rediscovery_ran = False
+            if plan.citation_rediscovery_due:
+                citation_rediscovery_enqueued = enqueue_citation_rediscovery_backfill(session, run.run_id)
+                citation_rediscovery_ran = True
+                citation_rediscovery_run = WorkflowRun(
+                    run_type="citation_rediscovery",
+                    status=WorkflowRunStatus.COMPLETED.value,
+                    ended_at=utcnow(),
+                    candidates_found=citation_rediscovery_enqueued,
+                    sources_queried={"triggered_by_run_id": run.run_id},
+                )
+                session.add(citation_rediscovery_run)
+
             summary = {
                 "dry_run": False,
                 "released_stale_claims": released,
@@ -154,6 +197,8 @@ def run_weekly_update(session: Session, *, dry_run: bool = False) -> WorkflowRun
                 "stale_manual_review_tasks_retried": manual_review_retried,
                 "quarterly_rediscovery_ran": rediscovery_ran,
                 "quarterly_rediscovery_tasks_enqueued": rediscovery_enqueued,
+                "citation_rediscovery_ran": citation_rediscovery_ran,
+                "citation_rediscovery_tasks_enqueued": citation_rediscovery_enqueued,
             }
 
         run.sources_queried = summary

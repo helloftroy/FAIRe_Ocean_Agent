@@ -646,6 +646,139 @@ existence is what makes "a Source belongs to more than one Study"
 representable at all going forward -- but nothing existing had to change
 to make room for it.
 
+## Why BIOSAMPLE_ACCESSION is excluded from Study-identity resolution (multi-study entity sharing)
+
+`identity/resolution.py`'s `resolve_or_create_study()` (see the section
+above) treats a `STRUCTURED_SOURCE`-confidence `RelatedIdentifier` match
+against a different Study as strong enough evidence to merge the two Study
+rows unconditionally, no consistency check needed -- correct for a DOI/
+PMID/BioProject accession, where two Study rows both claiming the exact
+same one is genuinely a strong signal they're duplicate submissions of the
+same underlying study.
+
+That assumption breaks for `BIOSAMPLE_ACCESSION` specifically, once
+Milestone 24 made real sample/experiment/sequencing-run reuse across
+genuinely different papers a normal, expected occurrence (a second paper
+reanalyzing an earlier paper's deposited data) rather than a rare
+coincidence. `NcbiBioSampleAdapter`/`EnaAdapter`'s `find_related()` both
+report *every* fetched sample's accession as a `RelatedIdentifier`
+(default confidence `STRUCTURED_SOURCE`) -- so the moment a second,
+citing paper's own BioSample/ENA resolution reaches a sample an earlier
+paper already owns, the unconditional-merge branch fires and silently
+collapses two distinct papers into one Study row, discarding whichever
+one lost. Confirmed live: this is exactly what happened running a real
+end-to-end citation-discovery pass (10.1038/s42003-024-06136-2 /
+10.1073/pnas.2005917117, both resolving PRJNA529480) before this fix.
+
+`resolve_or_create_study()` now special-cases `BIOSAMPLE_ACCESSION`
+entirely, ahead of the merge/sibling-split branching: a match against a
+different Study is recorded as an informational `ExternalIdentifier`
+(`relationship_type=SHARES_ACCESSION_WITH`, mirroring the sibling-split
+case's own convention) and the loop moves on -- never a merge, never a
+sibling+`CandidateMatch` flag either, since there's nothing ambiguous
+about it. The real "this sample belongs to more than one Study" fact is
+represented at the *Entity* level instead, via `entity_studies` (see
+below) -- Study-level `ExternalIdentifier` rows for `BIOSAMPLE_ACCESSION`
+are purely a discoverability convenience now, never identity evidence.
+
+## `entity_studies`: representing a shared physical sample/run across Studies
+
+`Entity.study_id` (a plain FK, like `Source.study_id`) stays the fast
+"home" pointer everywhere in the codebase -- unchanged. The new
+`entity_studies` table (exact structural mirror of the pre-existing
+`study_sources`, see the section above) is what makes an Entity belonging
+to more than one Study representable at all: every Entity gets a home row
+here at creation (`relationship_type=IS_HOME_OF`), and a second paper
+resolving the same real BioSample/experiment/sequencing-run accession gets
+an additional, non-home row (`relationship_type=SHARES_ACCESSION_WITH`)
+pointing the SAME Entity row at its own Study, rather than creating a
+duplicate Entity.
+
+Only `SAMPLE`/`EXPERIMENT_RUN`/`SEQUENCING_RUN` are shareable
+(`database/enums.py`'s `SHAREABLE_ENTITY_LEVELS`) -- deliberately not
+`PROJECT`: a shared BioProject accession is already `resolve_or_create_study`'s
+job (a real Study-identity signal, see above), and a paper's own
+bioinformatics-pipeline/assay-interpretation facts are PROJECT-level and
+paper-specific by the user's own stated model, so making PROJECT
+shareable too would create a second, competing mechanism for the same
+situation. `ASSAY` stays single-study for the same "interpretive, not
+physical" reason.
+
+A single new choke point, `identity/entity_linking.py`'s
+`create_entity()`/`link_entity_to_study()`/`get_or_create_entity()`,
+replaced what used to be **two independent, divergent**
+`_get_or_create_entity` implementations (`workflow/handlers.py`'s
+fact-materialization path and `extraction/experiment_runs.py`'s legacy
+sequencing-run-to-experiment-run path) -- only one of which had been
+updated to know about `entity_studies` before this consolidation, exactly
+the kind of silent gap a single choke point (mirroring
+`identity/source_linking.py`'s own `create_source`) exists to prevent.
+`get_or_create_entity()`'s lookup is global (no `study_id` filter) for
+shareable levels, made safe by a new partial unique index on `entities`
+(`entity_level`, `external_identifier`, shareable levels only) --
+confirmed against the real production database before adding it that zero
+existing cross-study duplicates existed among 7,787 real entities.
+
+`workflow/handlers.py`'s `_get_or_create_entity_relationship` needed a
+matching fix: its existence check used to be scoped by `study_id`, but
+`entity_relationships`' own `uq_entity_relationship` constraint is global
+on `(from_entity_id, to_entity_id, relationship_type)` -- once two Studies
+can legitimately resolve the same shared entities, a study-scoped lookup
+tries to re-insert the identical global triple and hits that constraint.
+Fixed by making the lookup global too, matching the real constraint (a
+physical relationship between two entities -- this run WAS sequenced from
+this sample -- doesn't change depending on which Study is asking, exactly
+as physically invariant as the entities themselves).
+
+`identity/deduplication.py::merge_study_into` and
+`identity/resolution.py::_create_sibling_and_flag` both needed companion
+`entity_studies`-aware updates for the same reason `merge_study_into`
+already special-cases `study_sources` (see the section above): `Entity` IS
+in `merge_study_into`'s bulk-reassigned `_STUDY_FK_MODELS`, so an
+absorbed entity's home study_id pointer gets updated correctly, but its
+`entity_studies` home row needs its own drop-on-collision/re-point block
+to stay in sync, never a blind bulk `UPDATE` (which could violate
+`uq_entity_study` if the surviving Study already independently shares that
+same entity). `_create_sibling_and_flag`'s Entity-move block gets the
+identical treatment when a moved entity's home changes.
+
+## Citation-expansion ("node-adding") discovery
+
+New `DISCOVER_CITING_STUDIES` task
+(`workflow/handlers.py::handle_discover_citing_studies`), enqueued right
+after `handle_discover_identifiers` resolves any BioProject accession
+(idempotency key is the accession alone, so two Studies sharing one
+accession only trigger this once for free). One `bioproject->pubmed`
+elink call returns every citing PMID at once -- cheap by construction, no
+per-sample fan-out, and a genuinely different NCBI capability from
+`sources/ncbi.py`'s own `biosample->bioproject` reverse-elink (UID-
+*correctness* verification, not citation discovery).
+
+Auto-expansion is deliberately aggressive, per an explicit user choice
+after reviewing the tradeoff: a citing paper not already known gets its
+own full `Study` row (`discovery_depth`/`discovery_parent_study_id`/
+`discovery_root_study_id`/`discovery_trigger` provenance columns on
+`Study`) and re-enters the normal `DISCOVER_IDENTIFIERS` pipeline
+recursively -- via the task queue's own idempotency/resumability, not an
+in-process recursive traversal. Real safety valves make that safe at
+~3000-paper scale: `DiscoveryConfig.citation_expansion_max_depth` (wired
+up for the first time -- previously defined but never read anywhere) caps
+how many hops deep auto-expansion goes (default 1 for the initial
+discovery run); `max_citing_papers_per_bioproject` caps how many of one
+accession's citing PMIDs expand per run. Both caps record a review-flagged
+`citing_pmid_not_expanded` `RawFact` for whatever they skip, never a
+silent drop.
+
+The recurring pass (`scheduling/rediscovery.py::enqueue_citation_rediscovery_backfill`,
+CLI: `enqueue-citation-rediscovery-backfill`, auto-wired into
+`weekly-update` alongside the existing `quarterly_full_rediscovery` block
+via `SchedulingConfig.citation_rediscovery_enabled`/
+`citation_rediscovery_interval_days`) exists because the accession-only
+idempotency key above means a paper published or indexed by PubMed *after*
+a Study's first resolution would otherwise never get picked up again --
+this re-enqueues `DISCOVER_CITING_STUDIES` for every known accession with
+a fresh, run-scoped key.
+
 ## Task queue
 
 See `workflow/task_queue.py` docstrings for the idempotency-key scheme and
@@ -683,3 +816,4 @@ README.md's "Assumptions and placeholders" section.
 | 21: Fixing a real taxon-extraction bug and two missed-field gaps, found via two more real papers | Done -- audited two more real papers (ISME J 10.1093/ismejo/wrae013, PLOS ONE 10.1371/journal.pone.0303937). Fixed a real garbage-output bug in Codex's new `extraction/taxonomic_assay.py` (abstract/title/keyword-only `assay_target_taxa` extractor): its whole-sentence fallback (`_taxon_mentions(sentence)`, a "Capitalized word + lowercase word(s)" regex meant to catch binomial species names) fired whenever a sentence merely mentioned "PCR"/"amplicon" without an explicit target/detect/amplify phrase, producing `"Diversity studies | The device was"` for the PLOS paper from its own opening sentence fragments -- removed the fallback, keeping only the narrower target-phrase-gated capture. Separately confirmed the ISME paper's blank result was already correct (its RT-qPCR methods only ever name the marker gene "16S rRNA", never an explicit target taxon), independent of the abstract-only scoping. Added a missing `TruSeq <kit>` pattern to `_SEQUENCING_KIT_PATTERNS` (confirmed missing on the ISME paper's "TruSeq Stranded mRNA kit (Illumina)"). Added explicit "each primer"/"both primers" aggregate-value guidance to the four primer volume/concentration checklist descriptions, confirmed live to fix extraction from the ISME paper's "...1 uL of each primer" phrasing in isolation (though not consistently in the full, busier chunk -- a harder attention-budget effect, not the max_output_tokens bug from Milestone 19). The standing collision-guard test (Milestone 17) caught two more real duplicate-mechanism gaps mid-task exactly as designed -- Codex's new narrow Trimmomatic/MINLEN-specific deterministic detectors for `adapter_trimming_method`/`length_filtering_tool`/`minimum_read_length` duplicate the LLM taxonomy's own native names; checked real data (excluding the LLM versions would have lost these entirely for the PeerJ and ISME papers, which use a custom Perl script and SeqPrep respectively, not Trimmomatic) before adding all three to `_ACCEPTED_UNCONDITIONAL_OVERLAPS` alongside `biological_rep`. 607 tests pass (10 new since the last commit). See README's "Fixing a real taxon-extraction bug and two missed-field gaps, found via two more real papers". |
 | 22: Disambiguating trim tools, catching a reagent-listing gap, and building out the second-PCR field family | Done -- direct follow-up after the user reviewed Milestone 21's fixes. Fixed a real context-blind bug: the deterministic Trimmomatic detector fired for both `adapter_trimming_method` and `length_filtering_tool` whenever "Trimmomatic" appeared anywhere in the text, even though the ISME paper actually uses SeqPrep for adapter removal and Trimmomatic only for quality/length trimming, described ~250 characters apart in one long compound sentence -- a whole-sentence context check wasn't tight enough to tell the two clauses apart. Rewrote as a single `_match_trim_tool(purpose=...)` function gated on context within a 90-char proximity window of each specific tool mention, and added a missing `_SEQPREP_RE` pattern so `adapter_trimming_method` can recognize SeqPrep at all. Fixed a real miss: `custom_mm` requires a "mixture"/"mix" word to trigger, but the PLOS ONE paper's real PCR-composition sentence ("...0.02 U/ul of Phusion High Fidelity DNA polymerase, 1X Phusion HF Buffer and 200 uM of dNTPs...") never uses either word -- added a second trigger (a named polymerase brand co-occurring with "buffer"/"dNTP" in the same sentence). Built out the second-PCR (`pcr2_*`) field family per the user's request: 9 new native names mirroring the first PCR's own fields one for one against the real FAIRe schema, gated on `pcr_0_1`. A live validation of the new fields caught a real hallucination bug before it shipped: the model copied this module's own example values ("22 uL", "2 uL") verbatim into `raw_value` when the real second-PCR text didn't state those quantities -- removed the examples from the four new quantity-shaped fields and added explicit "the SECOND PCR's own X only, never the first PCR's" (and the reverse, on every first-PCR counterpart) disambiguation guidance; re-verified live against a full first+second-PCR paragraph that all 18 facts now extract correctly with zero hallucinated examples. 610 tests pass (3 new). See README's "Disambiguating trim tools, catching a reagent-listing gap, and building out the second-PCR field family". |
 | 23: Excluding MAG BioSamples and parsing filter/pore-size/depth out of free-text attributes | Done -- running two more real papers (10.3389/fmicb.2024.1295149, 10.1038/s42003-024-06136-2) surfaced three real problems in `sources/ncbi.py`. Fixed a real category error caught before it shipped: `samp_mat_process`'s free text (e.g. "0.22 um cartridge filtration...") was never parsed at all, and a naive parser would have written the pore size into `filter_diameter` -- checked the real schema first and found `filter_diameter` is the physical filter *disc* diameter in mm, a different concept/unit entirely; the real home for pore size is a separate, previously-unmapped field, `size_frac`. New `_derive_filter_facts` parses `size_frac`/`filter_diameter`/`filter_material`/`filter_name`/`filter_passive_active_0_1`, each gated on its own specific pattern plus nearby context, never guessed. Fixed fmicb's depth being identical across every sample despite a real depth profile (30m-5200m): no sample has a literal `depth` attribute, but the real per-sample depth is embedded inside a differently-named attribute (`source_material_id`, e.g. "3500 m V3-V4") this submitter repurposed -- new `_derive_depth_from_source_material_id` reuses the *existing* `depth` MappingRule/`to_meters` transform, no new rule needed; confirmed live that 20 distinct real depths now populate correctly. Fixed MAG (metagenome-assembled genome) BioSamples polluting sampleMetadata for s42003: confirmed live via a real efetch that a BioProject can link to both real environmental BioSamples and a family of cross-linked MAG BioSamples from an entirely different downstream project, carrying assembly-specific attributes and none of the real per-sample data -- new `_is_mag_biosample` (checks the real INSDC-standard `package="MIMAG.*"`/`Models/Model` structural marker, with a title-text fallback) now excludes these from becoming SAMPLE entities at all. Found, but did not fix (out of this task's approved scope, reported to the user instead), a more fundamental bug while verifying against s42003's real BioProject: `esearch` for `PRJNA529480` returns two UIDs, and `_esearch_first_uid` blindly takes the first one, which turned out to be a *different* project (`PRJEB73262`, a MAG-only downstream project that just mentions the real accession in its own title) -- confirmed via `esummary` that the correct UID (`529480`) has 99 real linked samples, while the wrong one (`1356142`) has only the 8 MAG records the adapter was actually fetching. Affects both `NcbiBioProjectAdapter` and `NcbiBioSampleAdapter`, and plausibly any paper where esearch returns more than one UID for an accession. 620 tests pass (8 new). See README's "Excluding MAG BioSamples and parsing filter/pore-size/depth out of free-text attributes". |
+| 24: Multi-study entity sharing + citation-expansion ("node-adding") discovery | Done -- direct follow-up to Milestone 23's `_esearch_first_uid` finding, escalated by the user into a full architectural feature: real papers reuse other papers' deposited samples, and the pipeline had no way to represent that. Fixed the UID bug for real (`_esearch_verified_uid`: multi-UID esearch results now cross-checked against esummary's own `project_acc`/`accession` field, falling back to a review-flagged first-UID guess only when no candidate matches; plus an independent `biosample->bioproject` reverse-elink signal), confirmed live against PRJNA529480 *and* two more independently-ambiguous real BioProjects (PRJEB1787/Tara Oceans, PRJNA385854/bioGEOTRACES -- the SPIRE/EMG-produced TPA-reanalysis pattern polluting esearch rankings turned out to be systemic, not a one-off). New `entity_studies` join table (exact structural mirror of the existing `study_sources`) lets a SAMPLE/EXPERIMENT_RUN/SEQUENCING_RUN `Entity` belong to more than one `Study`, via a single new choke point (`identity/entity_linking.py`'s `create_entity`/`link_entity_to_study`/`get_or_create_entity`, replacing two independent, divergent `_get_or_create_entity` implementations that used to live in `workflow/handlers.py` and `extraction/experiment_runs.py`). New `DISCOVER_CITING_STUDIES` task (`bioproject->pubmed` elink, one call per accession) auto-expands a citing paper into its own full `Study` row via the existing task queue's own idempotency machinery, with real safety valves for ~3000-paper scale (`DiscoveryConfig.citation_expansion_max_depth`, wired up for the first time; new `max_citing_papers_per_bioproject`), plus a recurring node-adding backfill pass (`enqueue-citation-rediscovery-backfill`, wired into `weekly-update`) for papers published after a study's first resolution. A live end-to-end run against the real s42003 paper -- seeding it and letting `DISCOVER_IDENTIFIERS`/`DISCOVER_CITING_STUDIES` run for real against live Crossref/Europe PMC/OpenAlex/NCBI/ENA -- surfaced 3 more real bugs beyond the planned scope, none caught by mocked unit tests: (1) a citing paper's own full-text scan re-discovering the accession that citation-discovery already used to link it was treated as a study-identity conflict, spinning up an empty placeholder sibling Study + `CandidateMatch` review item for essentially every citing paper -- fixed with `_linked_via_discovery_lineage`, checked *before* confidence tier (not after), so two studies already known to be a deliberate citing/cited pair never re-litigate that relationship regardless of which adapter or confidence level reports the shared accession; (2) far more seriously, `NcbiBioSampleAdapter`/`EnaAdapter`'s `find_related()` reports every BioSample accession as a default-`STRUCTURED_SOURCE` `RelatedIdentifier`, which used to *unconditionally merge* two Study rows the moment they shared one real sample -- exactly the outcome this whole feature exists to prevent -- fixed by excluding `BIOSAMPLE_ACCESSION` from Study-identity resolution entirely (a shared BioSample is now informational, recorded via `SHARES_ACCESSION_WITH`, never identity evidence); (3) `EntityRelationship`'s existing `_get_or_create_entity_relationship` looked up prior rows scoped by `study_id`, but its own DB constraint (`uq_entity_relationship`) is global on `(from_entity_id, to_entity_id, relationship_type)` -- once two studies could legitimately resolve the same shared run/sample/experiment entities, this mismatch produced a real `UNIQUE constraint failed` the moment the second study's own ENA/NCBI resolution reached them; fixed by making the lookup global too, matching the real constraint. Final verified state: two genuinely separate `Study` rows (correct titles/DOIs/`discovery_depth`/`discovery_parent_study_id`/`discovery_root_study_id`/`discovery_trigger`), zero merges, zero `CandidateMatch` review-queue noise, 231 entities correctly linked to both studies via `entity_studies`, and `sampleMetadata.csv`'s shared-sample row showing the correct pipe-joined `internal_study_id` (`STUDY-.../STUDY-...`) with the broadcast-merge correctly suppressed (Milestone 20's `internal_study_id` column, gated per Section 5 of this feature). 645 tests pass (23 new). See README's "Multi-study entity sharing + citation-expansion discovery". |

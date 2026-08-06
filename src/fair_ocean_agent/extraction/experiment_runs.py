@@ -16,6 +16,7 @@ from fair_ocean_agent.database.enums import (
     SupportType,
 )
 from fair_ocean_agent.database.models import Entity, EntityRelationship, RawFact
+from fair_ocean_agent.identity.entity_linking import get_or_create_entity as _get_or_create_entity
 
 DERIVATION_METHOD = "derived:legacy_sequencing_run_to_experiment_run"
 
@@ -78,32 +79,6 @@ def _first_value(facts: list[RawFact], *fact_types: str) -> str | None:
             if fact.fact_type_candidate == fact_type and fact.raw_value:
                 return fact.raw_value
     return None
-
-
-def _get_or_create_entity(
-    session: Session,
-    study_id: str,
-    entity_level: EntityLevel,
-    external_identifier: str,
-    label: str | None = None,
-) -> Entity:
-    entity = session.scalar(
-        select(Entity).where(
-            Entity.study_id == study_id,
-            Entity.entity_level == entity_level.value,
-            Entity.external_identifier == external_identifier,
-        )
-    )
-    if entity is None:
-        entity = Entity(
-            study_id=study_id,
-            entity_level=entity_level.value,
-            external_identifier=external_identifier,
-            label=label,
-        )
-        session.add(entity)
-        session.flush()
-    return entity
 
 
 def _link(
