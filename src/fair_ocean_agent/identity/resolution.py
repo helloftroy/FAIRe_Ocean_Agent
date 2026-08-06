@@ -38,6 +38,33 @@ from fair_ocean_agent.identity.consistency import check_study_consistency
 from fair_ocean_agent.identity.deduplication import find_all_existing_studies_by_identifier, merge_study_into
 from fair_ocean_agent.identity.identifiers import IdentifierError, normalize_identifier
 from fair_ocean_agent.identity.source_linking import link_source_to_study
+
+# Repository *dataset*-accession identifier types -- these identify a
+# deposited submission (the same real BioProject/BioSample/run can be
+# reused by any number of different papers), never the paper itself, so a
+# match against a different Study is never Study-identity evidence, at ANY
+# confidence tier. Confirmed live via a 10-seed pressure test: two
+# genuinely different, independently-seeded papers sharing a real
+# BioProject (10.1038/s42003-024-06136-2 / 10.1073/pnas.2005917117, both
+# resolving PRJNA529480) got silently merged even after excluding
+# BIOSAMPLE_ACCESSION and non-STRUCTURED_SOURCE BIOPROJECT_ACCESSION
+# matches -- the remaining path was EnaAdapter's own structured
+# find_related() re-confirming the identical study_accession/
+# secondary_study_accession once BOTH papers independently, fully
+# resolved the shared accession, which is unavoidable for any two papers
+# that legitimately reuse the same real dataset. Genuinely PAPER-
+# identifying types (DOI/PMID/PMCID/OPENALEX_ID) are unaffected and keep
+# driving merge/sibling-split exactly as before -- a paper accidentally
+# seeded twice is still caught via those, independent of this exclusion,
+# so nothing about "same paper, duplicate seed row" detection is lost.
+_DATASET_ACCESSION_IDENTIFIER_TYPES = frozenset(
+    {
+        IdentifierType.BIOPROJECT_ACCESSION,
+        IdentifierType.BIOSAMPLE_ACCESSION,
+        IdentifierType.SRA_STUDY_ACCESSION,
+        IdentifierType.ENA_STUDY_ACCESSION,
+    }
+)
 from fair_ocean_agent.logging_setup import get_logger
 from fair_ocean_agent.sources.base import RelatedIdentifier
 
@@ -96,26 +123,20 @@ def resolve_or_create_study(
         if not candidates:
             continue
 
-        if rel.identifier_type == IdentifierType.BIOSAMPLE_ACCESSION:
-            # A BioSample accession shared with another study is expected,
-            # not a study-identity signal -- EntityStudy (database/models.py)
-            # / identity/entity_linking.py is what actually represents "this
-            # real sample belongs to more than one study" now, at the Entity
-            # level, decided independently of Study identity. This must
-            # never trigger a Study-level merge or sibling-split the way
-            # every OTHER identifier type still correctly does (DOI/PMID/
-            # BioProject accession/...), where a match against a different
-            # study IS still a real identity signal.
-            #
-            # Confirmed live: without this, two genuinely different papers
-            # sharing real BioSamples (10.1038/s42003-024-06136-2 /
-            # 10.1073/pnas.2005917117, both citing PRJNA529480) got silently
-            # merged into one Study the moment the second study's own
-            # BioSample resolution ran its find_related() output (NcbiBio-
-            # SampleAdapter/EnaAdapter both report every sample accession as
-            # a default-STRUCTURED_SOURCE RelatedIdentifier) through the
-            # unconditional merge branch below -- exactly the outcome this
-            # whole multi-study entity-sharing mechanism exists to prevent.
+        if rel.identifier_type in _DATASET_ACCESSION_IDENTIFIER_TYPES:
+            # A dataset accession (BioProject/BioSample/SRA/ENA study) shared
+            # with another study is expected, not a study-identity signal --
+            # EntityStudy (database/models.py) / identity/entity_linking.py
+            # is what actually represents "this real sample/run belongs to
+            # more than one study" now, at the Entity level, decided
+            # independently of Study identity. This must never trigger a
+            # Study-level merge or sibling-split the way genuinely PAPER-
+            # identifying types still correctly do (DOI/PMID/PMCID/
+            # OPENALEX_ID), where a match against a different study IS still
+            # a real identity signal -- see this module's own
+            # _DATASET_ACCESSION_IDENTIFIER_TYPES docstring for the live
+            # evidence this is built on, at every confidence tier including
+            # STRUCTURED_SOURCE.
             study = _record_as_shared(session, study, rel)
             continue
 

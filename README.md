@@ -2620,6 +2620,90 @@ and-enqueue-MAP_FAIRE, the stalled-generation cap, component reopening);
 `projectMetadata` exclusion; and `enqueue_mapping_backfill`'s deferral
 behavior for studies with shareable entities.
 
+## Generalizing dataset-accession exclusion, found via a 10-seed pressure test
+
+Direct follow-up to a request to pressure-test the whole architecture at
+slightly larger scale before the real ~3,000-paper run: seed ~10 real,
+never-before-seeded papers and see what breaks. Picked a mix of 6 papers
+already known (from this project's own validation history) to carry real
+NCBI BioProject/BioSample data -- including the already-validated s42003/
+PNAS pair -- plus 4 fresh marine eDNA papers found live via a Crossref
+search, never touched by this pipeline before. Real network calls
+throughout, scratch database, same discipline as every other live
+verification this session.
+
+**Immediately, two more real bugs, neither reachable by a single-pair
+test.** First: the empty-orphan-sibling-Study bug from two sections
+back was back, for a related but distinct case. That fix
+(`_linked_via_discovery_lineage`) only recognizes a citing/cited
+relationship the pipeline itself discovered via citation-expansion -- it
+has nothing to say about two studies that were both seeded *directly*,
+with no citation relationship recorded between them at all. This batch
+seeded the PNAS paper directly (not discovered via citation-expansion, as
+in every previous test), so with no lineage relationship on record, its
+own full-text mention of `PRJNA529480` fell straight through to the
+sibling-split path again -- exactly the "two independently seeded papers
+sharing a BioProject" case this whole feature exists for, and exactly the
+case a single-pair citation-discovery test structurally cannot exercise.
+
+Fixed by extending the informational-only carve-out to non-`STRUCTURED_SOURCE`
+`BIOPROJECT_ACCESSION` matches unconditionally, not just lineage-known
+ones. Re-ran the same 10-seed batch to confirm -- and the very next result
+was a second, more serious bug: s42003 silently **merged** into the PNAS
+study. Root cause: `EnaAdapter`'s own *structured* `find_related()`
+re-confirms the identical `study_accession`/`secondary_study_accession`
+(`STRUCTURED_SOURCE` confidence, deliberately left un-exempted as "still a
+strong duplicate signal" in the previous fix) the moment both studies
+independently, fully resolve the shared accession -- which happens for
+*any* two papers that legitimately reuse the same real dataset, not just a
+genuine duplicate submission. "STRUCTURED_SOURCE still means duplicate"
+was a false premise specifically for repository dataset accessions, even
+though it remains true and necessary for genuinely paper-identifying
+types (a paper's own Crossref/PubMed/OpenAlex record structurally
+reporting its own DOI/PMID/PMCID really is strong duplicate-submission
+evidence).
+
+**Generalized the fix into a principled rule instead of a third one-off
+patch.** `identity/resolution.py`'s new `_DATASET_ACCESSION_IDENTIFIER_TYPES`
+(`BIOPROJECT_ACCESSION`/`BIOSAMPLE_ACCESSION`/`SRA_STUDY_ACCESSION`/
+`ENA_STUDY_ACCESSION`) is now excluded from Study-identity resolution
+entirely, at every confidence tier: these identify a *deposited
+submission*, never the paper itself, so a match against a different Study
+is never Study-identity evidence, full stop. Only genuinely
+paper-identifying types still drive merge/sibling-split -- a paper
+accidentally seeded twice is still caught independent of this exclusion,
+so nothing about that detection is lost. Deliberately did **not** extend
+this to `DATASET_DOI`/`OBIS_DATASET_UUID`/`GBIF_DATASET_KEY`/
+`BCODMO_DATASET_ID`/`PANGAEA_ID`/`NCEI_ACCESSION` -- a different adapter
+family this specific pressure test never exercised. The same underlying
+risk plausibly applies there too, but generalizing further on suspicion
+rather than confirmed evidence would be exactly the kind of unproven leap
+this finding itself warns against -- flagged explicitly as a follow-up for
+whenever those adapters get their own real pressure test, not silently
+assumed either way.
+
+**Final verified state**, same 10-seed batch re-run clean after the fix:
+10 distinct `Study` rows, zero merges, zero orphan siblings, zero
+`CandidateMatch` review-queue noise, zero task failures. 231 real entities
+(samples, experiment runs, sequencing runs) correctly shared between
+s42003 and PNAS, all *consistently* resolved to the same evidence-based
+root (PNAS, still correctly the earlier-published paper) rather than some
+resolving one way and others another. Both components reached
+`entity_component_status=settled` cleanly. `sampleMetadata.csv` totaled
+exactly 181 rows across the 5 papers with real BioProject data (83+24+6+43+25
+-- the 83 shared samples counted once, under their home study, no
+duplication anywhere). `projectMetadata.csv` correctly excluded PNAS
+(analysis-only: 231 entity links, 0 homed) while correctly including
+s42003 (83 of its own homed samples) -- the exact analysis-only rule from
+the previous section, now confirmed at a scale beyond the one pair it was
+originally built and tested against.
+
+688 tests pass (2 new: the generalized non-lineage BIOPROJECT_ACCESSION
+case, and the STRUCTURED_SOURCE-tier dataset-accession case; 6 existing
+tests updated to exercise the general merge/consistency-check machinery
+via `PMID` instead of a now-exempted dataset-accession type, since that's
+what they were actually testing).
+
 ## Mapping expansion: the rest of FAIRe's Environment section
 
 Beyond the 8 BioSample attributes already mapped (elev/samp_collect_device/

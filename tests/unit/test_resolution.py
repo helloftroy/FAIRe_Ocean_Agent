@@ -68,7 +68,7 @@ def test_tier1_auto_links_without_consistency_check(db_session):
 def test_tier2_consistent_dates_attaches_via_merge(db_session):
     other_study = _study(db_session, title="Other")
     db_session.add(
-        ExternalIdentifier(study_id=other_study.study_id, identifier_type=IdentifierType.BIOPROJECT_ACCESSION.value, identifier_value="PRJNA1")
+        ExternalIdentifier(study_id=other_study.study_id, identifier_type=IdentifierType.PMID.value, identifier_value="99999")
     )
     db_session.add(
         RawFact(
@@ -90,7 +90,7 @@ def test_tier2_consistent_dates_attaches_via_merge(db_session):
     )
     db_session.commit()
 
-    rel = _rel(IdentifierType.BIOPROJECT_ACCESSION, "PRJNA1", confidence=SupportType.DETERMINISTICALLY_DERIVED)
+    rel = _rel(IdentifierType.PMID, "99999", confidence=SupportType.DETERMINISTICALLY_DERIVED)
     result = resolve_or_create_study(db_session, study, [rel], source=source)
     db_session.commit()
 
@@ -103,7 +103,7 @@ def test_tier2_consistent_dates_attaches_via_merge(db_session):
 def test_tier2_inconsistent_dates_creates_sibling_and_flags(db_session):
     other_study = _study(db_session, title="Other")
     db_session.add(
-        ExternalIdentifier(study_id=other_study.study_id, identifier_type=IdentifierType.BIOPROJECT_ACCESSION.value, identifier_value="PRJNA1")
+        ExternalIdentifier(study_id=other_study.study_id, identifier_type=IdentifierType.PMID.value, identifier_value="99999")
     )
     other_fact = RawFact(
         study_id=other_study.study_id, entity_level=EntityLevel.SAMPLE.value,
@@ -124,7 +124,7 @@ def test_tier2_inconsistent_dates_creates_sibling_and_flags(db_session):
     db_session.commit()
 
     original_study_count = db_session.query(Study).count()
-    rel = _rel(IdentifierType.BIOPROJECT_ACCESSION, "PRJNA1", confidence=SupportType.DETERMINISTICALLY_DERIVED)
+    rel = _rel(IdentifierType.PMID, "99999", confidence=SupportType.DETERMINISTICALLY_DERIVED)
     result = resolve_or_create_study(db_session, study, [rel], source=source)
     db_session.commit()
 
@@ -189,6 +189,79 @@ def test_shared_biosample_accession_never_merges_or_flags(db_session):
     assert recorded.relationship_type == RelationshipType.SHARES_ACCESSION_WITH.value
 
 
+def test_text_mined_bioproject_accession_never_merges_or_flags_even_without_lineage(db_session):
+    """Regression test for a real finding from a live 10-seed pressure
+    test: two studies can be seeded INDEPENDENTLY (no citation-discovery
+    relationship between them at all -- unlike
+    test_tier2_inconsistent_dates_but_discovery_lineage_skips_sibling
+    above) and still both resolve to the same real BioProject, one of them
+    via its own full-text scan simply mentioning the accession. That must
+    get the same informational-only treatment as BIOSAMPLE_ACCESSION, not
+    a sibling-split + CandidateMatch flag -- confirmed live:
+    10.1038/s42003-024-06136-2 and 10.1073/pnas.2005917117 were BOTH
+    directly seeded in the same batch (not one discovered via the other),
+    yet both independently resolve to PRJNA529480."""
+    other_study = _study(db_session, title="Original paper, seeded independently")
+    db_session.add(
+        ExternalIdentifier(study_id=other_study.study_id, identifier_type=IdentifierType.BIOPROJECT_ACCESSION.value, identifier_value="PRJNA1")
+    )
+    db_session.commit()
+
+    study = _study(db_session, title="Second paper, also seeded independently, mentions PRJNA1 in its own text")
+    rel = _rel(IdentifierType.BIOPROJECT_ACCESSION, "PRJNA1", confidence=SupportType.DETERMINISTICALLY_DERIVED)
+
+    original_study_count = db_session.query(Study).count()
+    result = resolve_or_create_study(db_session, study, [rel], source=None)
+    db_session.commit()
+
+    assert result.study_id == study.study_id
+    assert db_session.query(Study).count() == original_study_count  # no merge, no sibling
+    db_session.refresh(other_study)
+    assert other_study.canonical_status == CanonicalStatus.CANDIDATE.value  # not merged away
+    assert db_session.query(CandidateMatch).count() == 0  # not flagged as ambiguous either
+
+    recorded = db_session.query(ExternalIdentifier).filter_by(
+        study_id=study.study_id, identifier_type=IdentifierType.BIOPROJECT_ACCESSION.value, identifier_value="PRJNA1"
+    ).one()
+    assert recorded.relationship_type == RelationshipType.SHARES_ACCESSION_WITH.value
+
+
+def test_structured_source_dataset_accession_also_never_merges(db_session):
+    """Regression test for a second real finding from the same 10-seed
+    pressure test, discovered immediately after the first fix above:
+    excluding only non-STRUCTURED_SOURCE BIOPROJECT_ACCESSION matches
+    wasn't enough. EnaAdapter's own structured find_related() re-confirms
+    the identical study_accession/secondary_study_accession (STRUCTURED_
+    SOURCE confidence) the moment BOTH studies independently, fully
+    resolve a shared accession -- which happens for ANY two papers that
+    legitimately reuse the same real dataset, not just a genuine duplicate
+    submission. Confirmed live: 10.1038/s42003-024-06136-2 and
+    10.1073/pnas.2005917117 (seeded independently in the same batch) got
+    silently merged via exactly this path even after the first fix. Every
+    identifier type in _DATASET_ACCESSION_IDENTIFIER_TYPES is now excluded
+    from Study-identity resolution unconditionally, at every confidence
+    tier -- only genuinely paper-identifying types (DOI/PMID/PMCID/
+    OPENALEX_ID) still drive merge/sibling-split."""
+    other_study = _study(db_session, title="Other")
+    db_session.add(
+        ExternalIdentifier(study_id=other_study.study_id, identifier_type=IdentifierType.BIOPROJECT_ACCESSION.value, identifier_value="PRJNA1")
+    )
+    db_session.commit()
+
+    study = _study(db_session, title="Current")
+    rel = _rel(IdentifierType.BIOPROJECT_ACCESSION, "PRJNA1", confidence=SupportType.STRUCTURED_SOURCE, source="ena")
+
+    original_study_count = db_session.query(Study).count()
+    result = resolve_or_create_study(db_session, study, [rel], source=None)
+    db_session.commit()
+
+    assert result.study_id == study.study_id
+    assert db_session.query(Study).count() == original_study_count  # no merge, no sibling
+    db_session.refresh(other_study)
+    assert other_study.canonical_status == CanonicalStatus.CANDIDATE.value  # not merged away
+    assert db_session.query(CandidateMatch).count() == 0
+
+
 def test_tier2_inconsistent_dates_but_discovery_lineage_skips_sibling(db_session):
     """Regression test for a real finding from a live end-to-end run: a
     citation-discovered Study's own full-text scan re-mentions the exact
@@ -245,7 +318,7 @@ def test_tier2_inconsistent_dates_but_discovery_lineage_skips_sibling(db_session
 def test_tier3_never_merges_alone_even_when_consistent(db_session):
     other_study = _study(db_session, title="Other")
     db_session.add(
-        ExternalIdentifier(study_id=other_study.study_id, identifier_type=IdentifierType.BIOPROJECT_ACCESSION.value, identifier_value="PRJNA1")
+        ExternalIdentifier(study_id=other_study.study_id, identifier_type=IdentifierType.PMID.value, identifier_value="99999")
     )
     db_session.add(
         RawFact(
@@ -267,7 +340,7 @@ def test_tier3_never_merges_alone_even_when_consistent(db_session):
     )
     db_session.commit()
 
-    rel = _rel(IdentifierType.BIOPROJECT_ACCESSION, "PRJNA1", confidence=SupportType.INFERRED, source="llm")
+    rel = _rel(IdentifierType.PMID, "99999", confidence=SupportType.INFERRED, source="llm")
     resolve_or_create_study(db_session, study, [rel], source=source)
     db_session.commit()
 
@@ -281,7 +354,7 @@ def test_multiple_matches_picks_the_consistent_candidate(db_session):
     inconsistent_study = _study(db_session, title="Inconsistent")
     for other_study, date_value in ((consistent_study, "2020-06-01"), (inconsistent_study, "1999-01-01")):
         db_session.add(
-            ExternalIdentifier(study_id=other_study.study_id, identifier_type=IdentifierType.BIOPROJECT_ACCESSION.value, identifier_value="PRJNA1")
+            ExternalIdentifier(study_id=other_study.study_id, identifier_type=IdentifierType.PMID.value, identifier_value="99999")
         )
         db_session.add(
             RawFact(
@@ -303,7 +376,7 @@ def test_multiple_matches_picks_the_consistent_candidate(db_session):
     )
     db_session.commit()
 
-    rel = _rel(IdentifierType.BIOPROJECT_ACCESSION, "PRJNA1", confidence=SupportType.DETERMINISTICALLY_DERIVED)
+    rel = _rel(IdentifierType.PMID, "99999", confidence=SupportType.DETERMINISTICALLY_DERIVED)
     result = resolve_or_create_study(db_session, study, [rel], source=source)
     db_session.commit()
 
@@ -320,7 +393,7 @@ def test_multiple_matches_none_consistent_creates_sibling_flagged_against_all(db
     study_b = _study(db_session, title="B")
     for other_study, date_value in ((study_a, "1990-01-01"), (study_b, "1999-01-01")):
         db_session.add(
-            ExternalIdentifier(study_id=other_study.study_id, identifier_type=IdentifierType.BIOPROJECT_ACCESSION.value, identifier_value="PRJNA1")
+            ExternalIdentifier(study_id=other_study.study_id, identifier_type=IdentifierType.PMID.value, identifier_value="99999")
         )
         db_session.add(
             RawFact(
@@ -343,7 +416,7 @@ def test_multiple_matches_none_consistent_creates_sibling_flagged_against_all(db
     db_session.commit()
 
     original_study_count = db_session.query(Study).count()
-    rel = _rel(IdentifierType.BIOPROJECT_ACCESSION, "PRJNA1", confidence=SupportType.DETERMINISTICALLY_DERIVED)
+    rel = _rel(IdentifierType.PMID, "99999", confidence=SupportType.DETERMINISTICALLY_DERIVED)
     resolve_or_create_study(db_session, study, [rel], source=source)
     db_session.commit()
 
@@ -359,13 +432,13 @@ def test_inconsistent_with_no_single_source_degrades_to_flag_only(db_session):
     the ambiguity without attempting to reassign any rows."""
     other_study = _study(db_session, title="Other")
     db_session.add(
-        ExternalIdentifier(study_id=other_study.study_id, identifier_type=IdentifierType.BIOPROJECT_ACCESSION.value, identifier_value="PRJNA1")
+        ExternalIdentifier(study_id=other_study.study_id, identifier_type=IdentifierType.PMID.value, identifier_value="99999")
     )
     db_session.commit()
 
     study = _study(db_session, title="Current")
     rel = _rel(
-        IdentifierType.BIOPROJECT_ACCESSION, "PRJNA1",
+        IdentifierType.PMID, "99999",
         confidence=SupportType.DETERMINISTICALLY_DERIVED, source="europe_pmc_fulltext_identifier_scan",
     )
 
