@@ -368,6 +368,20 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
                 MappingMethod.DETERMINISTIC_SYNONYM.value),
     MappingRule("elev", EntityLevel.SAMPLE.value, "sampleMetadata", "elev",
                 MappingMethod.EXACT_LABEL.value),
+    # size_frac/filter_* are emitted by sources/ncbi.py's
+    # _derive_filter_facts, parsed out of the samp_mat_process attribute's
+    # free-text processing narrative -- never a literal NCBI attribute name
+    # itself, so review_required=True.
+    MappingRule("size_frac", EntityLevel.SAMPLE.value, "sampleMetadata", "size_frac",
+                MappingMethod.EXACT_LABEL.value, review_required=True),
+    MappingRule("filter_diameter", EntityLevel.SAMPLE.value, "sampleMetadata", "filter_diameter",
+                MappingMethod.EXACT_LABEL.value, review_required=True),
+    MappingRule("filter_material", EntityLevel.SAMPLE.value, "sampleMetadata", "filter_material",
+                MappingMethod.EXACT_LABEL.value, enum_name="filter_material_enum", review_required=True),
+    MappingRule("filter_name", EntityLevel.SAMPLE.value, "sampleMetadata", "filter_name",
+                MappingMethod.EXACT_LABEL.value, review_required=True),
+    MappingRule("filter_passive_active_0_1", EntityLevel.SAMPLE.value, "sampleMetadata", "filter_passive_active_0_1",
+                MappingMethod.EXACT_LABEL.value, enum_name="filter_passive_active_0_1_enum", review_required=True),
     MappingRule("samp_collect_device", EntityLevel.SAMPLE.value, "sampleMetadata", "samp_collect_device",
                 MappingMethod.EXACT_LABEL.value),
     MappingRule("samp_size", EntityLevel.SAMPLE.value, "sampleMetadata", "samp_size",
@@ -389,6 +403,8 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
     # worth a human sanity check regardless of which detection signal fired.
     MappingRule("biological_rep_relation", EntityLevel.SAMPLE.value, "sampleMetadata", "biological_rep_relation",
                 MappingMethod.EXACT_LABEL.value, review_required=True),
+    MappingRule("biological_rep_presence", EntityLevel.STUDY.value, "projectMetadata", "biological_rep",
+                MappingMethod.DETERMINISTIC_SYNONYM.value),
 
     # --- Sequencing-run-level structured facts (ENA) ---
     MappingRule("instrument_platform", EntityLevel.SEQUENCING_RUN.value, "projectMetadata", "platform",

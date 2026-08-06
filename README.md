@@ -2213,6 +2213,94 @@ second-PCR field additions are covered by the existing
 `test_render_field_reference_includes_faire_hints`-style completeness
 tests, which enumerate every native name/hint automatically).
 
+## Excluding MAG BioSamples and parsing filter/pore-size/depth out of free-text attributes
+
+Running two more real papers (10.3389/fmicb.2024.1295149,
+10.1038/s42003-024-06136-2) surfaced three real problems in
+`sources/ncbi.py`.
+
+**Filter fields blank for fmicb -- and a real category error caught before
+it shipped.** NCBI's `samp_mat_process` attribute (schema-documented to
+hold a full free-text processing narrative, e.g. `"0.22 µm cartridge
+filtration followed by DNA extraction"`) passed through verbatim but was
+never parsed for the FAIRe fields it actually describes. Checked the real
+schema before writing a parser: `filter_diameter` is explicitly "Diameter
+of a filter **if circular**. Unit = mm" -- the physical filter disc size
+(e.g. a 47mm membrane) -- a completely different concept and unit from
+pore size. `"0.22 µm"` is a pore size, whose real home is a separate,
+previously-unmapped field, `size_frac` ("Filtering pore size ... Unit =
+µm"). New `_derive_filter_facts` in `sources/ncbi.py` parses
+`samp_mat_process`'s text for `size_frac` (µm value near "pore"/"filt"
+context), `filter_diameter` (mm value near "filter"/"disc"/"membrane"
+context -- a genuinely different pattern/context/unit from the pore-size
+one, never conflated), `filter_material` (against the real
+`filter_material_enum` term list), `filter_name` (a short curated brand
+list -- Sterivex, Millipore, Whatman, ...), and `filter_passive_active_0_1`
+(`"1"` for "cartridge"/"pump"/"peristaltic", `"0"` for "passive"/
+"submerged"/"gravity", otherwise left unset -- never guessed). Confirmed
+live against the real BioProject: correctly produces `size_frac`/
+`filter_passive_active_0_1` for the water samples and nothing at all for
+the sediment samples' `samp_mat_process` value ("DNA extraction from
+sediment samples" -- no filtration mentioned).
+
+**fmicb's depth was identical across every sample despite a real depth
+profile (30m to 5200m).** No sample carries a literal `depth` attribute;
+the real per-sample depth is embedded as free text inside a differently-
+named attribute, `source_material_id` (this submitter's own convention,
+e.g. `"3500 m V3-V4"`, `"Overlaying water V3-V4"`). With nothing mapping
+that to depth, every sample fell back to one study-wide broadcast
+LLM-extracted depth value -- wrong for all but whichever one sample it
+happened to match. New `_derive_depth_from_source_material_id`: a leading
+number (optionally "m") becomes a `depth` fact, reusing the *existing*
+`depth` `MappingRule`/`to_meters` transform (no new rule needed);
+`"Overlaying water"` (no leading number) is deliberately left blank rather
+than guessed as 0. Confirmed live: 20 distinct real per-sample depths (30m
+through 5200m) now populate correctly, matching the paper's own described
+depth profile exactly.
+
+**MAG (metagenome-assembled genome) BioSamples were polluting
+sampleMetadata for s42003.** Traced live (a real `efetch` against a real
+accession) that a BioProject can legitimately link to both the true raw
+environmental BioSamples *and* a family of cross-linked MAG BioSamples
+from an entirely different downstream assembly project -- the MAG records
+carry assembly-specific attributes (`assembly software`/
+`completeness score`/`binning software`) a raw sample never has, and none
+of the real per-sample data (depth/lat-lon). Confirmed BioSample XML
+carries an authoritative, INSDC-standard structural marker for this that
+the adapter didn't parse: the `<BioSample package="...">` root attribute
+(a MAG's package is `MIMAG.*`, the real "Minimum Information about a MAG"
+checklist) and `<Models><Model>MIMAG</Model></Models>`. New
+`_is_mag_biosample` (checks `package`/`model`, with a title-text fallback
+for a record that doesn't carry either) now excludes a MAG-identified
+BioSample from becoming a SAMPLE entity entirely, at the top of
+`extract_structured_facts`'s per-sample loop.
+
+**A separate, more fundamental bug found while verifying all of the
+above against s42003's real BioProject, reported to the user rather than
+silently fixed (out of this task's approved scope)**: `esearch` for
+`PRJNA529480` returns *two* UIDs, and `_esearch_first_uid` blindly takes
+the first one -- which turned out to be `PRJEB73262` ("TPA metagenomic
+assembly of the PRJNA529480 data set"), a *different*, MAG-only downstream
+project that just happens to mention the real accession in its own title,
+not `PRJNA529480` itself (confirmed via `esummary`: UID `1356142` ->
+`PRJEB73262`; the real, correct UID `529480` -> `PRJNA529480`, 99 real
+linked samples). This is the true root cause of s42003's missing
+sample-level data -- the adapter was fetching an entirely different
+project's 8 BioSamples (all MAGs, now correctly excluded by the fix
+above) instead of the real project's 99. Affects both
+`NcbiBioProjectAdapter` and `NcbiBioSampleAdapter` (`fetch_record` in
+both classes calls the same naive `_esearch_first_uid`), and plausibly any
+other paper where NCBI's esearch returns more than one UID for an
+accession search. Flagged for a follow-up fix (verify each candidate UID's
+own accession via `esummary` and pick the exact match) rather than
+implemented here, given the scope and risk of changing core BioProject/
+BioSample resolution used by every paper this pipeline processes.
+
+620 tests pass (8 new: MAG exclusion via package/title, a real-sample
+BioSample confirmed unaffected, filter/size_frac derivation from both real
+`samp_mat_process` values plus a constructed filter-diameter case, and
+depth derivation from `source_material_id`).
+
 ## Mapping expansion: the rest of FAIRe's Environment section
 
 Beyond the 8 BioSample attributes already mapped (elev/samp_collect_device/

@@ -127,6 +127,36 @@ def test_biosample_extract_structured_facts_normalizes_location_and_host_aliases
     assert values["geo_loc_name"].source_locator.endswith("Attributes.geo_loc_name")
 
 
+def test_biosample_extract_structured_facts_maps_owner_to_recorded_by(biosample_adapter):
+    raw = {
+        "bioproject_accession": "PRJNA994076",
+        "total_linked_samples": 2,
+        "truncated": False,
+        "samples": [
+            {
+                "accession": "SAMN36415090",
+                "title": "pond sample",
+                "owner": {"name": "University of Konstanz, Corentin Fournier"},
+                "attributes": {"collection_date": "2022-04-11"},
+            },
+            {
+                "accession": "SAMN36415091",
+                "title": "pond sample",
+                "owner": {"name": "University of Konstanz, Corentin Fournier"},
+                "attributes": {"collection_date": "2022-04-11"},
+            },
+        ],
+    }
+
+    facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw, "PRJNA994076"))
+
+    recorded_by = [f for f in facts if f.fact_type_candidate == "recordedBy"]
+    assert len(recorded_by) == 1
+    assert recorded_by[0].entity_level == EntityLevel.STUDY
+    assert recorded_by[0].raw_value == "University of Konstanz, Corentin Fournier"
+    assert recorded_by[0].source_locator == "ncbi_biosample.SAMN36415090.Owner.Name"
+
+
 def test_biosample_extract_structured_facts_notes_truncation(biosample_adapter):
     raw = {
         "bioproject_accession": "PRJNA1425045",
@@ -139,6 +169,172 @@ def test_biosample_extract_structured_facts_notes_truncation(biosample_adapter):
     note = next(f for f in facts if f.fact_type_candidate == "biosample_coverage_note")
     assert "837" in note.raw_value
     assert note.entity_external_id is None  # a project-level note, not tied to one sample
+
+
+def test_biosample_extract_structured_facts_excludes_mag_records_by_package(biosample_adapter):
+    """Regression guard for a real finding (ISME J-adjacent marine-sediment
+    audit, BioProject PRJNA529480): confirmed live against a real efetch
+    that a metagenome-assembled-genome BioSample carries package="MIMAG.*"
+    and attributes (assembly software, completeness score) a raw
+    environmental sample never has -- these must never become SAMPLE
+    entities alongside real samples."""
+    raw = {
+        "bioproject_accession": "PRJNA1425045",
+        "total_linked_samples": 1,
+        "truncated": False,
+        "samples": [
+            {
+                "accession": "SAMN_MAG_1",
+                "title": "Metagenome-assembled genome: STUDY_SAMN123_MAG_00000024",
+                "package": "MIMAG.host-associated.6.0",
+                "attributes": {"assembly software": "metaSPAdes 3.14", "completeness score": "95.77"},
+            }
+        ],
+    }
+    facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw))
+
+    assert facts == []
+
+
+def test_biosample_extract_structured_facts_excludes_mag_records_by_title_fallback(biosample_adapter):
+    """No package/Models field on this record -- falls back to the title
+    text, which still says "Metagenome-assembled genome"."""
+    raw = {
+        "bioproject_accession": "PRJNA1425045",
+        "total_linked_samples": 1,
+        "truncated": False,
+        "samples": [
+            {
+                "accession": "SAMN_MAG_2",
+                "title": "Metagenome-assembled genome: STUDY_SAMN124_MAG_00000036",
+                "package": None,
+                "attributes": {"assembly software": "metaSPAdes 3.14"},
+            }
+        ],
+    }
+    facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw))
+
+    assert facts == []
+
+
+def test_biosample_extract_structured_facts_keeps_a_real_raw_sample_unaffected(biosample_adapter):
+    raw = {
+        "bioproject_accession": "PRJNA1425045",
+        "total_linked_samples": 1,
+        "truncated": False,
+        "samples": [
+            {
+                "accession": "SAMN_REAL",
+                "title": "MIMS Environmental sample",
+                "package": "Generic.1.0",
+                "attributes": {"collection_date": "2019-07-02"},
+            }
+        ],
+    }
+    facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw))
+
+    assert {f.fact_type_candidate for f in facts} == {"collection_date"}
+
+
+def test_biosample_extract_structured_facts_derives_filter_facts_from_samp_mat_process(biosample_adapter):
+    """Regression guard for a real gap (PeerJ-adjacent Indian Ocean
+    prokaryote audit): samp_mat_process's free text carries a pore size
+    ("0.22 um") that must land in size_frac, NEVER filter_diameter (a
+    different concept and unit -- physical filter disc diameter in mm,
+    per the real FAIRe schema)."""
+    raw = {
+        "bioproject_accession": "PRJNA1425045",
+        "total_linked_samples": 1,
+        "truncated": False,
+        "samples": [
+            {
+                "accession": "SAMN_WATER",
+                "title": "MIMS Environmental sample",
+                "attributes": {"samp_mat_process": "0.22 um cartridge filtration followed by DNA extraction"},
+            }
+        ],
+    }
+    facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw))
+
+    by_type = {f.fact_type_candidate: f for f in facts}
+    assert by_type["size_frac"].raw_value == "0.22 um"
+    assert by_type["filter_passive_active_0_1"].raw_value == "1"
+    assert "filter_diameter" not in by_type
+    assert by_type["size_frac"].support_type == SupportType.DETERMINISTICALLY_DERIVED
+    assert by_type["size_frac"].raw_field_name == "samp_mat_process"
+
+
+def test_biosample_extract_structured_facts_no_filter_facts_when_nothing_stated(biosample_adapter):
+    raw = {
+        "bioproject_accession": "PRJNA1425045",
+        "total_linked_samples": 1,
+        "truncated": False,
+        "samples": [
+            {
+                "accession": "SAMN_SEDIMENT",
+                "title": "MIMS Environmental sample",
+                "attributes": {"samp_mat_process": "DNA extraction from sediment samples"},
+            }
+        ],
+    }
+    facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw))
+
+    filter_fields = {"size_frac", "filter_diameter", "filter_material", "filter_name", "filter_passive_active_0_1"}
+    assert not filter_fields & {f.fact_type_candidate for f in facts}
+
+
+def test_biosample_extract_structured_facts_derives_filter_diameter_material_and_name(biosample_adapter):
+    raw = {
+        "bioproject_accession": "PRJNA1425045",
+        "total_linked_samples": 1,
+        "truncated": False,
+        "samples": [
+            {
+                "accession": "SAMN_FILTER",
+                "title": "MIMS Environmental sample",
+                "attributes": {
+                    "samp_mat_process": "Filtered through a 47mm cellulose ester filter (Merck Millipore)"
+                },
+            }
+        ],
+    }
+    facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw))
+
+    by_type = {f.fact_type_candidate: f for f in facts}
+    assert by_type["filter_diameter"].raw_value == "47"
+    assert by_type["filter_material"].raw_value == "cellulose ester"
+    assert by_type["filter_name"].raw_value == "Millipore"
+
+
+def test_biosample_extract_structured_facts_derives_depth_from_source_material_id(biosample_adapter):
+    """Regression guard for a real gap: this submitter's source_material_id
+    (generically "an identifier for the source material", not inherently
+    about depth) embeds per-sample depth as a leading number, e.g.
+    "3500 m V3-V4" -- confirmed real per-sample depths vary across samples
+    that a study-wide broadcast fallback was incorrectly uniforming."""
+    raw = {
+        "bioproject_accession": "PRJNA1425045",
+        "total_linked_samples": 2,
+        "truncated": False,
+        "samples": [
+            {
+                "accession": "SAMN_3500M",
+                "title": "MIMS Environmental sample",
+                "attributes": {"source_material_id": "3500 m V3-V4"},
+            },
+            {
+                "accession": "SAMN_SURFACE",
+                "title": "MIMS Environmental sample",
+                "attributes": {"source_material_id": "Overlaying water V3-V4"},
+            },
+        ],
+    }
+    facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw))
+
+    by_entity = {f.entity_external_id: f for f in facts if f.fact_type_candidate == "depth"}
+    assert by_entity["SAMN_3500M"].raw_value == "3500 m"
+    assert by_entity["SAMN_3500M"].support_type == SupportType.DETERMINISTICALLY_DERIVED
+    assert "SAMN_SURFACE" not in by_entity
 
 
 def test_biosample_extract_structured_facts_detects_biological_rep_relation_from_sample_name_attribute(
@@ -172,6 +368,54 @@ def test_biosample_extract_structured_facts_detects_biological_rep_relation_from
         "replicate_detection_signal": "explicit_rep_marker",
         "replicate_group_size": 2,
     }
+
+
+def test_biosample_extract_structured_facts_uses_explicit_replicate_attribute_first(biosample_adapter):
+    raw = {
+        "bioproject_accession": "PRJNA994076",
+        "total_linked_samples": 4,
+        "truncated": False,
+        "samples": [
+            {
+                "accession": "SAMN1",
+                "title": "MIMS Environmental sample",
+                "attributes": {"sample_name": "Site_A_rep1", "replicate": "a"},
+            },
+            {
+                "accession": "SAMN2",
+                "title": "MIMS Environmental sample",
+                "attributes": {"sample_name": "Site_A_rep2", "replicate": "a"},
+            },
+            {
+                "accession": "SAMN3",
+                "title": "MIMS Environmental sample",
+                "attributes": {"sample_name": "Site_B_rep1", "replicate": "b"},
+            },
+            {
+                "accession": "SAMN4",
+                "title": "MIMS Environmental sample",
+                "attributes": {"sample_name": "Site_B_rep2", "replicate": "b"},
+            },
+        ],
+    }
+    facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw, "PRJNA994076"))
+
+    rep_facts = {f.entity_external_id: f for f in facts if f.fact_type_candidate == "biological_rep_relation"}
+    assert set(rep_facts) == {"SAMN1", "SAMN2", "SAMN3", "SAMN4"}
+    assert rep_facts["SAMN1"].raw_value == "SAMN1 | SAMN2"
+    assert rep_facts["SAMN3"].raw_value == "SAMN3 | SAMN4"
+    assert all(f.raw_field_name == "replicate" for f in rep_facts.values())
+    assert rep_facts["SAMN1"].confidence_metadata == {
+        "replicate_detection_signal": "explicit_biosample_replicate_attribute",
+        "replicate_group_size": 2,
+        "replicate_value": "a",
+    }
+
+    biological_rep = [f for f in facts if f.fact_type_candidate == "biological_rep_presence"]
+    assert len(biological_rep) == 1
+    assert biological_rep[0].entity_level == EntityLevel.STUDY
+    assert biological_rep[0].raw_value == "TRUE"
+    assert biological_rep[0].raw_field_name == "replicate"
 
 
 def test_biosample_extract_structured_facts_falls_back_to_title_for_replicate_detection(biosample_adapter):

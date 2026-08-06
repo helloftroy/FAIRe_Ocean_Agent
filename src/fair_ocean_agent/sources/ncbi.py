@@ -22,6 +22,8 @@ XML/JSON text instead.
 from __future__ import annotations
 
 import hashlib
+import re
+from collections import defaultdict
 import xml.etree.ElementTree as ET
 
 from fair_ocean_agent.clock import utcnow
@@ -66,6 +68,124 @@ def _elink_ids(http, base_url: str, dbfrom: str, db: str, uid: str) -> list[str]
 
 def _hash_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _clean_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = " ".join(value.split())
+    return cleaned or None
+
+
+# A BioSample submitted as a metagenome-assembled genome (MAG) describes a
+# reconstructed genome BIN, not the physical environmental sample it was
+# assembled from -- confirmed live (a real efetch against a real MAG
+# accession, ISME J/marine-sediment audit) that such a record's "sample
+# derived from"/title only ever reference the real sample, they never
+# carry the real sample's own attributes (depth, lat/lon, collection
+# method) themselves, and instead carry assembly-specific attributes
+# (assembly software, completeness/contamination score, binning software)
+# a raw environmental sample never has. A BioProject can legitimately link
+# to BOTH the raw samples and their downstream MAG BioSamples together
+# (confirmed live: one real BioProject returned a mix of ~80 real
+# environmental BioSamples and a handful of MIMAG-packaged ones cross-
+# linked from an entirely different downstream assembly project) --
+# without this exclusion, MAG records pollute sampleMetadata with
+# assembly-bin-level facts under the same SAMPLE entity_level as real
+# samples. MIMAG ("Minimum Information about a MAG") is the real,
+# standard INSDC checklist used for exactly this kind of submission --
+# `package`/`Models/Model` carrying it is the authoritative structural
+# signal; the title text is a secondary fallback for a record that
+# doesn't carry the package/model fields for some reason.
+_MAG_TITLE_RE = re.compile(r"\bmetagenome-assembled genome\b", re.IGNORECASE)
+
+
+def _is_mag_biosample(sample: dict) -> bool:
+    package = (sample.get("package") or "").upper()
+    model = (sample.get("model") or "").upper()
+    if package.startswith("MIMAG") or model == "MIMAG":
+        return True
+    return bool(_MAG_TITLE_RE.search(sample.get("title") or ""))
+
+
+# samp_mat_process is schema-documented to hold a full free-text
+# processing narrative (e.g. "0.22 um cartridge filtration followed by DNA
+# extraction") -- these patterns pull the specific sub-facts FAIRe asks
+# for out of that narrative without altering samp_mat_process's own raw
+# fact, which stays the verbatim sentence. Confirmed via real evidence
+# (PeerJ/marine-microbiome audits) NOT to conflate pore size (µm, this
+# module's size_frac) with filter_diameter (mm, "Diameter of a filter if
+# circular" -- the physical disc size, a different concept and unit a
+# naive parser could easily get wrong).
+_PORE_SIZE_RE = re.compile(
+    r"(?P<value>\d+(?:\.\d+)?)\s*(?:µm|um|micrometers?|microns?)\b",
+    re.IGNORECASE,
+)
+_PORE_CONTEXT_RE = re.compile(r"\bpore\b|\bfilt\w*\b", re.IGNORECASE)
+_FILTER_DIAMETER_RE = re.compile(r"(?P<value>\d+(?:\.\d+)?)\s*mm\b", re.IGNORECASE)
+_FILTER_DIAMETER_CONTEXT_RE = re.compile(r"\bfilter\b|\bdisc\b|\bdisk\b|\bmembrane\b", re.IGNORECASE)
+_FILTER_MATERIAL_TERMS = (
+    "cellulose ester",
+    "cellulose",
+    "glass fiber",
+    "nylon",
+    "polyethersulfone",
+    "thermoplastic membrane",
+    "track etched polycarbonate",
+)
+_FILTER_NAME_TERMS = ("Sterivex", "Millipore", "Whatman", "Nalgene", "Supor", "Durapore")
+_FILTER_ACTIVE_RE = re.compile(r"\bcartridge\b|\bpump(?:ed|ing)?\b|\bperistaltic\b", re.IGNORECASE)
+_FILTER_PASSIVE_RE = re.compile(r"\bpassive\b|\bsubmerged\b|\bgravity\b", re.IGNORECASE)
+_CONTEXT_WINDOW = 40
+
+
+def _derive_filter_facts(value: str) -> dict[str, str]:
+    """Parses samp_mat_process's free text for size_frac/filter_* sub-facts
+    -- see this module's own comment above for why pore size and filter
+    diameter are deliberately never conflated. Only ever returns a field
+    when its own specific pattern (and, for size_frac/filter_diameter,
+    nearby context) genuinely matched -- never guesses."""
+    derived: dict[str, str] = {}
+    pore_match = _PORE_SIZE_RE.search(value)
+    if pore_match:
+        window = value[max(0, pore_match.start() - _CONTEXT_WINDOW) : pore_match.end() + _CONTEXT_WINDOW]
+        if _PORE_CONTEXT_RE.search(window):
+            derived["size_frac"] = pore_match.group(0)
+    diameter_match = _FILTER_DIAMETER_RE.search(value)
+    if diameter_match:
+        window = value[max(0, diameter_match.start() - _CONTEXT_WINDOW) : diameter_match.end() + _CONTEXT_WINDOW]
+        if _FILTER_DIAMETER_CONTEXT_RE.search(window):
+            derived["filter_diameter"] = diameter_match.group("value")
+    for term in _FILTER_MATERIAL_TERMS:
+        if re.search(rf"\b{re.escape(term)}\b", value, re.IGNORECASE):
+            derived["filter_material"] = term
+            break
+    for term in _FILTER_NAME_TERMS:
+        if re.search(rf"\b{re.escape(term)}\b", value, re.IGNORECASE):
+            derived["filter_name"] = term
+            break
+    if _FILTER_ACTIVE_RE.search(value):
+        derived["filter_passive_active_0_1"] = "1"
+    elif _FILTER_PASSIVE_RE.search(value):
+        derived["filter_passive_active_0_1"] = "0"
+    return derived
+
+
+# source_material_id is a real BioSample/MIxS attribute name generically
+# meaning "an identifier for the source material" -- NOT inherently about
+# depth. Confirmed via real evidence (a real study's own submission
+# convention, "3500 m V3-V4"/"Overlaying water V3-V4") that one submitter
+# repurposed it to embed per-sample depth alongside an unrelated marker-gene
+# suffix. Deliberately narrow: only matches a value that IS just a leading
+# number (optionally "m"), never a value embedded deeper inside a longer
+# alphanumeric id, to avoid misreading a genuine catalog/voucher id (e.g.
+# "MSC2019-047") as if it were a depth in meters.
+_SOURCE_MATERIAL_ID_DEPTH_RE = re.compile(r"^(?P<value>\d+(?:\.\d+)?)\s*m?\b")
+
+
+def _derive_depth_from_source_material_id(value: str) -> str | None:
+    match = _SOURCE_MATERIAL_ID_DEPTH_RE.match(value.strip())
+    return match.group(0).strip() if match else None
 
 
 class NcbiBioProjectAdapter(SourceAdapter):
@@ -189,16 +309,32 @@ class NcbiBioSampleAdapter(SourceAdapter):
                     continue
                 organism_el = bs.find("Description/Organism")
                 organism = dict(organism_el.attrib) if organism_el is not None else {}
+                owner_name_el = bs.find("Owner/Name")
+                owner_name = _clean_text(owner_name_el.text if owner_name_el is not None else None)
+                submission_name = _clean_text(bs.findtext("Submission/Name") or bs.findtext("Submission"))
                 samples.append(
                     {
                         "accession": accession,
                         "title": bs.findtext("Description/Title"),
+                        "package": bs.get("package"),
+                        "model": bs.findtext("Models/Model"),
                         "organism": {key: value for key, value in organism.items() if value},
                         "attributes": {
                             attr.get("attribute_name"): attr.text
                             for attr in bs.findall("Attributes/Attribute")
                             if attr.get("attribute_name")
                         },
+                        "owner": {
+                            key: value
+                            for key, value in {
+                                "name": owner_name,
+                                "abbreviation": (
+                                    owner_name_el.get("abbreviation") if owner_name_el is not None else None
+                                ),
+                            }.items()
+                            if value
+                        },
+                        "submission": {"name": submission_name} if submission_name else {},
                     }
                 )
 
@@ -242,6 +378,8 @@ class NcbiBioSampleAdapter(SourceAdapter):
             )
 
         for sample in r.get("samples", []):
+            if _is_mag_biosample(sample):
+                continue
             accession = sample["accession"]
             normalized_attrs: dict[str, str] = {}
             for attr_name, attr_value in sample.get("attributes", {}).items():
@@ -269,11 +407,142 @@ class NcbiBioSampleAdapter(SourceAdapter):
                         entity_label=sample.get("title"),
                     )
                 )
-        facts.extend(self._biological_rep_relation_facts(r.get("samples", [])))
+            samp_mat_process = sample.get("attributes", {}).get("samp_mat_process")
+            if samp_mat_process:
+                for field, value in _derive_filter_facts(str(samp_mat_process)).items():
+                    facts.append(
+                        RawFactCandidate(
+                            entity_level=EntityLevel.SAMPLE,
+                            fact_type_candidate=field,
+                            raw_field_name="samp_mat_process",
+                            raw_value=value,
+                            source_locator=f"ncbi_biosample.{accession}.Attributes.samp_mat_process.{field}",
+                            entity_external_id=accession,
+                            entity_label=sample.get("title"),
+                            support_type=SupportType.DETERMINISTICALLY_DERIVED,
+                        )
+                    )
+            source_material_id = sample.get("attributes", {}).get("source_material_id")
+            if source_material_id:
+                depth_value = _derive_depth_from_source_material_id(str(source_material_id))
+                if depth_value:
+                    facts.append(
+                        RawFactCandidate(
+                            entity_level=EntityLevel.SAMPLE,
+                            fact_type_candidate="depth",
+                            raw_field_name="source_material_id",
+                            raw_value=depth_value,
+                            source_locator=f"ncbi_biosample.{accession}.Attributes.source_material_id.depth",
+                            entity_external_id=accession,
+                            entity_label=sample.get("title"),
+                            support_type=SupportType.DETERMINISTICALLY_DERIVED,
+                        )
+                    )
+        facts.extend(self._recorded_by_facts(r.get("samples", [])))
+        explicit_rep_facts = self._biological_rep_relation_facts_from_replicate_attribute(r.get("samples", []))
+        facts.extend(explicit_rep_facts)
+        if explicit_rep_facts:
+            facts.append(
+                RawFactCandidate(
+                    entity_level=EntityLevel.STUDY,
+                    fact_type_candidate="biological_rep_presence",
+                    raw_field_name="replicate",
+                    raw_value="TRUE",
+                    source_locator="ncbi_biosample.Attributes.replicate",
+                    support_type=SupportType.DETERMINISTICALLY_DERIVED,
+                    confidence_metadata={
+                        "replicate_detection_signal": "explicit_biosample_replicate_attribute",
+                        "replicate_group_count": len({fact.raw_value for fact in explicit_rep_facts}),
+                    },
+                )
+            )
+        facts.extend(
+            self._biological_rep_relation_facts(
+                r.get("samples", []),
+                excluded_accessions={fact.entity_external_id for fact in explicit_rep_facts if fact.entity_external_id},
+            )
+        )
         return facts
 
     @staticmethod
-    def _biological_rep_relation_facts(samples: list[dict]) -> list[RawFactCandidate]:
+    def _recorded_by_facts(samples: list[dict]) -> list[RawFactCandidate]:
+        recorded_by_values: list[str] = []
+        locators: list[str] = []
+        seen: set[str] = set()
+        for sample in samples:
+            accession = sample.get("accession")
+            candidates = (
+                ("Owner.Name", sample.get("owner", {}).get("name")),
+                ("Submission.Name", sample.get("submission", {}).get("name")),
+            )
+            for field_name, value in candidates:
+                value = _clean_text(value)
+                if not accession or not value or value.casefold() in seen:
+                    continue
+                seen.add(value.casefold())
+                recorded_by_values.append(value)
+                locators.append(f"ncbi_biosample.{accession}.{field_name}")
+
+        if not recorded_by_values:
+            return []
+        return [
+            RawFactCandidate(
+                entity_level=EntityLevel.STUDY,
+                fact_type_candidate="recordedBy",
+                raw_field_name="recordedBy",
+                raw_value=" | ".join(recorded_by_values),
+                source_locator=" | ".join(locators),
+                confidence_metadata={"biosample_submitter_sample_count": len(locators)},
+            )
+        ]
+
+    @staticmethod
+    def _biological_rep_relation_facts_from_replicate_attribute(samples: list[dict]) -> list[RawFactCandidate]:
+        accessions_by_replicate: dict[str, list[str]] = defaultdict(list)
+        titles_by_accession: dict[str, str | None] = {}
+        replicate_value_by_accession: dict[str, str] = {}
+        for sample in samples:
+            accession = sample.get("accession")
+            if not accession:
+                continue
+            titles_by_accession[accession] = sample.get("title")
+            replicate_value = _clean_text(sample.get("attributes", {}).get("replicate"))
+            if not replicate_value:
+                continue
+            normalized_value = replicate_value.casefold()
+            accessions_by_replicate[normalized_value].append(accession)
+            replicate_value_by_accession[accession] = replicate_value
+
+        facts: list[RawFactCandidate] = []
+        for accessions in accessions_by_replicate.values():
+            if len(accessions) < 2:
+                continue
+            group_members = sorted(accessions)
+            relation = " | ".join(group_members)
+            for accession in group_members:
+                facts.append(
+                    RawFactCandidate(
+                        entity_level=EntityLevel.SAMPLE,
+                        fact_type_candidate="biological_rep_relation",
+                        raw_field_name="replicate",
+                        raw_value=relation,
+                        source_locator=f"ncbi_biosample.{accession}.Attributes.replicate",
+                        entity_external_id=accession,
+                        entity_label=titles_by_accession.get(accession),
+                        support_type=SupportType.DETERMINISTICALLY_DERIVED,
+                        confidence_metadata={
+                            "replicate_detection_signal": "explicit_biosample_replicate_attribute",
+                            "replicate_group_size": len(group_members),
+                            "replicate_value": replicate_value_by_accession[accession],
+                        },
+                    )
+                )
+        return facts
+
+    @staticmethod
+    def _biological_rep_relation_facts(
+        samples: list[dict], excluded_accessions: set[str] | None = None
+    ) -> list[RawFactCandidate]:
         """Detects replicate groupings from each BioSample's sample_name
         attribute (falling back to its title when no sample_name attribute
         was submitted) via sources/replicate_grouping.py's shared,
@@ -284,11 +553,12 @@ class NcbiBioSampleAdapter(SourceAdapter):
         the accession as the exported samp_name for NCBI-sourced samples;
         pipe-joining the name/title text instead would reference values that
         never appear in that exported column."""
+        excluded_accessions = excluded_accessions or set()
         name_and_field_by_accession: dict[str, tuple[str, str]] = {}
         titles_by_accession: dict[str, str | None] = {}
         for sample in samples:
             accession = sample.get("accession")
-            if not accession:
+            if not accession or accession in excluded_accessions:
                 continue
             titles_by_accession[accession] = sample.get("title")
             sample_name_attr = sample.get("attributes", {}).get("sample_name")

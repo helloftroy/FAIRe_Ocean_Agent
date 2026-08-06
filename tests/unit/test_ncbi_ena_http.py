@@ -24,6 +24,7 @@ BIOPROJECT_XML = """<?xml version="1.0" ?>
 BIOSAMPLE_XML = """<?xml version="1.0" ?>
 <BioSampleSet><BioSample accession="SAMN1">
     <Description><Title>Sample one</Title></Description>
+    <Owner><Name abbreviation="UKN">University of Konstanz, Corentin Fournier</Name></Owner>
     <Attributes>
         <Attribute attribute_name="collection_date">2023-12-06</Attribute>
         <Attribute attribute_name="depth">1</Attribute>
@@ -100,6 +101,10 @@ def test_biosample_fetch_record_discovers_and_parses_linked_samples(retrieval_co
     sample_one = next(s for s in record.raw["samples"] if s["accession"] == "SAMN1")
     assert sample_one["attributes"]["collection_date"] == "2023-12-06"
     assert sample_one["attributes"]["depth"] == "1"
+    assert sample_one["owner"] == {
+        "name": "University of Konstanz, Corentin Fournier",
+        "abbreviation": "UKN",
+    }
     adapter.close()
 
 

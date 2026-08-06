@@ -95,6 +95,30 @@ def test_maps_biological_rep_relation_sample_level_fact(db_session):
     assert values["biological_rep_relation"].review_required is True
 
 
+def test_maps_structured_biological_rep_presence_without_review(db_session):
+    study = _study(db_session, title="Structured replicate presence")
+    _fact(
+        db_session,
+        study,
+        field="biological_rep_presence",
+        value="TRUE",
+        entity_level="study",
+        support=SupportType.DETERMINISTICALLY_DERIVED,
+    )
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    values = {
+        sv.target_field: sv
+        for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id, entity_id=None)
+    }
+    assert values["biological_rep"].standardized_value == "TRUE"
+    assert values["biological_rep"].mapping_method == "deterministic_synonym"
+    assert values["biological_rep"].review_required is False
+
+
 def test_maps_depth_aliases_and_control_sample_category(db_session):
     study = _study(db_session, title="Depth aliases and controls")
     sample = Entity(study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN_CONTROL")
