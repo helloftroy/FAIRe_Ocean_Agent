@@ -31,7 +31,6 @@ from fair_ocean_agent.database.enums import (
 )
 from fair_ocean_agent.database.models import (
     Entity,
-    EntityRelationship,
     ExternalIdentifier,
     RawFact,
     Source,
@@ -61,6 +60,9 @@ from fair_ocean_agent.extraction.text import (
 )
 from fair_ocean_agent.identity.deduplication import find_existing_study_by_identifier
 from fair_ocean_agent.identity.entity_linking import get_or_create_entity as _get_or_create_entity
+from fair_ocean_agent.identity.entity_linking import (
+    get_or_create_entity_relationship as _get_or_create_entity_relationship,
+)
 from fair_ocean_agent.identity.identifiers import IdentifierError, normalize_identifier
 from fair_ocean_agent.identity.resolution import resolve_or_create_study
 from fair_ocean_agent.identity.source_linking import create_source
@@ -226,48 +228,6 @@ def _apply_publication_fields(source: Source, fields: dict) -> None:
         source.fulltext_available = fields["fulltext_available"]
     if fields.get("open_access_status") == AccessStatus.OPEN.value:
         source.access_status = AccessStatus.OPEN.value
-
-
-def _get_or_create_entity_relationship(
-    session: Session,
-    study_id: str,
-    from_entity_id: str,
-    to_entity_id: str,
-    relationship_type: EntityRelationshipType,
-) -> EntityRelationship:
-    """Looked up GLOBALLY (no study_id filter), matching entity_relationships'
-    own uq_entity_relationship constraint (from_entity_id, to_entity_id,
-    relationship_type -- database/models.py, no study_id in it): from/to
-    entity_ids can now be shared entities (SHAREABLE_ENTITY_LEVELS,
-    database/enums.py) resolved by more than one Study, and the physical
-    relationship between two such entities (this run WAS sequenced from
-    this sample, structurally) doesn't change depending on which study is
-    asking -- it's exactly as physically invariant as the entities
-    themselves (same reasoning the user gave for sample/experiment facts
-    not changing on reuse). A study-scoped lookup here would try to
-    reinsert the identical (from, to, type) triple every time a SECOND
-    study's own resolution pass reaches the same shared entities, hitting
-    that unique constraint -- confirmed live against a real citing-paper
-    pair (10.1038/s42003-024-06136-2 / 10.1073/pnas.2005917117) whose
-    shared run/sample/experiment entities triggered exactly this."""
-    existing = session.scalar(
-        select(EntityRelationship).where(
-            EntityRelationship.from_entity_id == from_entity_id,
-            EntityRelationship.to_entity_id == to_entity_id,
-            EntityRelationship.relationship_type == relationship_type.value,
-        )
-    )
-    if existing is not None:
-        return existing
-    relationship = EntityRelationship(
-        study_id=study_id,
-        from_entity_id=from_entity_id,
-        to_entity_id=to_entity_id,
-        relationship_type=relationship_type.value,
-    )
-    session.add(relationship)
-    session.flush()
-    return relationship
 
 
 def _materialize_candidate_entity(

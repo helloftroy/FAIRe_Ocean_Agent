@@ -45,6 +45,7 @@ from fair_ocean_agent.database.models import (
     StandardizedValueEvidence,
 )
 from fair_ocean_agent.extraction.experiment_runs import materialize_legacy_experiment_runs
+from fair_ocean_agent.identity.sample_alias_reconciliation import reconcile_sample_aliases
 from fair_ocean_agent.mapping import vocabularies
 from fair_ocean_agent.mapping.rules import MappingRule, rules_for
 
@@ -116,6 +117,7 @@ def map_study_to_faire(session: Session, study_id: str) -> int:
     from scratch each time it's called (delete-then-recreate), so it's safe
     to call again after new raw_facts arrive or after a rules.py change."""
     materialize_legacy_experiment_runs(session, study_id)
+    reconcile_sample_aliases(session, study_id)
     _clear_existing_faire_mappings(session, study_id)
 
     # REJECTED facts (quarantined -- e.g. extracted under a since-fixed

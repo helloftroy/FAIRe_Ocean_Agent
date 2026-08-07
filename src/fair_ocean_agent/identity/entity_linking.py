@@ -14,17 +14,19 @@ forward.
 """
 from __future__ import annotations
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from fair_ocean_agent.clock import utcnow
 from fair_ocean_agent.database.enums import (
     EntityLevel,
+    EntityRelationshipType,
     EntityRootStatus,
     RelationshipType,
     SHAREABLE_ENTITY_LEVELS,
     SupportType,
 )
-from fair_ocean_agent.database.models import Entity, EntityStudy
+from fair_ocean_agent.database.models import Entity, EntityRelationship, EntityStudy
 
 
 def create_entity(
@@ -160,3 +162,53 @@ def get_or_create_entity(
             label=label,
         ),
     )
+
+
+def get_or_create_entity_relationship(
+    session: Session,
+    study_id: str,
+    from_entity_id: str,
+    to_entity_id: str,
+    relationship_type: EntityRelationshipType,
+) -> EntityRelationship:
+    """Looked up GLOBALLY (no study_id filter), matching entity_relationships'
+    own uq_entity_relationship constraint (from_entity_id, to_entity_id,
+    relationship_type -- database/models.py, no study_id in it): from/to
+    entity_ids can now be shared entities (SHAREABLE_ENTITY_LEVELS above)
+    resolved by more than one Study, and the physical relationship between
+    two such entities (this run WAS sequenced from this sample,
+    structurally) doesn't change depending on which study is asking --
+    it's exactly as physically invariant as the entities themselves (same
+    reasoning the user gave for sample/experiment facts not changing on
+    reuse). A study-scoped lookup here would try to reinsert the identical
+    (from, to, type) triple every time a SECOND study's own resolution
+    pass reaches the same shared entities, hitting that unique constraint
+    -- confirmed live against a real citing-paper pair
+    (10.1038/s42003-024-06136-2 / 10.1073/pnas.2005917117) whose shared
+    run/sample/experiment entities triggered exactly this.
+
+    Promoted from workflow/handlers.py's own originally-private
+    _get_or_create_entity_relationship into this module -- the single
+    choke point for Entity/EntityStudy-adjacent writes -- so
+    identity/sample_alias_reconciliation.py (a different call site,
+    genuinely needing the exact same global-lookup semantics for its own
+    SAME_PHYSICAL_SAMPLE_AS relationships) doesn't grow a second,
+    independent copy of this same logic."""
+    existing = session.scalar(
+        select(EntityRelationship).where(
+            EntityRelationship.from_entity_id == from_entity_id,
+            EntityRelationship.to_entity_id == to_entity_id,
+            EntityRelationship.relationship_type == relationship_type.value,
+        )
+    )
+    if existing is not None:
+        return existing
+    relationship = EntityRelationship(
+        study_id=study_id,
+        from_entity_id=from_entity_id,
+        to_entity_id=to_entity_id,
+        relationship_type=relationship_type.value,
+    )
+    session.add(relationship)
+    session.flush()
+    return relationship

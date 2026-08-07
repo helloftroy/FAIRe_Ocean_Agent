@@ -337,6 +337,33 @@ def test_biosample_extract_structured_facts_derives_depth_from_source_material_i
     assert "SAMN_SURFACE" not in by_entity
 
 
+def test_biosample_extract_structured_facts_derives_depth_from_hyphenated_source_material_id(biosample_adapter):
+    """Regression guard for a real gap found live: BioSample attribute_name
+    spelling is submitter-controlled and varies -- a real dataset stored
+    this exact MIxS attribute as "source-material-id" (hyphenated), which
+    the dict-exact-key lookup silently never matched at all, so depth
+    derivation never fired for that dataset despite the attribute being
+    present. _get_attribute's normalized fallback must catch this."""
+    raw = {
+        "bioproject_accession": "PRJNA1425045",
+        "total_linked_samples": 1,
+        "truncated": False,
+        "samples": [
+            {
+                "accession": "SAMN_HYPHENATED",
+                "title": "MIMS Environmental sample",
+                "attributes": {"source-material-id": "10 m V3-V4"},
+            },
+        ],
+    }
+    facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw))
+
+    depth_facts = [f for f in facts if f.fact_type_candidate == "depth"]
+    assert len(depth_facts) == 1
+    assert depth_facts[0].entity_external_id == "SAMN_HYPHENATED"
+    assert depth_facts[0].raw_value == "10 m"
+
+
 def test_biosample_extract_structured_facts_detects_biological_rep_relation_from_sample_name_attribute(
     biosample_adapter,
 ):

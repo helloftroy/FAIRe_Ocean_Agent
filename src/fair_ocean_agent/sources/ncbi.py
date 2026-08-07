@@ -246,6 +246,29 @@ def _derive_depth_from_source_material_id(value: str) -> str | None:
     return match.group(0).strip() if match else None
 
 
+def _normalize_attribute_name(name: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", name.lower())
+
+
+def _get_attribute(attributes: dict, name: str) -> str | None:
+    """BioSample `attribute_name` spelling is submitter-controlled and
+    varies (hyphens vs underscores vs spaces) -- confirmed live that the
+    exact same MIxS attribute appears as both "source_material_id" and
+    "source-material-id" across real submissions. Looks up by exact key
+    first (cheap, the common case), falling back to a normalized
+    (case/separator-insensitive) match across all attribute keys rather
+    than silently missing real data stored under a differently-spelled
+    key -- this is what caused depth derivation below to never fire at
+    all for a real dataset that happened to use the hyphenated spelling."""
+    if name in attributes:
+        return attributes[name]
+    target = _normalize_attribute_name(name)
+    for key, value in attributes.items():
+        if _normalize_attribute_name(key) == target:
+            return value
+    return None
+
+
 def _uid_verification_fact(
     *,
     bioproject_accession: str,
@@ -554,7 +577,7 @@ class NcbiBioSampleAdapter(SourceAdapter):
                             support_type=SupportType.DETERMINISTICALLY_DERIVED,
                         )
                     )
-            source_material_id = sample.get("attributes", {}).get("source_material_id")
+            source_material_id = _get_attribute(sample.get("attributes", {}), "source_material_id")
             if source_material_id:
                 depth_value = _derive_depth_from_source_material_id(str(source_material_id))
                 if depth_value:

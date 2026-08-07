@@ -59,6 +59,20 @@ EMPTY_CLASSES = OMITTED_EMPTY_CLASSES
 # more than one is being processed at once.
 INTERNAL_STUDY_ID_FIELD = "internal_study_id"
 
+# Same non-FAIRe, internal-only precedent as INTERNAL_STUDY_ID_FIELD above --
+# not in schemas/faire/classes.yaml, excluded from field_reference.csv.
+# Carries a canonical sample's alias entities' own native names (e.g. a
+# supplement table's own "GC04_1") once identity/sample_alias_reconciliation.py
+# has folded them into the canonical (accessioned) entity's row, so that
+# native name isn't lost even though it no longer gets its own row.
+INTERNAL_ALIAS_SAMPLE_IDS_FIELD = "internal_alias_sample_ids"
+
+# samp_name/materialSampleID are the row's own identifying columns -- the
+# real accession must win outright as the identifier, never get pipe-joined
+# against an alias's native name (that native name is preserved separately,
+# in INTERNAL_ALIAS_SAMPLE_IDS_FIELD).
+_ALIAS_MERGE_EXCLUDED_FIELDS = frozenset({"samp_name", "materialSampleID"})
+
 
 @lru_cache(maxsize=1)
 def _load_classes() -> dict:
@@ -141,6 +155,48 @@ def _linked_entity(
             "cannot emit an unambiguous FAIRe experimentRunMetadata row"
         )
     return entities[0] if entities else None
+
+
+def _alias_entities(session: Session, canonical_entity_id: str) -> list[Entity]:
+    """Reverse of _linked_entity's direction: every alias entity that
+    identity/sample_alias_reconciliation.py has folded INTO this canonical
+    entity. Deliberately doesn't reuse _linked_entity's "raise if >1"
+    guard -- more than one supplement-derived alias legitimately folding
+    into one real accession is the expected case here, unlike
+    DERIVED_FROM_SAMPLE/USES_ASSAY/SEQUENCED_IN_RUN's 1:1 semantics."""
+    return list(
+        session.scalars(
+            select(Entity)
+            .join(EntityRelationship, EntityRelationship.from_entity_id == Entity.entity_id)
+            .where(
+                EntityRelationship.to_entity_id == canonical_entity_id,
+                EntityRelationship.relationship_type == EntityRelationshipType.SAME_PHYSICAL_SAMPLE_AS.value,
+            )
+            .order_by(Entity.external_identifier, Entity.entity_id)
+        )
+    )
+
+
+def _merge_field_values(
+    primary: dict[str, str], secondary: dict[str, str], *, exclude: frozenset[str] = frozenset()
+) -> dict[str, str]:
+    """Folds `secondary` into `primary`: a field present on only one side
+    passes through unchanged; identical values on both sides collapse to
+    one; genuinely differing non-null values get pipe-joined (primary's
+    value first) per the user's own explicit request ("if there are
+    conflicts we should list both with a pipe"). Fields in `exclude` are
+    copied from `primary` only, never touched by `secondary`."""
+    merged = dict(primary)
+    for field, value in secondary.items():
+        if field in exclude:
+            continue
+        if field not in merged or not merged[field]:
+            merged[field] = value
+        elif value and value != merged[field]:
+            existing_values = merged[field].split("|")
+            if value not in existing_values:
+                merged[field] = "|".join([*existing_values, value])
+    return merged
 
 
 def _write_csv(path: Path, columns: list[str], rows: list[dict[str, str]]) -> int:
@@ -276,7 +332,14 @@ def export_faire(session: Session, output_dir: str | Path) -> dict[str, int]:
             select(Entity).where(Entity.study_id == study.study_id, Entity.entity_level == EntityLevel.SAMPLE.value)
         )
         for entity in sample_entities:
-            linked_study_ids = _linked_study_ids(session, entity.entity_id)
+            # A supplement-derived alias entity (identity/
+            # sample_alias_reconciliation.py) never emits its own row --
+            # its values are folded into its canonical (accessioned)
+            # entity's row below instead.
+            if _linked_entity(session, entity.entity_id, EntityRelationshipType.SAME_PHYSICAL_SAMPLE_AS) is not None:
+                continue
+
+            linked_study_ids = set(_linked_study_ids(session, entity.entity_id))
             # A shared sample's row must not carry any non-root study's
             # paper-specific interpretive broadcast defaults -- only the
             # root study's (identity/root_determination.py), or its own
@@ -286,10 +349,28 @@ def export_faire(session: Session, output_dir: str | Path) -> dict[str, int]:
             row = dict(broadcast)
             row.update(_entity_values(session, entity.entity_id))
             row["samp_name"] = entity.external_identifier or entity.entity_id
-            row[INTERNAL_STUDY_ID_FIELD] = "|".join(linked_study_ids)
+
+            alias_sample_ids = []
+            for alias in _alias_entities(session, entity.entity_id):
+                alias_broadcast = (
+                    _study_wide_values(session, alias.study_id)
+                    if _entity_broadcast_is_authoritative(alias, alias.study)
+                    else {}
+                )
+                alias_row = dict(alias_broadcast)
+                alias_row.update(_entity_values(session, alias.entity_id))
+                row = _merge_field_values(row, alias_row, exclude=_ALIAS_MERGE_EXCLUDED_FIELDS)
+                alias_sample_ids.append(alias.external_identifier or alias.entity_id)
+                linked_study_ids.update(_linked_study_ids(session, alias.entity_id))
+            if alias_sample_ids:
+                row[INTERNAL_ALIAS_SAMPLE_IDS_FIELD] = "|".join(alias_sample_ids)
+
+            row[INTERNAL_STUDY_ID_FIELD] = "|".join(sorted(linked_study_ids))
             sample_rows.append(row)
     counts["sampleMetadata"] = _write_csv(
-        output_dir / "sampleMetadata.csv", [INTERNAL_STUDY_ID_FIELD, *sample_columns], sample_rows
+        output_dir / "sampleMetadata.csv",
+        [INTERNAL_STUDY_ID_FIELD, INTERNAL_ALIAS_SAMPLE_IDS_FIELD, *sample_columns],
+        sample_rows,
     )
 
     experiment_columns = class_columns("experimentRunMetadata")
@@ -322,7 +403,16 @@ def export_faire(session: Session, output_dir: str | Path) -> dict[str, int]:
                 EntityRelationshipType.SEQUENCED_IN_RUN,
             )
             if sample is not None:
-                row.setdefault("samp_name", sample.external_identifier or sample.entity_id)
+                # Defends against a run's DERIVED_FROM_SAMPLE link pointing
+                # at a supplement-derived alias entity (identity/
+                # sample_alias_reconciliation.py) that no longer emits its
+                # own sampleMetadata row -- prefer the real accessioned
+                # entity so samp_name always resolves to a row that exists.
+                canonical_sample = (
+                    _linked_entity(session, sample.entity_id, EntityRelationshipType.SAME_PHYSICAL_SAMPLE_AS)
+                    or sample
+                )
+                row.setdefault("samp_name", canonical_sample.external_identifier or canonical_sample.entity_id)
             if assay is not None:
                 row.setdefault("assay_name", assay.external_identifier or assay.label or assay.entity_id)
             if sequencing_run is not None:

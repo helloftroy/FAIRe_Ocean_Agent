@@ -2704,6 +2704,116 @@ tests updated to exercise the general merge/consistency-check machinery
 via `PMID` instead of a now-exempted dataset-accession type, since that's
 what they were actually testing).
 
+## Within-study sample-entity alias reconciliation
+
+Direct follow-up after reviewing a real audit export
+(`two_remaining_current_pipeline_20260806_172744`) for s42003: the user
+noticed `sampleMetadata.csv` carried two un-reconciled representations of
+the same physical samples for that one study -- 67 rows named
+`GC04_1`..`GC05_19` (the paper's own native core/sub-sample naming,
+materialized by `sources/supplement_parsing.py` from its supplement
+table's own sample-ID column) and, separately, 83 rows with real NCBI
+BioSample accessions (`SAMN...`). These were never reconciled because
+entity matching is strict string equality on `(entity_level,
+external_identifier)`, and `"GC04_1"` never equals `"SAMN11268098"`. The
+user's own framing was exactly right: "because these are sample-level
+datasets, we should merge the results ... if there are conflicts we should
+list both with a pipe."
+
+**Found a real, 100%-reliable cross-reference already sitting in the
+data.** Each real BioSample's own `source_material_id`-family attribute
+already encodes the paper's native name, just with an extra cruise-ID
+token and a different separator -- `SAMN11268098`'s value is
+`"GS14-GC08-1"`, and `sample_alias_reconciliation.py`'s general
+(deliberately not paper-specific) tokenized trailing-subsequence match
+confirmed **67 of 67** supplement-named entities correspond to exactly one
+real accession, 0 ambiguous. The one "leftover" real accession
+(`GC05_20`) is a genuine BioSample the paper's own supplement table simply
+never mentions -- a legitimate gap, not a matching failure. This pattern
+is systemic, not one-off: any paper whose supplement table uses the
+author's own sample naming rather than the eventual accession hits the
+identical mismatch.
+
+**Found and fixed a related pre-existing bug sharing the same root
+cause.** The real BioSample XML for this paper stores the attribute as
+`"source-material-id"` (hyphenated) -- not the literal
+`"source_material_id"` (underscored) `sources/ncbi.py`'s own
+depth-derivation lookup (added two sections back, for a different paper)
+searches for. That lookup is keyed on the BioSample's own verbatim,
+submitter-controlled `attribute_name` with no normalization, so depth
+derivation was silently never firing for this exact real dataset. New
+`_get_attribute` does a case/hyphen/underscore-insensitive fallback lookup
+before giving up.
+
+**Chose a non-destructive, export-time merge over a real Entity-level FK
+merge**, for three concrete reasons. Ordering: `DISCOVER_IDENTIFIERS`/
+`DISCOVER_SUPPLEMENTS`/`RETRIEVE_SUPPLEMENTS`/
+`EXTRACT_SUPPLEMENT_TEXT_FACTS` are separate, manually-triggered stages
+with no auto-chaining, so a creation-time merge hook can't assume the
+other side of a pairing already exists in either direction -- a separate,
+idempotent, re-runnable reconciliation pass handles either order for
+free. Correctness: `mapping/faire.py`'s existing per-field conflict
+handling is "oldest fact wins, flag review, drop the rest" -- re-pointing
+`RawFact.entity_id` onto one entity just feeds both entities' facts into
+that same pick-one machinery, and still wouldn't produce the pipe-join the
+user actually asked for. Evidence tier: the matching evidence here is
+`DETERMINISTICALLY_DERIVED` (a token derivation over free text), the same
+tier `identity/resolution.py`'s own docstring says must never merge Study
+rows unreviewed -- there's no un-merge mechanism anywhere in this schema
+for a false positive at the Entity level either.
+
+**New `identity/sample_alias_reconciliation.py::reconcile_sample_aliases`**,
+called once per study from `map_study_to_faire` (idempotent, self-heals if
+the "losing" side of a pairing shows up on a later run -- e.g. supplements
+retrieved after the first mapping pass). A `SAMPLE` entity with no
+accessioned-adapter `RawFact` is an alias candidate; a linked `SAMPLE`
+entity that does have one is a canonical candidate. Exactly one
+tokenized trailing-subsequence match -> records a new
+`EntityRelationshipType.SAME_PHYSICAL_SAMPLE_AS` relationship (alias ->
+canonical, via the newly-promoted, globally-scoped
+`get_or_create_entity_relationship` in `identity/entity_linking.py`) plus
+a non-review `sample_alias_match` audit fact. Two or more matches never
+guesses -- flags a `NEEDS_REVIEW` `sample_alias_ambiguous` fact instead,
+mirroring `identity/root_determination.py::_flag_ambiguous`'s
+already-flagged dedup guard. Zero matches is a silent no-op (the common
+case). Dedups by distinct target `entity_id`, not by fact row, after
+confirming live that a shared canonical entity carries one duplicate
+`source_material_id` fact per linked study's own independent resolution
+pass -- naive row-counting would read that as false ambiguity.
+
+**`exports/faire.py` folds each alias into its canonical entity's row.**
+New `_alias_entities`/`_merge_field_values` helpers: identical values
+collapse to one, a value present on only one side passes through
+unchanged, genuine conflicts pipe-join with the canonical's value first.
+`samp_name`/`materialSampleID` are excluded from merging -- the real
+accession always wins outright as the row's identifier -- with the
+alias's own native name(s) preserved separately in a new internal-only
+`internal_alias_sample_ids` column (same non-FAIRe precedent as the
+existing `internal_study_id` column: not in `classes.yaml`, excluded from
+`field_reference.csv`). An alias entity never emits its own
+`sampleMetadata` row. `experimentRunMetadata`'s `samp_name` resolution now
+also prefers a run's linked sample's canonical target, if one exists, so a
+run pointing at a since-aliased entity still resolves to a row that
+actually exists.
+
+**Live re-check against a scratch copy of the real audit database**
+confirmed the design's own predicted numbers exactly: `reconcile_sample_
+aliases` found 67 matches / 0 ambiguous for s42003 (68 alias candidates
+considered, the one non-match being a real gap, not a miss),
+`sampleMetadata.csv` rows for that study dropped from 150 to 83 exactly as
+predicted, the `GC08_1`/`SAMN11268098` pair correctly collapsed into one
+row (`samp_name="SAMN11268098"`, `internal_alias_sample_ids="GC08_1"`),
+zero ambiguous flags anywhere, and the unrelated fmicb study in the same
+database (a different, pure-depth-style `source_material_id` convention,
+e.g. `"3500 m V3-V4"`) produced zero alias relationships -- confirming no
+false positives from generalizing the matcher beyond this one paper's own
+naming convention.
+
+710 tests pass (8 new: unambiguous/ambiguous/zero-match/idempotent-rerun/
+pure-depth-false-match/dedup-by-entity-id cases for the reconciliation
+module itself, plus alias+canonical merge-with-conflict and
+experimentRunMetadata samp_name-through-canonical export cases).
+
 ## Mapping expansion: the rest of FAIRe's Environment section
 
 Beyond the 8 BioSample attributes already mapped (elev/samp_collect_device/

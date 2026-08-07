@@ -12,7 +12,13 @@ from fair_ocean_agent.database.models import (
     StandardizedValue,
     Study,
 )
-from fair_ocean_agent.exports.faire import EMPTY_CLASSES, INTERNAL_STUDY_ID_FIELD, class_columns, export_faire
+from fair_ocean_agent.exports.faire import (
+    EMPTY_CLASSES,
+    INTERNAL_ALIAS_SAMPLE_IDS_FIELD,
+    INTERNAL_STUDY_ID_FIELD,
+    class_columns,
+    export_faire,
+)
 from fair_ocean_agent.mapping.faire import TARGET_SCHEMA, TARGET_SCHEMA_VERSION, map_study_to_faire
 
 
@@ -170,6 +176,7 @@ def test_export_faire_internal_study_id_traces_rows_across_two_studies(db_sessio
     with (tmp_path / "field_reference.csv").open() as f:
         field_names = {row["faire_field"] for row in csv.DictReader(f)}
     assert INTERNAL_STUDY_ID_FIELD not in field_names
+    assert INTERNAL_ALIAS_SAMPLE_IDS_FIELD not in field_names
 
 
 def test_shared_sample_gets_pipe_joined_study_ids_and_no_broadcast_while_root_pending(db_session, tmp_path):
@@ -551,9 +558,10 @@ def test_export_faire_column_order_matches_classes_yaml(db_session, tmp_path):
     export_faire(db_session, tmp_path)
     with (tmp_path / "sampleMetadata.csv").open() as f:
         header = next(csv.reader(f))
-    # internal_study_id is a pipeline-internal traceability column, prepended
-    # ahead of the real FAIRe columns -- not itself part of classes.yaml.
-    assert header == [INTERNAL_STUDY_ID_FIELD, *class_columns("sampleMetadata")]
+    # internal_study_id/internal_alias_sample_ids are pipeline-internal
+    # traceability columns, prepended ahead of the real FAIRe columns --
+    # neither is itself part of classes.yaml.
+    assert header == [INTERNAL_STUDY_ID_FIELD, INTERNAL_ALIAS_SAMPLE_IDS_FIELD, *class_columns("sampleMetadata")]
 
 
 def test_export_faire_writes_field_reference_with_exact_mappings(db_session, tmp_path):
@@ -581,3 +589,113 @@ def test_export_faire_skips_studies_with_nothing_mapped(db_session, tmp_path):
     counts = export_faire(db_session, tmp_path)
 
     assert counts["projectMetadata"] == 0
+
+
+def test_alias_and_canonical_sample_merge_with_pipe_joined_conflict(db_session, tmp_path):
+    """A paper's own supplement-derived sample entity ("GC04_1") and the
+    real BioSample accession for the same physical sample ("SAMN0007")
+    fold into one sampleMetadata row -- identity/sample_alias_
+    reconciliation.py is invoked automatically by map_study_to_faire. A
+    genuine conflict on a shared field pipe-joins (canonical value first,
+    per the user's own explicit request); a field present on only the
+    alias passes through unchanged; the alias never emits its own row."""
+    study = Study(title="Alias reconciliation export test")
+    db_session.add(study)
+    db_session.flush()
+    canonical = Entity(study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN0007")
+    alias = Entity(study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="GC04_1")
+    db_session.add_all([canonical, alias])
+    db_session.flush()
+    db_session.add_all([_home_entity_study(canonical), _home_entity_study(alias)])
+    db_session.add_all(
+        [
+            # Marks `canonical` as a real, structurally-resolved BioSample --
+            # the only signal reconcile_sample_aliases uses to distinguish
+            # a canonical entity from an alias candidate.
+            RawFact(
+                study_id=study.study_id, entity_id=canonical.entity_id, raw_field_name="biosample_accession",
+                raw_value="SAMN0007", fact_type_candidate="biosample_accession", entity_level="sample",
+                support_type=SupportType.STRUCTURED_SOURCE.value, extraction_method="adapter:ncbi_biosample",
+            ),
+            RawFact(
+                study_id=study.study_id, entity_id=canonical.entity_id, raw_field_name="source-material-id",
+                raw_value="GS14-GC04-1", fact_type_candidate="source-material-id", entity_level="sample",
+                support_type=SupportType.STRUCTURED_SOURCE.value, extraction_method="adapter:ncbi_biosample",
+            ),
+            RawFact(
+                study_id=study.study_id, entity_id=canonical.entity_id, raw_field_name="geo_loc_name",
+                raw_value="USA: California", fact_type_candidate="geo_loc_name", entity_level="sample",
+                support_type=SupportType.STRUCTURED_SOURCE.value,
+            ),
+            RawFact(
+                study_id=study.study_id, entity_id=alias.entity_id, raw_field_name="geo_loc_name",
+                raw_value="USA: California: Monterey Bay", fact_type_candidate="geo_loc_name", entity_level="sample",
+                support_type=SupportType.STRUCTURED_SOURCE.value,
+            ),
+            RawFact(
+                study_id=study.study_id, entity_id=alias.entity_id, raw_field_name="env_broad_scale",
+                raw_value="marine biome", fact_type_candidate="env_broad_scale", entity_level="sample",
+                support_type=SupportType.STRUCTURED_SOURCE.value,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+    export_faire(db_session, tmp_path)
+
+    with (tmp_path / "sampleMetadata.csv").open() as f:
+        rows = list(csv.DictReader(f))
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["samp_name"] == "SAMN0007"
+    assert row[INTERNAL_ALIAS_SAMPLE_IDS_FIELD] == "GC04_1"
+    assert row["geo_loc_name"] == "USA: California|USA: California: Monterey Bay"
+    assert row["env_broad_scale"] == "marine biome"
+
+
+def test_experiment_run_samp_name_resolves_through_canonical_alias_target(db_session, tmp_path):
+    """A run whose DERIVED_FROM_SAMPLE link points at a supplement-derived
+    alias entity (which no longer emits its own sampleMetadata row once
+    reconciled) must still resolve samp_name to the real accession that
+    row exists under."""
+    study = Study(title="Run resolves through alias")
+    db_session.add(study)
+    db_session.flush()
+    canonical = Entity(study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN0008")
+    alias = Entity(study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="GC05_1")
+    run = Entity(study_id=study.study_id, entity_level=EntityLevel.EXPERIMENT_RUN.value, external_identifier="LIB-B01")
+    db_session.add_all([canonical, alias, run])
+    db_session.flush()
+    db_session.add_all([_home_entity_study(canonical), _home_entity_study(alias)])
+    db_session.add_all(
+        [
+            RawFact(
+                study_id=study.study_id, entity_id=canonical.entity_id, raw_field_name="biosample_accession",
+                raw_value="SAMN0008", fact_type_candidate="biosample_accession", entity_level="sample",
+                support_type=SupportType.STRUCTURED_SOURCE.value, extraction_method="adapter:ncbi_biosample",
+            ),
+            RawFact(
+                study_id=study.study_id, entity_id=canonical.entity_id, raw_field_name="source_material_id",
+                raw_value="GS14-GC05-1", fact_type_candidate="source_material_id", entity_level="sample",
+                support_type=SupportType.STRUCTURED_SOURCE.value, extraction_method="adapter:ncbi_biosample",
+            ),
+            EntityRelationship(
+                study_id=study.study_id,
+                from_entity_id=run.entity_id,
+                to_entity_id=alias.entity_id,
+                relationship_type=EntityRelationshipType.DERIVED_FROM_SAMPLE.value,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+    export_faire(db_session, tmp_path)
+
+    with (tmp_path / "experimentRunMetadata.csv").open() as f:
+        rows = list(csv.DictReader(f))
+    assert len(rows) == 1
+    assert rows[0]["samp_name"] == "SAMN0008"

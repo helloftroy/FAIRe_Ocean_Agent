@@ -166,6 +166,17 @@ class EntityRelationshipType(str, enum.Enum):
     DERIVED_FROM_SAMPLE = "derived_from_sample"
     USES_ASSAY = "uses_assay"
     SEQUENCED_IN_RUN = "sequenced_in_run"
+    # identity/sample_alias_reconciliation.py: a within-study SAMPLE entity
+    # created from a paper's own native naming (e.g. supplement-table
+    # parsing, sources/supplement_parsing.py) that's been confidently
+    # matched, via a real BioSample's own source_material_id cross-
+    # reference, to the entity carrying the real accession for the same
+    # physical sample. from_entity_id = the alias (native-named) entity,
+    # to_entity_id = the canonical (accessioned) entity -- never the
+    # reverse, so a canonical entity can be the target of more than one
+    # alias without violating entity_relationships' own uq_entity_relationship
+    # constraint.
+    SAME_PHYSICAL_SAMPLE_AS = "same_physical_sample_as"
 
 
 class SupportType(str, enum.Enum):
