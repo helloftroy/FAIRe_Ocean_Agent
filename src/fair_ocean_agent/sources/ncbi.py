@@ -453,7 +453,19 @@ class NcbiBioSampleAdapter(SourceAdapter):
                 organism = dict(organism_el.attrib) if organism_el is not None else {}
                 owner_name_el = bs.find("Owner/Name")
                 owner_name = _clean_text(owner_name_el.text if owner_name_el is not None else None)
-                submission_name = _clean_text(bs.findtext("Submission/Name") or bs.findtext("Submission"))
+                # Owner/Name is the submitting INSTITUTION's name (e.g.
+                # "San Francisco Estuary Institute"), confirmed against
+                # real cached BioSample XML -- never a person. The real
+                # per-sample submitter PERSON lives one level deeper, at
+                # Owner/Contacts/Contact/Name/First+Last (also confirmed
+                # against the same real record). Only the first <Contact>
+                # is read, matching this whole block's existing
+                # single-element convention (a BioSample practically
+                # always carries exactly one).
+                contact_name_el = bs.find("Owner/Contacts/Contact/Name")
+                contact_first = _clean_text(contact_name_el.findtext("First") if contact_name_el is not None else None)
+                contact_last = _clean_text(contact_name_el.findtext("Last") if contact_name_el is not None else None)
+                contact_name = " ".join(part for part in (contact_first, contact_last) if part)
                 samples.append(
                     {
                         "accession": accession,
@@ -473,10 +485,10 @@ class NcbiBioSampleAdapter(SourceAdapter):
                                 "abbreviation": (
                                     owner_name_el.get("abbreviation") if owner_name_el is not None else None
                                 ),
+                                "contact_name": contact_name,
                             }.items()
                             if value
                         },
-                        "submission": {"name": submission_name} if submission_name else {},
                     }
                 )
 
@@ -532,9 +544,21 @@ class NcbiBioSampleAdapter(SourceAdapter):
                 )
             )
 
-        for sample in r.get("samples", []):
-            if _is_mag_biosample(sample):
-                continue
+        # MAG (metagenome-assembled-genome) BioSamples are excluded from
+        # every per-sample-derived signal below, not just the attribute
+        # loop immediately following: a real live audit found the
+        # replicate-relation tiers further down used to read straight from
+        # r.get("samples", []) (the UNFILTERED list), so MAG BioSamples --
+        # which never get their own lat_lon/collection_date/depth facts
+        # persisted, since the loop below skips them -- could still get
+        # silently grouped as "biological replicates" of each other by the
+        # metadata-match tier purely because they share the one real
+        # sediment sample's coordinates/date/depth they were assembled
+        # from. A MAG is a computational construct derived from one
+        # sample's sequencing data, not a biological replicate.
+        non_mag_samples = [sample for sample in r.get("samples", []) if not _is_mag_biosample(sample)]
+
+        for sample in non_mag_samples:
             accession = sample["accession"]
             normalized_attrs: dict[str, str] = {}
             for attr_name, attr_value in sample.get("attributes", {}).items():
@@ -593,50 +617,73 @@ class NcbiBioSampleAdapter(SourceAdapter):
                             support_type=SupportType.DETERMINISTICALLY_DERIVED,
                         )
                     )
-        facts.extend(self._recorded_by_facts(r.get("samples", [])))
-        explicit_rep_facts = self._biological_rep_relation_facts_from_replicate_attribute(r.get("samples", []))
+        facts.extend(self._recorded_by_facts(non_mag_samples))
+        # Three replicate-grouping signals, most confident first, each
+        # scoped to only the samples the earlier signal(s) left ungrouped:
+        # (1) an explicit BioSample `replicate` attribute, (2) a sample-
+        # name suffix pattern (sources/replicate_grouping.py), (3) an
+        # explicit user request: samples sharing the same coordinates,
+        # collection date, and depth (and the same assay when one is
+        # actually reported per-sample, otherwise assumed the same) are
+        # grouped as biological replicates. All three read non_mag_samples
+        # (not the raw list) -- see non_mag_samples's own comment above.
+        explicit_rep_facts = self._biological_rep_relation_facts_from_replicate_attribute(non_mag_samples)
         facts.extend(explicit_rep_facts)
-        if explicit_rep_facts:
+        name_pattern_excluded = {fact.entity_external_id for fact in explicit_rep_facts if fact.entity_external_id}
+        name_pattern_rep_facts = self._biological_rep_relation_facts(
+            non_mag_samples, excluded_accessions=name_pattern_excluded
+        )
+        facts.extend(name_pattern_rep_facts)
+        metadata_excluded = name_pattern_excluded | {
+            fact.entity_external_id for fact in name_pattern_rep_facts if fact.entity_external_id
+        }
+        metadata_match_rep_facts = self._biological_rep_relation_facts_from_metadata_match(
+            non_mag_samples, excluded_accessions=metadata_excluded
+        )
+        facts.extend(metadata_match_rep_facts)
+        all_rep_facts = explicit_rep_facts + name_pattern_rep_facts + metadata_match_rep_facts
+        # Emit an explicit TRUE/FALSE whenever there were real (non-MAG)
+        # samples to actually check -- per a real live-audit complaint,
+        # silently emitting nothing when no replicate group was found left
+        # biological_rep blank rather than a clear negative, indistinguishable
+        # from "never checked". Stays silent only when there's genuinely
+        # nothing to assess (no samples at all), matching this pipeline's
+        # standing "never guess absent data" discipline.
+        if non_mag_samples:
             facts.append(
                 RawFactCandidate(
                     entity_level=EntityLevel.STUDY,
                     fact_type_candidate="biological_rep_presence",
                     raw_field_name="replicate",
-                    raw_value="TRUE",
-                    source_locator="ncbi_biosample.Attributes.replicate",
+                    raw_value="TRUE" if all_rep_facts else "FALSE",
+                    source_locator="ncbi_biosample.biological_rep_relation",
                     support_type=SupportType.DETERMINISTICALLY_DERIVED,
                     confidence_metadata={
-                        "replicate_detection_signal": "explicit_biosample_replicate_attribute",
-                        "replicate_group_count": len({fact.raw_value for fact in explicit_rep_facts}),
+                        "replicate_detection_signal": "any_tier" if all_rep_facts else "none",
+                        "replicate_group_count": len({fact.raw_value for fact in all_rep_facts}),
                     },
                 )
             )
-        facts.extend(
-            self._biological_rep_relation_facts(
-                r.get("samples", []),
-                excluded_accessions={fact.entity_external_id for fact in explicit_rep_facts if fact.entity_external_id},
-            )
-        )
         return facts
 
     @staticmethod
     def _recorded_by_facts(samples: list[dict]) -> list[RawFactCandidate]:
+        """The real per-sample submitter PERSON, from each BioSample's own
+        Owner/Contacts/Contact/Name -- NOT Owner/Name, which real BioSample
+        XML confirms is the submitting institution's own name (e.g. "San
+        Francisco Estuary Institute"), not a person, and was previously
+        (incorrectly) piped into this same field alongside real names."""
         recorded_by_values: list[str] = []
         locators: list[str] = []
         seen: set[str] = set()
         for sample in samples:
             accession = sample.get("accession")
-            candidates = (
-                ("Owner.Name", sample.get("owner", {}).get("name")),
-                ("Submission.Name", sample.get("submission", {}).get("name")),
-            )
-            for field_name, value in candidates:
-                value = _clean_text(value)
-                if not accession or not value or value.casefold() in seen:
-                    continue
-                seen.add(value.casefold())
-                recorded_by_values.append(value)
-                locators.append(f"ncbi_biosample.{accession}.{field_name}")
+            value = _clean_text(sample.get("owner", {}).get("contact_name"))
+            if not accession or not value or value.casefold() in seen:
+                continue
+            seen.add(value.casefold())
+            recorded_by_values.append(value)
+            locators.append(f"ncbi_biosample.{accession}.Owner.Contacts.Contact.Name")
 
         if not recorded_by_values:
             return []
@@ -749,6 +796,87 @@ class NcbiBioSampleAdapter(SourceAdapter):
                     },
                 )
             )
+        return facts
+
+    @staticmethod
+    def _effective_depth(sample: dict) -> str | None:
+        attributes = sample.get("attributes", {})
+        depth = _clean_text(attributes.get("depth") or "")
+        if depth:
+            return depth
+        source_material_id = _get_attribute(attributes, "source_material_id")
+        if source_material_id:
+            return _derive_depth_from_source_material_id(str(source_material_id))
+        return None
+
+    @staticmethod
+    def _biological_rep_relation_facts_from_metadata_match(
+        samples: list[dict], excluded_accessions: set[str] | None = None
+    ) -> list[RawFactCandidate]:
+        """Third, lowest-priority replicate-grouping signal (after an
+        explicit BioSample `replicate` attribute, then a sample-name
+        suffix pattern) -- an explicit user request: BioSamples sharing
+        the same coordinates, collection date, and depth are grouped as
+        biological replicates. The assay/marker is also required to match
+        when at least one of the two samples actually reports one (a real
+        BioSample attribute, rare but possible); when NEITHER reports one
+        -- true for essentially all real BioSamples, which have no
+        per-sample assay attribute at all -- it's assumed the same, per
+        the user's own explicit instruction, since one paper/BioProject
+        overwhelmingly uses one consistent assay across all its samples.
+        Never groups a sample missing lat_lon/collection_date/depth: an
+        unknown value is never treated as "the same" as another unknown
+        or known value (this pipeline's standing "never guess" discipline
+        applied here too)."""
+        excluded_accessions = excluded_accessions or set()
+        titles_by_accession: dict[str, str | None] = {}
+        key_by_accession: dict[str, tuple[str, str, str, str | None]] = {}
+        for sample in samples:
+            accession = sample.get("accession")
+            if not accession or accession in excluded_accessions:
+                continue
+            attributes = sample.get("attributes", {})
+            lat_lon = _clean_text(_get_attribute(attributes, "lat_lon") or "")
+            collection_date = _clean_text(attributes.get("collection_date") or "")
+            depth = NcbiBioSampleAdapter._effective_depth(sample) or ""
+            if not lat_lon or not collection_date or not depth:
+                continue
+            assay = _clean_text(_get_attribute(attributes, "assay") or _get_attribute(attributes, "assay_type") or "")
+            titles_by_accession[accession] = sample.get("title")
+            key_by_accession[accession] = (
+                lat_lon.casefold(),
+                collection_date.casefold(),
+                depth.casefold(),
+                assay.casefold() if assay else None,
+            )
+
+        groups: dict[tuple, list[str]] = defaultdict(list)
+        for accession, key in key_by_accession.items():
+            groups[key].append(accession)
+
+        facts: list[RawFactCandidate] = []
+        for accessions in groups.values():
+            if len(accessions) < 2:
+                continue
+            group_members = sorted(accessions)
+            relation = " | ".join(group_members)
+            for accession in group_members:
+                facts.append(
+                    RawFactCandidate(
+                        entity_level=EntityLevel.SAMPLE,
+                        fact_type_candidate="biological_rep_relation",
+                        raw_field_name="lat_lon+collection_date+depth",
+                        raw_value=relation,
+                        source_locator=f"ncbi_biosample.{accession}.biological_rep_relation.metadata_match",
+                        entity_external_id=accession,
+                        entity_label=titles_by_accession.get(accession),
+                        support_type=SupportType.DETERMINISTICALLY_DERIVED,
+                        confidence_metadata={
+                            "replicate_detection_signal": "biosample_metadata_match",
+                            "replicate_group_size": len(group_members),
+                        },
+                    )
+                )
         return facts
 
     def find_related(self, record: SourceRecord) -> list[RelatedIdentifier]:

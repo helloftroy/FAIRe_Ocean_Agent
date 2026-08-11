@@ -6,9 +6,11 @@ from fair_ocean_agent.extraction.faire_fields import (
     all_faire_hints,
     all_field_names,
     assay_scoped_field_names,
+    faire_hints_probeable_from_text,
     field_names_for_reference,
     native_name_to_faire_hint,
     render_field_reference,
+    suppress_resolved_faire_hints_for_text,
 )
 from fair_ocean_agent.exports.faire import class_columns
 from fair_ocean_agent.standards.faire_registry import build_faire_registry
@@ -308,6 +310,16 @@ def test_render_field_reference_with_no_exclusions_matches_default():
     assert render_field_reference(exclude_faire_hints=frozenset()) == render_field_reference()
 
 
+def test_structured_resolved_suppression_keeps_text_probeable_overlap_fields():
+    resolved = frozenset({"eventDate", "minimumDepthInMeters", "nucl_acid_ext_kit", "lib_layout"})
+
+    suppress = suppress_resolved_faire_hints_for_text(resolved)
+
+    assert {"eventDate", "minimumDepthInMeters", "nucl_acid_ext_kit"} <= faire_hints_probeable_from_text()
+    assert "lib_layout" not in faire_hints_probeable_from_text()
+    assert suppress == frozenset({"lib_layout"})
+
+
 def test_low_value_optional_fields_are_excluded_from_llm_only():
     expected_fields = frozenset(
         {
@@ -319,7 +331,6 @@ def test_low_value_optional_fields_are_excluded_from_llm_only():
             "pcr2_method_additional",
             "seq_method_additional",
             "woce_sect",
-            "sequencing_location",
             "block_seq",
             "block_ref",
             "block_taxa",
@@ -337,6 +348,20 @@ def test_low_value_optional_fields_are_excluded_from_llm_only():
             "seq_kit",
             "adapter_forward",
             "adapter_reverse",
+            "trim_method",
+            "trim_param",
+            "error_rate_tool",
+            "error_rate_type",
+            "demux_tool",
+            "chimera_check_method",
+            "otu_clust_tool",
+            "otu_clust_cutoff",
+            "otu_db",
+            "tax_assign_cat",
+            "tax_class_other",
+            "otu_raw_description",
+            "targetTaxonomicAssay",
+            "targetTaxonomicScope",
         }
     )
     rendered = render_field_reference()

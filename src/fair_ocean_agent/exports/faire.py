@@ -34,8 +34,15 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from fair_ocean_agent.config import REPO_ROOT
-from fair_ocean_agent.database.enums import EntityLevel, EntityRelationshipType, EntityRootStatus, SHAREABLE_ENTITY_LEVELS
-from fair_ocean_agent.database.models import Entity, EntityRelationship, EntityStudy, StandardizedValue, Study
+from fair_ocean_agent.database.enums import (
+    SHAREABLE_ENTITY_LEVELS,
+    EntityLevel,
+    EntityRelationshipType,
+    EntityRootStatus,
+    ReviewStatus,
+)
+from fair_ocean_agent.database.models import Entity, EntityRelationship, EntityStudy, RawFact, StandardizedValue, Study
+from fair_ocean_agent.extraction.section_categories import SECTION_CATEGORIES
 from fair_ocean_agent.mapping.faire import TARGET_SCHEMA, resolve_project_id
 from fair_ocean_agent.standards.faire_registry import build_faire_registry
 
@@ -46,11 +53,10 @@ OMITTED_EMPTY_CLASSES = ("ampData", "stdData", "eLowQuantData", "taxaRaw", "taxa
 # classes are intentionally omitted until the pipeline has row-shaped data.
 EMPTY_CLASSES = OMITTED_EMPTY_CLASSES
 
-# Pipeline-internal traceability column, not a real FAIRe field -- deliberately
-# NOT added to schemas/faire/classes.yaml (unlike expedition_id/
-# ship_crs_expocode, a genuine NOAA/SEUS-MBON domain extension, this must
-# never be mistaken for something submittable to NOAA/GBIF/OBIS as part of
-# the real checklist) and deliberately excluded from field_reference.csv
+# Pipeline-internal traceability column, not a real FAIRe field --
+# deliberately NOT added to schemas/faire/classes.yaml (this must never be
+# mistaken for something submittable to NOAA/GBIF/OBIS as part of the real
+# checklist) and deliberately excluded from field_reference.csv
 # (which documents real FAIRe fields with real requirement levels/
 # exact_mappings -- this column has neither). export_faire() merges every
 # study in the database into one shared set of output CSVs with no
@@ -73,6 +79,54 @@ INTERNAL_ALIAS_SAMPLE_IDS_FIELD = "internal_alias_sample_ids"
 # in INTERNAL_ALIAS_SAMPLE_IDS_FIELD).
 _ALIAS_MERGE_EXCLUDED_FIELDS = frozenset({"samp_name", "materialSampleID"})
 
+# extraction/section_categories.py's per-category "<name>_0_1" detection
+# facts (e.g. "pcr1_primary_amplification_0_1") -- a diagnostic coverage
+# signal for tuning that module's keyword lists against real papers, never
+# registered as real FAIRe checklist terms (not in schemas/faire/
+# classes.yaml), same internal-only precedent as INTERNAL_STUDY_ID_FIELD.
+# Always "0" or "1" (never blank) so the column reads as a real boolean
+# even when the underlying RawFact is absent.
+INTERNAL_SECTION_DETECTION_FIELDS = tuple(f"{category.name}_0_1" for category in SECTION_CATEGORIES)
+
+
+def _section_category_detection_values(session: Session, study_id: str) -> dict[str, str]:
+    detected = set(
+        session.scalars(
+            select(RawFact.fact_type_candidate).where(
+                RawFact.study_id == study_id,
+                RawFact.entity_id.is_(None),
+                RawFact.fact_type_candidate.in_(INTERNAL_SECTION_DETECTION_FIELDS),
+            )
+        )
+    )
+    return {field: ("1" if field in detected else "0") for field in INTERNAL_SECTION_DETECTION_FIELDS}
+
+
+# EXPERIMENTAL, not a real FAIRe field -- see extraction/study_factor.py's
+# generate_information_withheld_llm_guess docstring. Read directly from
+# RawFact (never mapped/merged into the real informationWithheld
+# StandardizedValue) so the model's own speculative "what looks missing"
+# guess can be compared side by side against the real, verbatim-only
+# informationWithheld column without either one contaminating the other.
+INTERNAL_INFORMATION_WITHHELD_LLM_GUESS_FIELD = "internal_information_withheld_llm_guess"
+
+
+def _information_withheld_llm_guess_value(session: Session, study_id: str) -> str:
+    return (
+        session.scalar(
+            select(RawFact.raw_value)
+            .where(
+                RawFact.study_id == study_id,
+                RawFact.entity_id.is_(None),
+                RawFact.fact_type_candidate == "information_withheld_llm_guess",
+                RawFact.review_status != ReviewStatus.REJECTED.value,
+            )
+            .order_by(RawFact.created_at)
+            .limit(1)
+        )
+        or ""
+    )
+
 
 @lru_cache(maxsize=1)
 def _load_classes() -> dict:
@@ -83,6 +137,38 @@ def _load_classes() -> dict:
 
 def class_columns(class_name: str) -> list[str]:
     return list(_load_classes()[class_name]["slots"])
+
+
+# Real, non-mandatory FAIRe projectMetadata fields the user explicitly
+# asked to never populate and never show as a column at all -- an
+# export-time suppression, deliberately NOT removed from schemas/faire/
+# classes.yaml/schema.yaml: these are real upstream FAIRe terms, and
+# editing the vendored schema mirror to drop a real term would corrupt its
+# own fidelity to the actual FAIRe v1.0.2 checklist, a line this project
+# has been careful never to cross. (Contrast a genuinely non-upstream
+# local addition, safe to remove from the schema mirror outright -- e.g.
+# expedition_id/ship_crs_expocode, a former NOAA/SEUS-MBON extension
+# retracted per a later explicit user request; nothing here reintroduces
+# that pattern.) None of these are `required: true` in the real schema,
+# so suppressing them doesn't hide a genuinely mandatory field.
+PROJECT_METADATA_SUPPRESSED_FIELDS = frozenset(
+    {
+        "institutionID",
+        "parent_project_id",
+        "project_name",
+        "recordedByID",
+        "mod_date",
+        "dataGeneralizations",
+        "sop_bioinformatics",
+        "assay_validation",
+        "nucl_acid_amp",
+        "sequencing_location",
+    }
+)
+
+
+def _exportable_project_columns() -> list[str]:
+    return [field for field in class_columns("projectMetadata") if field not in PROJECT_METADATA_SUPPRESSED_FIELDS]
 
 
 def _study_wide_values(session: Session, study_id: str) -> dict[str, str]:
@@ -199,6 +285,24 @@ def _merge_field_values(
     return merged
 
 
+def _pipe_join_unique(values: list[str]) -> str:
+    seen: set[str] = set()
+    merged: list[str] = []
+    for value in values:
+        for part in str(value).split("|"):
+            part = part.strip()
+            key = part.casefold()
+            if not part or key in seen:
+                continue
+            seen.add(key)
+            merged.append(part)
+    return "|".join(merged)
+
+
+def _linked_study_values(session: Session, study_ids: list[str], field: str) -> str:
+    return _pipe_join_unique([_study_wide_values(session, study_id).get(field, "") for study_id in study_ids])
+
+
 def _write_csv(path: Path, columns: list[str], rows: list[dict[str, str]]) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="") as f:
@@ -246,7 +350,7 @@ def export_faire(session: Session, output_dir: str | Path) -> dict[str, int]:
 
     studies = list(session.scalars(select(Study)))
 
-    project_columns = class_columns("projectMetadata")
+    project_columns = _exportable_project_columns()
     project_rows = []
     for study in studies:
         # Analysis-only paper: links to shared samples/runs (EntityStudy)
@@ -302,12 +406,16 @@ def export_faire(session: Session, output_dir: str | Path) -> dict[str, int]:
             )
         )
         assays_with_values = [assay for assay in assay_entities if _entity_values(session, assay.entity_id)]
+        section_detection = _section_category_detection_values(session, study.study_id)
+        information_withheld_llm_guess = _information_withheld_llm_guess_value(session, study.study_id)
         if not assays_with_values:
             if project_id is None and not broadcast:
                 continue  # nothing at all mapped for this study -- don't emit an all-blank row
             row = dict(broadcast)
             row["project_id"] = project_id or ""
             row[INTERNAL_STUDY_ID_FIELD] = study.study_id
+            row.update(section_detection)
+            row[INTERNAL_INFORMATION_WITHHELD_LLM_GUESS_FIELD] = information_withheld_llm_guess
             project_rows.append(row)
             continue
         for assay in assays_with_values:
@@ -316,9 +424,18 @@ def export_faire(session: Session, output_dir: str | Path) -> dict[str, int]:
             row.setdefault("assay_name", assay.external_identifier or assay.label or assay.entity_id)
             row["project_id"] = project_id or ""
             row[INTERNAL_STUDY_ID_FIELD] = study.study_id
+            row.update(section_detection)
+            row[INTERNAL_INFORMATION_WITHHELD_LLM_GUESS_FIELD] = information_withheld_llm_guess
             project_rows.append(row)
     counts["projectMetadata"] = _write_csv(
-        output_dir / "projectMetadata.csv", [INTERNAL_STUDY_ID_FIELD, *project_columns], project_rows
+        output_dir / "projectMetadata.csv",
+        [
+            INTERNAL_STUDY_ID_FIELD,
+            *INTERNAL_SECTION_DETECTION_FIELDS,
+            INTERNAL_INFORMATION_WITHHELD_LLM_GUESS_FIELD,
+            *project_columns,
+        ],
+        project_rows,
     )
 
     sample_columns = class_columns("sampleMetadata")
@@ -415,6 +532,10 @@ def export_faire(session: Session, output_dir: str | Path) -> dict[str, int]:
                 row.setdefault("samp_name", canonical_sample.external_identifier or canonical_sample.entity_id)
             if assay is not None:
                 row.setdefault("assay_name", assay.external_identifier or assay.label or assay.entity_id)
+            if not row.get("assay_name"):
+                linked_assay_name = _linked_study_values(session, linked_study_ids, "assay_name")
+                if linked_assay_name:
+                    row["assay_name"] = linked_assay_name
             if sequencing_run is not None:
                 row.setdefault("seq_run_id", sequencing_run.external_identifier or sequencing_run.entity_id)
             if entity.external_identifier and not entity.external_identifier.startswith("internal:"):

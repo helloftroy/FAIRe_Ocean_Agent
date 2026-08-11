@@ -82,7 +82,6 @@ LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS = frozenset(
         "pcr2_method_additional",
         "seq_method_additional",
         "woce_sect",
-        "sequencing_location",
         "block_seq",
         "block_ref",
         "block_taxa",
@@ -119,6 +118,59 @@ LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS = frozenset(
         # favor of the more precise mechanism, same pattern as seq_kit.
         "adapter_forward",
         "adapter_reverse",
+        # trim_method/trim_param are handled by targeted quote-judged LLM
+        # search with strong primer/adapter/technical-sequence context gates;
+        # the broad checklist is too likely to mix them up with quality,
+        # length, demultiplexing, or denoising parameters.
+        "trim_method",
+        "trim_param",
+        # error_rate_tool/error_rate_type are handled by
+        # search_flags.LLM_JUDGED_SEARCH_FIELDS using the user's ordered
+        # search-term lists, so the broad checklist does not also ask the
+        # model for denoising_tool/error_rate_measurement and create a
+        # second, competing LLM path for the same FAIRe fields.
+        "error_rate_tool",
+        "error_rate_type",
+        # demux_tool is handled by targeted quote-judged LLM search; the
+        # broad checklist's demultiplexing_tool entry would otherwise ask a
+        # second model pass for the same FAIRe field.
+        "demux_tool",
+        # chimera_check_method is handled by the targeted quote-judged LLM
+        # search because the useful value is usually a compact method phrase
+        # with software plus de novo/reference/consensus details.
+        "chimera_check_method",
+        # OTU/ASV clustering tool/cutoff are targeted quote-judged fields:
+        # shared bioinformatics terms like DADA2/QIIME/VSEARCH need a
+        # narrow, evidence-cited decision so taxonomy-classification tools
+        # are not confused with OTU/ASV generation.
+        "otu_clust_tool",
+        "otu_clust_cutoff",
+        # otu_db is a targeted quote-judged field: it must avoid
+        # classifier/software-only mentions.
+        "otu_db",
+        # tax_assign_cat is a controlled-enum classification
+        # (search_flags.py's own LLMJudgedSearchField, allowed_values-
+        # constrained) -- the broad checklist's freeform prompt has no
+        # equivalent enum constraint.
+        "tax_assign_cat",
+        # otu_raw_description/tax_class_other are generated (not extracted)
+        # by section_category_extraction.py's own
+        # _generate_otu_raw_description_fact/_generate_tax_class_other_fact
+        # -- excluded here so the generic checklist prompt never also
+        # produces a competing, verbatim-quote-style answer for the same
+        # field.
+        "otu_raw_description",
+        "tax_class_other",
+        # targetTaxonomicAssay/targetTaxonomicScope (native names
+        # assay_target_taxa/study_target_taxonomic_scope) are targeted
+        # quote-judged fields: an ordered, priority-ranked search-term list
+        # plus a required same-sentence assay/study-scope context word,
+        # per an explicit user specification -- the broad checklist's
+        # freeform prompt has no equivalent priority/context mechanism and
+        # would risk a second, independently-worded LLM pass producing a
+        # conflicting fact for the same FAIRe field.
+        "targetTaxonomicAssay",
+        "targetTaxonomicScope",
     }
 )
 
@@ -173,6 +225,7 @@ FIELD_GROUPS: dict[str, tuple[FaireExtractionField, ...]] = {
         FaireExtractionField("coordinates", "sampling latitude/longitude or coordinate pair", "decimalLatitude", "38.03 N, 122.15 W"),
         FaireExtractionField("sample_collection_method", "how samples were physically collected", "samp_collect_method"),
         FaireExtractionField("sample_storage_conditions", "how samples were stored or preserved after collection", "samp_store_method_additional"),
+        FaireExtractionField("filter_name", "brand/product/model/name of the sample filter, such as Sterivex filter or Millipore filter", "filter_name", "Sterivex filter"),
     ),
     "DNA extraction": (
         FaireExtractionField("dna_extraction_kit", "name of the extraction kit used", "nucl_acid_ext_kit", "DNeasy PowerWater Kit"),
@@ -283,12 +336,6 @@ FIELD_GROUPS: dict[str, tuple[FaireExtractionField, ...]] = {
             required_any_flags=frozenset({"pcr_0_1"}),
         ),
         FaireExtractionField(
-            "assay_validation",
-            "how the assay was validated for specificity (e.g. in-silico, in-vitro, in-situ validation, Sanger sequencing, repeat analysis with an alternate assay, intra/inter-species tests)",
-            "assay_validation",
-            required_any_flags=frozenset({"pcr_0_1"}),
-        ),
-        FaireExtractionField(
             "study_target_taxonomic_scope",
             "the broader taxonomic group(s) targeted by the STUDY as a whole, which can differ from assay_target_taxa (e.g. assay targets Chordata, but the study's scope is Chondrichthyes -- sharks and rays)",
             "targetTaxonomicScope",
@@ -341,7 +388,6 @@ FIELD_GROUPS: dict[str, tuple[FaireExtractionField, ...]] = {
         FaireExtractionField("library_concentration_method", "method used to estimate library concentration", "lib_conc_meth"),
         FaireExtractionField("library_concentration_unit", "unit for library_concentration", "lib_conc_unit"),
         FaireExtractionField("phix_percentage", "% PhiX spiked into the sequencing run", "phix_perc", "10%"),
-        FaireExtractionField("sequencing_location", "facility/lab where sequencing was performed", "sequencing_location"),
     ),
     "Bioinformatics workflow": (
         FaireExtractionField("adapter_trimming_method", "primer/adapter trimming method, including software and version", "trim_method"),
@@ -350,6 +396,7 @@ FIELD_GROUPS: dict[str, tuple[FaireExtractionField, ...]] = {
         FaireExtractionField("read_merging_tool", "software (with version) used to merge paired-end reads", "merge_tool"),
         FaireExtractionField("read_merge_minimum_overlap", "minimum overlap required to merge paired-end reads", "merge_min_overlap", "12 bp"),
         FaireExtractionField("denoising_tool", "software used for denoising/error-correction (e.g. DADA2)", "error_rate_tool"),
+        FaireExtractionField("error_rate_measurement", "type of quality/error measurement used to decide whether reads or bases should be removed or trimmed", "error_rate_type"),
         FaireExtractionField("minimum_read_length", "minimum read length threshold used for filtering", "min_len_cutoff"),
         FaireExtractionField("length_filtering_tool", "software used to filter reads by length", "min_len_tool"),
         FaireExtractionField("chimera_detection_method", "chimera detection approach, including software/version", "chimera_check_method"),
@@ -357,7 +404,11 @@ FIELD_GROUPS: dict[str, tuple[FaireExtractionField, ...]] = {
         FaireExtractionField("clustering_similarity_threshold", "percent similarity threshold used for OTU/ASV clustering", "otu_clust_cutoff", "97%"),
         FaireExtractionField("reference_database", "reference database(s) used for taxonomic assignment, with version", "otu_db", "SILVA 138"),
         FaireExtractionField("taxonomic_assignment_method", "taxonomic assignment approach (e.g. BLAST, naive Bayesian classifier)", "tax_assign_cat"),
-        FaireExtractionField("bioinformatics_sop_reference", "reference/link/DOI to the bioinformatics standard operating procedure", "sop_bioinformatics"),
+        FaireExtractionField("taxonomic_assignment_details", "free-text details of taxonomic assignment rules, thresholds, databases, and parameters", "tax_class_other"),
+        # bioinformatics_sop_reference (-> sop_bioinformatics) deliberately
+        # removed: an explicit user instruction to never populate it at all
+        # (exports/faire.py's PROJECT_METADATA_SUPPRESSED_FIELDS also drops
+        # its column entirely).
     ),
     "Taxonomic assignment output": (
         FaireExtractionField("scientific_name", "a taxon name the paper reports as assigned/detected", "scientificName"),
@@ -409,6 +460,31 @@ def all_faire_hints() -> frozenset[str]:
     `candidate_standard_fields` hint -- for validating that a hint the
     model returns is one this taxonomy actually knows about."""
     return frozenset(f.faire_hint for fields in FIELD_GROUPS.values() for f in fields if f.faire_hint)
+
+
+def faire_hints_probeable_from_text() -> frozenset[str]:
+    """FAIRe fields the paper-text extractor can legitimately check.
+
+    These are the overlap fields where a structured/API value should not
+    suppress paper extraction. If paper evidence later disagrees with the
+    API, mapping/faire.py keeps both pieces of evidence and marks the
+    standardized value for human review.
+
+    Static no-LLM fields stay excluded here: those are fields we have
+    explicitly decided not to ask the general paper LLM about at all.
+    """
+    return all_faire_hints() - LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS
+
+
+def suppress_resolved_faire_hints_for_text(resolved_hints: frozenset[str]) -> frozenset[str]:
+    """Return only resolved FAIRe hints that should suppress paper LLM asks.
+
+    Structured sources are still preferred in mapping, but their presence
+    no longer hides fields that are also readable from paper prose. This
+    lets API-vs-paper conflicts surface as review_required rows instead of
+    disappearing before extraction.
+    """
+    return resolved_hints - faire_hints_probeable_from_text()
 
 
 def native_name_to_faire_hint() -> dict[str, str]:

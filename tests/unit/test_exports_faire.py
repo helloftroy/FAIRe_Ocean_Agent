@@ -15,6 +15,8 @@ from fair_ocean_agent.database.models import (
 from fair_ocean_agent.exports.faire import (
     EMPTY_CLASSES,
     INTERNAL_ALIAS_SAMPLE_IDS_FIELD,
+    INTERNAL_INFORMATION_WITHHELD_LLM_GUESS_FIELD,
+    INTERNAL_SECTION_DETECTION_FIELDS,
     INTERNAL_STUDY_ID_FIELD,
     class_columns,
     export_faire,
@@ -699,3 +701,192 @@ def test_experiment_run_samp_name_resolves_through_canonical_alias_target(db_ses
         rows = list(csv.DictReader(f))
     assert len(rows) == 1
     assert rows[0]["samp_name"] == "SAMN0008"
+
+
+def test_shared_experiment_row_inherits_assay_name_from_linked_study(db_session, tmp_path):
+    home_study = Study(title="Original data paper")
+    linked_study = Study(title="Amplicon reanalysis paper")
+    db_session.add_all([home_study, linked_study])
+    db_session.flush()
+
+    experiment = Entity(
+        study_id=home_study.study_id,
+        entity_level=EntityLevel.EXPERIMENT_RUN.value,
+        external_identifier="SRX_SHARED",
+    )
+    db_session.add(experiment)
+    db_session.flush()
+    db_session.add_all(
+        [
+            _home_entity_study(experiment),
+            EntityStudy(
+                entity_id=experiment.entity_id,
+                study_id=linked_study.study_id,
+                relationship_type=RelationshipType.SHARES_ACCESSION_WITH.value,
+                confidence=SupportType.STRUCTURED_SOURCE.value,
+            ),
+            StandardizedValue(
+                study_id=linked_study.study_id,
+                entity_id=None,
+                target_schema=TARGET_SCHEMA,
+                target_schema_version=TARGET_SCHEMA_VERSION,
+                target_field="assay_name",
+                standardized_value="16S rRNA",
+                mapping_method="deterministic_synonym",
+            ),
+        ]
+    )
+    db_session.commit()
+
+    export_faire(db_session, tmp_path)
+
+    with (tmp_path / "experimentRunMetadata.csv").open() as f:
+        rows = list(csv.DictReader(f))
+    assert len(rows) == 1
+    assert set(rows[0][INTERNAL_STUDY_ID_FIELD].split("|")) == {home_study.study_id, linked_study.study_id}
+    assert rows[0]["assay_name"] == "16S rRNA"
+
+
+def test_project_metadata_section_detection_columns_default_zero_and_flip_to_one(db_session, tmp_path):
+    study = Study(title="Section detection export test")
+    db_session.add(study)
+    db_session.flush()
+    db_session.add(ExternalIdentifier(study_id=study.study_id, identifier_type=IdentifierType.BIOPROJECT_ACCESSION.value, identifier_value="PRJNA9"))
+    db_session.add(
+        RawFact(
+            study_id=study.study_id, entity_id=None, raw_field_name="pcr1_primary_amplification_0_1",
+            raw_value="1", fact_type_candidate="pcr1_primary_amplification_0_1", entity_level="study",
+            support_type=SupportType.DETERMINISTICALLY_DERIVED.value,
+        )
+    )
+    db_session.commit()
+
+    export_faire(db_session, tmp_path)
+
+    with (tmp_path / "projectMetadata.csv").open() as f:
+        rows = list(csv.DictReader(f))
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["pcr1_primary_amplification_0_1"] == "1"
+    for field in INTERNAL_SECTION_DETECTION_FIELDS:
+        if field != "pcr1_primary_amplification_0_1":
+            assert row[field] == "0"
+
+    with (tmp_path / "field_reference.csv").open() as f:
+        field_names = {r["faire_field"] for r in csv.DictReader(f)}
+    for field in INTERNAL_SECTION_DETECTION_FIELDS:
+        assert field not in field_names
+
+
+def test_project_metadata_information_withheld_llm_guess_column(db_session, tmp_path):
+    """EXPERIMENTAL internal diagnostic column, per an explicit user
+    request to compare the model's own speculative "what looks missing"
+    guess against the real informationWithheld value -- never merged into
+    that real FAIRe column, and excluded from field_reference.csv like
+    every other INTERNAL_* column."""
+    study = Study(title="Information withheld guess export test")
+    db_session.add(study)
+    db_session.flush()
+    db_session.add(ExternalIdentifier(study_id=study.study_id, identifier_type=IdentifierType.BIOPROJECT_ACCESSION.value, identifier_value="PRJNA10"))
+    db_session.add(
+        RawFact(
+            study_id=study.study_id, entity_id=None, raw_field_name="information_withheld_llm_guess",
+            raw_value="no code repository provided | no replicate count reported",
+            fact_type_candidate="information_withheld_llm_guess", entity_level="study",
+            support_type=SupportType.INFERRED.value,
+        )
+    )
+    db_session.commit()
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    export_faire(db_session, tmp_path)
+
+    with (tmp_path / "projectMetadata.csv").open() as f:
+        rows = list(csv.DictReader(f))
+    assert len(rows) == 1
+    assert rows[0][INTERNAL_INFORMATION_WITHHELD_LLM_GUESS_FIELD] == (
+        "no code repository provided | no replicate count reported"
+    )
+    # The real FAIRe field is untouched by the guess -- still just the
+    # deterministic default since no real withheld-information fact exists.
+    assert rows[0]["informationWithheld"] == "Nothing indicated as withheld"
+
+    with (tmp_path / "field_reference.csv").open() as f:
+        field_names = {r["faire_field"] for r in csv.DictReader(f)}
+    assert INTERNAL_INFORMATION_WITHHELD_LLM_GUESS_FIELD not in field_names
+
+
+def test_project_metadata_information_withheld_llm_guess_blank_when_absent(db_session, tmp_path):
+    study = Study(title="No guess generated")
+    db_session.add(study)
+    db_session.flush()
+    db_session.add(ExternalIdentifier(study_id=study.study_id, identifier_type=IdentifierType.BIOPROJECT_ACCESSION.value, identifier_value="PRJNA11"))
+    db_session.commit()
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    export_faire(db_session, tmp_path)
+
+    with (tmp_path / "projectMetadata.csv").open() as f:
+        rows = list(csv.DictReader(f))
+    assert len(rows) == 1
+    assert rows[0][INTERNAL_INFORMATION_WITHHELD_LLM_GUESS_FIELD] == ""
+
+
+def test_project_metadata_suppressed_fields_never_appear_as_columns(db_session, tmp_path):
+    """institutionID/parent_project_id/project_name/recordedByID/mod_date/
+    dataGeneralizations are real FAIRe fields (never removed from the
+    vendored schema.yaml/classes.yaml mirror -- an explicit user
+    instruction not to fabricate/corrupt real schema fidelity) but must
+    never appear as columns in the exported CSV or field_reference.csv,
+    per an explicit user instruction to never populate them at all."""
+    from fair_ocean_agent.exports.faire import PROJECT_METADATA_SUPPRESSED_FIELDS
+
+    study = Study(title="Suppressed field export test")
+    db_session.add(study)
+    db_session.flush()
+    db_session.add(ExternalIdentifier(study_id=study.study_id, identifier_type=IdentifierType.BIOPROJECT_ACCESSION.value, identifier_value="PRJNA_SUPPRESS"))
+    db_session.commit()
+
+    export_faire(db_session, tmp_path)
+
+    with (tmp_path / "projectMetadata.csv").open() as f:
+        header = next(csv.reader(f))
+    for field in PROJECT_METADATA_SUPPRESSED_FIELDS:
+        assert field not in header
+    # a real, still-populated field must still appear, confirming the
+    # suppression is scoped to exactly these fields, not the whole class.
+    assert "project_id" in header
+
+    with (tmp_path / "field_reference.csv").open() as f:
+        field_names = {r["faire_field"] for r in csv.DictReader(f)}
+    for field in PROJECT_METADATA_SUPPRESSED_FIELDS:
+        assert field not in field_names
+
+
+def test_expedition_id_and_ship_crs_expocode_no_longer_in_real_schema():
+    """A former NOAA/SEUS-MBON extension, retracted per an explicit later
+    user request -- unlike PROJECT_METADATA_SUPPRESSED_FIELDS's real
+    upstream terms, these were never part of the public FAIRe v1.0.2
+    checklist, so removing them from the vendored schema mirror entirely
+    (not just suppressing their export column) doesn't corrupt schema
+    fidelity."""
+    assert "expedition_id" not in class_columns("projectMetadata")
+    assert "ship_crs_expocode" not in class_columns("projectMetadata")
+
+
+def test_checkls_ver_always_synced_as_the_pipelines_own_schema_version(db_session, tmp_path):
+    study = Study(title="checkls_ver sync test")
+    db_session.add(study)
+    db_session.flush()
+    db_session.add(ExternalIdentifier(study_id=study.study_id, identifier_type=IdentifierType.BIOPROJECT_ACCESSION.value, identifier_value="PRJNA_CKV"))
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+    export_faire(db_session, tmp_path)
+
+    with (tmp_path / "projectMetadata.csv").open() as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["checkls_ver"] == "1.0.2"

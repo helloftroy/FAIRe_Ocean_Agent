@@ -5,13 +5,16 @@ retrieval cache, no live network call.
 """
 import pytest
 
-from fair_ocean_agent.database.enums import SupportType
+from fair_ocean_agent.database.enums import EntityLevel, ReviewStatus, SupportType
+from fair_ocean_agent.database.models import RawFact, Study
 from fair_ocean_agent.extraction.publication_metadata import (
     extract_code_repo_from_text,
     extract_from_jats_authors,
     extract_from_jats_permissions,
+    extract_method_section_citations,
     extract_publication_metadata_facts,
     format_bibliographic_citation,
+    sync_recorded_by_from_biosample_or_first_author,
 )
 from fair_ocean_agent.workflow.handlers import _build_enabled_adapters
 
@@ -46,15 +49,18 @@ def test_permissions_gives_license_accessrights_rightsholder(real_fulltext_xml):
 
 
 def test_authors_includes_paper_authors_excludes_editor(real_fulltext_xml):
+    """paper_authors_list (not recordedBy directly -- see
+    extract_from_jats_authors's own docstring) still carries every real
+    author, still excludes the editor. recordedByID is no longer
+    extracted at all (an explicit user instruction)."""
     facts = {f.fact_type_candidate: f for f in extract_from_jats_authors(real_fulltext_xml, locator_prefix="t")}
-    recorded_by = facts["recordedBy"].raw_value
+    authors_list = facts["paper_authors_list"].raw_value
     for author in ("Sarah W. Davies", "Eli Meyer", "Sarah M. Guermond", "Mikhail V. Matz"):
-        assert author in recorded_by
-    assert "Qian" not in recorded_by  # the editor, not an author -- must never be conflated
-    assert facts["project_contact"].raw_value == "daviessw@gmail.com"
-    # This real article's JATS XML carries no ORCID for any author --
-    # recordedByID must correctly produce nothing, not fabricate a value.
+        assert author in authors_list
+    assert "Qian" not in authors_list  # the editor, not an author -- must never be conflated
+    assert facts["project_contact"].raw_value == "Sarah W. Davies <daviessw@gmail.com>"
     assert "recordedByID" not in facts
+    assert "recordedBy" not in facts
 
 
 def test_code_repo_captures_availability_statement_for_this_paper(real_fulltext_xml):
@@ -113,7 +119,142 @@ def test_code_repo_does_not_false_positive_on_unrelated_availability_mentions():
         "<article><body><p>Samples were available at each of the seven sites surveyed. "
         "Software packages used in this study include R and Python.</p></body></article>"
     )
-    assert extract_code_repo_from_text(xml, locator_prefix="t") == []
+    facts = extract_code_repo_from_text(xml, locator_prefix="t")
+    assert len(facts) == 1
+    assert facts[0].raw_value == "no code published"
+    assert facts[0].evidence_quote is None
+
+
+def test_code_repo_captures_non_github_code_url_from_availability_sentence():
+    xml = (
+        "<article><body><p>Analysis code is available at "
+        "https://example.org/projects/pipeline-code.</p></body></article>"
+    )
+    facts = extract_code_repo_from_text(xml, locator_prefix="t")
+    assert len(facts) == 1
+    assert facts[0].raw_value == "https://example.org/projects/pipeline-code"
+    assert "Analysis code is available" in facts[0].evidence_quote
+
+
+def test_method_section_citations_prefer_reference_doi_and_group_by_heading():
+    xml = """
+    <article>
+      <body>
+        <sec>
+          <title>Materials and methods</title>
+          <sec>
+            <title>Sediment sampling</title>
+            <p>Sampling followed a regional design
+            <xref ref-type="bibr" rid="B1">Smith et al.</xref>.</p>
+          </sec>
+        </sec>
+      </body>
+      <back>
+        <ref-list>
+          <ref id="B1">
+            <element-citation>
+              <article-title>A careful extraction protocol</article-title>
+              <pub-id pub-id-type="doi">https://doi.org/10.1234/Protocol.1</pub-id>
+            </element-citation>
+          </ref>
+        </ref-list>
+      </back>
+    </article>
+    """
+    facts = extract_method_section_citations(xml, locator_prefix="t")
+    assert len(facts) == 1
+    assert facts[0].fact_type_candidate == "associated_resource"
+    assert facts[0].raw_value == "**Sediment sampling**: https://doi.org/10.1234/protocol.1"
+    assert facts[0].support_type == SupportType.DETERMINISTICALLY_DERIVED
+    assert "Sampling followed a regional design" in facts[0].evidence_quote
+    section = facts[0].confidence_metadata["method_section_citations"][0]
+    assert section["heading"] == "Sediment sampling"
+    assert section["citations"][0]["ref_id"] == "B1"
+
+
+def test_method_section_citations_fall_back_to_reference_title_without_doi():
+    xml = """
+    <article>
+      <body>
+        <sec>
+          <title>Methods</title>
+          <p>Amplification followed a previously described method
+          <xref ref-type="bibr" rid="B2">22</xref>.</p>
+        </sec>
+      </body>
+      <back>
+        <ref-list>
+          <ref id="B2">
+            <element-citation>
+              <article-title>Standard operating procedure for marine DNA barcoding</article-title>
+            </element-citation>
+          </ref>
+        </ref-list>
+      </back>
+    </article>
+    """
+    facts = extract_method_section_citations(xml, locator_prefix="t")
+    assert len(facts) == 1
+    assert facts[0].raw_value == "**Methods**: Standard operating procedure for marine DNA barcoding"
+
+
+def test_method_section_citations_include_all_method_citations_but_ignore_results_sections():
+    xml = """
+    <article>
+      <body>
+        <sec>
+          <title>Methods</title>
+          <p>Reads were processed with DADA2 <xref ref-type="bibr" rid="B1">1</xref>.</p>
+        </sec>
+        <sec>
+          <title>Results</title>
+          <p>Patterns matched a previously described method <xref ref-type="bibr" rid="B2">2</xref>.</p>
+        </sec>
+      </body>
+      <back>
+        <ref-list>
+          <ref id="B1"><element-citation><pub-id pub-id-type="doi">10.1000/dada2</pub-id></element-citation></ref>
+          <ref id="B2"><element-citation><pub-id pub-id-type="doi">10.1000/results</pub-id></element-citation></ref>
+        </ref-list>
+      </back>
+    </article>
+    """
+    facts = extract_method_section_citations(xml, locator_prefix="t")
+    assert len(facts) == 1
+    assert facts[0].raw_value == "**Methods**: https://doi.org/10.1000/dada2"
+    assert "10.1000/results" not in facts[0].raw_value
+
+
+def test_method_section_citations_preserve_multiple_subsection_headings():
+    xml = """
+    <article>
+      <body>
+        <sec>
+          <title>Materials and methods</title>
+          <sec>
+            <title>Sediment sampling</title>
+            <p>Sampling design cited <xref ref-type="bibr" rid="B1">1</xref>.</p>
+          </sec>
+          <sec>
+            <title>Meiofauna extractions and experimental setup</title>
+            <p>Extraction setup cited <xref ref-type="bibr" rid="B2">2</xref>.</p>
+          </sec>
+        </sec>
+      </body>
+      <back>
+        <ref-list>
+          <ref id="B1"><element-citation><pub-id pub-id-type="doi">10.1000/sediment</pub-id></element-citation></ref>
+          <ref id="B2"><element-citation><pub-id pub-id-type="doi">10.1000/meiofauna</pub-id></element-citation></ref>
+        </ref-list>
+      </back>
+    </article>
+    """
+    facts = extract_method_section_citations(xml, locator_prefix="t")
+    assert len(facts) == 1
+    assert facts[0].raw_value == (
+        "**Sediment sampling**: https://doi.org/10.1000/sediment | "
+        "**Meiofauna extractions and experimental setup**: https://doi.org/10.1000/meiofauna"
+    )
 
 
 def test_bibliographic_citation_composed_from_crossref(real_crossref_raw):
@@ -139,13 +280,175 @@ def test_extract_publication_metadata_facts_merges_everything(real_fulltext_xml,
         "license",
         "accessRights",
         "rightsHolder",
-        "recordedBy",
+        "paper_authors_list",
         "project_contact",
         "bibliographicCitation",
         "code_repo",
+        "associated_resource",
     }
 
 
 def test_malformed_xml_returns_empty_not_raises():
     assert extract_from_jats_permissions("<not valid xml", locator_prefix="t") == []
     assert extract_from_jats_authors("<not valid xml", locator_prefix="t") == []
+
+
+def test_rightsholder_falls_back_to_full_author_names_for_generic_statement():
+    """Real pattern confirmed across ~40 cached articles: '(c) The
+    Author(s) 2024[. Published by X]' -- the year (plus anything after
+    it) is stripped, leaving just the holder's own name."""
+    xml = """<article><front><article-meta><contrib-group>
+    <contrib contrib-type="author"><name><given-names>A.</given-names><surname>Alpha</surname></name></contrib>
+    <contrib contrib-type="author"><name><given-names>Beatrice</given-names><surname>Beta</surname></name></contrib>
+    </contrib-group><permissions>
+    <copyright-statement>&#169; The Author(s) 2020. Published by Oxford University Press.</copyright-statement>
+    </permissions></article-meta></front></article>"""
+    facts = {f.fact_type_candidate: f for f in extract_from_jats_permissions(xml, locator_prefix="t")}
+    assert facts["rightsHolder"].raw_value == "A. Alpha and Beatrice Beta"
+    assert facts["rightsHolder"].source_locator.endswith("author_name_fallback_for_generic_rights_holder")
+
+
+def test_rightsholder_falls_back_to_copyright_statement_year_before_name():
+    """Real pattern confirmed: '(c) 2013 Jessen et al' -- the leading
+    year is stripped, leaving the holder's own name intact."""
+    xml = """<article><body><sec><permissions>
+    <copyright-statement>&#169; 2013 Jessen et al</copyright-statement>
+    </permissions></sec></body></article>"""
+    facts = {f.fact_type_candidate: f for f in extract_from_jats_permissions(xml, locator_prefix="t")}
+    assert facts["rightsHolder"].raw_value == "Jessen et al"
+
+
+def test_rightsholder_prefers_copyright_holder_tag_over_statement_when_both_present():
+    xml = """<article><body><sec><permissions>
+    <copyright-statement>&#169; 2013 Jessen et al</copyright-statement>
+    <copyright-holder>Jessen et al.</copyright-holder>
+    </permissions></sec></body></article>"""
+    facts = {f.fact_type_candidate: f for f in extract_from_jats_permissions(xml, locator_prefix="t")}
+    assert facts["rightsHolder"].raw_value == "Jessen et al."
+    assert facts["rightsHolder"].source_locator == "t:permissions/copyright-holder"
+
+
+def test_rightsholder_absent_when_neither_tag_present():
+    xml = "<article><body><sec><permissions><license/></permissions></sec></body></article>"
+    facts = {f.fact_type_candidate: f for f in extract_from_jats_permissions(xml, locator_prefix="t")}
+    assert "rightsHolder" not in facts
+
+
+def _study(session, **kwargs) -> Study:
+    study = Study(**kwargs)
+    session.add(study)
+    session.flush()
+    return study
+
+
+def _biosample_recorded_by_fact(session, study: Study, value: str) -> RawFact:
+    fact = RawFact(
+        study_id=study.study_id,
+        entity_id=None,
+        raw_field_name="recordedBy",
+        raw_value=value,
+        fact_type_candidate="recordedBy",
+        entity_level=EntityLevel.STUDY.value,
+        support_type=SupportType.STRUCTURED_SOURCE.value,
+        source_locator="ncbi_biosample.SAMN1.Owner.Contacts.Contact.Name",
+    )
+    session.add(fact)
+    session.flush()
+    return fact
+
+
+def _paper_authors_list_fact(session, study: Study, value: str) -> RawFact:
+    fact = RawFact(
+        study_id=study.study_id,
+        entity_id=None,
+        raw_field_name="paper_authors_list",
+        raw_value=value,
+        fact_type_candidate="paper_authors_list",
+        entity_level=EntityLevel.STUDY.value,
+        support_type=SupportType.STRUCTURED_SOURCE.value,
+        source_locator="publication_metadata:10.1/x:contrib-group",
+    )
+    session.add(fact)
+    session.flush()
+    return fact
+
+
+def test_sync_recorded_by_prefers_real_biosample_contact_over_first_author(db_session):
+    study = _study(db_session, title="BioSample contact present")
+    _biosample_recorded_by_fact(db_session, study, "Daniel Killam")
+    _paper_authors_list_fact(db_session, study, "Sarah W. Davies | Eli Meyer")
+    db_session.commit()
+
+    sync_recorded_by_from_biosample_or_first_author(db_session, study.study_id)
+    db_session.commit()
+
+    facts = db_session.query(RawFact).filter_by(study_id=study.study_id, fact_type_candidate="recordedBy").all()
+    assert len(facts) == 1
+    assert facts[0].raw_value == "Daniel Killam"
+
+
+def test_sync_recorded_by_falls_back_to_first_author_only_when_no_biosample_contact(db_session):
+    study = _study(db_session, title="No BioSample contact")
+    _paper_authors_list_fact(db_session, study, "Sarah W. Davies | Eli Meyer | Sarah M. Guermond")
+    db_session.commit()
+
+    sync_recorded_by_from_biosample_or_first_author(db_session, study.study_id)
+    db_session.commit()
+
+    fact = db_session.query(RawFact).filter_by(study_id=study.study_id, fact_type_candidate="recordedBy").one()
+    assert fact.raw_value == "Sarah W. Davies"
+    assert fact.extraction_method == "derived:recorded_by_first_author_fallback"
+
+
+def test_sync_recorded_by_no_op_when_neither_source_exists(db_session):
+    study = _study(db_session, title="No data at all")
+    db_session.commit()
+
+    sync_recorded_by_from_biosample_or_first_author(db_session, study.study_id)
+    db_session.commit()
+
+    assert db_session.query(RawFact).filter_by(study_id=study.study_id, fact_type_candidate="recordedBy").count() == 0
+
+
+def test_sync_recorded_by_self_heals_when_biosample_contact_appears_later(db_session):
+    """A study synced with the first-author fallback on an earlier run
+    must switch over to the real BioSample contact once one becomes
+    available on a later run, not keep the stale fallback forever."""
+    study = _study(db_session, title="Self-healing fallback")
+    _paper_authors_list_fact(db_session, study, "Sarah W. Davies | Eli Meyer")
+    db_session.commit()
+    sync_recorded_by_from_biosample_or_first_author(db_session, study.study_id)
+    db_session.commit()
+    assert (
+        db_session.query(RawFact)
+        .filter_by(study_id=study.study_id, fact_type_candidate="recordedBy", review_status=ReviewStatus.ACCEPTED.value)
+        .one()
+        .raw_value
+        == "Sarah W. Davies"
+    )
+
+    _biosample_recorded_by_fact(db_session, study, "Daniel Killam")
+    db_session.commit()
+    sync_recorded_by_from_biosample_or_first_author(db_session, study.study_id)
+    db_session.commit()
+
+    active_facts = [
+        fact
+        for fact in db_session.query(RawFact).filter_by(study_id=study.study_id, fact_type_candidate="recordedBy")
+        if fact.review_status != ReviewStatus.REJECTED.value
+    ]
+    assert len(active_facts) == 1
+    assert active_facts[0].raw_value == "Daniel Killam"
+
+
+def test_sync_recorded_by_is_idempotent_on_rerun(db_session):
+    study = _study(db_session, title="Idempotent rerun")
+    _paper_authors_list_fact(db_session, study, "Sarah W. Davies | Eli Meyer")
+    db_session.commit()
+
+    sync_recorded_by_from_biosample_or_first_author(db_session, study.study_id)
+    db_session.commit()
+    sync_recorded_by_from_biosample_or_first_author(db_session, study.study_id)
+    db_session.commit()
+
+    assert db_session.query(RawFact).filter_by(study_id=study.study_id, fact_type_candidate="recordedBy").count() == 1

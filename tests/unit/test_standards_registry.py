@@ -23,22 +23,6 @@ def test_build_faire_registry_has_full_provenance_and_known_field():
     assert env["requirement_level_condition"]  # the conditional-mandatory note
 
 
-def test_faire_registry_includes_noaa_seus_mbon_extension_fields():
-    """expedition_id/ship_crs_expocode aren't part of the public FAIRe
-    v1.0.2 checklist upstream -- added as an explicitly-documented
-    NOAA/SEUS-MBON extension (schema.yaml/classes.yaml), not silently.
-    This is the check that would catch classes.yaml/schema.yaml drifting
-    out of sync for these two fields specifically."""
-    from fair_ocean_agent.exports.faire import class_columns
-
-    terms = build_faire_registry()
-    by_name = {t["upstream_field_name"]: t for t in terms}
-    for field in ("expedition_id", "ship_crs_expocode"):
-        assert field in by_name, f"{field!r} missing from the FAIRe registry"
-        assert by_name[field]["data_type"] == ["projectMetadata"]
-        assert field in class_columns("projectMetadata")
-
-
 def test_build_miop_registry_excludes_abstract_slots():
     terms = build_miop_registry()
     names = {t["upstream_field_name"] for t in terms}

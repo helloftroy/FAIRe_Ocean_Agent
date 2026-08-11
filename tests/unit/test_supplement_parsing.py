@@ -12,6 +12,7 @@ from fair_ocean_agent.database.enums import EntityLevel, EntityRelationshipType,
 from fair_ocean_agent.sources.supplement_parsing import (
     ZipMemberTooLargeError,
     _column_letter,
+    extract_docx_text,
     extract_pdf_text,
     parse_delimited_table,
     parse_json_supplement,
@@ -326,6 +327,32 @@ def test_extract_pdf_text_runs_without_error_on_a_real_pdf():
     writer.write(buf)
     text = extract_pdf_text(buf.getvalue())
     assert isinstance(text, str)
+
+
+def _docx_bytes(paragraphs: list[str]) -> bytes:
+    paragraph_xml = "".join(f"<w:p><w:r><w:t>{text}</w:t></w:r></w:p>" for text in paragraphs)
+    document_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        f"<w:body>{paragraph_xml}</w:body></w:document>"
+    ).encode("utf-8")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("word/document.xml", document_xml)
+    return buf.getvalue()
+
+
+def test_extract_docx_text_returns_paragraph_text_in_order():
+    content = _docx_bytes(["No negative or positive controls were used.", "Table S1. Sample metadata."])
+    text = extract_docx_text(content)
+    assert text == "No negative or positive controls were used.\n\nTable S1. Sample metadata."
+
+
+def test_extract_docx_text_returns_empty_string_when_document_xml_missing():
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("word/other.xml", b"<x/>")
+    assert extract_docx_text(buf.getvalue()) == ""
 
 
 def _zip_with(name: str, content: bytes) -> zipfile.ZipFile:

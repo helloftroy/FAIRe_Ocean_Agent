@@ -91,8 +91,15 @@ def test_biosample_extract_structured_facts_creates_per_sample_entities(biosampl
     }
     facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw))
 
-    assert len(facts) == 4  # 3 attrs for sample 1 + 1 for sample 2
-    assert all(f.entity_level == EntityLevel.SAMPLE for f in facts)
+    # 3 attrs for sample 1 + 1 for sample 2 + one study-level
+    # biological_rep_presence=FALSE (real, non-MAG samples were checked,
+    # no replicate group found).
+    assert len(facts) == 5
+    sample_facts = [f for f in facts if f.entity_level == EntityLevel.SAMPLE]
+    assert len(sample_facts) == 4
+    presence_facts = [f for f in facts if f.fact_type_candidate == "biological_rep_presence"]
+    assert len(presence_facts) == 1
+    assert presence_facts[0].raw_value == "FALSE"
     sample_1_facts = [f for f in facts if f.entity_external_id == "SAMN55404186"]
     assert len(sample_1_facts) == 3
     assert {f.fact_type_candidate for f in sample_1_facts} == {"collection_date", "depth", "lat_lon"}
@@ -127,7 +134,11 @@ def test_biosample_extract_structured_facts_normalizes_location_and_host_aliases
     assert values["geo_loc_name"].source_locator.endswith("Attributes.geo_loc_name")
 
 
-def test_biosample_extract_structured_facts_maps_owner_to_recorded_by(biosample_adapter):
+def test_biosample_extract_structured_facts_maps_owner_contact_to_recorded_by(biosample_adapter):
+    """recordedBy comes from the real per-sample submitter PERSON
+    (Owner/Contacts/Contact/Name), confirmed against real cached BioSample
+    XML -- Owner/Name alone is the submitting INSTITUTION's own name
+    (see the regression guard below), never a person."""
     raw = {
         "bioproject_accession": "PRJNA994076",
         "total_linked_samples": 2,
@@ -136,13 +147,13 @@ def test_biosample_extract_structured_facts_maps_owner_to_recorded_by(biosample_
             {
                 "accession": "SAMN36415090",
                 "title": "pond sample",
-                "owner": {"name": "University of Konstanz, Corentin Fournier"},
+                "owner": {"name": "University of Konstanz", "contact_name": "Corentin Fournier"},
                 "attributes": {"collection_date": "2022-04-11"},
             },
             {
                 "accession": "SAMN36415091",
                 "title": "pond sample",
-                "owner": {"name": "University of Konstanz, Corentin Fournier"},
+                "owner": {"name": "University of Konstanz", "contact_name": "Corentin Fournier"},
                 "attributes": {"collection_date": "2022-04-11"},
             },
         ],
@@ -153,8 +164,34 @@ def test_biosample_extract_structured_facts_maps_owner_to_recorded_by(biosample_
     recorded_by = [f for f in facts if f.fact_type_candidate == "recordedBy"]
     assert len(recorded_by) == 1
     assert recorded_by[0].entity_level == EntityLevel.STUDY
-    assert recorded_by[0].raw_value == "University of Konstanz, Corentin Fournier"
-    assert recorded_by[0].source_locator == "ncbi_biosample.SAMN36415090.Owner.Name"
+    assert recorded_by[0].raw_value == "Corentin Fournier"
+    assert recorded_by[0].source_locator == "ncbi_biosample.SAMN36415090.Owner.Contacts.Contact.Name"
+
+
+def test_biosample_extract_structured_facts_institution_only_owner_never_becomes_recorded_by(biosample_adapter):
+    """Regression guard for a real bug: Owner/Name (the submitting
+    institution, e.g. "San Francisco Estuary Institute" in a real cached
+    BioSample record) used to be piped directly into recordedBy alongside
+    real person names -- confirmed wrong since Owner/Name is never a
+    person. A sample with no Contact name at all must produce zero
+    recordedBy facts, not fall back to the institution name."""
+    raw = {
+        "bioproject_accession": "PRJNA1",
+        "total_linked_samples": 1,
+        "truncated": False,
+        "samples": [
+            {
+                "accession": "SAMN1",
+                "title": "sample",
+                "owner": {"name": "San Francisco Estuary Institute"},
+                "attributes": {"collection_date": "2023-03-15"},
+            },
+        ],
+    }
+
+    facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw, "PRJNA1"))
+
+    assert [f for f in facts if f.fact_type_candidate == "recordedBy"] == []
 
 
 def test_biosample_extract_structured_facts_notes_truncation(biosample_adapter):
@@ -233,7 +270,11 @@ def test_biosample_extract_structured_facts_keeps_a_real_raw_sample_unaffected(b
     }
     facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw))
 
-    assert {f.fact_type_candidate for f in facts} == {"collection_date"}
+    # Plus a study-level biological_rep_presence=FALSE (one real, non-MAG
+    # sample was checked, no replicate group found).
+    assert {f.fact_type_candidate for f in facts} == {"collection_date", "biological_rep_presence"}
+    presence_fact = next(f for f in facts if f.fact_type_candidate == "biological_rep_presence")
+    assert presence_fact.raw_value == "FALSE"
 
 
 def test_biosample_extract_structured_facts_derives_filter_facts_from_samp_mat_process(biosample_adapter):
@@ -470,6 +511,176 @@ def test_biosample_extract_structured_facts_no_biological_rep_relation_without_s
         "samples": [{"accession": "SAMN1", "title": "Site_A_rep1", "attributes": {}}],
     }
     facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw))
+
+    assert not any(f.fact_type_candidate == "biological_rep_relation" for f in facts)
+
+
+def test_biosample_extract_structured_facts_groups_replicates_by_shared_metadata(biosample_adapter):
+    """Lowest-priority replicate signal (after explicit attribute and
+    name-pattern), per an explicit user request: same coordinates,
+    collection date, and depth -- with no per-sample assay attribute at
+    all, so the assay dimension is assumed the same for every sample,
+    matching the common real-world case."""
+    raw = {
+        "bioproject_accession": "PRJNA1",
+        "total_linked_samples": 3,
+        "truncated": False,
+        "samples": [
+            {
+                "accession": "SAMN1",
+                "title": "sample 1",
+                "attributes": {
+                    "lat_lon": "38.03 N 122.15 W",
+                    "collection_date": "2023-03-15",
+                    "depth": "1 m",
+                },
+            },
+            {
+                "accession": "SAMN2",
+                "title": "sample 2",
+                "attributes": {
+                    "lat_lon": "38.03 N 122.15 W",
+                    "collection_date": "2023-03-15",
+                    "depth": "1 m",
+                },
+            },
+            {
+                "accession": "SAMN3",
+                "title": "sample 3, different site",
+                "attributes": {
+                    "lat_lon": "40.00 N 120.00 W",
+                    "collection_date": "2023-03-15",
+                    "depth": "1 m",
+                },
+            },
+        ],
+    }
+    facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw, "PRJNA1"))
+
+    rep_facts = {f.entity_external_id: f for f in facts if f.fact_type_candidate == "biological_rep_relation"}
+    assert set(rep_facts) == {"SAMN1", "SAMN2"}
+    assert rep_facts["SAMN1"].raw_value == "SAMN1 | SAMN2"
+    assert rep_facts["SAMN1"].confidence_metadata["replicate_detection_signal"] == "biosample_metadata_match"
+
+    biological_rep = [f for f in facts if f.fact_type_candidate == "biological_rep_presence"]
+    assert len(biological_rep) == 1
+    assert biological_rep[0].raw_value == "TRUE"
+
+
+def test_biosample_extract_structured_facts_metadata_match_excludes_mag_biosamples(biosample_adapter):
+    """Regression guard for a real bug found live (BioProject PRJNA529480):
+    MAG (metagenome-assembled-genome) BioSamples are excluded from the
+    main per-attribute loop (they never get their own lat_lon/
+    collection_date/depth facts persisted), but the replicate-relation
+    tiers used to read straight from the UNFILTERED sample list -- so a
+    real MAG derived from one sediment sample could still get grouped as
+    a "biological replicate" of sibling MAGs sharing that one sample's
+    coordinates, even though it's a computational construct, not a
+    separate physical sample. Two real (non-MAG) samples here do NOT
+    share matching metadata, so the only reason biological_rep_presence
+    could wrongly read TRUE is if the MAG trio below leaked into the
+    metadata-match tier."""
+    raw = {
+        "bioproject_accession": "PRJNA1",
+        "total_linked_samples": 5,
+        "truncated": False,
+        "samples": [
+            {
+                "accession": "SAMN_REAL_1",
+                "title": "sample 1",
+                "attributes": {"lat_lon": "38.03 N 122.15 W", "collection_date": "2023-03-15", "depth": "1 m"},
+            },
+            {
+                "accession": "SAMN_REAL_2",
+                "title": "sample 2, different site",
+                "attributes": {"lat_lon": "40.00 N 120.00 W", "collection_date": "2023-03-16", "depth": "2 m"},
+            },
+            {
+                "accession": "SAMN_MAG_1",
+                "title": "Metagenome-assembled genome: STUDY_SAMN_MAG_00001",
+                "package": "MIMAG.host-associated.6.0",
+                "attributes": {
+                    "lat_lon": "38.03 N 122.15 W",
+                    "collection_date": "2023-03-15",
+                    "depth": "1 m",
+                    "assembly software": "metaSPAdes 3.14",
+                },
+            },
+            {
+                "accession": "SAMN_MAG_2",
+                "title": "Metagenome-assembled genome: STUDY_SAMN_MAG_00002",
+                "package": "MIMAG.host-associated.6.0",
+                "attributes": {
+                    "lat_lon": "38.03 N 122.15 W",
+                    "collection_date": "2023-03-15",
+                    "depth": "1 m",
+                    "assembly software": "metaSPAdes 3.14",
+                },
+            },
+        ],
+    }
+    facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw, "PRJNA1"))
+
+    assert not [f for f in facts if f.fact_type_candidate == "biological_rep_relation"]
+    biological_rep = [f for f in facts if f.fact_type_candidate == "biological_rep_presence"]
+    assert len(biological_rep) == 1
+    assert biological_rep[0].raw_value == "FALSE"
+    # The MAG entries never contribute their own attribute facts either.
+    assert not [f for f in facts if f.entity_external_id in ("SAMN_MAG_1", "SAMN_MAG_2")]
+
+
+def test_biosample_extract_structured_facts_metadata_match_requires_matching_assay_when_reported(biosample_adapter):
+    raw = {
+        "bioproject_accession": "PRJNA1",
+        "total_linked_samples": 2,
+        "truncated": False,
+        "samples": [
+            {
+                "accession": "SAMN1",
+                "title": "sample 1",
+                "attributes": {
+                    "lat_lon": "38.03 N 122.15 W",
+                    "collection_date": "2023-03-15",
+                    "depth": "1 m",
+                    "assay": "16S",
+                },
+            },
+            {
+                "accession": "SAMN2",
+                "title": "sample 2",
+                "attributes": {
+                    "lat_lon": "38.03 N 122.15 W",
+                    "collection_date": "2023-03-15",
+                    "depth": "1 m",
+                    "assay": "18S",
+                },
+            },
+        ],
+    }
+    facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw, "PRJNA1"))
+
+    assert not any(f.fact_type_candidate == "biological_rep_relation" for f in facts)
+
+
+def test_biosample_extract_structured_facts_metadata_match_skips_samples_missing_depth(biosample_adapter):
+    raw = {
+        "bioproject_accession": "PRJNA1",
+        "total_linked_samples": 2,
+        "truncated": False,
+        "samples": [
+            {
+                "accession": "SAMN1",
+                "title": "sample 1",
+                "attributes": {"lat_lon": "38.03 N 122.15 W", "collection_date": "2023-03-15"},
+            },
+            {
+                "accession": "SAMN2",
+                "title": "sample 2",
+                "attributes": {"lat_lon": "38.03 N 122.15 W", "collection_date": "2023-03-15"},
+            },
+        ],
+    }
+    facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw, "PRJNA1"))
 
     assert not any(f.fact_type_candidate == "biological_rep_relation" for f in facts)
 

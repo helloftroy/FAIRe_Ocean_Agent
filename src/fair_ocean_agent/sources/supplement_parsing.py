@@ -542,6 +542,38 @@ def extract_pdf_text(content: bytes) -> str:
     return "\n\n".join(page.extract_text() or "" for page in reader.pages).strip()
 
 
+_DOCX_WORD_NAMESPACE = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+_DOCX_PARAGRAPH_TAG = f"{_DOCX_WORD_NAMESPACE}p"
+_DOCX_TEXT_TAG = f"{_DOCX_WORD_NAMESPACE}t"
+
+
+def extract_docx_text(content: bytes) -> str:
+    """Best-effort text extraction for a .docx supplementary document --
+    a real gap found live: Frontiers routinely ships its "Data Sheet"
+    supplements as .docx, and this extension previously had no handler at
+    all, falling into the generic "unsupported file type, not parsed"
+    branch, so a real paper's supplement was silently never scanned for
+    anything (controls included) despite being successfully retrieved.
+
+    A .docx file is a zip archive; `word/document.xml` holds the visible
+    text as `<w:t>` runs inside `<w:p>` paragraphs. Deliberately dependency-
+    free (stdlib `zipfile`/`xml.etree.ElementTree` only, matching this
+    module's existing JATS/XML parsing) rather than adding python-docx as
+    a new dependency for what is, at its core, just zipped XML."""
+    with zipfile.ZipFile(io.BytesIO(content)) as archive:
+        try:
+            document_xml = archive.read("word/document.xml")
+        except KeyError:
+            return ""
+    root = ET.fromstring(document_xml)
+    paragraphs = []
+    for paragraph in root.iter(_DOCX_PARAGRAPH_TAG):
+        text = "".join(node.text or "" for node in paragraph.iter(_DOCX_TEXT_TAG))
+        if text.strip():
+            paragraphs.append(text)
+    return "\n\n".join(paragraphs).strip()
+
+
 class ZipMemberTooLargeError(Exception):
     """Raised when a zip member's uncompressed size exceeds the configured
     per-member cap -- either as reported by ZipInfo.file_size (checked

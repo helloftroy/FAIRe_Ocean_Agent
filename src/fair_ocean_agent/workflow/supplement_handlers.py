@@ -67,6 +67,11 @@ from fair_ocean_agent.extraction.search_flags import (
     detect_llm_judged_search_facts,
     detect_text_search_flags,
 )
+from fair_ocean_agent.extraction.section_categories import (
+    derive_pcr_0_1_from_category_detection,
+    detect_section_categories_present,
+)
+from fair_ocean_agent.extraction.section_category_extraction import extract_section_category_facts
 from fair_ocean_agent.extraction.text import (
     PROMPT_VERSION,
     extract_facts_from_section,
@@ -81,6 +86,7 @@ from fair_ocean_agent.sources.europe_pmc import discover_supplementary_materials
 from fair_ocean_agent.sources.supplement_parsing import (
     ParsedTableResult,
     ZipMemberTooLargeError,
+    extract_docx_text,
     extract_pdf_text,
     parse_delimited_table,
     parse_json_supplement,
@@ -340,7 +346,7 @@ def _process_member(
     failure abort the whole study."""
     extension = _extension(file_name)
     config = load_config()
-    text_preparation = extension in ("txt", "md", "pdf")
+    text_preparation = extension in ("txt", "md", "pdf", "docx")
 
     try:
         if extension == "csv":
@@ -388,6 +394,21 @@ def _process_member(
             if prepared is None:
                 raise ValueError("PDF contains no extractable text")
             summary = f"text_ready: {prepared.character_count} chars prepared from PDF; supplement LLM extraction pending"
+            facts = []
+        elif extension == "docx":
+            text = extract_docx_text(content)
+            prepared = _prepare_source_text(
+                session,
+                study,
+                source,
+                asset,
+                file_name=file_name,
+                text=text,
+                preparation_method="docx_xml_text_extraction",
+            )
+            if prepared is None:
+                raise ValueError("DOCX contains no extractable text")
+            summary = f"text_ready: {prepared.character_count} chars prepared from DOCX; supplement LLM extraction pending"
             facts = []
         else:
             _mark(
@@ -626,18 +647,36 @@ def handle_extract_supplement_text_facts(session: Session, task: Task) -> None:
             raise ValueError(f"Source {prepared.source_id} not found")
         prepared_texts = ((prepared.title, prepared.text_content),)
         locator_prefix = f"prepared_source_text:{prepared.prepared_source_text_id}"
+        section_category_facts = detect_section_categories_present(
+            list(prepared_texts), locator_prefix=locator_prefix
+        )
         flag_facts = detect_text_search_flags(prepared_texts, locator_prefix=locator_prefix)
+        pcr_0_1_fact = derive_pcr_0_1_from_category_detection(section_category_facts)
+        if pcr_0_1_fact is not None:
+            flag_facts = [*flag_facts, pcr_0_1_fact]
         active_flags = frozenset(fact.fact_type_candidate for fact in flag_facts)
         controlled_search_facts = detect_controlled_search_facts(
             prepared_texts,
             locator_prefix=locator_prefix,
             active_flags=active_flags,
         )
+        section_category_term_facts = extract_section_category_facts(
+            backend, list(prepared_texts), locator_prefix=locator_prefix
+        )
+        # Feed this pipeline's own resolved field names into the older
+        # mechanism's exclude set so its broader LLM judgement (and
+        # keyword-default fallbacks like barcoding_pcr_appr's "one-step
+        # PCR") never overrides an already-found, quote-grounded answer
+        # from the category pipeline above -- mirrors the same fix in
+        # workflow/handlers.py's handle_extract_text_facts.
         llm_judged_search_facts = detect_llm_judged_search_facts(
             backend,
             prepared_texts,
             locator_prefix=locator_prefix,
             max_output_tokens=512,
+            active_flags=active_flags,
+            exclude_field_names=already_present
+            | frozenset(fact.fact_type_candidate for fact in section_category_term_facts),
         )
 
         try:
@@ -668,7 +707,7 @@ def handle_extract_supplement_text_facts(session: Session, task: Task) -> None:
             session,
             study,
             source,
-            [*flag_facts, *controlled_search_facts],
+            [*flag_facts, *controlled_search_facts, *section_category_facts],
             extraction_method="supplement_deterministic_text_search_flagging",
             prompt_version=PROMPT_VERSION,
         )
@@ -687,6 +726,15 @@ def handle_extract_supplement_text_facts(session: Session, task: Task) -> None:
             source,
             facts,
             extraction_method="supplement_llm_extraction",
+            model_name=backend.label,
+            prompt_version=PROMPT_VERSION,
+        )
+        _persist_supplement_facts(
+            session,
+            study,
+            source,
+            section_category_term_facts,
+            extraction_method="supplement_section_category_term_extraction",
             model_name=backend.label,
             prompt_version=PROMPT_VERSION,
         )

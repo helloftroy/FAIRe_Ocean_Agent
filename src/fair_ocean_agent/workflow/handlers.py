@@ -50,8 +50,15 @@ from fair_ocean_agent.extraction.search_flags import (
     detect_llm_judged_search_facts,
     detect_text_search_flags,
 )
-from fair_ocean_agent.extraction.taxonomic_assay import (
-    extract_assay_target_taxa_from_publication_metadata,
+from fair_ocean_agent.extraction.section_categories import (
+    derive_pcr_0_1_from_category_detection,
+    detect_section_categories_present,
+)
+from fair_ocean_agent.extraction.section_category_extraction import extract_section_category_facts
+from fair_ocean_agent.extraction.study_factor import (
+    generate_information_withheld_llm_guess,
+    generate_study_factor,
+    generate_study_target_taxonomic_scope,
 )
 from fair_ocean_agent.extraction.text import (
     PROMPT_VERSION,
@@ -613,13 +620,6 @@ def _discover_publication_metadata_from_sources(
 
     locator_prefix = f"publication_metadata:{doi}"
     facts = extract_publication_metadata_facts(fulltext_xml, crossref_raw, locator_prefix=locator_prefix)
-    facts.extend(
-        extract_assay_target_taxa_from_publication_metadata(
-            fulltext_xml,
-            crossref_raw,
-            locator_prefix=locator_prefix,
-        )
-    )
     if not facts:
         return study
 
@@ -1216,6 +1216,7 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
                 RawFact.extraction_method.in_(
                     (
                         "deterministic_text_search_flagging",
+                        "llm_generated_study_target_taxonomic_scope",
                         "llm_judged_quote_search",
                         "llm_text_extraction",
                     )
@@ -1239,7 +1240,13 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
 
     section_texts = tuple((section["title"], section["text"]) for section in sections)
     locator_prefix = f"europe_pmc_fulltext:{pmcid}"
+    section_category_facts = detect_section_categories_present(
+        list(section_texts), locator_prefix=locator_prefix
+    )
     flag_facts = detect_text_search_flags(section_texts, locator_prefix=locator_prefix)
+    pcr_0_1_fact = derive_pcr_0_1_from_category_detection(section_category_facts)
+    if pcr_0_1_fact is not None:
+        flag_facts = [*flag_facts, pcr_0_1_fact]
     active_flags = frozenset(fact.fact_type_candidate for fact in flag_facts)
     controlled_search_facts = detect_controlled_search_facts(
         section_texts,
@@ -1250,8 +1257,75 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
         session,
         study.study_id,
         source.source_id,
-        [*flag_facts, *controlled_search_facts],
+        [*flag_facts, *controlled_search_facts, *section_category_facts],
         extraction_method="deterministic_text_search_flagging",
+        prompt_version=PROMPT_VERSION,
+        review_status=ReviewStatus.ACCEPTED.value,
+    )
+    study_factor_facts = generate_study_factor(backend, fulltext_xml, locator_prefix=locator_prefix)
+    _persist_candidate_facts(
+        session,
+        study.study_id,
+        source.source_id,
+        study_factor_facts,
+        extraction_method="llm_generated_study_factor",
+        model_name=backend.label,
+        prompt_version=PROMPT_VERSION,
+        review_status=ReviewStatus.ACCEPTED.value,
+    )
+    study_target_scope_facts = generate_study_target_taxonomic_scope(
+        backend, fulltext_xml, locator_prefix=locator_prefix
+    )
+    _persist_candidate_facts(
+        session,
+        study.study_id,
+        source.source_id,
+        study_target_scope_facts,
+        extraction_method="llm_generated_study_target_taxonomic_scope",
+        model_name=backend.label,
+        prompt_version=PROMPT_VERSION,
+        review_status=ReviewStatus.ACCEPTED.value,
+    )
+    # EXPERIMENTAL, not a real FAIRe field -- see generate_information_
+    # withheld_llm_guess's own docstring. Surfaced only as a separate
+    # internal diagnostic export column, never merged into the real
+    # informationWithheld value.
+    information_withheld_guess_facts = generate_information_withheld_llm_guess(
+        backend, list(section_texts), locator_prefix=locator_prefix
+    )
+    _persist_candidate_facts(
+        session,
+        study.study_id,
+        source.source_id,
+        information_withheld_guess_facts,
+        extraction_method="llm_generated_information_withheld_guess",
+        model_name=backend.label,
+        prompt_version=PROMPT_VERSION,
+        review_status=ReviewStatus.ACCEPTED.value,
+    )
+    # New categorize-then-extract pipeline (extraction/section_category_
+    # extraction.py) for the PCR/library-prep/bioinformatics term
+    # families -- deliberately additive alongside every mechanism below,
+    # not a replacement, per an explicit user request to compare this
+    # new pipeline's own output against the existing ones before
+    # retiring anything. Runs BEFORE detect_llm_judged_search_facts (and
+    # feeds its own resolved field names into that call's
+    # exclude_field_names) so this pipeline's quote-grounded answer always
+    # wins over the older mechanism's broader LLM judgement or its
+    # keyword-default fallback (e.g. barcoding_pcr_appr's "one-step PCR"
+    # default firing even when this pipeline already found real
+    # "two-step" evidence) -- confirmed as a real bug against a live
+    # paper audit.
+    section_category_term_facts = extract_section_category_facts(
+        backend, list(section_texts), locator_prefix=locator_prefix
+    )
+    _persist_candidate_facts(
+        session,
+        study.study_id,
+        source.source_id,
+        section_category_term_facts,
+        extraction_method="section_category_term_extraction",
+        model_name=backend.label,
         prompt_version=PROMPT_VERSION,
         review_status=ReviewStatus.ACCEPTED.value,
     )
@@ -1260,6 +1334,9 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
         section_texts,
         locator_prefix=locator_prefix,
         max_output_tokens=512,
+        active_flags=active_flags,
+        exclude_field_names=already_resolved
+        | frozenset(fact.fact_type_candidate for fact in section_category_term_facts),
     )
     _persist_candidate_facts(
         session,

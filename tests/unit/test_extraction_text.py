@@ -49,6 +49,48 @@ def test_missing_or_unknown_evidence_id_is_dropped():
     assert facts == []
 
 
+def test_hallucinated_pcr_volume_not_present_in_quote_is_dropped():
+    text = (
+        "Amplicon libraries were sequenced on an Ion Torrent Personal Genome Machine. "
+        "The raw sequencing reads were quality filtered and trimmed to 220 bp using USEARCH."
+    )
+    response = json.dumps(
+        [{"fact_type_candidate": "pcr_reaction_volume", "raw_value": "25 uL", "evidence_id": "METHODS.P001"}]
+    )
+    backend = MockLLMBackend(responses=[response])
+
+    facts, _ = extract_facts_from_section(backend, "Methods", text, active_flags=frozenset({"pcr_0_1"}))
+
+    assert facts == []
+
+
+def test_pcr_volume_present_in_quote_survives_literal_guard_with_unit_variants():
+    text = "PCR amplification was performed in a total reaction volume of 25 µL."
+    response = json.dumps(
+        [{"fact_type_candidate": "pcr_reaction_volume", "raw_value": "25 uL", "evidence_id": "METHODS.P001"}]
+    )
+    backend = MockLLMBackend(responses=[response])
+
+    facts, _ = extract_facts_from_section(backend, "Methods", text, active_flags=frozenset({"pcr_0_1"}))
+
+    assert len(facts) == 1
+    assert facts[0].raw_value == "25 uL"
+
+
+def test_filter_name_can_be_extracted_from_sampling_text():
+    text = "Samples were filtered directly using a 0.22 μm cartridge filter (Sterivex filter)."
+    response = json.dumps(
+        [{"fact_type_candidate": "filter_name", "raw_value": "Sterivex filter", "evidence_id": "METHODS.P001"}]
+    )
+    backend = MockLLMBackend(responses=[response])
+
+    facts, _ = extract_facts_from_section(backend, "Methods", text)
+
+    assert len(facts) == 1
+    assert facts[0].fact_type_candidate == "filter_name"
+    assert facts[0].raw_value == "Sterivex filter"
+
+
 def test_assay_tag_on_assay_scoped_fact_becomes_assay_entity():
     from fair_ocean_agent.database.enums import EntityLevel
 
@@ -250,7 +292,7 @@ def test_extract_facts_from_section_chunks_long_text_and_merges_facts():
 
 
 def test_prompt_version_is_stable_constant():
-    assert PROMPT_VERSION == "text-extraction-v18-canonical-target-gene"
+    assert PROMPT_VERSION == "text-extraction-v19-library-layout-search"
 
 
 def test_recall_second_pass_does_not_fire_when_first_pass_finds_any_facts():
@@ -376,7 +418,7 @@ def test_prompt_embeds_the_native_name_checklist():
         "negative_control_type",
         "standard_curve_slope",
         "phix_percentage",
-        "reference_database",
+        "read_merge_minimum_overlap",
         "scientific_name",
     ):
         assert native_name in prompt
@@ -584,7 +626,13 @@ def test_resolved_faire_fields_for_study_ignores_other_studies_and_schemas(db_se
     db_session.flush()
 
     _standardized_value(db_session, study_a, target_field="annealingTemp", missingness_status=MissingnessStatus.PRESENT.value, value="55C")
-    _standardized_value(db_session, study_b, target_field="otu_db", missingness_status=MissingnessStatus.PRESENT.value, value="SILVA 138")
+    _standardized_value(
+        db_session,
+        study_b,
+        target_field="tax_assign_cat",
+        missingness_status=MissingnessStatus.PRESENT.value,
+        value="naive Bayes classifier",
+    )
     # A non-FAIRe schema row for study_a must never leak into the result.
     other_schema = StandardizedValue(
         study_id=study_a.study_id,
@@ -598,18 +646,19 @@ def test_resolved_faire_fields_for_study_ignores_other_studies_and_schemas(db_se
     db_session.flush()
 
     assert resolved_faire_fields_for_study(db_session, study_a.study_id) == frozenset({"annealingTemp"})
-    assert resolved_faire_fields_for_study(db_session, study_b.study_id) == frozenset({"otu_db"})
+    assert resolved_faire_fields_for_study(db_session, study_b.study_id) == frozenset({"tax_assign_cat"})
 
 
 def test_build_prompt_excludes_resolved_faire_hint_fields():
-    # "reference_database" (unlike "annealing_temperature") never appears in
-    # the instructions' own static illustrative text, so its absence here
-    # unambiguously means the checklist entry was actually filtered out.
+    # "read_merge_minimum_overlap" (unlike "annealing_temperature") never
+    # appears in the instructions' own static illustrative text, so its
+    # absence here unambiguously means the checklist entry was actually
+    # filtered out.
     prompt_full = build_prompt("PCR", SECTION_TEXT)
-    prompt_filtered = build_prompt("PCR", SECTION_TEXT, exclude_faire_hints=frozenset({"otu_db"}))
+    prompt_filtered = build_prompt("PCR", SECTION_TEXT, exclude_faire_hints=frozenset({"merge_min_overlap"}))
 
-    assert "reference_database" in prompt_full
-    assert "reference_database" not in prompt_filtered
+    assert "read_merge_minimum_overlap" in prompt_full
+    assert "read_merge_minimum_overlap" not in prompt_filtered
     assert len(prompt_filtered) < len(prompt_full)
 
 
@@ -617,8 +666,8 @@ def test_extract_facts_from_section_passes_exclusions_into_the_prompt():
     """Integration-level check that exclude_faire_hints actually reaches
     the prompt the backend receives, not just build_prompt in isolation."""
     backend = MockLLMBackend(responses=["[]"])
-    extract_facts_from_section(backend, "PCR", SECTION_TEXT, exclude_faire_hints=frozenset({"otu_db"}))
-    assert "reference_database" not in backend.calls[-1]["prompt"]
+    extract_facts_from_section(backend, "PCR", SECTION_TEXT, exclude_faire_hints=frozenset({"sop_bioinformatics"}))
+    assert "bioinformatics_sop_reference" not in backend.calls[-1]["prompt"]
 
 
 # --- Flag-gated checklist (extraction/faire_fields.py's required_any_flags,
@@ -635,7 +684,7 @@ def test_build_prompt_hides_pcr_checklist_with_no_active_flags():
     assert "pcr_cycle_count" not in prompt
     assert "probe_sequence" not in prompt
     # An ungated concept from another group must still be present.
-    assert "reference_database" in prompt
+    assert "read_merge_minimum_overlap" in prompt
 
 
 def test_build_prompt_shows_pcr_checklist_when_pcr_0_1_active():

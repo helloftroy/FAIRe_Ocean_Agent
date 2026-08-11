@@ -205,7 +205,7 @@ from fair_ocean_agent.llm.base import LLMBackend, LLMResponse
 from fair_ocean_agent.mapping.faire import TARGET_SCHEMA
 from fair_ocean_agent.sources.base import RawFactCandidate
 
-PROMPT_VERSION = "text-extraction-v18-canonical-target-gene"
+PROMPT_VERSION = "text-extraction-v19-library-layout-search"
 DEFAULT_MAX_SECTION_CHARS_PER_CALL = 1600
 
 ABSENT_RAW_VALUE_STRINGS = frozenset(
@@ -913,6 +913,34 @@ def _candidate_assay_tag(candidate: dict, fact_type: str) -> str | None:
     return tag or None
 
 
+_LITERAL_VOLUME_FACT_TYPES = frozenset(
+    {
+        "forward_primer_volume",
+        "reverse_primer_volume",
+        "pcr_reaction_volume",
+        "template_dna_volume",
+        "second_pcr_reaction_volume",
+        "second_pcr_template_dna_volume",
+    }
+)
+
+
+def _normalize_volume_text_for_literal_check(value: str) -> str:
+    return " ".join(
+        value.replace("\u2009", " ")
+        .replace("\u202f", " ")
+        .replace("µ", "u")
+        .replace("μ", "u")
+        .split()
+    ).casefold()
+
+
+def _candidate_value_is_supported_by_quote(fact_type: str, raw_value: object, quote: str) -> bool:
+    if fact_type not in _LITERAL_VOLUME_FACT_TYPES:
+        return True
+    return _normalize_volume_text_for_literal_check(str(raw_value)) in _normalize_volume_text_for_literal_check(quote)
+
+
 def _facts_from_candidates(
     candidates,
     segment_lookup: dict[str, str],
@@ -933,6 +961,8 @@ def _facts_from_candidates(
         if not fact_type or is_absent_raw_value(raw_value):
             continue
         if allowed_fact_types is not None and str(fact_type) not in allowed_fact_types:
+            continue
+        if not _candidate_value_is_supported_by_quote(str(fact_type), raw_value, quote):
             continue
         assay_tag = _candidate_assay_tag(candidate, str(fact_type))
         dedupe_key = (str(fact_type), str(raw_value), quote, assay_tag or "")

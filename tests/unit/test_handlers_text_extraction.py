@@ -35,6 +35,15 @@ PCR_FLAG_XML = """<article><body>
 </sec>
 </body></article>"""
 
+ABSTRACT_SCOPE_XML = """<article><front><article-meta><abstract>
+<p>This study investigates prokaryotic microorganisms, including bacteria and archaea,
+across water-column and sediment samples from the deep sea.</p>
+</abstract></article-meta></front><body>
+<sec><title>Materials and Methods</title>
+<sec><title>Sampling</title><p>Water samples were collected on 4 January 2022 at a depth of 5 meters.</p></sec>
+</sec>
+</body></article>"""
+
 
 class FakeEuropePmcAdapter:
     name = "europe_pmc"
@@ -137,6 +146,47 @@ def test_handler_persists_deterministic_text_search_flags(db_session, monkeypatc
     )
     assert facts["probe_based_qPCR_ddPCR_assay_0_1"].support_type == "deterministically_derived"
     assert facts["probe_based_qPCR_ddPCR_assay_0_1"].prompt_version == handlers.PROMPT_VERSION
+
+
+def test_handler_persists_abstract_generated_target_taxonomic_scope(db_session, monkeypatch):
+    study = _seeded_study_with_pmcid(db_session)
+    task = _task_for(db_session, study)
+
+    handlers._llm_backend_cache = MockLLMBackend(
+        label="mock-model",
+        responses=[
+            json.dumps({"study_factor": "Water-column and sediment sample type in deep-sea habitats."}),
+            json.dumps(
+                {
+                    "study_target_taxonomic_scope": (
+                        "prokaryotic microorganisms | bacteria | archaea"
+                    )
+                }
+            ),
+            "[]",
+        ],
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_build_enabled_adapters",
+        lambda: {"europe_pmc": FakeEuropePmcAdapter(fulltext_xml=ABSTRACT_SCOPE_XML)},
+    )
+
+    handlers.handle_extract_text_facts(db_session, task)
+    db_session.commit()
+
+    fact = (
+        db_session.query(RawFact)
+        .filter_by(
+            study_id=study.study_id,
+            fact_type_candidate="study_target_taxonomic_scope",
+            extraction_method="llm_generated_study_target_taxonomic_scope",
+        )
+        .one()
+    )
+    assert fact.raw_value == "prokaryotic microorganisms | bacteria | archaea"
+    assert fact.support_type == "inferred"
+    assert "including bacteria and archaea" in fact.evidence_quote
 
 
 def test_handler_materializes_a_real_entity_per_assay_tag(db_session, monkeypatch):
@@ -281,7 +331,19 @@ def test_handler_reprocesses_fulltext_with_new_prompt_version_or_model(db_sessio
         .count()
         == 1
     )
-    assert db_session.query(RawFact).filter_by(study_id=study.study_id, model_name="new-model").count() == 1
+    new_model_facts = db_session.query(RawFact).filter_by(study_id=study.study_id, model_name="new-model").all()
+    assert {fact.fact_type_candidate for fact in new_model_facts} == {
+        "collection_date",
+        "chimera_check_method",
+        "trim_method",
+        "trim_param",
+        "tax_assign_cat",
+        "assay_target_taxa",
+        # neg_cont_0_1/pos_cont_0_1 now confidently default to "0" rather
+        # than staying unresolved when no control/blank mention is found.
+        "neg_cont_0_1",
+        "pos_cont_0_1",
+    }
     db_session.refresh(old_fact)
     assert old_fact.review_status == ReviewStatus.REJECTED.value
 
@@ -426,12 +488,11 @@ def test_handler_raises_llm_backend_error_when_llm_disabled(db_session, monkeypa
         handlers.handle_extract_text_facts(db_session, task)
 
 
-def test_handler_excludes_faire_fields_already_resolved_from_structured_sources(db_session, monkeypatch):
-    """Structured-first extraction: a FAIRe field already resolved (e.g. by
-    a prior MAP_FAIRE pass over NCBI/ENA/PANGAEA facts) must be dropped
-    from the checklist the LLM actually sees -- less prompt, and no chance
-    of the LLM guessing a value that could contradict the already-resolved
-    one."""
+def test_handler_keeps_text_probeable_structured_fields_in_paper_prompt(db_session, monkeypatch):
+    """Structured/API values are evidence, not truth. If the same FAIRe
+    field is also in the paper-text checklist, structured resolution must
+    not remove it from the prompt; a paper-vs-API disagreement should
+    become a review_required conflict after mapping."""
     study = _seeded_study_with_pmcid(db_session)
     sample = Entity(
         study_id=study.study_id,
@@ -463,8 +524,12 @@ def test_handler_excludes_faire_fields_already_resolved_from_structured_sources(
     db_session.commit()
 
     assert backend.calls, "expected at least one LLM call"
-    for call in backend.calls:
-        assert "- depth:" not in call["prompt"]
+    # At least the checklist-style call must retain depth -- not every
+    # call, since handle_extract_text_facts now also makes several other
+    # LLM calls with entirely different prompt shapes (study_factor,
+    # study_target_taxonomic_scope, information_withheld_llm_guess, the
+    # section-category pipeline's own calls, ...).
+    assert any("- depth:" in call["prompt"] for call in backend.calls)
 
 
 def test_handler_asks_about_everything_when_nothing_resolved_yet(db_session, monkeypatch):

@@ -1,111 +1,104 @@
-from fair_ocean_agent.database.enums import SupportType
-from fair_ocean_agent.extraction.taxonomic_assay import (
-    extract_assay_target_taxa_from_publication_metadata,
-)
+"""Tests for extraction/taxonomic_assay.py::sync_assay_target_taxa_from_biosample_organisms."""
+from fair_ocean_agent.database.enums import EntityLevel, RelationshipType, ReviewStatus, SupportType
+from fair_ocean_agent.database.models import Entity, EntityStudy, RawFact, Study
+from fair_ocean_agent.extraction.taxonomic_assay import sync_assay_target_taxa_from_biosample_organisms
 
 
-def test_extract_assay_target_taxa_from_jats_keywords_and_assay_context():
-    xml = """
-    <article>
-      <front>
-        <article-meta>
-          <title-group>
-            <article-title>A reef-building coral settlement study</article-title>
-          </title-group>
-          <abstract>
-            <p>We used a metabarcoding assay targeting Chordata for elasmobranch monitoring.</p>
-            <p>Background coral reefs were discussed without assay context.</p>
-          </abstract>
-          <kwd-group>
-            <kwd>Crustose coralline algae</kwd>
-            <kwd>Coral recruitment</kwd>
-            <kwd>Settlement cues</kwd>
-            <kwd>Metabarcoding</kwd>
-          </kwd-group>
-        </article-meta>
-      </front>
-    </article>
-    """
-
-    facts = extract_assay_target_taxa_from_publication_metadata(
-        xml,
-        None,
-        locator_prefix="t",
-    )
-
-    assert len(facts) == 1
-    assert facts[0].fact_type_candidate == "assay_target_taxa"
-    assert facts[0].raw_value == "Chordata | Crustose coralline algae"
-    assert facts[0].support_type == SupportType.DETERMINISTICALLY_DERIVED
-    assert "targeting Chordata" in facts[0].evidence_quote
-    assert "Crustose coralline algae" in facts[0].evidence_quote
+def _study(session, **kwargs) -> Study:
+    study = Study(**kwargs)
+    session.add(study)
+    session.flush()
+    return study
 
 
-def test_extract_assay_target_taxa_prefers_target_phrase_over_scope_phrase():
-    xml = """
-    <article><front><article-meta><abstract>
-      <p>The metabarcoding assay targeted Chordata for sharks and rays.</p>
-    </abstract></article-meta></front></article>
-    """
-
-    facts = extract_assay_target_taxa_from_publication_metadata(
-        xml,
-        None,
-        locator_prefix="t",
-    )
-
-    assert len(facts) == 1
-    assert facts[0].raw_value == "Chordata"
-
-
-def test_extract_assay_target_taxa_from_crossref_abstract_when_jats_absent():
-    crossref_raw = {
-        "abstract": "<jats:p>Primers were designed to amplify Acropora millepora DNA.</jats:p>",
-        "subject": ["Environmental DNA"],
-    }
-
-    facts = extract_assay_target_taxa_from_publication_metadata(
-        None,
-        crossref_raw,
-        locator_prefix="t",
-    )
-
-    assert len(facts) == 1
-    assert facts[0].raw_value == "Acropora millepora"
-    assert facts[0].confidence_metadata["scope"] == "title_abstract_keywords_only"
-
-
-def test_extract_assay_target_taxa_does_not_treat_sentence_openers_as_species_names():
-    """Regression guard for a real false positive (PLOS ONE
-    10.1371/journal.pone.0303937): its abstract mentions "PCR" and
-    "amplicon" in sentences that pass the loose assay-context gate but
-    describe a filtration device, not an assay's target taxon. The old
-    `_target_phrase_taxa(sentence) or _taxon_mentions(sentence)` fallback
-    scanned the whole sentence for anything matching the "looks like a
-    binomial name" regex and produced "Diversity studies" (the abstract's
-    own opening two words) and "The device was" (a different sentence's
-    opening three words) as if they were taxa."""
-    crossref_raw = {
-        "abstract": (
-            "<jats:p>Diversity studies of aquatic picoplankton communities using size-class "
-            "filtration, DNA extraction, PCR and sequencing of phylogenetic markers, require a "
-            "robust methodological pipeline. The device was tested using freshwater plankton of "
-            "Lake Constance, and total DNA was extracted and an 16S rDNA amplicon was "
-            "sequenced.</jats:p>"
+def _linked_sample_with_organism(session, study: Study, external_identifier: str, organism: str) -> Entity:
+    entity = Entity(study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier=external_identifier)
+    session.add(entity)
+    session.flush()
+    session.add(
+        EntityStudy(
+            entity_id=entity.entity_id,
+            study_id=study.study_id,
+            relationship_type=RelationshipType.IS_HOME_OF.value,
+            confidence=SupportType.STRUCTURED_SOURCE.value,
         )
-    }
+    )
+    session.add(
+        RawFact(
+            study_id=study.study_id,
+            entity_id=entity.entity_id,
+            raw_field_name="organism",
+            raw_value=organism,
+            fact_type_candidate="organism",
+            entity_level=EntityLevel.SAMPLE.value,
+            support_type=SupportType.STRUCTURED_SOURCE.value,
+        )
+    )
+    session.flush()
+    return entity
 
-    facts = extract_assay_target_taxa_from_publication_metadata(None, crossref_raw, locator_prefix="t")
 
-    assert facts == []
+def test_aggregates_distinct_organism_values_across_samples(db_session):
+    study = _study(db_session, title="Multi-sample organism aggregation")
+    _linked_sample_with_organism(db_session, study, "SAMN1", "seawater metagenome")
+    _linked_sample_with_organism(db_session, study, "SAMN2", "seawater metagenome")
+    _linked_sample_with_organism(db_session, study, "SAMN3", "marine sediment metagenome")
+    db_session.commit()
+
+    sync_assay_target_taxa_from_biosample_organisms(db_session, study.study_id)
+    db_session.commit()
+
+    fact = db_session.query(RawFact).filter_by(
+        study_id=study.study_id, fact_type_candidate="assay_target_taxa"
+    ).one()
+    assert fact.raw_value == "seawater metagenome | marine sediment metagenome"
+    assert fact.support_type == SupportType.STRUCTURED_SOURCE.value
+    assert fact.entity_id is None
 
 
-def test_extract_assay_target_taxa_returns_empty_without_taxa_or_context():
-    xml = """
-    <article><front><article-meta>
-      <abstract><p>Coral reefs were monitored across seasons.</p></abstract>
-      <kwd-group><kwd>Metabarcoding</kwd><kwd>Environmental DNA</kwd></kwd-group>
-    </article-meta></front></article>
-    """
+def test_no_organism_facts_is_a_silent_no_op(db_session):
+    study = _study(db_session, title="No BioSample data")
+    db_session.commit()
 
-    assert extract_assay_target_taxa_from_publication_metadata(xml, None, locator_prefix="t") == []
+    sync_assay_target_taxa_from_biosample_organisms(db_session, study.study_id)
+    db_session.commit()
+
+    assert db_session.query(RawFact).filter_by(study_id=study.study_id, fact_type_candidate="assay_target_taxa").count() == 0
+
+
+def test_idempotent_rerun_updates_in_place_rather_than_duplicating(db_session):
+    study = _study(db_session, title="Rerun-safe aggregation")
+    _linked_sample_with_organism(db_session, study, "SAMN1", "seawater metagenome")
+    db_session.commit()
+
+    sync_assay_target_taxa_from_biosample_organisms(db_session, study.study_id)
+    db_session.commit()
+
+    _linked_sample_with_organism(db_session, study, "SAMN2", "marine sediment metagenome")
+    db_session.commit()
+
+    sync_assay_target_taxa_from_biosample_organisms(db_session, study.study_id)
+    db_session.commit()
+
+    facts = db_session.query(RawFact).filter_by(study_id=study.study_id, fact_type_candidate="assay_target_taxa").all()
+    assert len(facts) == 1
+    assert facts[0].raw_value == "seawater metagenome | marine sediment metagenome"
+
+
+def test_self_heals_by_rejecting_the_fact_when_organisms_disappear(db_session):
+    study = _study(db_session, title="Organism fact later rejected")
+    sample = _linked_sample_with_organism(db_session, study, "SAMN1", "seawater metagenome")
+    db_session.commit()
+
+    sync_assay_target_taxa_from_biosample_organisms(db_session, study.study_id)
+    db_session.commit()
+
+    organism_fact = db_session.query(RawFact).filter_by(entity_id=sample.entity_id, fact_type_candidate="organism").one()
+    organism_fact.review_status = ReviewStatus.REJECTED.value
+    db_session.commit()
+
+    sync_assay_target_taxa_from_biosample_organisms(db_session, study.study_id)
+    db_session.commit()
+
+    aggregated = db_session.query(RawFact).filter_by(study_id=study.study_id, fact_type_candidate="assay_target_taxa").one()
+    assert aggregated.review_status == ReviewStatus.REJECTED.value

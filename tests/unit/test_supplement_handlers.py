@@ -301,6 +301,50 @@ def test_retrieve_prepares_pdf_text_without_calling_llm(db_session, monkeypatch)
     assert db_session.query(RawFact).filter_by(study_id=study.study_id).count() == 0
 
 
+def test_retrieve_prepares_docx_text_without_calling_llm(db_session, monkeypatch):
+    """Regression guard for a real gap found live: Frontiers ships its
+    "Data Sheet" supplements as .docx, which used to fall into the generic
+    "unsupported file type, not parsed" branch -- silently never scanned
+    for anything, controls included, despite being successfully
+    retrieved. Mirrors test_retrieve_prepares_pdf_text_without_calling_llm."""
+    study = _seeded_study_with_pmcid(db_session)
+    small_xml = """<article><supplementary-material id="TS1"><media xmlns:xlink="http://www.w3.org/1999/xlink"
+    xlink:href="Data_Sheet_1.docx" mimetype="application" mime-subtype="msword"><?size 40?></media></supplementary-material></article>"""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("Data_Sheet_1.docx", b"fake docx bytes")
+    monkeypatch.setattr(
+        supplement_handlers, "_build_enabled_adapters",
+        lambda: {"europe_pmc": FakeEuropePmcAdapter(fulltext_xml=small_xml, bundle=buf.getvalue())},
+    )
+    monkeypatch.setattr(
+        supplement_handlers,
+        "_build_llm_backend_cached",
+        lambda: (_ for _ in ()).throw(AssertionError("LLM backend should not be built")),
+    )
+    monkeypatch.setattr(
+        supplement_handlers,
+        "extract_docx_text",
+        lambda _content: "No negative or positive controls were used in this study.",
+    )
+    discover_task = _discover_task(db_session, study)
+    supplement_handlers.handle_discover_supplements(db_session, discover_task)
+    db_session.commit()
+
+    retrieve_task = _retrieve_task(db_session, study)
+    supplement_handlers.handle_retrieve_supplements(db_session, retrieve_task)
+    db_session.commit()
+
+    asset = db_session.query(DataAsset).filter_by(study_id=study.study_id, file_name="Data_Sheet_1.docx").one()
+    assert asset.access_status == "open"
+    assert asset.inspection_level == "lightweight"
+    assert "text_ready" in asset.description
+    prepared = db_session.query(PreparedSourceText).filter_by(data_asset_id=asset.asset_id).one()
+    assert prepared.text_content == "No negative or positive controls were used in this study."
+    assert prepared.preparation_method == "docx_xml_text_extraction"
+    assert db_session.query(RawFact).filter_by(study_id=study.study_id).count() == 0
+
+
 def test_supplement_llm_pass_targets_fields_still_missing_after_paper(db_session, monkeypatch):
     study = _seeded_study_with_pmcid(db_session)
     paper_source = Source(
@@ -649,12 +693,15 @@ def test_retrieve_marks_malformed_supplement_parse_failed_without_aborting(db_se
 
 
 def test_retrieve_marks_unsupported_file_type_as_retrieved_not_parsed(db_session, monkeypatch):
+    # .PPTX, not .DOCX -- .docx supplements are now parsed (extract_docx_text),
+    # per a real gap found live (Frontiers' "Data Sheet" .docx supplements
+    # were silently never scanned at all). .pptx remains genuinely unsupported.
     study = _seeded_study_with_pmcid(db_session)
     small_xml = """<article><supplementary-material id="TS1"><media xmlns:xlink="http://www.w3.org/1999/xlink"
-    xlink:href="Table_1.DOCX" mimetype="application" mime-subtype="msword"><?size 40?></media></supplementary-material></article>"""
+    xlink:href="Table_1.PPTX" mimetype="application" mime-subtype="vnd.openxmlformats-officedocument.presentationml.presentation"><?size 40?></media></supplementary-material></article>"""
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
-        zf.writestr("Table_1.DOCX", b"fake docx bytes")
+        zf.writestr("Table_1.PPTX", b"fake pptx bytes")
     monkeypatch.setattr(
         supplement_handlers, "_build_enabled_adapters",
         lambda: {"europe_pmc": FakeEuropePmcAdapter(fulltext_xml=small_xml, bundle=buf.getvalue())},
@@ -667,7 +714,7 @@ def test_retrieve_marks_unsupported_file_type_as_retrieved_not_parsed(db_session
     supplement_handlers.handle_retrieve_supplements(db_session, retrieve_task)
     db_session.commit()
 
-    asset = db_session.query(DataAsset).filter_by(study_id=study.study_id, file_name="Table_1.DOCX").one()
+    asset = db_session.query(DataAsset).filter_by(study_id=study.study_id, file_name="Table_1.PPTX").one()
     assert asset.inspection_level == "lightweight"
     assert asset.access_status == "open"
     assert "unsupported" in asset.description
