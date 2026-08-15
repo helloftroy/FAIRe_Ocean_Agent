@@ -60,7 +60,6 @@ SUPPLEMENT_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     "salinity": ("salinity", "sal", "salinity_psu", "salinity (psu)"),
     "ph": ("ph", "ph_value"),
     "diss_oxygen": ("diss_oxygen", "dissolved_oxygen", "do", "do_mg_l", "dissolved oxygen"),
-    "turbidity": ("turbidity",),
     "chlorophyll": ("chlorophyll", "chl", "chl_a", "chlorophyll_a"),
     "env_broad_scale": ("env_broad_scale", "biome"),
     "env_local_scale": ("env_local_scale", "environmental_feature"),
@@ -71,12 +70,10 @@ SUPPLEMENT_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     "pcr_plate_id": ("pcr_plate_id", "pcr plate id", "pcr_plate", "plate_id", "plate id"),
     "lib_id": ("lib_id", "library_id", "library id", "library", "lib name"),
     "seq_run_id": ("seq_run_id", "sequencing_run_id", "sequencing run id", "run_accession", "run accession"),
-    "lib_conc": ("lib_conc", "library_concentration", "library concentration", "lib concentration"),
-    "lib_conc_unit": ("lib_conc_unit", "library_concentration_unit", "library concentration unit"),
-    "lib_conc_meth": ("lib_conc_meth", "library_concentration_method", "library concentration method"),
-    "phix_perc": ("phix_perc", "phix_percentage", "phix percentage", "phix", "% phix"),
-    "mid_forward": ("mid_forward", "forward_mid", "forward mid", "forward barcode", "forward index"),
-    "mid_reverse": ("mid_reverse", "reverse_mid", "reverse mid", "reverse barcode", "reverse index"),
+    "phix_perc": (
+        "phix_perc", "phix_percentage", "phix percentage", "phix", "% phix", "phix%",
+        "%phix", "phix_pct", "percent phix",
+    ),
     "filename": ("filename", "file_name", "fastq_1", "fastq file 1", "forward_reads", "r1"),
     "filename2": ("filename2", "file_name2", "fastq_2", "fastq file 2", "reverse_reads", "r2"),
     "checksum_filename": ("checksum_filename", "checksum_file_1", "md5_1", "fastq_md5_1"),
@@ -124,12 +121,7 @@ _EXPERIMENT_RUN_FACTS = frozenset(
         "pcr_plate_id",
         "lib_id",
         "seq_run_id",
-        "lib_conc",
-        "lib_conc_unit",
-        "lib_conc_meth",
         "phix_perc",
-        "mid_forward",
-        "mid_reverse",
         "filename",
         "filename2",
         "checksum_filename",
@@ -200,6 +192,34 @@ def _facts_from_rows(
     data_rows = rows[header_index + 1 :]
     result.row_count = len(data_rows)
 
+    locator_prefix = f"supplement.{file_name}"
+    if sheet_name:
+        locator_prefix = f"{locator_prefix}#{sheet_name}"
+
+    # Every real header cell, verbatim, pipe-joined, regardless of whether
+    # it's recognized below -- a cheap diagnostic (projectMetadata.
+    # spreadsheet_headers) so a human can see what a supplement table
+    # actually contains even when none of its columns are in
+    # SUPPLEMENT_COLUMN_ALIASES yet, per an explicit user request. Built
+    # here but appended to result.facts at every return point below (kept
+    # LAST, not first) so it never disturbs an existing caller's own
+    # facts[0]-is-the-first-real-fact assumption; unconditional (fires on
+    # the "nothing else recognized" early-return path too), since an
+    # all-unrecognized header row is exactly the case this exists to
+    # surface.
+    non_empty_headers = [h for h in header if h]
+    spreadsheet_headers_fact = (
+        RawFactCandidate(
+            entity_level=EntityLevel.STUDY,
+            fact_type_candidate="spreadsheet_headers",
+            raw_field_name="header_row",
+            raw_value=" | ".join(non_empty_headers),
+            source_locator=f"{locator_prefix}!row{header_index + 1}",
+        )
+        if non_empty_headers
+        else None
+    )
+
     column_plan: list[tuple[int, str, str | None]] = []  # (col_index, canonical, header_text)
     identifier_cols: dict[EntityLevel, tuple[int, str]] = {}
     for col_index, raw_header in enumerate(header):
@@ -232,11 +252,9 @@ def _facts_from_rows(
         }
 
     if not column_plan and not replicate_group_by_sample_id:
+        if spreadsheet_headers_fact is not None:
+            result.facts.append(spreadsheet_headers_fact)
         return result
-
-    locator_prefix = f"supplement.{file_name}"
-    if sheet_name:
-        locator_prefix = f"{locator_prefix}#{sheet_name}"
 
     for row_offset, row in enumerate(data_rows):
         row_number = header_index + row_offset + 2  # +1 for 1-indexing, +1 for the header row
@@ -368,6 +386,8 @@ def _facts_from_rows(
                         },
                     )
                 )
+    if spreadsheet_headers_fact is not None:
+        result.facts.append(spreadsheet_headers_fact)
     return result
 
 

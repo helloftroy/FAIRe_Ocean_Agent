@@ -495,6 +495,33 @@ class StandardizedValueEvidence(Base):
     )
 
 
+class ApiPaperCorrection(Base, TimestampMixin):
+    """Durable, code-populated log of every case where a structured API
+    value (BioSample/ENA/...) was found to contradict what the paper's own
+    text actually says and was corrected -- per an explicit user request
+    to stop losing track of these ("I want to start documenting 'fixes'
+    somehow... this new table isn't manual, this should be built into the
+    code"). The only writer is the LLM verification mechanism that found
+    the mismatch (e.g. extraction/api_verification.py's elev/depth check);
+    never hand-edited. `paper_reference` is deliberately NOT duplicated
+    here -- resolved at export time from the study's own
+    ExternalIdentifier (DOI), the single source of truth for that."""
+
+    __tablename__ = "api_paper_corrections"
+
+    correction_id: Mapped[str] = mapped_column(
+        String, primary_key=True, default=lambda: new_id("CORR")
+    )
+    study_id: Mapped[str] = mapped_column(ForeignKey("studies.study_id"), index=True)
+    entity_id: Mapped[str | None] = mapped_column(ForeignKey("entities.entity_id"), index=True)
+    api_faire_term: Mapped[str] = mapped_column(String)
+    api_value: Mapped[str] = mapped_column(Text)
+    corrected_faire_term: Mapped[str] = mapped_column(String)
+    corrected_value: Mapped[str] = mapped_column(Text)
+    supporting_quote: Mapped[str] = mapped_column(Text)
+    detector: Mapped[str] = mapped_column(String)
+
+
 class DataAsset(Base, TimestampMixin):
     __tablename__ = "data_assets"
 

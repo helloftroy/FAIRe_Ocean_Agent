@@ -344,9 +344,11 @@ def test_handler_discovers_supplements_inline_during_doi_driven_discovery(db_ses
 
 def test_handler_extracts_publication_metadata_inline_during_doi_driven_discovery(db_session, monkeypatch):
     """A DOI-driven DISCOVER_IDENTIFIERS pass must also resolve
-    license/rightsHolder/accessRights/paper_authors_list/project_contact
+    license/accessRights/paper_authors_list/project_contact
     (from JATS <permissions>/<contrib-group>) and bibliographicCitation
-    (from Crossref) for free -- no LLM, no extra network cost, same shape
+    (from Crossref) for free -- no LLM, no extra network cost. rightsHolder
+    is now extracted in the full-text LLM stage from rights text.
+    Same shape
     as the inline supplement-discovery test above."""
     study = _seeded_study_with_doi(db_session)
     task = _task_for(db_session, study)
@@ -392,7 +394,7 @@ def test_handler_extracts_publication_metadata_inline_during_doi_driven_discover
         )
     }
     assert facts["license"] == "http://creativecommons.org/licenses/by/4.0/"
-    assert facts["rightsHolder"] == "Test Authors"
+    assert "rightsHolder" not in facts
     assert facts["accessRights"] == "open access"
     assert facts["paper_authors_list"] == "Jane Doe"
     assert facts["project_contact"] == "Jane Doe <jane@example.org>"

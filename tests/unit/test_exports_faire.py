@@ -16,6 +16,7 @@ from fair_ocean_agent.exports.faire import (
     EMPTY_CLASSES,
     INTERNAL_ALIAS_SAMPLE_IDS_FIELD,
     INTERNAL_INFORMATION_WITHHELD_LLM_GUESS_FIELD,
+    INTERNAL_PRIMER_TRACEABILITY_FIELDS,
     INTERNAL_SECTION_DETECTION_FIELDS,
     INTERNAL_STUDY_ID_FIELD,
     class_columns,
@@ -307,6 +308,58 @@ def test_shared_sample_gets_roots_broadcast_once_determined(db_session, tmp_path
     assert rows["SAMN_ROOTED"]["env_broad_scale"] == "marine biome (root study)"
 
 
+def test_samp_mat_process_pipe_joins_entity_structured_value_with_study_broadcast(db_session, tmp_path):
+    """Grounded in a real gap (10.3389/fmicb.2024.1295149): every real
+    sample already has its own terse structured samp_mat_process value
+    straight from NCBI ("DNA extraction from sediment samples"), which
+    used to silently win outright and discard the study's richer
+    paper-text broadcast entirely -- unlike every other sampleMetadata
+    field (a genuinely different, unrelated value), this field is a
+    free-text narrative where both sources are worth keeping side by
+    side."""
+    study = Study(title="MAG-adjacent sample prep detail")
+    db_session.add(study)
+    db_session.flush()
+    sample = Entity(
+        study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN_PREP",
+        root_status=EntityRootStatus.DETERMINED.value, root_study_id=study.study_id,
+    )
+    db_session.add(sample)
+    db_session.flush()
+    db_session.add(
+        EntityStudy(
+            entity_id=sample.entity_id, study_id=study.study_id,
+            relationship_type=RelationshipType.IS_HOME_OF.value, confidence=SupportType.STRUCTURED_SOURCE.value,
+        )
+    )
+    db_session.add(
+        StandardizedValue(
+            study_id=study.study_id, entity_id=None, target_schema=TARGET_SCHEMA,
+            target_schema_version=TARGET_SCHEMA_VERSION, target_field="samp_mat_process",
+            standardized_value="the sub-sectioned sediment samples were freeze-dried in a freeze-dryer",
+            mapping_method="suggested_semantic",
+        )
+    )
+    db_session.add(
+        StandardizedValue(
+            study_id=study.study_id, entity_id=sample.entity_id, target_schema=TARGET_SCHEMA,
+            target_schema_version=TARGET_SCHEMA_VERSION, target_field="samp_mat_process",
+            standardized_value="DNA extraction from sediment samples", mapping_method="exact_label",
+        )
+    )
+    db_session.commit()
+
+    export_faire(db_session, tmp_path)
+
+    with (tmp_path / "sampleMetadata.csv").open() as f:
+        rows = {row["samp_name"]: row for row in csv.DictReader(f)}
+
+    assert rows["SAMN_PREP"]["samp_mat_process"] == (
+        "DNA extraction from sediment samples|"
+        "the sub-sectioned sediment samples were freeze-dried in a freeze-dryer"
+    )
+
+
 def test_analysis_only_study_excluded_from_project_metadata(db_session, tmp_path):
     """A study that links to shared samples/runs but is home to none of
     them did no original data collection -- must not get a projectMetadata
@@ -557,13 +610,59 @@ def test_export_refuses_ambiguous_library_to_run_relationship(db_session, tmp_pa
 
 
 def test_export_faire_column_order_matches_classes_yaml(db_session, tmp_path):
+    from fair_ocean_agent.exports.faire import CUSTOM_ENV_VAR_BLOCK_FIELD, SAMPLE_METADATA_SUPPRESSED_FIELDS
+
     export_faire(db_session, tmp_path)
     with (tmp_path / "sampleMetadata.csv").open() as f:
         header = next(csv.reader(f))
     # internal_study_id/internal_alias_sample_ids are pipeline-internal
     # traceability columns, prepended ahead of the real FAIRe columns --
-    # neither is itself part of classes.yaml.
-    assert header == [INTERNAL_STUDY_ID_FIELD, INTERNAL_ALIAS_SAMPLE_IDS_FIELD, *class_columns("sampleMetadata")]
+    # neither is itself part of classes.yaml. Columns still follow
+    # classes.yaml's own order, just with the suppressed ones dropped out.
+    # x_env_var_block (also not in classes.yaml -- a custom, non-schema
+    # column) is appended at the very end.
+    expected_columns = [
+        field for field in class_columns("sampleMetadata") if field not in SAMPLE_METADATA_SUPPRESSED_FIELDS
+    ]
+    assert header == [
+        INTERNAL_STUDY_ID_FIELD, INTERNAL_ALIAS_SAMPLE_IDS_FIELD, *expected_columns, CUSTOM_ENV_VAR_BLOCK_FIELD,
+    ]
+    assert not {
+        "verbatimCoordinateSystem",
+        "verbatimEventDate",
+        "verbatimEventTime",
+        "verbatimLatitude",
+        "verbatimLongitude",
+        "verbatimSRS",
+        "habitat_natural_artificial_0_1",
+        "ph_meth",
+        "stationed_sample_dur",
+        "tidal_stage",
+        "turbidity",
+        "water_current",
+        "wind_direction",
+        "wind_speed",
+        "tot_carb_unit",
+        "tot_diss_nitro_unit",
+        "tot_inorg_nitro_unit",
+        "tot_nitro_content_unit",
+        "tot_nitro_unit",
+        "tot_org_carb_unit",
+        "tot_part_carb_unit",
+        "org_carb_unit",
+        "org_matter_unit",
+        "org_nitro_unit",
+        "part_org_carb_unit",
+        "part_org_nitro_unit",
+        "nitrate_unit",
+        "nitrite_unit",
+        "diss_inorg_carb_unit",
+        "diss_inorg_nitro_unit",
+        "diss_org_carb_unit",
+        "diss_org_nitro_unit",
+        "diss_oxygen_unit",
+    } & set(header)
+    assert "internal_expedition_id" in header
 
 
 def test_export_faire_writes_field_reference_with_exact_mappings(db_session, tmp_path):
@@ -731,7 +830,7 @@ def test_shared_experiment_row_inherits_assay_name_from_linked_study(db_session,
                 target_schema=TARGET_SCHEMA,
                 target_schema_version=TARGET_SCHEMA_VERSION,
                 target_field="assay_name",
-                standardized_value="16S rRNA",
+                standardized_value="16S | hzsA | 515F/806R | hzsA_1597A/hzsA_1857R",
                 mapping_method="deterministic_synonym",
             ),
         ]
@@ -744,7 +843,7 @@ def test_shared_experiment_row_inherits_assay_name_from_linked_study(db_session,
         rows = list(csv.DictReader(f))
     assert len(rows) == 1
     assert set(rows[0][INTERNAL_STUDY_ID_FIELD].split("|")) == {home_study.study_id, linked_study.study_id}
-    assert rows[0]["assay_name"] == "16S rRNA"
+    assert rows[0]["assay_name"] == "16S"
 
 
 def test_project_metadata_section_detection_columns_default_zero_and_flip_to_one(db_session, tmp_path):
@@ -775,6 +874,40 @@ def test_project_metadata_section_detection_columns_default_zero_and_flip_to_one
     with (tmp_path / "field_reference.csv").open() as f:
         field_names = {r["faire_field"] for r in csv.DictReader(f)}
     for field in INTERNAL_SECTION_DETECTION_FIELDS:
+        assert field not in field_names
+
+
+def test_project_metadata_primer_traceability_columns_default_zero_and_flip_to_one(db_session, tmp_path):
+    """Internal-only diagnostic columns, per an explicit user request to
+    flag a primer whose name was found but whose sequence AND reference/DOI
+    could not be pinned down, as a future targeted-supplement-crawl
+    candidate -- never a real FAIRe checklist term, same precedent as
+    INTERNAL_SECTION_DETECTION_FIELDS."""
+    study = Study(title="Primer traceability export test")
+    db_session.add(study)
+    db_session.flush()
+    db_session.add(ExternalIdentifier(study_id=study.study_id, identifier_type=IdentifierType.BIOPROJECT_ACCESSION.value, identifier_value="PRJNA10"))
+    db_session.add(
+        RawFact(
+            study_id=study.study_id, entity_id=None, raw_field_name="primer_forward_source_unresolved",
+            raw_value="1", fact_type_candidate="primer_forward_source_unresolved", entity_level="study",
+            support_type=SupportType.DETERMINISTICALLY_DERIVED.value,
+        )
+    )
+    db_session.commit()
+
+    export_faire(db_session, tmp_path)
+
+    with (tmp_path / "projectMetadata.csv").open() as f:
+        rows = list(csv.DictReader(f))
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["primer_forward_source_unresolved"] == "1"
+    assert row["primer_reverse_source_unresolved"] == "0"
+
+    with (tmp_path / "field_reference.csv").open() as f:
+        field_names = {r["faire_field"] for r in csv.DictReader(f)}
+    for field in INTERNAL_PRIMER_TRACEABILITY_FIELDS:
         assert field not in field_names
 
 
@@ -865,6 +998,96 @@ def test_project_metadata_suppressed_fields_never_appear_as_columns(db_session, 
         assert field not in field_names
 
 
+def test_sample_metadata_suppressed_fields_never_appear_as_columns(db_session, tmp_path):
+    """nucl_acid_ext/nucl_acid_ext_modify/date_ext/ratioOfAbsorbance260_280/
+    prepped_samp_store_temp/prepped_samp_store_dur/prepped_samp_store_sol/
+    dna_store_loc/size_frac_low/neg_cont_type/pos_cont_type/rel_cont_id/
+    detected_notDetected/nitro/org_carb/org_nitro/tot_org_c_meth/
+    tot_nitro_cont_meth/tot_nitro_content are real FAIRe fields (never
+    removed from the vendored schema.yaml/classes.yaml mirror) but must
+    never appear as columns in the exported CSV or field_reference.csv,
+    per an explicit, repeated user instruction. (tot_depth_water_col was
+    on this list too, but was un-suppressed -- see
+    extraction/api_verification.py.)"""
+    from fair_ocean_agent.exports.faire import SAMPLE_METADATA_SUPPRESSED_FIELDS
+
+    study = Study(title="Sample-level suppressed field export test")
+    db_session.add(study)
+    db_session.flush()
+    sample = Entity(study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN_SUPPRESS")
+    db_session.add(sample)
+    db_session.flush()
+    db_session.add(
+        RawFact(
+            study_id=study.study_id, entity_id=sample.entity_id, raw_field_name="geo_loc_name",
+            raw_value="USA: California", fact_type_candidate="geo_loc_name", entity_level="sample",
+            support_type=SupportType.STRUCTURED_SOURCE.value,
+        )
+    )
+    db_session.commit()
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    export_faire(db_session, tmp_path)
+
+    with (tmp_path / "sampleMetadata.csv").open() as f:
+        header = next(csv.reader(f))
+    for field in SAMPLE_METADATA_SUPPRESSED_FIELDS:
+        assert field not in header
+    # a real, still-populated field must still appear, confirming the
+    # suppression is scoped to exactly these fields, not the whole class.
+    assert "geo_loc_name" in header
+
+    with (tmp_path / "field_reference.csv").open() as f:
+        field_names = {r["faire_field"] for r in csv.DictReader(f)}
+    for field in SAMPLE_METADATA_SUPPRESSED_FIELDS:
+        assert field not in field_names
+
+
+def test_experiment_run_metadata_suppressed_fields_never_appear_as_columns(db_session, tmp_path):
+    """otu_num_tax_assigned/output_otu_num/output_read_count/mid_forward/
+    mid_reverse/lib_conc/lib_conc_meth/lib_conc_unit are real FAIRe fields
+    (never removed from the vendored schema.yaml/classes.yaml mirror) but
+    must never appear as columns in the exported CSV or field_reference.csv,
+    per an explicit, repeated user instruction. otu_num_tax_assigned/
+    output_otu_num/output_read_count in particular are dropped rather than
+    guessed at because they're computed differently study to study -- no
+    single extraction approach would be correct across papers."""
+    from fair_ocean_agent.exports.faire import EXPERIMENT_RUN_METADATA_SUPPRESSED_FIELDS
+
+    study = Study(title="Experiment-run suppressed field export test")
+    db_session.add(study)
+    db_session.flush()
+    run = Entity(study_id=study.study_id, entity_level=EntityLevel.SEQUENCING_RUN.value, external_identifier="SRR_SUPPRESS")
+    db_session.add(run)
+    db_session.flush()
+    db_session.add(
+        RawFact(
+            study_id=study.study_id, entity_id=run.entity_id, raw_field_name="run_accession",
+            raw_value="SRR_SUPPRESS", fact_type_candidate="run_accession", entity_level="sequencing_run",
+            support_type=SupportType.STRUCTURED_SOURCE.value,
+        )
+    )
+    db_session.commit()
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    export_faire(db_session, tmp_path)
+
+    with (tmp_path / "experimentRunMetadata.csv").open() as f:
+        header = next(csv.reader(f))
+    for field in EXPERIMENT_RUN_METADATA_SUPPRESSED_FIELDS:
+        assert field not in header
+    # a real, still-populated field must still appear, confirming the
+    # suppression is scoped to exactly these fields, not the whole class.
+    assert "seq_run_id" in header
+
+    with (tmp_path / "field_reference.csv").open() as f:
+        field_names = {r["faire_field"] for r in csv.DictReader(f)}
+    for field in EXPERIMENT_RUN_METADATA_SUPPRESSED_FIELDS:
+        assert field not in field_names
+
+
 def test_expedition_id_and_ship_crs_expocode_no_longer_in_real_schema():
     """A former NOAA/SEUS-MBON extension, retracted per an explicit later
     user request -- unlike PROJECT_METADATA_SUPPRESSED_FIELDS's real
@@ -874,6 +1097,7 @@ def test_expedition_id_and_ship_crs_expocode_no_longer_in_real_schema():
     fidelity."""
     assert "expedition_id" not in class_columns("projectMetadata")
     assert "ship_crs_expocode" not in class_columns("projectMetadata")
+    assert "internal_expedition_id" in class_columns("sampleMetadata")
 
 
 def test_checkls_ver_always_synced_as_the_pipelines_own_schema_version(db_session, tmp_path):
@@ -890,3 +1114,119 @@ def test_checkls_ver_always_synced_as_the_pipelines_own_schema_version(db_sessio
     with (tmp_path / "projectMetadata.csv").open() as f:
         rows = list(csv.DictReader(f))
     assert rows[0]["checkls_ver"] == "1.0.2"
+
+
+def test_in_situ_temp_oxygen_salinity_broadcast_into_every_sample_row(db_session, tmp_path):
+    """Real audit (10.1093/ismejo/wrae013, STUDY-295abf4a8f43): a single
+    STUDY-level in-situ reading (one collection event/site) must appear on
+    every sample's own sampleMetadata row, exactly like other STUDY-level
+    broadcast defaults. Only checks diss_oxygen -- temp/salinity's own
+    mapping still runs identically (in_situ_temp/in_situ_salinity still
+    map through to temp/salinity StandardizedValue rows), but those two
+    columns are now suppressed from export entirely, replaced by
+    x_env_var_block, per an explicit user request."""
+    study = Study(title="In-situ broadcast test")
+    db_session.add(study)
+    db_session.flush()
+    sample1 = Entity(study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN1")
+    sample2 = Entity(study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN2")
+    db_session.add_all([sample1, sample2])
+    db_session.flush()
+    db_session.add_all([_home_entity_study(sample1), _home_entity_study(sample2)])
+    db_session.add(
+        RawFact(
+            study_id=study.study_id, entity_id=None, raw_field_name="in_situ_temp", raw_value="6.5C",
+            fact_type_candidate="in_situ_temp", entity_level="study", support_type=SupportType.EXPLICIT.value,
+        )
+    )
+    db_session.add(
+        RawFact(
+            study_id=study.study_id, entity_id=None, raw_field_name="in_situ_diss_oxygen", raw_value="11.9 mg L-1",
+            fact_type_candidate="in_situ_diss_oxygen", entity_level="study", support_type=SupportType.EXPLICIT.value,
+        )
+    )
+    db_session.add(
+        RawFact(
+            study_id=study.study_id, entity_id=None, raw_field_name="in_situ_salinity", raw_value="6.4 PSU",
+            fact_type_candidate="in_situ_salinity", entity_level="study", support_type=SupportType.EXPLICIT.value,
+        )
+    )
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+    export_faire(db_session, tmp_path)
+
+    with (tmp_path / "sampleMetadata.csv").open() as f:
+        rows = {row["samp_name"]: row for row in csv.DictReader(f)}
+    assert rows["SAMN1"]["diss_oxygen"] == "11.9 mg L-1"
+    assert rows["SAMN2"]["diss_oxygen"] == "11.9 mg L-1"
+    assert "temp" not in rows["SAMN1"]
+    assert "salinity" not in rows["SAMN1"]
+
+
+def test_api_paper_corrections_csv_includes_paper_reference_and_correction_details(db_session, tmp_path):
+    """The durable "fixes" spreadsheet an explicit user request asked for:
+    every api_paper_corrections row must surface with its paper's own DOI
+    (not the internal study_id) as paper_reference, alongside the API
+    term/value, the paper-corrected term/value, and the supporting quote."""
+    from fair_ocean_agent.database.models import ApiPaperCorrection
+
+    study = Study(title="Corrections export test")
+    db_session.add(study)
+    db_session.flush()
+    db_session.add(ExternalIdentifier(study_id=study.study_id, identifier_type=IdentifierType.DOI.value, identifier_value="10.1093/ismejo/wrae013"))
+    db_session.add(
+        ApiPaperCorrection(
+            study_id=study.study_id,
+            entity_id=None,
+            api_faire_term="elev",
+            api_value="34 m",
+            corrected_faire_term="tot_depth_water_col",
+            corrected_value="34",
+            supporting_quote="at a site with 34 m water depth",
+            detector="elev_depth_mislabel_check",
+        )
+    )
+    db_session.commit()
+
+    export_faire(db_session, tmp_path)
+
+    with (tmp_path / "api_paper_corrections.csv").open() as f:
+        rows = list(csv.DictReader(f))
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["paper_reference"] == "10.1093/ismejo/wrae013"
+    assert row["api_faire_term"] == "elev"
+    assert row["api_value"] == "34 m"
+    assert row["corrected_faire_term"] == "tot_depth_water_col"
+    assert row["corrected_value"] == "34"
+    assert row["supporting_quote"] == "at a site with 34 m water depth"
+    assert row["detector"] == "elev_depth_mislabel_check"
+
+
+def test_api_paper_corrections_csv_falls_back_to_study_id_without_a_doi(db_session, tmp_path):
+    from fair_ocean_agent.database.models import ApiPaperCorrection
+
+    study = Study(title="Corrections export, no DOI")
+    db_session.add(study)
+    db_session.flush()
+    db_session.add(
+        ApiPaperCorrection(
+            study_id=study.study_id,
+            entity_id=None,
+            api_faire_term="elev",
+            api_value="10 m",
+            corrected_faire_term="tot_depth_water_col",
+            corrected_value="10",
+            supporting_quote="some quote",
+            detector="elev_depth_mislabel_check",
+        )
+    )
+    db_session.commit()
+
+    export_faire(db_session, tmp_path)
+
+    with (tmp_path / "api_paper_corrections.csv").open() as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["paper_reference"] == study.study_id

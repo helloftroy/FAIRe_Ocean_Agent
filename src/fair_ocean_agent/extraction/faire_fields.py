@@ -52,10 +52,10 @@ from dataclasses import dataclass
 # one of these fields back to either paper or supplement LLM extraction.
 #
 # samp_collect_method/samp_store_method_additional (sampleMetadata) and
-# assay_name/lib_conc/lib_conc_unit/lib_conc_meth (experimentRunMetadata,
-# via `_target_table_for_faire_field`'s resolution -- assay_name in
-# particular resolves to projectMetadata, see mapping/rules.py's
-# _TARGET_TABLE_OVERRIDES) were added per an explicit user review of which
+# assay_name (experimentRunMetadata, via `_target_table_for_faire_field`'s
+# resolution -- assay_name resolves to projectMetadata, see mapping/
+# rules.py's _TARGET_TABLE_OVERRIDES) were added per an explicit user
+# review of which
 # project/sample/experiment fields are realistically findable in prose
 # versus structured-source-only. sampleMetadata's LLM checklist is now
 # deliberately narrow: only collection_date/depth/coordinates (->
@@ -64,12 +64,14 @@ from dataclasses import dataclass
 # sample, including which samples are controls, comes from APIs/structured
 # supplementary data, never the LLM.
 #
-# platform/instrument/lib_layout were added in a follow-up review of a
+# platform/instrument were added in a follow-up review of a
 # NOAA-specific FAIRe checklist that marks these (real projectMetadata
 # fields, confirmed via `_target_table_for_faire_field`) "No LLM" --
-# already 100% covered by ENA's own instrument_platform/instrument_model/
-# library_layout facts wherever a study has one (see mapping/rules.py's
-# EntityLevel.SEQUENCING_RUN rules). This corrects an earlier decision in
+# already covered by ENA's own instrument_platform/instrument_model facts
+# wherever a study has them (see mapping/rules.py's EntityLevel.SEQUENCING_RUN
+# rules). `lib_layout` is also No LLM, but is derived from FASTQ file counts
+# in mapping/faire.py rather than from paper prose or ENA's declared
+# library_layout. This corrects an earlier decision in
 # this same module's history that kept `platform` LLM-askable after
 # mis-scoping it as an "experiment" rather than "project" field.
 LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS = frozenset(
@@ -90,9 +92,6 @@ LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS = frozenset(
         "samp_collect_method",
         "samp_store_method_additional",
         "assay_name",
-        "lib_conc",
-        "lib_conc_unit",
-        "lib_conc_meth",
         "platform",
         "instrument",
         "lib_layout",
@@ -118,33 +117,11 @@ LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS = frozenset(
         # favor of the more precise mechanism, same pattern as seq_kit.
         "adapter_forward",
         "adapter_reverse",
-        # trim_method/trim_param are handled by targeted quote-judged LLM
-        # search with strong primer/adapter/technical-sequence context gates;
-        # the broad checklist is too likely to mix them up with quality,
-        # length, demultiplexing, or denoising parameters.
-        "trim_method",
-        "trim_param",
-        # error_rate_tool/error_rate_type are handled by
-        # search_flags.LLM_JUDGED_SEARCH_FIELDS using the user's ordered
-        # search-term lists, so the broad checklist does not also ask the
-        # model for denoising_tool/error_rate_measurement and create a
-        # second, competing LLM path for the same FAIRe fields.
-        "error_rate_tool",
-        "error_rate_type",
-        # demux_tool is handled by targeted quote-judged LLM search; the
-        # broad checklist's demultiplexing_tool entry would otherwise ask a
-        # second model pass for the same FAIRe field.
-        "demux_tool",
-        # chimera_check_method is handled by the targeted quote-judged LLM
-        # search because the useful value is usually a compact method phrase
-        # with software plus de novo/reference/consensus details.
-        "chimera_check_method",
-        # OTU/ASV clustering tool/cutoff are targeted quote-judged fields:
-        # shared bioinformatics terms like DADA2/QIIME/VSEARCH need a
-        # narrow, evidence-cited decision so taxonomy-classification tools
-        # are not confused with OTU/ASV generation.
+        # OTU/ASV clustering tool is a targeted quote-judged field: shared
+        # bioinformatics terms like DADA2/QIIME/VSEARCH need a narrow,
+        # evidence-cited decision so taxonomy-classification tools are not
+        # confused with OTU/ASV generation.
         "otu_clust_tool",
-        "otu_clust_cutoff",
         # otu_db is a targeted quote-judged field: it must avoid
         # classifier/software-only mentions.
         "otu_db",
@@ -153,14 +130,6 @@ LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS = frozenset(
         # constrained) -- the broad checklist's freeform prompt has no
         # equivalent enum constraint.
         "tax_assign_cat",
-        # otu_raw_description/tax_class_other are generated (not extracted)
-        # by section_category_extraction.py's own
-        # _generate_otu_raw_description_fact/_generate_tax_class_other_fact
-        # -- excluded here so the generic checklist prompt never also
-        # produces a competing, verbatim-quote-style answer for the same
-        # field.
-        "otu_raw_description",
-        "tax_class_other",
         # targetTaxonomicAssay/targetTaxonomicScope (native names
         # assay_target_taxa/study_target_taxonomic_scope) are targeted
         # quote-judged fields: an ordered, priority-ranked search-term list
@@ -218,14 +187,24 @@ FIELD_GROUPS: dict[str, tuple[FaireExtractionField, ...]] = {
         FaireExtractionField("collection_date", "date or date range when samples were collected", "eventDate", "2022-01-04"),
         FaireExtractionField(
             "depth",
-            "sampling depth below the water/sediment/soil surface, including phrases like surface sediment, upper few millimeters, or top 2 cm",
+            "sampling depth below the water/sediment/soil surface, including phrases like surface sediment, "
+            "upper few millimeters, top 2 cm, or a depth range such as the epilimnion (0-20 m)",
             "minimumDepthInMeters",
             "upper few millimeters",
         ),
         FaireExtractionField("coordinates", "sampling latitude/longitude or coordinate pair", "decimalLatitude", "38.03 N, 122.15 W"),
         FaireExtractionField("sample_collection_method", "how samples were physically collected", "samp_collect_method"),
         FaireExtractionField("sample_storage_conditions", "how samples were stored or preserved after collection", "samp_store_method_additional"),
-        FaireExtractionField("filter_name", "brand/product/model/name of the sample filter, such as Sterivex filter or Millipore filter", "filter_name", "Sterivex filter"),
+        FaireExtractionField(
+            "filter_name",
+            "brand/product/model/name of the FILTER used to capture the sample (e.g. Sterivex filter or "
+            "Millipore filter) -- the device the sample material is caught ON/IN. Never a syringe, "
+            "pipette tip, collection tube, vial, or other labware used to transfer/subsample material "
+            "(e.g. a 'cut-off syringe (Henke-Ject)' used to subsample sediment is a syringe, not a "
+            "filter); do not return cross-reference placeholders like 'see below' or 'see above'",
+            "filter_name",
+            "Sterivex filter",
+        ),
     ),
     "DNA extraction": (
         FaireExtractionField("dna_extraction_kit", "name of the extraction kit used", "nucl_acid_ext_kit", "DNeasy PowerWater Kit"),
@@ -233,9 +212,14 @@ FIELD_GROUPS: dict[str, tuple[FaireExtractionField, ...]] = {
         FaireExtractionField("dna_separation_method", "how DNA was separated/purified (e.g. spin column, magnetic beads)", "nucl_acid_ext_sep"),
         FaireExtractionField("sample_volume_for_extraction", "volume or mass of sample processed for extraction", "samp_vol_we_dna_ext", "500 mL"),
         FaireExtractionField("sample_volume_for_extraction_unit", "unit for sample_volume_for_extraction", "samp_vol_we_dna_ext_unit", "mL"),
-        FaireExtractionField("dna_concentration", "DNA concentration after extraction", "concentration", "12.4 ng/uL"),
-        FaireExtractionField("dna_concentration_method", "instrument/method used to measure DNA concentration", "concentration_method", "Qubit fluorometer"),
-        FaireExtractionField("absorbance_260_280_ratio", "A260/A280 absorbance ratio (DNA purity)", "ratioOfAbsorbance260_280", "1.85"),
+        FaireExtractionField(
+            "dna_concentration",
+            "concentration of the purified/extracted DNA sample itself (e.g. measured via Qubit, NanoDrop, or gel), "
+            "never a PCR template DNA concentration added into a reaction mixture; preserve both the numeric value and "
+            "unit together in this one field when reported (e.g. 12.4 ng/uL)",
+            "concentration",
+            "12.4 ng/uL",
+        ),
         FaireExtractionField("dna_cleanup_method", "DNA clean-up/purification method or kit name", "dna_cleanup_method"),
     ),
     "PCR / assay setup": (
@@ -265,17 +249,9 @@ FIELD_GROUPS: dict[str, tuple[FaireExtractionField, ...]] = {
         FaireExtractionField("reverse_primer_sequence", "reverse primer sequence, 5' to 3'", "pcr_primer_reverse", required_any_flags=frozenset({"pcr_0_1"})),
         FaireExtractionField("forward_primer_name", "forward primer's name", "pcr_primer_name_forward", "515F", required_any_flags=frozenset({"pcr_0_1"})),
         FaireExtractionField("reverse_primer_name", "reverse primer's name", "pcr_primer_name_reverse", "926R", required_any_flags=frozenset({"pcr_0_1"})),
-        FaireExtractionField("forward_primer_concentration", "forward primer's stock concentration -- if the text gives one aggregate concentration for 'each primer'/'both primers' rather than naming forward/reverse separately, use that same value here too", "pcr_primer_conc_forward", "10 uM", required_any_flags=frozenset({"pcr_0_1"})),
-        FaireExtractionField("reverse_primer_concentration", "reverse primer's stock concentration -- if the text gives one aggregate concentration for 'each primer'/'both primers' rather than naming forward/reverse separately, use that same value here too", "pcr_primer_conc_reverse", "10 uM", required_any_flags=frozenset({"pcr_0_1"})),
-        FaireExtractionField("forward_primer_volume", "forward primer volume per reaction -- if the text gives one aggregate volume for 'each primer'/'both primers' rather than naming forward/reverse separately, use that same value here too", "pcr_primer_vol_forward", "1 uL", required_any_flags=frozenset({"pcr_0_1"})),
-        FaireExtractionField("reverse_primer_volume", "reverse primer volume per reaction -- if the text gives one aggregate volume for 'each primer'/'both primers' rather than naming forward/reverse separately, use that same value here too", "pcr_primer_vol_reverse", "1 uL", required_any_flags=frozenset({"pcr_0_1"})),
         FaireExtractionField("amplicon_size", "expected amplicon length in base pairs, excluding primers/adapters", "ampliconSize", "411 bp", required_any_flags=frozenset({"pcr_0_1"})),
-        FaireExtractionField("pcr_reaction_volume", "total PCR reaction volume -- if the text separately describes a second/index PCR, this is the FIRST PCR's own volume only, never the second PCR's", "amplificationReactionVolume", "25 uL", required_any_flags=frozenset({"pcr_0_1"})),
-        FaireExtractionField("template_dna_volume", "template DNA volume added per PCR reaction -- if the text separately describes a second/index PCR, this is the FIRST PCR's own template volume only, never the second PCR's", "pcr_dna_vol", "2 uL", required_any_flags=frozenset({"pcr_0_1"})),
-        FaireExtractionField("thermocycler", "thermocycler manufacturer and model -- if the text separately describes a second/index PCR run on a different thermocycler, this is the FIRST PCR's own thermocycler only", "thermocycler", required_any_flags=frozenset({"pcr_0_1"})),
         FaireExtractionField("annealing_temperature", "PCR annealing temperature -- if the text separately describes a second/index PCR, this is the FIRST PCR's own annealing temperature only, never the second PCR's", "annealingTemp", "55C", required_any_flags=frozenset({"pcr_0_1"})),
         FaireExtractionField("pcr_cycle_count", "number of PCR cycles -- if the text separately describes a second/index PCR, this is the FIRST PCR's own cycle count only, never the second PCR's", "pcr_cycles", "35", required_any_flags=frozenset({"pcr_0_1"})),
-        FaireExtractionField("pcr_conditions", "full description of PCR reaction conditions/thermal profile -- if the text separately describes a second/index PCR, this is the FIRST PCR's own conditions only, never the second PCR's", "pcr_cond", required_any_flags=frozenset({"pcr_0_1"})),
         FaireExtractionField("commercial_master_mix", "commercial master mix name/brand, if one was used -- if the text separately describes a second/index PCR using a different master mix, this is the FIRST PCR's own master mix only", "commercial_mm", required_any_flags=frozenset({"pcr_0_1"})),
         FaireExtractionField("custom_master_mix", "custom master mix composition, if a commercial one was not used -- if the text separately describes a second/index PCR using a different mixture, this is the FIRST PCR's own mixture only", "custom_mm", required_any_flags=frozenset({"pcr_0_1"})),
         # A two-step metabarcoding protocol (barcoding_pcr_appr =
@@ -307,15 +283,8 @@ FIELD_GROUPS: dict[str, tuple[FaireExtractionField, ...]] = {
         # temptation; every other field in this module already omits one
         # where a concise, unambiguous example wasn't obviously safe (e.g.
         # forward_primer_sequence).
-        FaireExtractionField("second_pcr_reaction_volume", "total reaction volume of the second-step (barcoding/indexing) PCR, if a two-step PCR protocol was used -- the SECOND PCR's own volume only, never the first PCR's", "pcr2_amplificationReactionVolume", required_any_flags=frozenset({"pcr_0_1"})),
-        FaireExtractionField("second_pcr_template_dna_volume", "volume of the first PCR's cleaned product used as template in the second-step PCR, if a two-step PCR protocol was used -- the SECOND PCR's own template volume only, never the first PCR's", "pcr2_dna_vol", required_any_flags=frozenset({"pcr_0_1"})),
-        FaireExtractionField("second_pcr_thermocycler", "thermocycler manufacturer and model used for the second-step PCR, if a two-step PCR protocol was used -- the SECOND PCR's own thermocycler only, never the first PCR's", "pcr2_thermocycler", required_any_flags=frozenset({"pcr_0_1"})),
         FaireExtractionField("second_pcr_annealing_temperature", "annealing temperature of the second-step PCR, if a two-step PCR protocol was used -- the SECOND PCR's own annealing temperature only, never the first PCR's", "pcr2_annealingTemp", required_any_flags=frozenset({"pcr_0_1"})),
         FaireExtractionField("second_pcr_cycle_count", "number of cycles in the second-step PCR, if a two-step PCR protocol was used -- the SECOND PCR's own cycle count only, never the first PCR's", "pcr2_cycles", required_any_flags=frozenset({"pcr_0_1"})),
-        FaireExtractionField("second_pcr_conditions", "full description of the second-step PCR's reaction conditions/thermal profile, if a two-step PCR protocol was used -- the SECOND PCR's own conditions only, never the first PCR's", "pcr2_cond", required_any_flags=frozenset({"pcr_0_1"})),
-        FaireExtractionField("second_pcr_commercial_master_mix", "commercial master mix name/brand used in the second-step PCR, if one was used -- the SECOND PCR's own master mix only, never the first PCR's", "pcr2_commercial_mm", required_any_flags=frozenset({"pcr_0_1"})),
-        FaireExtractionField("second_pcr_custom_master_mix", "custom master mix composition used in the second-step PCR, if a commercial one was not used -- the SECOND PCR's own mixture only, never the first PCR's", "pcr2_custom_mm", required_any_flags=frozenset({"pcr_0_1"})),
-        FaireExtractionField("second_pcr_plate_id", "plate ID used for the second-step PCR, if a two-step PCR protocol was used -- the SECOND PCR's own plate ID only, never the first PCR's", "pcr2_plate_id", required_any_flags=frozenset({"pcr_0_1"})),
         FaireExtractionField(
             "probe_sequence",
             "hydrolysis/TaqMan probe sequence, 5' to 3', if a probe-based qPCR/ddPCR assay was used",
@@ -343,19 +312,14 @@ FIELD_GROUPS: dict[str, tuple[FaireExtractionField, ...]] = {
         ),
     ),
     "Controls & replicates": (
-        FaireExtractionField("negative_control_type", "type of negative control used", "neg_cont_type", "extraction blank"),
-        FaireExtractionField("positive_control_type", "type of positive control used", "pos_cont_type", "synthetic DNA standard"),
-        # Unlike pcr_replicate_count below (a PCR-technical-replicate concept
-        # that only makes sense once a paper describes PCR at all),
-        # biological_rep is unconditional in the real FAIRe schema -- a
-        # general sample-design concept ("N biological replicates were
-        # collected") that applies to any study design, PCR or not (e.g.
-        # shotgun metagenomics). search_flags.CONTROLLED_SEARCH_FIELDS's own
-        # "biological_rep" entry is likewise ungated. A prior round gated
-        # this on pcr_0_1 by treating it the same as the genuinely
-        # PCR-specific overlap fields above; corrected after checking
-        # schema.yaml directly.
-        FaireExtractionField("biological_replicate_count", "number of biological replicates collected per sample/treatment", "biological_rep", "3"),
+        # biological_replicate_count (this broad-checklist entry) and
+        # search_flags.CONTROLLED_SEARCH_FIELDS's own "biological_rep"
+        # deterministic text-regex entry were both removed per an explicit
+        # user request, after a live audit of a real 5-paper run found
+        # neither ever fired. biological_rep is now derived purely from
+        # structured-API/supplement biological_rep_relation data
+        # (mapping/faire.py::_apply_biological_rep_from_relations) -- the
+        # paper's own text is deliberately never queried for it anymore.
         FaireExtractionField("pcr_replicate_count", "number of PCR technical replicates per sample", "pcr_rep", "3", required_any_flags=frozenset({"pcr_0_1"})),
     ),
     "qPCR / standard curve": (
@@ -381,30 +345,21 @@ FIELD_GROUPS: dict[str, tuple[FaireExtractionField, ...]] = {
         FaireExtractionField("sequencing_platform_general", "general sequencing platform (e.g. Illumina, PacBio, Oxford Nanopore)", "platform"),
         FaireExtractionField("sequencing_instrument", "specific sequencer manufacturer and model", "instrument", "Illumina MiSeq"),
         FaireExtractionField("sequencing_kit", "sequencing kit name", "seq_kit", "MiSeq Reagent Kit v3"),
-        FaireExtractionField("library_layout", "single, paired, or other read layout", "lib_layout"),
         FaireExtractionField("forward_sequencing_adapter", "forward sequencing adapter sequence", "adapter_forward"),
         FaireExtractionField("reverse_sequencing_adapter", "reverse sequencing adapter sequence", "adapter_reverse"),
-        FaireExtractionField("library_concentration", "concentration of the prepared sequencing library", "lib_conc"),
-        FaireExtractionField("library_concentration_method", "method used to estimate library concentration", "lib_conc_meth"),
-        FaireExtractionField("library_concentration_unit", "unit for library_concentration", "lib_conc_unit"),
-        FaireExtractionField("phix_percentage", "% PhiX spiked into the sequencing run", "phix_perc", "10%"),
+        # phix_percentage was here as an LLM-askable field; per an explicit
+        # user request ("just have a quick search ... for PhiX or its
+        # variations"), it's now handled entirely by a deterministic
+        # regex pass instead (search_flags.py's detect_phix_percentage_
+        # facts) -- a percentage number co-occurring with "PhiX" in the
+        # same sentence is unambiguous enough that no LLM judgment call
+        # is needed, and the deterministic pass runs over both the main
+        # paper text and supplementary text already.
     ),
     "Bioinformatics workflow": (
-        FaireExtractionField("adapter_trimming_method", "primer/adapter trimming method, including software and version", "trim_method"),
-        FaireExtractionField("adapter_trimming_parameters", "trimming parameters/cutoffs used, if non-default", "trim_param"),
-        FaireExtractionField("demultiplexing_tool", "software (with version) used to demultiplex reads", "demux_tool"),
-        FaireExtractionField("read_merging_tool", "software (with version) used to merge paired-end reads", "merge_tool"),
-        FaireExtractionField("read_merge_minimum_overlap", "minimum overlap required to merge paired-end reads", "merge_min_overlap", "12 bp"),
-        FaireExtractionField("denoising_tool", "software used for denoising/error-correction (e.g. DADA2)", "error_rate_tool"),
-        FaireExtractionField("error_rate_measurement", "type of quality/error measurement used to decide whether reads or bases should be removed or trimmed", "error_rate_type"),
-        FaireExtractionField("minimum_read_length", "minimum read length threshold used for filtering", "min_len_cutoff"),
-        FaireExtractionField("length_filtering_tool", "software used to filter reads by length", "min_len_tool"),
-        FaireExtractionField("chimera_detection_method", "chimera detection approach, including software/version", "chimera_check_method"),
         FaireExtractionField("clustering_tool", "software (with version) used for OTU/ASV clustering", "otu_clust_tool"),
-        FaireExtractionField("clustering_similarity_threshold", "percent similarity threshold used for OTU/ASV clustering", "otu_clust_cutoff", "97%"),
         FaireExtractionField("reference_database", "reference database(s) used for taxonomic assignment, with version", "otu_db", "SILVA 138"),
         FaireExtractionField("taxonomic_assignment_method", "taxonomic assignment approach (e.g. BLAST, naive Bayesian classifier)", "tax_assign_cat"),
-        FaireExtractionField("taxonomic_assignment_details", "free-text details of taxonomic assignment rules, thresholds, databases, and parameters", "tax_class_other"),
         # bioinformatics_sop_reference (-> sop_bioinformatics) deliberately
         # removed: an explicit user instruction to never populate it at all
         # (exports/faire.py's PROJECT_METADATA_SUPPRESSED_FIELDS also drops

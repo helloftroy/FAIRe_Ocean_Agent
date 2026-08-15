@@ -15,7 +15,7 @@ from datetime import datetime
 
 from dateutil import parser as date_parser
 
-from fair_ocean_agent.validation.logical import parse_depth_meters, parse_lat_lon
+from fair_ocean_agent.validation.logical import parse_depth_meters, parse_depth_range_meters, parse_lat_lon
 
 _SINGLE_COORDINATE_PATTERN = re.compile(r"^\s*(-?\d+(?:\.\d+)?)\s*([NSEW])?\s*$", re.IGNORECASE)
 
@@ -77,6 +77,26 @@ def to_meters(value: str) -> str | None:
     if meters is None:
         return None
     return f"{meters:g}"
+
+
+def to_min_meters(value: str) -> str | None:
+    """minimumDepthInMeters's own transform: the lesser end of a genuine
+    depth range (e.g. "0-20 m" -> "0"), or the single value itself when
+    there's no range -- see parse_depth_range_meters."""
+    parsed = parse_depth_range_meters(value)
+    if parsed is None:
+        return None
+    return f"{parsed[0]:g}"
+
+
+def to_max_meters(value: str) -> str | None:
+    """maximumDepthInMeters's own transform -- the greater end of a
+    genuine depth range (e.g. "0-20 m" -> "20"), or the single value
+    itself when there's no range -- see parse_depth_range_meters."""
+    parsed = parse_depth_range_meters(value)
+    if parsed is None:
+        return None
+    return f"{parsed[1]:g}"
 
 
 def to_iso_event_date(value: str) -> str | None:

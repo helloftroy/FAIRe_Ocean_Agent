@@ -16,6 +16,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
+from fair_ocean_agent import diag_timing
 from fair_ocean_agent.config import REPO_ROOT, RetrievalConfig
 from fair_ocean_agent.database.enums import (
     EntityLevel,
@@ -171,6 +172,7 @@ class RateLimitedClient:
             headers={"User-Agent": retrieval_config.user_agent},
             transport=transport,
         )
+        self._source_name = source_name
         self._min_interval = 1.0 / rate_limit_per_second if rate_limit_per_second > 0 else 0.0
         self._last_request_at = 0.0
         self._cache_enabled = retrieval_config.cache_enabled
@@ -201,7 +203,8 @@ class RateLimitedClient:
         SourceRecordNotFoundError on 404 rather than retrying (a missing
         record won't appear on retry)."""
         self._throttle()
-        response = self._client.get(url, params=params)
+        with diag_timing.record("http", self._source_name):
+            response = self._client.get(url, params=params)
         self._last_request_at = time.monotonic()
         if response.status_code == 404:
             raise SourceRecordNotFoundError(f"404 Not Found: {url}")
@@ -245,6 +248,27 @@ class RateLimitedClient:
         if cache_path is not None:
             cache_path.write_bytes(content)
         return content, False
+
+    def url_accessible(self, url: str) -> bool:
+        """Check whether a remote file URL is reachable without downloading
+        the file body. Used for large raw-data assets: a successful HEAD is
+        enough; if a server refuses HEAD, open a ranged GET stream and close
+        it after headers."""
+        self._throttle()
+        try:
+            response = self._client.head(url, follow_redirects=True)
+            self._last_request_at = time.monotonic()
+            if 200 <= response.status_code < 400:
+                return True
+            if response.status_code not in {403, 405}:
+                return False
+
+            self._throttle()
+            with self._client.stream("GET", url, headers={"Range": "bytes=0-0"}, follow_redirects=True) as stream:
+                self._last_request_at = time.monotonic()
+                return 200 <= stream.status_code < 400
+        except (httpx.HTTPError, httpx.TransportError, httpx.TimeoutException):
+            return False
 
     def clear_cache(self) -> int:
         """Deletes every cached response file for this adapter instance.

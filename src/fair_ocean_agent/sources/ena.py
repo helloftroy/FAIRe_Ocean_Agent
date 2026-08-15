@@ -36,13 +36,27 @@ STUDY_FIELDS = "study_accession,secondary_study_accession,study_title,study_desc
 RUN_FIELDS = (
     "run_accession,sample_accession,experiment_accession,experiment_alias,experiment_title,experiment_target,"
     "library_name,library_strategy,library_source,library_selection,"
-    "library_layout,library_construction_protocol,instrument_platform,instrument_model,"
+    "library_construction_protocol,instrument_platform,instrument_model,"
     "base_count,read_count,fastq_bytes,fastq_md5,fastq_ftp,first_public"
 )
 
 # Same rationale as NCBI's MAX_SAMPLES_PER_PROJECT: bound worst-case work per
 # task against very large run collections; truncation is logged, not silent.
 MAX_RUNS_PER_STUDY = 500
+
+
+def _split_fastq_urls(fastq_ftp: str | None) -> list[str]:
+    if not fastq_ftp:
+        return []
+    return [part.strip() for part in fastq_ftp.split(";") if part.strip()]
+
+
+def _fastq_check_url(url: str) -> str:
+    if url.startswith("ftp://"):
+        return "https://" + url.removeprefix("ftp://")
+    if url.startswith("http://") or url.startswith("https://"):
+        return url
+    return f"https://{url}"
 
 
 class EnaAdapter(SourceAdapter):
@@ -81,6 +95,15 @@ class EnaAdapter(SourceAdapter):
                 identifier, MAX_RUNS_PER_STUDY, MAX_RUNS_PER_STUDY,
             )
         run_rows = run_rows[:MAX_RUNS_PER_STUDY]
+        for run in run_rows:
+            fastq_urls = _split_fastq_urls(run.get("fastq_ftp"))
+            if not fastq_urls:
+                run["fastq_access_status"] = "no_fastq_url"
+                continue
+            checked_urls = [_fastq_check_url(url) for url in fastq_urls]
+            accessible = [self.http.url_accessible(url) for url in checked_urls]
+            run["fastq_access_status"] = "accessible" if all(accessible) else "not_accessible"
+            run["fastq_access_checked_urls"] = ";".join(checked_urls)
 
         raw = {"study": study, "runs": run_rows, "truncated": truncated, "total_runs_seen": total_runs}
 
@@ -147,8 +170,9 @@ class EnaAdapter(SourceAdapter):
                 continue
             for field in (
                 "run_accession", "sample_accession", "library_strategy", "library_source", "library_selection",
-                "library_layout", "library_construction_protocol", "instrument_platform", "instrument_model",
-                "base_count", "read_count", "fastq_bytes", "fastq_md5", "fastq_ftp", "first_public",
+                "library_construction_protocol", "instrument_platform", "instrument_model",
+                "base_count", "read_count", "fastq_bytes", "fastq_md5", "fastq_ftp",
+                "fastq_access_status", "fastq_access_checked_urls", "first_public",
             ):
                 value = run.get(field)
                 if value in (None, ""):
@@ -216,7 +240,6 @@ class EnaAdapter(SourceAdapter):
                 "library_strategy",
                 "library_source",
                 "library_selection",
-                "library_layout",
                 "library_construction_protocol",
                 "instrument_platform",
                 "instrument_model",
@@ -225,6 +248,8 @@ class EnaAdapter(SourceAdapter):
                 "fastq_bytes",
                 "fastq_md5",
                 "fastq_ftp",
+                "fastq_access_status",
+                "fastq_access_checked_urls",
             ):
                 value = run.get(field)
                 if value not in (None, ""):

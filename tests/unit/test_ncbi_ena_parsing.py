@@ -91,18 +91,38 @@ def test_biosample_extract_structured_facts_creates_per_sample_entities(biosampl
     }
     facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw))
 
-    # 3 attrs for sample 1 + 1 for sample 2 + one study-level
-    # biological_rep_presence=FALSE (real, non-MAG samples were checked,
-    # no replicate group found).
-    assert len(facts) == 5
+    # 3 attrs for sample 1 + 1 for sample 2. No study-level
+    # biological_rep_presence fact anymore -- projectMetadata.biological_rep
+    # is now derived entirely at map-time from biological_rep_relation
+    # facts (mapping/faire.py::_apply_biological_rep_from_relations), not
+    # emitted here.
+    assert len(facts) == 4
     sample_facts = [f for f in facts if f.entity_level == EntityLevel.SAMPLE]
     assert len(sample_facts) == 4
-    presence_facts = [f for f in facts if f.fact_type_candidate == "biological_rep_presence"]
-    assert len(presence_facts) == 1
-    assert presence_facts[0].raw_value == "FALSE"
     sample_1_facts = [f for f in facts if f.entity_external_id == "SAMN55404186"]
     assert len(sample_1_facts) == 3
     assert {f.fact_type_candidate for f in sample_1_facts} == {"collection_date", "depth", "lat_lon"}
+
+
+def test_biosample_extract_structured_facts_logs_useful_title_as_samp_category(biosample_adapter):
+    raw = {
+        "bioproject_accession": "PRJNA295",
+        "total_linked_samples": 1,
+        "truncated": False,
+        "samples": [
+            {
+                "accession": "SAMN32539297",
+                "title": "LM 7",
+                "attributes": {"collection_date": "2023-12-06"},
+            },
+        ],
+    }
+    facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw, "PRJNA295"))
+
+    by_type = {f.fact_type_candidate: f for f in facts if f.entity_external_id == "SAMN32539297"}
+    assert by_type["samp_category"].raw_value == "LM 7"
+    assert by_type["samp_category"].raw_field_name == "title"
+    assert by_type["samp_category"].source_locator == "ncbi_biosample.SAMN32539297.title"
 
 
 def test_biosample_extract_structured_facts_normalizes_location_and_host_aliases(biosample_adapter):
@@ -117,6 +137,7 @@ def test_biosample_extract_structured_facts_normalizes_location_and_host_aliases
                 "organism": {"taxonomy_name": "coral metagenome", "taxonomy_id": "496922"},
                 "attributes": {
                     "geographic location": "USA: Florida Keys",
+                    "isolation source": "coral cue material",
                     "cultivar": "crustose coralline algae (CCA)",
                 },
             },
@@ -128,10 +149,13 @@ def test_biosample_extract_structured_facts_normalizes_location_and_host_aliases
 
     assert values["geographic location"].raw_value == "USA: Florida Keys"
     assert values["geo_loc_name"].raw_value == "USA: Florida Keys"
+    assert values["isolation source"].raw_value == "coral cue material"
+    assert values["isolation_source"].raw_value == "coral cue material"
     assert values["cultivar"].raw_value == "crustose coralline algae (CCA)"
     assert values["host_species"].raw_value == "crustose coralline algae (CCA)"
     assert values["organism"].raw_value == "coral metagenome"
     assert values["geo_loc_name"].source_locator.endswith("Attributes.geo_loc_name")
+    assert values["isolation_source"].source_locator.endswith("Attributes.isolation_source")
 
 
 def test_biosample_extract_structured_facts_maps_owner_contact_to_recorded_by(biosample_adapter):
@@ -270,11 +294,7 @@ def test_biosample_extract_structured_facts_keeps_a_real_raw_sample_unaffected(b
     }
     facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw))
 
-    # Plus a study-level biological_rep_presence=FALSE (one real, non-MAG
-    # sample was checked, no replicate group found).
-    assert {f.fact_type_candidate for f in facts} == {"collection_date", "biological_rep_presence"}
-    presence_fact = next(f for f in facts if f.fact_type_candidate == "biological_rep_presence")
-    assert presence_fact.raw_value == "FALSE"
+    assert {f.fact_type_candidate for f in facts} == {"collection_date"}
 
 
 def test_biosample_extract_structured_facts_derives_filter_facts_from_samp_mat_process(biosample_adapter):
@@ -322,6 +342,28 @@ def test_biosample_extract_structured_facts_no_filter_facts_when_nothing_stated(
 
     filter_fields = {"size_frac", "filter_diameter", "filter_material", "filter_name", "filter_passive_active_0_1"}
     assert not filter_fields & {f.fact_type_candidate for f in facts}
+
+
+def test_biosample_extract_structured_facts_emits_biosample_submission_date(biosample_adapter):
+    raw = {
+        "bioproject_accession": "PRJNA1425045",
+        "total_linked_samples": 1,
+        "truncated": False,
+        "samples": [
+            {
+                "accession": "SAMN_SUBMITTED",
+                "title": "MIMS Environmental sample",
+                "submitted": "2024-02-03",
+                "attributes": {},
+            }
+        ],
+    }
+    facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw))
+
+    by_type = {f.fact_type_candidate: f for f in facts}
+    assert by_type["eventDate_submitted"].raw_value == "2024-02-03"
+    assert by_type["eventDate_submitted"].raw_field_name == "submission_date"
+    assert by_type["eventDate_submitted"].source_locator == "ncbi_biosample.SAMN_SUBMITTED.submission_date"
 
 
 def test_biosample_extract_structured_facts_derives_filter_diameter_material_and_name(biosample_adapter):
@@ -438,6 +480,115 @@ def test_biosample_extract_structured_facts_detects_biological_rep_relation_from
     }
 
 
+def test_biosample_extract_structured_facts_uses_source_material_id_as_sample_name_fallback(
+    biosample_adapter,
+):
+    raw = {
+        "bioproject_accession": "PRJNA529480",
+        "total_linked_samples": 2,
+        "truncated": False,
+        "samples": [
+            {
+                "accession": "SAMN11268162",
+                "title": "Metagenome or environmental sample from marine sediment metagenome",
+                "attributes": {"source-material-id": "GS16-GC05-20"},
+            },
+            {
+                "accession": "SAMN11268163",
+                "title": "Metagenome or environmental sample from marine sediment metagenome",
+                "attributes": {"source-material-id": "GS16-GC05-21"},
+            },
+        ],
+    }
+    facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw, "PRJNA529480"))
+
+    categories = {f.entity_external_id: f for f in facts if f.fact_type_candidate == "samp_category"}
+    assert categories["SAMN11268162"].raw_value == "GS16_GC05_20"
+    assert categories["SAMN11268162"].raw_field_name == "source_material_id"
+
+    rep_facts = {f.entity_external_id: f for f in facts if f.fact_type_candidate == "biological_rep_relation"}
+    assert set(rep_facts) == {"SAMN11268162", "SAMN11268163"}
+    assert rep_facts["SAMN11268162"].raw_value == "SAMN11268162 | SAMN11268163"
+    assert rep_facts["SAMN11268162"].raw_field_name == "source_material_id"
+    assert rep_facts["SAMN11268162"].confidence_metadata == {
+        "replicate_detection_signal": "trailing_number_suffix",
+        "replicate_group_size": 2,
+    }
+
+
+def test_biosample_extract_structured_facts_source_material_id_wins_over_sample_name(biosample_adapter):
+    """Explicit user instruction: "source material id... should stay the
+    default" -- when a BioSample carries BOTH source_material_id and a
+    submitted sample_name, source_material_id is preferred for both
+    samp_category and replicate detection."""
+    raw = {
+        "bioproject_accession": "PRJNA529480",
+        "total_linked_samples": 2,
+        "truncated": False,
+        "samples": [
+            {
+                "accession": "SAMN11268098",
+                "title": "MIMS sample from marine sediment metagenome",
+                "attributes": {"source-material-id": "GS14-GC08-1", "sample_name": "GS14_GC08_1"},
+            },
+            {
+                "accession": "SAMN11268099",
+                "title": "MIMS sample from marine sediment metagenome",
+                "attributes": {"source-material-id": "GS14-GC08-2", "sample_name": "GS14_GC08_2"},
+            },
+        ],
+    }
+    facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw, "PRJNA529480"))
+
+    categories = {f.entity_external_id: f for f in facts if f.fact_type_candidate == "samp_category"}
+    assert categories["SAMN11268098"].raw_field_name == "source_material_id"
+
+    rep_facts = {f.entity_external_id: f for f in facts if f.fact_type_candidate == "biological_rep_relation"}
+    assert rep_facts["SAMN11268098"].raw_field_name == "source_material_id"
+    assert rep_facts["SAMN11268098"].raw_value == "SAMN11268098 | SAMN11268099"
+
+
+def test_biosample_extract_structured_facts_falls_back_to_sample_name_when_no_source_material_id(
+    biosample_adapter,
+):
+    """Real live gap (SAMN29179945, STUDY-4fbd530e2a5e|STUDY-e97980f33de0):
+    this record has no source_material_id attribute at all, only a
+    submitted sample_name ("GS16-GC05-1", hyphenated) -- confirms the
+    fallback fires and the hyphen gets normalized to "_" the same way
+    source_material_id already is, per an explicit user instruction ("a
+    fix was just put in for this behavior for source_material_id"),
+    preventing a real sibling record whose sample_name already uses
+    underscores ("GS16_GC05_2") from failing to group as a replicate
+    purely over a hyphen-vs-underscore naming difference."""
+    raw = {
+        "bioproject_accession": "PRJNA529480",
+        "total_linked_samples": 2,
+        "truncated": False,
+        "samples": [
+            {
+                "accession": "SAMN29179945",
+                "title": "MIMS Environmental/Metagenome sample from marine sediment metagenome",
+                "attributes": {"sample_name": "GS16-GC05-1"},
+            },
+            {
+                "accession": "SAMN29179946",
+                "title": "MIMS Environmental/Metagenome sample from marine sediment metagenome",
+                "attributes": {"sample_name": "GS16_GC05_2"},
+            },
+        ],
+    }
+    facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw, "PRJNA529480"))
+
+    categories = {f.entity_external_id: f for f in facts if f.fact_type_candidate == "samp_category"}
+    assert categories["SAMN29179945"].raw_value == "GS16_GC05_1"
+    assert categories["SAMN29179945"].raw_field_name == "sample_name"
+
+    rep_facts = {f.entity_external_id: f for f in facts if f.fact_type_candidate == "biological_rep_relation"}
+    assert set(rep_facts) == {"SAMN29179945", "SAMN29179946"}
+    assert rep_facts["SAMN29179945"].raw_value == "SAMN29179945 | SAMN29179946"
+    assert rep_facts["SAMN29179945"].raw_field_name == "sample_name"
+
+
 def test_biosample_extract_structured_facts_uses_explicit_replicate_attribute_first(biosample_adapter):
     raw = {
         "bioproject_accession": "PRJNA994076",
@@ -479,12 +630,6 @@ def test_biosample_extract_structured_facts_uses_explicit_replicate_attribute_fi
         "replicate_value": "a",
     }
 
-    biological_rep = [f for f in facts if f.fact_type_candidate == "biological_rep_presence"]
-    assert len(biological_rep) == 1
-    assert biological_rep[0].entity_level == EntityLevel.STUDY
-    assert biological_rep[0].raw_value == "TRUE"
-    assert biological_rep[0].raw_field_name == "replicate"
-
 
 def test_biosample_extract_structured_facts_falls_back_to_title_for_replicate_detection(biosample_adapter):
     raw = {
@@ -501,6 +646,32 @@ def test_biosample_extract_structured_facts_falls_back_to_title_for_replicate_de
     rep_facts = [f for f in facts if f.fact_type_candidate == "biological_rep_relation"]
     assert len(rep_facts) == 2
     assert rep_facts[0].raw_field_name == "title"
+
+
+def test_biosample_extract_structured_facts_groups_title_number_suffix_by_exact_prefix(biosample_adapter):
+    raw = {
+        "bioproject_accession": "PRJNA295",
+        "total_linked_samples": 4,
+        "truncated": False,
+        "samples": [
+            {"accession": "SAMN_LM_6", "title": "LM 6", "attributes": {}},
+            {"accession": "SAMN_LM_7", "title": "LM 7", "attributes": {}},
+            {"accession": "SAMN_LMM_6", "title": "LMM 6", "attributes": {}},
+            {"accession": "SAMN_LMM_7", "title": "LMM 7", "attributes": {}},
+        ],
+    }
+    facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw, "PRJNA295"))
+
+    rep_facts = {f.entity_external_id: f for f in facts if f.fact_type_candidate == "biological_rep_relation"}
+    assert rep_facts["SAMN_LM_6"].raw_value == "SAMN_LM_6 | SAMN_LM_7"
+    assert rep_facts["SAMN_LM_7"].raw_value == "SAMN_LM_6 | SAMN_LM_7"
+    assert rep_facts["SAMN_LMM_6"].raw_value == "SAMN_LMM_6 | SAMN_LMM_7"
+    assert rep_facts["SAMN_LMM_7"].raw_value == "SAMN_LMM_6 | SAMN_LMM_7"
+    assert rep_facts["SAMN_LM_6"].raw_field_name == "title"
+    assert rep_facts["SAMN_LM_6"].confidence_metadata == {
+        "replicate_detection_signal": "trailing_number_suffix",
+        "replicate_group_size": 2,
+    }
 
 
 def test_biosample_extract_structured_facts_no_biological_rep_relation_without_sibling(biosample_adapter):
@@ -562,24 +733,21 @@ def test_biosample_extract_structured_facts_groups_replicates_by_shared_metadata
     assert rep_facts["SAMN1"].raw_value == "SAMN1 | SAMN2"
     assert rep_facts["SAMN1"].confidence_metadata["replicate_detection_signal"] == "biosample_metadata_match"
 
-    biological_rep = [f for f in facts if f.fact_type_candidate == "biological_rep_presence"]
-    assert len(biological_rep) == 1
-    assert biological_rep[0].raw_value == "TRUE"
-
 
 def test_biosample_extract_structured_facts_metadata_match_excludes_mag_biosamples(biosample_adapter):
     """Regression guard for a real bug found live (BioProject PRJNA529480):
     MAG (metagenome-assembled-genome) BioSamples are excluded from the
-    main per-attribute loop (they never get their own lat_lon/
-    collection_date/depth facts persisted), but the replicate-relation
-    tiers used to read straight from the UNFILTERED sample list -- so a
-    real MAG derived from one sediment sample could still get grouped as
-    a "biological replicate" of sibling MAGs sharing that one sample's
-    coordinates, even though it's a computational construct, not a
-    separate physical sample. Two real (non-MAG) samples here do NOT
-    share matching metadata, so the only reason biological_rep_presence
-    could wrongly read TRUE is if the MAG trio below leaked into the
-    metadata-match tier."""
+    main per-attribute loop and from every replicate-relation tier (they
+    stay out of non_mag_samples, which is what those tiers read), but they
+    DO still get a curated, safe subset of environmental-context attributes
+    (lat_lon/collection_date/depth/etc.) via a separate, narrow loop -- a
+    second real bug found live (SAMN42764696, a MIMAG.sediment-packaged
+    record) confirmed a MAG record can genuinely carry these directly,
+    contradicting the earlier assumption that it never does. Assembly-
+    specific attributes (e.g. "assembly software") never get through that
+    loop. Two real (non-MAG) samples here do NOT share matching metadata,
+    so the only reason a biological_rep_relation fact could wrongly appear
+    for them is if the MAG trio below leaked into the metadata-match tier."""
     raw = {
         "bioproject_accession": "PRJNA1",
         "total_linked_samples": 5,
@@ -622,11 +790,101 @@ def test_biosample_extract_structured_facts_metadata_match_excludes_mag_biosampl
     facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw, "PRJNA1"))
 
     assert not [f for f in facts if f.fact_type_candidate == "biological_rep_relation"]
-    biological_rep = [f for f in facts if f.fact_type_candidate == "biological_rep_presence"]
-    assert len(biological_rep) == 1
-    assert biological_rep[0].raw_value == "FALSE"
-    # The MAG entries never contribute their own attribute facts either.
-    assert not [f for f in facts if f.entity_external_id in ("SAMN_MAG_1", "SAMN_MAG_2")]
+    # The MAG entries still contribute their safe environmental attributes...
+    mag_facts = [f for f in facts if f.entity_external_id in ("SAMN_MAG_1", "SAMN_MAG_2")]
+    mag_fact_types = {f.fact_type_candidate for f in mag_facts}
+    assert mag_fact_types == {"lat_lon", "collection_date", "depth"}
+    # ...but never their assembly-specific attributes.
+    assert "assembly software" not in mag_fact_types
+
+
+def test_biosample_extract_structured_facts_mag_with_full_environmental_attributes(biosample_adapter):
+    """Grounded in the real live BioSample that exposed this gap
+    (SAMN42764696, 10.1038/s42003-024-06136-2's BioProject PRJNA529480): a
+    MIMAG.sediment-packaged MAG record that directly carries the same kind
+    of environmental attributes a real environmental sample would (isolate,
+    collection_date, depth, elev, env_broad_scale, env_local_scale,
+    env_medium, geo_loc_name, isolation_source, lat_lon) -- previously
+    dropped entirely, leaving this sample's exported row completely blank
+    even though the live NCBI record plainly has the data. `isolate` isn't
+    in the safe allowlist (it names the assembled bin, e.g. "Bin_040", not
+    the environment) and correctly still doesn't come through."""
+    raw = {
+        "bioproject_accession": "PRJNA529480",
+        "total_linked_samples": 1,
+        "truncated": False,
+        "samples": [
+            {
+                "accession": "SAMN42764696",
+                "title": "MIMAG Metagenome-assembled Genome sample from Candidatus Scalindua sp.",
+                "package": "MIMAG.sediment.6.0",
+                "model": "MIMAG.sediment",
+                "organism": {"taxonomy_name": "Candidatus Scalindua sp."},
+                "attributes": {
+                    "isolate": "Bin_040",
+                    "collection_date": "2014-07-22",
+                    "depth": "2.5",
+                    "elev": "-2476",
+                    "env_broad_scale": "sediment microbiome",
+                    "env_local_scale": "not applicable",
+                    "env_medium": "marine sediment",
+                    "geo_loc_name": "Atlantic Ocean",
+                    "isolation_source": "Pelagic sediments on the east flank of Mohns Ridge",
+                    "lat_lon": "72.00 N 0.10 E",
+                },
+            }
+        ],
+    }
+    facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw, "PRJNA529480"))
+    by_type = {f.fact_type_candidate: f.raw_value for f in facts if f.entity_external_id == "SAMN42764696"}
+    assert by_type == {
+        "collection_date": "2014-07-22",
+        "depth": "2.5",
+        "elev": "-2476",
+        "env_broad_scale": "sediment microbiome",
+        "env_local_scale": "not applicable",
+        "env_medium": "marine sediment",
+        "geo_loc_name": "Atlantic Ocean",
+        "isolation_source": "Pelagic sediments on the east flank of Mohns Ridge",
+        "lat_lon": "72.00 N 0.10 E",
+    }
+    assert "isolate" not in by_type
+    assert "organism" not in by_type
+
+
+def test_biosample_extract_structured_facts_mag_derived_from_extracts_parent_accession(biosample_adapter):
+    """Grounded in the real live BioSample SAMN12415826 (a MIMAG.sediment
+    MAG record): its own "derived-from" attribute is a full sentence --
+    "This BioSample is a metagenomic assembly obtained from the marine
+    sediment metagenome BioSample: SAMN11268106" -- not a bare accession,
+    so the parent BioSample's own accession is extracted out of it into
+    sample_derived_from rather than storing the whole sentence. Per an
+    explicit user request: "'derived from' = sample_derived_from"."""
+    raw = {
+        "bioproject_accession": "PRJNA1",
+        "total_linked_samples": 1,
+        "truncated": False,
+        "samples": [
+            {
+                "accession": "SAMN12415826",
+                "title": "MIMAG Metagenome-assembled Genome sample from Candidatus Scalindua sp.",
+                "package": "MIMAG.sediment.6.0",
+                "model": "MIMAG.sediment",
+                "organism": {"taxonomy_name": "Candidatus Scalindua sp."},
+                "attributes": {
+                    "geo_loc_name": "Atlantic Ocean",
+                    "derived-from": (
+                        "This BioSample is a metagenomic assembly obtained from the marine "
+                        "sediment metagenome BioSample: SAMN11268106"
+                    ),
+                },
+            }
+        ],
+    }
+    facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw, "PRJNA1"))
+    by_type = {f.fact_type_candidate: f.raw_value for f in facts if f.entity_external_id == "SAMN12415826"}
+    assert by_type["sample_derived_from"] == "SAMN11268106"
+    assert by_type["geo_loc_name"] == "Atlantic Ocean"
 
 
 def test_biosample_extract_structured_facts_metadata_match_requires_matching_assay_when_reported(biosample_adapter):
@@ -720,6 +978,8 @@ def test_ena_extract_structured_facts_splits_project_and_run_level(ena_adapter):
                 "library_source": "METAGENOMIC",
                 "fastq_ftp": "ftp.sra.ebi.ac.uk/vol1/fastq/SRR001/SRR1.fastq.gz",
                 "fastq_bytes": "12345",
+                "fastq_access_status": "accessible",
+                "fastq_access_checked_urls": "https://ftp.sra.ebi.ac.uk/vol1/fastq/SRR001/SRR1.fastq.gz",
             }
         ],
         "truncated": False,
@@ -736,6 +996,7 @@ def test_ena_extract_structured_facts_splits_project_and_run_level(ena_adapter):
     assert all(f.entity_external_id == "SRR1" for f in run_facts)
     assert {f.fact_type_candidate for f in run_facts} == {
         "run_accession", "sample_accession", "library_strategy", "library_source", "fastq_ftp", "fastq_bytes",
+        "fastq_access_status", "fastq_access_checked_urls",
     }
     assert all(f.entity_external_id == "SRX1" for f in experiment_facts)
     by_type = {fact.fact_type_candidate: fact for fact in experiment_facts}
@@ -750,21 +1011,6 @@ def test_ena_extract_structured_facts_splits_project_and_run_level(ena_adapter):
         (EntityLevel.SAMPLE, "SAMN1", EntityRelationshipType.DERIVED_FROM_SAMPLE),
         (EntityLevel.SEQUENCING_RUN, "SRR1", EntityRelationshipType.SEQUENCED_IN_RUN),
     }
-
-
-def test_ena_extract_structured_facts_includes_library_layout(ena_adapter):
-    """library_layout (PAIRED/SINGLE) feeds mapping/rules.py's lib_layout
-    rule -- added alongside that rule since neither did anything without
-    the other."""
-    raw = {
-        "study": {"study_accession": "PRJNA1", "study_title": "t"},
-        "runs": [{"run_accession": "SRR1", "sample_accession": "SAMN1", "library_layout": "PAIRED"}],
-        "truncated": False,
-        "total_runs_seen": 1,
-    }
-    facts = ena_adapter.extract_structured_facts(_record("ena", raw))
-    run_facts = {f.fact_type_candidate: f.raw_value for f in facts if f.entity_level == EntityLevel.SEQUENCING_RUN}
-    assert run_facts["library_layout"] == "PAIRED"
 
 
 def test_ena_find_related_disambiguates_secondary_accession_type(ena_adapter):

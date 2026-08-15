@@ -39,11 +39,21 @@ from fair_ocean_agent.database.enums import (
     EntityLevel,
     EntityRelationshipType,
     EntityRootStatus,
+    IdentifierType,
     ReviewStatus,
 )
-from fair_ocean_agent.database.models import Entity, EntityRelationship, EntityStudy, RawFact, StandardizedValue, Study
+from fair_ocean_agent.database.models import (
+    ApiPaperCorrection,
+    Entity,
+    EntityRelationship,
+    EntityStudy,
+    ExternalIdentifier,
+    RawFact,
+    StandardizedValue,
+    Study,
+)
 from fair_ocean_agent.extraction.section_categories import SECTION_CATEGORIES
-from fair_ocean_agent.mapping.faire import TARGET_SCHEMA, resolve_project_id
+from fair_ocean_agent.mapping.faire import TARGET_SCHEMA, clean_assay_name_value, resolve_project_id
 from fair_ocean_agent.standards.faire_registry import build_faire_registry
 
 FAIRE_SCHEMA_DIR = REPO_ROOT / "schemas" / "faire"
@@ -73,11 +83,50 @@ INTERNAL_STUDY_ID_FIELD = "internal_study_id"
 # native name isn't lost even though it no longer gets its own row.
 INTERNAL_ALIAS_SAMPLE_IDS_FIELD = "internal_alias_sample_ids"
 
+# Unlike INTERNAL_STUDY_ID_FIELD/INTERNAL_ALIAS_SAMPLE_IDS_FIELD above, this
+# one DOES carry real extracted data (mapping/rules.py has a genuine
+# MappingRule for it, target_table "sampleMetadata") -- it's just not a real
+# FAIRe checklist field (not in schemas/faire/classes.yaml, excluded from
+# field_reference.csv the same way), so it needs the same manual
+# header-inclusion treatment as those internal columns to show up in
+# sampleMetadata.csv at all. Bundles ~18 individually low-yield
+# physicochemical fields (temp, salinity, ph, nitrate, chlorophyll, ...)
+# into one pipe-joined "name/formula: value unit" column, per an explicit
+# user request; those 18 fields' own columns are hidden via
+# SAMPLE_METADATA_SUPPRESSED_FIELDS below.
+CUSTOM_ENV_VAR_BLOCK_FIELD = "x_env_var_block"
+
+# Same custom-non-FAIRe-field treatment as CUSTOM_ENV_VAR_BLOCK_FIELD above,
+# for projectMetadata this time. Per an explicit user request: every real
+# column header found in a structured (CSV/TSV/XLSX/XLS) supplement table
+# gets captured verbatim, pipe-joined, in one study-wide field -- a cheap
+# diagnostic so a human can see what a supplement table actually contains
+# even when most/all of its columns aren't in SUPPLEMENT_COLUMN_ALIASES yet
+# (sources/supplement_parsing.py::_facts_from_rows is the producer).
+CUSTOM_SPREADSHEET_HEADERS_FIELD = "spreadsheet_headers"
+
 # samp_name/materialSampleID are the row's own identifying columns -- the
 # real accession must win outright as the identifier, never get pipe-joined
 # against an alias's native name (that native name is preserved separately,
 # in INTERNAL_ALIAS_SAMPLE_IDS_FIELD).
 _ALIAS_MERGE_EXCLUDED_FIELDS = frozenset({"samp_name", "materialSampleID"})
+
+# For most sampleMetadata fields, an entity's own structured value
+# (_entity_values, e.g. a real NCBI BioSample attribute) is deliberately
+# left to win outright over a study-wide paper-text broadcast -- a real
+# per-sample measurement should never be second-guessed by an LLM's
+# broader claim. samp_mat_process is the one deliberate exception: FAIRe
+# defines it as a free-text processing narrative (this pipeline's own
+# CategoryTerm sets allows_multi_sentence=True for it), and a real
+# BioSample's own samp_mat_process attribute is routinely a terse,
+# boilerplate submitter note (e.g. "DNA extraction from sediment
+# samples") that says far less than what the paper's own Methods
+# describes -- confirmed live (10.3389/fmicb.2024.1295149). Rather than
+# the structured value silently winning and discarding the richer paper
+# text (mapping/faire.py's own pipe-union already merges multiple paper
+# paragraphs' worth of samp_mat_process text into one broadcast value),
+# both are kept side by side here.
+_BROADCAST_ENTITY_PIPE_JOIN_FIELDS = frozenset({"samp_mat_process"})
 
 # extraction/section_categories.py's per-category "<name>_0_1" detection
 # facts (e.g. "pcr1_primary_amplification_0_1") -- a diagnostic coverage
@@ -100,6 +149,28 @@ def _section_category_detection_values(session: Session, study_id: str) -> dict[
         )
     )
     return {field: ("1" if field in detected else "0") for field in INTERNAL_SECTION_DETECTION_FIELDS}
+
+
+# extraction/section_category_extraction.py's primer-traceability flags --
+# a primer whose name was found in the text but whose sequence AND
+# reference/DOI could not be pinned down, per an explicit user request to
+# track these as future targeted-supplement-crawl candidates. Same
+# internal-only, always-"0"-or-"1" precedent as INTERNAL_SECTION_DETECTION_
+# FIELDS above, not a real FAIRe checklist term.
+INTERNAL_PRIMER_TRACEABILITY_FIELDS = ("primer_forward_source_unresolved", "primer_reverse_source_unresolved")
+
+
+def _primer_traceability_values(session: Session, study_id: str) -> dict[str, str]:
+    flagged = set(
+        session.scalars(
+            select(RawFact.fact_type_candidate).where(
+                RawFact.study_id == study_id,
+                RawFact.entity_id.is_(None),
+                RawFact.fact_type_candidate.in_(INTERNAL_PRIMER_TRACEABILITY_FIELDS),
+            )
+        )
+    )
+    return {field: ("1" if field in flagged else "0") for field in INTERNAL_PRIMER_TRACEABILITY_FIELDS}
 
 
 # EXPERIMENTAL, not a real FAIRe field -- see extraction/study_factor.py's
@@ -153,6 +224,10 @@ def class_columns(class_name: str) -> list[str]:
 # so suppressing them doesn't hide a genuinely mandatory field.
 PROJECT_METADATA_SUPPRESSED_FIELDS = frozenset(
     {
+        # Re-confirmed directly against the real codebase (a later audit
+        # pass, per an explicit user request): none of these ten have any
+        # extraction or mapping code populating them either -- suppressing
+        # the column costs nothing beyond what was already true.
         "institutionID",
         "parent_project_id",
         "project_name",
@@ -163,12 +238,179 @@ PROJECT_METADATA_SUPPRESSED_FIELDS = frozenset(
         "assay_validation",
         "nucl_acid_amp",
         "sequencing_location",
+        # The following removed entirely per an explicit user request
+        # ("negligible... don't want to waste compute on them or clutter
+        # the code with them") -- no extraction/mapping code populates
+        # any of these, same suppression idiom as the fields above.
+        "pcr_primer_conc_forward",
+        "pcr_primer_conc_reverse",
+        "amplificationReactionVolume",
+        "pcr_dna_vol",
+        "pcr2_thermocycler",
+        "thermocycler",
+        "pcr2_amplificationReactionVolume",
+        "pcr2_dna_vol",
+        "pcr2_plate_id",
+        "lib_screen",
+        "pcr_cond",
+        "pcr2_custom_mm",
+        "pcr2_commercial_mm",
+        "trim_method",
+        "trim_param",
+        "pcr2_cond",
+        "demux_tool",
+        "demux_max_mismatch",
+        "tax_class_collapse",
+        "tax_class_id_cutoff",
+        "tax_class_other",
+        "tax_class_query_cutoff",
+        "otu_clust_cutoff",
+        "error_rate_cutoff",
+        "error_rate_tool",
+        "error_rate_type",
+        "min_reads_cutoff",
+        "min_reads_tool",
+        "min_reads_cutoff_unit",
+        "merge_tool",
+        "merge_min_overlap",
+        "min_len_cutoff",
+        "min_len_tool",
+        "otu_raw_description",
+        "otu_final_description",
+        "bioinfo_method_additional",
+        "chimera_check_method",
+        "chimera_check_param",
+        "screen_geograph_method",
+        "screen_nontarget_method",
+        "screen_other",
+        "concentration_method",
+        "concentration_unit",
     }
 )
 
 
 def _exportable_project_columns() -> list[str]:
     return [field for field in class_columns("projectMetadata") if field not in PROJECT_METADATA_SUPPRESSED_FIELDS]
+
+
+# Real, non-mandatory-in-practice FAIRe sampleMetadata fields the user
+# explicitly asked to never populate and never show as a column at all --
+# same export-time suppression idiom as PROJECT_METADATA_SUPPRESSED_FIELDS
+# above, deliberately NOT removed from schemas/faire/classes.yaml/
+# schema.yaml (a real upstream FAIRe term list, not something this project
+# edits). Unlike that project-level set, three of these
+# (neg_cont_type/pos_cont_type/detected_notDetected) ARE marked
+# `required: true` in the vendored schema mirror with no recorded
+# conditional-requirement text -- none of them ever had any real
+# extraction code populating them regardless (confirmed directly against
+# the real codebase before removal), so suppressing the column doesn't
+# lose any data that was ever actually being captured, but it does mean
+# the exported CSV no longer carries a column FAIRe's own checklist marks
+# mandatory. Per an explicit, repeated user request. (A later audit pass
+# found prepped_samp_store_temp/dur/sol still carried a dangling
+# MappingRule with no extraction source ever feeding it -- dead code that
+# could never actually fire; removed from mapping/rules.py.)
+SAMPLE_METADATA_SUPPRESSED_FIELDS = frozenset(
+    {
+        "nucl_acid_ext",
+        "nucl_acid_ext_modify",
+        "date_ext",
+        "ratioOfAbsorbance260_280",
+        "prepped_samp_store_temp",
+        "prepped_samp_store_dur",
+        "prepped_samp_store_sol",
+        "dna_store_loc",
+        "size_frac_low",
+        "neg_cont_type",
+        "pos_cont_type",
+        "rel_cont_id",
+        "detected_notDetected",
+        "nitro",
+        "org_carb",
+        "org_nitro",
+        "tot_org_c_meth",
+        "tot_nitro_cont_meth",
+        "tot_nitro_content",
+        "concentration_method",
+        "concentration_unit",
+        # The following removed entirely per an explicit user request
+        # ("negligible... don't want to waste compute on them or clutter
+        # the code with them") -- no extraction/mapping code populates
+        # any of these, same suppression idiom as the fields above.
+        "samp_weather",
+        "humidity",
+        "alt",
+        "solar_irradiance",
+        "precip_chem_prep",
+        "precip_force_prep",
+        "precip_temp_prep",
+        "precip_time_prep",
+        "light_intensity",
+        # The following 18 physicochemical fields are suppressed per an
+        # explicit user request: their combined coverage now lives in one
+        # column instead, CUSTOM_ENV_VAR_BLOCK_FIELD below (extraction/
+        # section_categories.py's x_env_var_block CategoryTerm, sample_prep
+        # category). Deliberately excludes diss_oxygen, which keeps its own
+        # column -- it already has a separate working LLMJudgedSearchField
+        # mechanism and was never part of the bundle.
+        "diss_inorg_carb",
+        "diss_inorg_nitro",
+        "diss_org_carb",
+        "diss_org_nitro",
+        "nitrate",
+        "nitrite",
+        "org_matter",
+        "part_org_carb",
+        "part_org_nitro",
+        "ph",
+        "suspend_part_matter",
+        "tot_carb",
+        "tot_diss_nitro",
+        "tot_nitro",
+        "tot_org_carb",
+        "tot_part_carb",
+        "chlorophyll",
+        "temp",
+        "salinity",
+    }
+)
+
+
+def _exportable_sample_columns() -> list[str]:
+    return [field for field in class_columns("sampleMetadata") if field not in SAMPLE_METADATA_SUPPRESSED_FIELDS]
+
+
+# Same export-time suppression idiom as PROJECT_METADATA_SUPPRESSED_FIELDS/
+# SAMPLE_METADATA_SUPPRESSED_FIELDS above, for experimentRunMetadata.
+# otu_num_tax_assigned/output_otu_num/output_read_count are dropped
+# entirely per an explicit user judgment call: these are computed
+# differently study to study (no single extraction/derivation approach
+# would be correct across papers), so guessing at one now isn't worth it --
+# revisit once this pipeline computes them itself from its own
+# bioinformatics outputs, rather than trying to extract them from a
+# paper's prose. mid_forward/mid_reverse and lib_conc/lib_conc_meth/
+# lib_conc_unit are dropped as a low-priority scope cut, both per an
+# explicit, repeated user request.
+EXPERIMENT_RUN_METADATA_SUPPRESSED_FIELDS = frozenset(
+    {
+        "otu_num_tax_assigned",
+        "output_otu_num",
+        "output_read_count",
+        "mid_forward",
+        "mid_reverse",
+        "lib_conc",
+        "lib_conc_meth",
+        "lib_conc_unit",
+    }
+)
+
+
+def _exportable_experiment_columns() -> list[str]:
+    return [
+        field
+        for field in class_columns("experimentRunMetadata")
+        if field not in EXPERIMENT_RUN_METADATA_SUPPRESSED_FIELDS
+    ]
 
 
 def _study_wide_values(session: Session, study_id: str) -> dict[str, str]:
@@ -300,7 +542,10 @@ def _pipe_join_unique(values: list[str]) -> str:
 
 
 def _linked_study_values(session: Session, study_ids: list[str], field: str) -> str:
-    return _pipe_join_unique([_study_wide_values(session, study_id).get(field, "") for study_id in study_ids])
+    value = _pipe_join_unique([_study_wide_values(session, study_id).get(field, "") for study_id in study_ids])
+    if field == "assay_name":
+        return clean_assay_name_value(value) or ""
+    return value
 
 
 def _write_csv(path: Path, columns: list[str], rows: list[dict[str, str]]) -> int:
@@ -336,6 +581,53 @@ def _write_field_reference(output_dir: Path, columns_by_class: dict[str, list[st
     return _write_csv(
         output_dir / "field_reference.csv",
         ["faire_field", "faire_classes", "requirement_level_code", "requirement_level_condition", "range", "exact_mappings"],
+        rows,
+    )
+
+
+def _paper_reference(session: Session, study_id: str) -> str:
+    doi = session.scalar(
+        select(ExternalIdentifier.identifier_value).where(
+            ExternalIdentifier.study_id == study_id,
+            ExternalIdentifier.identifier_type == IdentifierType.DOI.value,
+        )
+    )
+    return doi or study_id
+
+
+def _write_api_paper_corrections(session: Session, output_dir: Path) -> int:
+    """The durable, code-populated "fixes" spreadsheet an explicit user
+    request asked for -- every row here was written by a verification
+    mechanism (e.g. extraction/api_verification.py) that found a
+    structured API value contradicted by the paper's own text, never
+    hand-curated. One row per correction across every study, so this file
+    accumulates over time as more papers get processed."""
+    corrections = list(session.scalars(select(ApiPaperCorrection).order_by(ApiPaperCorrection.created_at)))
+    rows = [
+        {
+            "paper_reference": _paper_reference(session, correction.study_id),
+            "internal_study_id": correction.study_id,
+            "api_faire_term": correction.api_faire_term,
+            "api_value": correction.api_value,
+            "corrected_faire_term": correction.corrected_faire_term,
+            "corrected_value": correction.corrected_value,
+            "supporting_quote": correction.supporting_quote,
+            "detector": correction.detector,
+        }
+        for correction in corrections
+    ]
+    return _write_csv(
+        output_dir / "api_paper_corrections.csv",
+        [
+            "paper_reference",
+            "internal_study_id",
+            "api_faire_term",
+            "api_value",
+            "corrected_faire_term",
+            "corrected_value",
+            "supporting_quote",
+            "detector",
+        ],
         rows,
     )
 
@@ -407,6 +699,7 @@ def export_faire(session: Session, output_dir: str | Path) -> dict[str, int]:
         )
         assays_with_values = [assay for assay in assay_entities if _entity_values(session, assay.entity_id)]
         section_detection = _section_category_detection_values(session, study.study_id)
+        primer_traceability = _primer_traceability_values(session, study.study_id)
         information_withheld_llm_guess = _information_withheld_llm_guess_value(session, study.study_id)
         if not assays_with_values:
             if project_id is None and not broadcast:
@@ -415,6 +708,7 @@ def export_faire(session: Session, output_dir: str | Path) -> dict[str, int]:
             row["project_id"] = project_id or ""
             row[INTERNAL_STUDY_ID_FIELD] = study.study_id
             row.update(section_detection)
+            row.update(primer_traceability)
             row[INTERNAL_INFORMATION_WITHHELD_LLM_GUESS_FIELD] = information_withheld_llm_guess
             project_rows.append(row)
             continue
@@ -425,6 +719,7 @@ def export_faire(session: Session, output_dir: str | Path) -> dict[str, int]:
             row["project_id"] = project_id or ""
             row[INTERNAL_STUDY_ID_FIELD] = study.study_id
             row.update(section_detection)
+            row.update(primer_traceability)
             row[INTERNAL_INFORMATION_WITHHELD_LLM_GUESS_FIELD] = information_withheld_llm_guess
             project_rows.append(row)
     counts["projectMetadata"] = _write_csv(
@@ -432,13 +727,15 @@ def export_faire(session: Session, output_dir: str | Path) -> dict[str, int]:
         [
             INTERNAL_STUDY_ID_FIELD,
             *INTERNAL_SECTION_DETECTION_FIELDS,
+            *INTERNAL_PRIMER_TRACEABILITY_FIELDS,
             INTERNAL_INFORMATION_WITHHELD_LLM_GUESS_FIELD,
             *project_columns,
+            CUSTOM_SPREADSHEET_HEADERS_FIELD,
         ],
         project_rows,
     )
 
-    sample_columns = class_columns("sampleMetadata")
+    sample_columns = _exportable_sample_columns()
     sample_rows = []
     for study in studies:
         # entities are keyed by home study_id (Entity.study_id, unchanged),
@@ -463,8 +760,14 @@ def export_faire(session: Session, output_dir: str | Path) -> dict[str, int]:
             # entity-level facts, which are unconditionally safe regardless
             # of how many studies link to it.
             broadcast = _study_wide_values(session, study.study_id) if _entity_broadcast_is_authoritative(entity, study) else {}
+            entity_values = _entity_values(session, entity.entity_id)
             row = dict(broadcast)
-            row.update(_entity_values(session, entity.entity_id))
+            row.update(entity_values)
+            for field in _BROADCAST_ENTITY_PIPE_JOIN_FIELDS:
+                broadcast_value = broadcast.get(field)
+                entity_value = entity_values.get(field)
+                if broadcast_value and entity_value and broadcast_value != entity_value:
+                    row[field] = _pipe_join_unique([entity_value, broadcast_value])
             row["samp_name"] = entity.external_identifier or entity.entity_id
 
             alias_sample_ids = []
@@ -486,11 +789,11 @@ def export_faire(session: Session, output_dir: str | Path) -> dict[str, int]:
             sample_rows.append(row)
     counts["sampleMetadata"] = _write_csv(
         output_dir / "sampleMetadata.csv",
-        [INTERNAL_STUDY_ID_FIELD, INTERNAL_ALIAS_SAMPLE_IDS_FIELD, *sample_columns],
+        [INTERNAL_STUDY_ID_FIELD, INTERNAL_ALIAS_SAMPLE_IDS_FIELD, *sample_columns, CUSTOM_ENV_VAR_BLOCK_FIELD],
         sample_rows,
     )
 
-    experiment_columns = class_columns("experimentRunMetadata")
+    experiment_columns = _exportable_experiment_columns()
     experiment_rows = []
     for study in studies:
         experiment_entities = session.scalars(
@@ -554,5 +857,6 @@ def export_faire(session: Session, output_dir: str | Path) -> dict[str, int]:
         "experimentRunMetadata": experiment_columns,
     }
     counts["field_reference"] = _write_field_reference(output_dir, columns_by_class)
+    counts["api_paper_corrections"] = _write_api_paper_corrections(session, output_dir)
 
     return counts

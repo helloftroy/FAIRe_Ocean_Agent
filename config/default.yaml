@@ -68,7 +68,7 @@ supplements:
   require_completed_paper_pass: true
 
 discovery:
-  citation_expansion_max_depth: 1
+  citation_expansion_max_depth: 100
   keyword_search_enabled: false
 
 scheduling:

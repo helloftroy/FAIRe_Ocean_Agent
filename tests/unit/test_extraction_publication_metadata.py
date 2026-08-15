@@ -3,6 +3,8 @@
 project-metadata extraction work. `fetch_fulltext_xml` hits the on-disk
 retrieval cache, no live network call.
 """
+import json
+
 import pytest
 
 from fair_ocean_agent.database.enums import EntityLevel, ReviewStatus, SupportType
@@ -14,8 +16,11 @@ from fair_ocean_agent.extraction.publication_metadata import (
     extract_method_section_citations,
     extract_publication_metadata_facts,
     format_bibliographic_citation,
+    generate_funding_source,
+    generate_rights_holder,
     sync_recorded_by_from_biosample_or_first_author,
 )
+from fair_ocean_agent.llm.mock import MockLLMBackend
 from fair_ocean_agent.workflow.handlers import _build_enabled_adapters
 
 PMCID = "PMC3994630"
@@ -45,7 +50,7 @@ def test_permissions_gives_license_accessrights_rightsholder(real_fulltext_xml):
     assert facts["license"].raw_value == "http://creativecommons.org/licenses/by/3.0/"
     assert facts["license"].support_type == SupportType.STRUCTURED_SOURCE
     assert facts["accessRights"].raw_value == "open access"
-    assert facts["rightsHolder"].raw_value == "Davies et al."
+    assert "rightsHolder" not in facts
 
 
 def test_authors_includes_paper_authors_excludes_editor(real_fulltext_xml):
@@ -164,7 +169,7 @@ def test_method_section_citations_prefer_reference_doi_and_group_by_heading():
     facts = extract_method_section_citations(xml, locator_prefix="t")
     assert len(facts) == 1
     assert facts[0].fact_type_candidate == "associated_resource"
-    assert facts[0].raw_value == "**Sediment sampling**: https://doi.org/10.1234/protocol.1"
+    assert facts[0].raw_value == "**Sediment sampling**: doi: 10.1234/protocol.1"
     assert facts[0].support_type == SupportType.DETERMINISTICALLY_DERIVED
     assert "Sampling followed a regional design" in facts[0].evidence_quote
     section = facts[0].confidence_metadata["method_section_citations"][0]
@@ -198,6 +203,40 @@ def test_method_section_citations_fall_back_to_reference_title_without_doi():
     assert facts[0].raw_value == "**Methods**: Standard operating procedure for marine DNA barcoding"
 
 
+def test_method_section_citations_extract_doi_from_reference_text_tail():
+    xml = """
+    <article>
+      <body>
+        <sec>
+          <title>Materials and methods</title>
+          <sec>
+            <title>Bioinformatic pipeline</title>
+            <p>Reads were filtered as described previously
+            <xref ref-type="bibr" rid="B3">36</xref>.</p>
+          </sec>
+        </sec>
+      </body>
+      <back>
+        <ref-list>
+          <ref id="B3">
+            <mixed-citation>
+              Bolger AM, Lohse M, Usadel B. Trimmomatic: a flexible trimmer
+              for Illumina sequence data. Bioinformatics. 2014;30:2114-2120.
+              doi: 10.1093/bioinformatics/btu170.
+            </mixed-citation>
+          </ref>
+        </ref-list>
+      </back>
+    </article>
+    """
+    facts = extract_method_section_citations(xml, locator_prefix="t")
+    assert len(facts) == 1
+    assert facts[0].raw_value == "**Bioinformatic pipeline**: doi: 10.1093/bioinformatics/btu170"
+    citation = facts[0].confidence_metadata["method_section_citations"][0]["citations"][0]
+    assert citation["resource"] == "doi: 10.1093/bioinformatics/btu170"
+    assert "Trimmomatic" in citation["citation_text"]
+
+
 def test_method_section_citations_include_all_method_citations_but_ignore_results_sections():
     xml = """
     <article>
@@ -221,7 +260,7 @@ def test_method_section_citations_include_all_method_citations_but_ignore_result
     """
     facts = extract_method_section_citations(xml, locator_prefix="t")
     assert len(facts) == 1
-    assert facts[0].raw_value == "**Methods**: https://doi.org/10.1000/dada2"
+    assert facts[0].raw_value == "**Methods**: doi: 10.1000/dada2"
     assert "10.1000/results" not in facts[0].raw_value
 
 
@@ -252,9 +291,85 @@ def test_method_section_citations_preserve_multiple_subsection_headings():
     facts = extract_method_section_citations(xml, locator_prefix="t")
     assert len(facts) == 1
     assert facts[0].raw_value == (
-        "**Sediment sampling**: https://doi.org/10.1000/sediment | "
-        "**Meiofauna extractions and experimental setup**: https://doi.org/10.1000/meiofauna"
+        "**Sediment sampling**: doi: 10.1000/sediment | "
+        "**Meiofauna extractions and experimental setup**: doi: 10.1000/meiofauna"
     )
+
+
+def test_generate_funding_source_from_jats_funding_paragraph():
+    xml = """
+    <article>
+      <back>
+        <sec sec-type="funding">
+          <title>Funding</title>
+          <p>This work was supported by the National Science Foundation (OCE-123)
+          and the Gordon and Betty Moore Foundation. The funders had no role
+          in study design.</p>
+        </sec>
+      </back>
+    </article>
+    """
+    backend = MockLLMBackend(
+        responses=[
+            json.dumps(
+                {
+                    "funding_source": (
+                        "National Science Foundation | Gordon and Betty Moore Foundation"
+                    )
+                }
+            )
+        ]
+    )
+
+    facts = generate_funding_source(backend, xml, locator_prefix="t")
+
+    assert len(facts) == 1
+    assert facts[0].fact_type_candidate == "funding_source"
+    assert facts[0].raw_value == "National Science Foundation | Gordon and Betty Moore Foundation"
+    assert facts[0].support_type == SupportType.EXPLICIT
+    assert "National Science Foundation" in facts[0].evidence_quote
+    assert "The funders had no role" in backend.calls[0]["prompt"]
+
+
+def test_generate_funding_source_from_pdf_plain_text_funding_section():
+    backend = MockLLMBackend(
+        responses=[
+            json.dumps(
+                {
+                    "funding_source": (
+                        "National Science Foundation | Gordon and Betty Moore Foundation"
+                    )
+                }
+            )
+        ]
+    )
+    pdf_text = """Results
+These are results.
+
+Funding
+This work was supported by the National Science Foundation (OCE-123)
+and the Gordon and Betty Moore Foundation. The funders had no role in study design.
+
+References
+Reference text.
+"""
+
+    facts = generate_funding_source(backend, pdf_text, locator_prefix="pdf")
+
+    assert len(facts) == 1
+    assert facts[0].raw_value == "National Science Foundation | Gordon and Betty Moore Foundation"
+    assert facts[0].support_type == SupportType.EXPLICIT
+    assert "National Science Foundation" in facts[0].evidence_quote
+    assert "The funders had no role" in backend.calls[0]["prompt"]
+
+
+def test_generate_funding_source_no_funding_text_makes_no_llm_call():
+    backend = MockLLMBackend(responses=[json.dumps({"funding_source": "National Science Foundation"})])
+
+    facts = generate_funding_source(backend, "<article><body><p>No methods here.</p></body></article>", locator_prefix="t")
+
+    assert facts == []
+    assert backend.calls == []
 
 
 def test_bibliographic_citation_composed_from_crossref(real_crossref_raw):
@@ -279,7 +394,6 @@ def test_extract_publication_metadata_facts_merges_everything(real_fulltext_xml,
     assert fact_types == {
         "license",
         "accessRights",
-        "rightsHolder",
         "paper_authors_list",
         "project_contact",
         "bibliographicCitation",
@@ -293,45 +407,110 @@ def test_malformed_xml_returns_empty_not_raises():
     assert extract_from_jats_authors("<not valid xml", locator_prefix="t") == []
 
 
-def test_rightsholder_falls_back_to_full_author_names_for_generic_statement():
-    """Real pattern confirmed across ~40 cached articles: '(c) The
-    Author(s) 2024[. Published by X]' -- the year (plus anything after
-    it) is stripped, leaving just the holder's own name."""
+def test_generate_rights_holder_keeps_generic_author_holder_and_year():
     xml = """<article><front><article-meta><contrib-group>
     <contrib contrib-type="author"><name><given-names>A.</given-names><surname>Alpha</surname></name></contrib>
     <contrib contrib-type="author"><name><given-names>Beatrice</given-names><surname>Beta</surname></name></contrib>
     </contrib-group><permissions>
     <copyright-statement>&#169; The Author(s) 2020. Published by Oxford University Press.</copyright-statement>
     </permissions></article-meta></front></article>"""
-    facts = {f.fact_type_candidate: f for f in extract_from_jats_permissions(xml, locator_prefix="t")}
-    assert facts["rightsHolder"].raw_value == "A. Alpha and Beatrice Beta"
-    assert facts["rightsHolder"].source_locator.endswith("author_name_fallback_for_generic_rights_holder")
+    backend = MockLLMBackend(responses=[json.dumps({"rightsHolder": "2020 The Author(s)"})])
+
+    facts = generate_rights_holder(backend, xml, locator_prefix="t")
+
+    assert len(facts) == 1
+    assert facts[0].raw_value == "2020 The Author(s)"
+    assert facts[0].support_type == SupportType.EXPLICIT
+    assert "The Author(s) 2020" in facts[0].evidence_quote
+    assert "Do not replace \"The Author(s)\"" in backend.calls[0]["prompt"]
 
 
-def test_rightsholder_falls_back_to_copyright_statement_year_before_name():
-    """Real pattern confirmed: '(c) 2013 Jessen et al' -- the leading
-    year is stripped, leaving the holder's own name intact."""
+def test_generate_rights_holder_can_extract_journal_or_publisher_holder():
     xml = """<article><body><sec><permissions>
-    <copyright-statement>&#169; 2013 Jessen et al</copyright-statement>
+    <copyright-statement>&#169; 2024 International Society for Microbial Ecology</copyright-statement>
     </permissions></sec></body></article>"""
-    facts = {f.fact_type_candidate: f for f in extract_from_jats_permissions(xml, locator_prefix="t")}
-    assert facts["rightsHolder"].raw_value == "Jessen et al"
+    backend = MockLLMBackend(responses=[json.dumps({"rightsHolder": "2024 International Society for Microbial Ecology"})])
 
+    facts = generate_rights_holder(backend, xml, locator_prefix="t")
 
-def test_rightsholder_prefers_copyright_holder_tag_over_statement_when_both_present():
-    xml = """<article><body><sec><permissions>
-    <copyright-statement>&#169; 2013 Jessen et al</copyright-statement>
-    <copyright-holder>Jessen et al.</copyright-holder>
-    </permissions></sec></body></article>"""
-    facts = {f.fact_type_candidate: f for f in extract_from_jats_permissions(xml, locator_prefix="t")}
-    assert facts["rightsHolder"].raw_value == "Jessen et al."
-    assert facts["rightsHolder"].source_locator == "t:permissions/copyright-holder"
+    assert len(facts) == 1
+    assert facts[0].raw_value == "2024 International Society for Microbial Ecology"
 
 
 def test_rightsholder_absent_when_neither_tag_present():
     xml = "<article><body><sec><permissions><license/></permissions></sec></body></article>"
-    facts = {f.fact_type_candidate: f for f in extract_from_jats_permissions(xml, locator_prefix="t")}
-    assert "rightsHolder" not in facts
+    backend = MockLLMBackend(responses=[json.dumps({"rightsHolder": "2024 The Author(s)"})])
+
+    assert generate_rights_holder(backend, xml, locator_prefix="t") == []
+    assert backend.calls == []
+
+
+def test_generate_rights_holder_uses_rights_section_when_no_permissions_element():
+    xml = """<article><front><article-meta><contrib-group content-type="author">
+    <contrib><name><given-names>Rui</given-names><surname>Zhao</surname></name></contrib>
+    <contrib><name><given-names>Andrew R</given-names><surname>Babbin</surname></name></contrib>
+    </contrib-group></article-meta></front>
+    <body><sec sec-type="rights-and-permissions"><title>Rights and permissions</title>
+    <p>Copyright 2024 The Author(s), under exclusive licence to Springer Nature Limited.</p>
+    </sec></body></article>"""
+    backend = MockLLMBackend(responses=[json.dumps({"rightsHolder": "2024 The Author(s)"})])
+
+    facts = generate_rights_holder(backend, xml, locator_prefix="t")
+
+    assert len(facts) == 1
+    assert facts[0].raw_value == "2024 The Author(s)"
+    assert "exclusive licence to Springer Nature Limited" in facts[0].evidence_quote
+
+
+def test_generate_rights_holder_from_pdf_plain_text_rights_section():
+    pdf_text = """Abstract
+Study abstract.
+
+Rights and permissions
+Copyright 2024 The Author(s), under exclusive licence to Springer Nature Limited.
+
+References
+Reference text.
+"""
+    backend = MockLLMBackend(responses=[json.dumps({"rightsHolder": "2024 The Author(s)"})])
+
+    facts = generate_rights_holder(backend, pdf_text, locator_prefix="pdf")
+
+    assert len(facts) == 1
+    assert facts[0].raw_value == "2024 The Author(s)"
+    assert "exclusive licence to Springer Nature Limited" in facts[0].evidence_quote
+
+
+def test_authors_and_contact_from_group_level_content_type_and_author_notes_corresp():
+    """Regression guard for the same real gap, plus a second one found
+    alongside it: this same real document marks its corresponding author
+    via an <xref ref-type="author-notes"> pointing at an <fn> saying
+    "Corresponding author." -- not a corresp="yes" attribute or an
+    <email> element anywhere -- so project_contact used to come back
+    entirely empty too."""
+    xml = """<article><front><article-meta><contrib-group content-type="author">
+    <contrib><name><given-names>Rui</given-names><surname>Zhao</surname></name>
+    <xref ref-type="author-notes" rid="fn1">&#10038;</xref></contrib>
+    <contrib><name><given-names>Andrew R</given-names><surname>Babbin</surname></name></contrib>
+    </contrib-group>
+    <author-notes><fn id="fn1"><label>&#10038;</label><p>Corresponding author.</p></fn></author-notes>
+    </article-meta></front></article>"""
+    facts = {f.fact_type_candidate: f for f in extract_from_jats_authors(xml, locator_prefix="t")}
+    assert facts["paper_authors_list"].raw_value == "Rui Zhao | Andrew R Babbin"
+    assert facts["project_contact"].raw_value == "Rui Zhao"
+
+
+def test_authors_group_level_content_type_never_overrides_explicit_non_author_contrib_type():
+    """The group-level content-type="author" fallback only fills in for a
+    contrib with NO contrib-type of its own -- it must never override an
+    explicit non-author role (e.g. an editor correctly excluded per this
+    module's own docstring) that happens to sit inside such a group."""
+    xml = """<article><front><article-meta><contrib-group content-type="author">
+    <contrib><name><given-names>Rui</given-names><surname>Zhao</surname></name></contrib>
+    <contrib contrib-type="editor"><name><given-names>Some</given-names><surname>Editor</surname></name></contrib>
+    </contrib-group></article-meta></front></article>"""
+    facts = {f.fact_type_candidate: f for f in extract_from_jats_authors(xml, locator_prefix="t")}
+    assert facts["paper_authors_list"].raw_value == "Rui Zhao"
 
 
 def _study(session, **kwargs) -> Study:

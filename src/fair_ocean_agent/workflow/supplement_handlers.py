@@ -41,7 +41,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from fair_ocean_agent.clock import utcnow
-from fair_ocean_agent.config import load_config
+from fair_ocean_agent.config import MIN_LLM_MAX_OUTPUT_TOKENS, load_config
 from fair_ocean_agent.database.enums import (
     AccessStatus,
     AssetType,
@@ -65,6 +65,7 @@ from fair_ocean_agent.database.models import (
 from fair_ocean_agent.extraction.search_flags import (
     detect_controlled_search_facts,
     detect_llm_judged_search_facts,
+    detect_phix_percentage_facts,
     detect_text_search_flags,
 )
 from fair_ocean_agent.extraction.section_categories import (
@@ -651,6 +652,7 @@ def handle_extract_supplement_text_facts(session: Session, task: Task) -> None:
             list(prepared_texts), locator_prefix=locator_prefix
         )
         flag_facts = detect_text_search_flags(prepared_texts, locator_prefix=locator_prefix)
+        flag_facts = [*flag_facts, *detect_phix_percentage_facts(prepared_texts, locator_prefix=locator_prefix)]
         pcr_0_1_fact = derive_pcr_0_1_from_category_detection(section_category_facts)
         if pcr_0_1_fact is not None:
             flag_facts = [*flag_facts, pcr_0_1_fact]
@@ -673,7 +675,7 @@ def handle_extract_supplement_text_facts(session: Session, task: Task) -> None:
             backend,
             prepared_texts,
             locator_prefix=locator_prefix,
-            max_output_tokens=512,
+            max_output_tokens=MIN_LLM_MAX_OUTPUT_TOKENS,
             active_flags=active_flags,
             exclude_field_names=already_present
             | frozenset(fact.fact_type_candidate for fact in section_category_term_facts),

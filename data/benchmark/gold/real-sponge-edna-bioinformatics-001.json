@@ -16,7 +16,7 @@
       "evidence_quote": "paired‐end reads were merged by ‘illuminapairedend’"
     },
     {
-      "fact_type_candidate": "demultiplexing_tool",
+      "fact_type_candidate": "demux_tool",
       "raw_value": "ngsfilter",
       "evidence_quote": "demultiplexed using ‘ngsfilter’"
     },

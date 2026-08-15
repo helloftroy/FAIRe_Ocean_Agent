@@ -20,20 +20,21 @@ Two independent, deliberately conservative signals:
   1. EXPLICIT_REP_MARKER -- an explicit "rep"/"replicate" token plus a
      digit (e.g. "_rep1", "-REP_2", "_replicate3"). High confidence: the
      token is unambiguous.
-  2. TRAILING_LETTER_SUFFIX -- a single trailing letter after a separator
+  2. TRAILING_NUMBER_SUFFIX -- a bare number after an underscore or space
+     (e.g. "LM_1", "LM 2"). This is intentionally separator-scoped and
+     grouped by exact prefix, so "LM_1" and "LM_2" group, but "LM_1" and
+     "LMM_2" do not.
+  3. TRAILING_LETTER_SUFFIX -- a single trailing letter after a separator
      (e.g. "_A", "-b"). Lower confidence -- letters are also commonly used
      for genuinely different sites/stations (e.g. "Station_A"/"Station_B"),
      so this signal is gated by a minimum group size and a
      consecutive-letters check: a lone A/B pair never groups, and
      non-consecutive letters (e.g. only A and F) never group either.
 
-Bare trailing digits (e.g. "Sample1" vs "Sample12" vs "Sample2") are never
-treated as a replicate signal by either tier -- they're the single most
-common false-positive shape (arbitrary/incrementing sample numbering, not
-same-site replication) and match neither regex below. This means FAIRe's own
-worked example ("S01_1"/"S01_2"/"S01_3", a bare numeric suffix) is not
-detected by this module unless the real sample names also carry an explicit
-"rep" token or a letter suffix -- an intentional recall/precision tradeoff.
+Bare trailing digits without a separator (e.g. "Sample1" vs "Sample12" vs
+"Sample2") are never treated as a replicate signal -- they're the single
+most common false-positive shape (arbitrary/incrementing sample numbering,
+not same-site replication) and match neither regex below.
 """
 from __future__ import annotations
 
@@ -44,6 +45,7 @@ from enum import Enum
 
 class ReplicateSignal(str, Enum):
     EXPLICIT_REP_MARKER = "explicit_rep_marker"
+    TRAILING_NUMBER_SUFFIX = "trailing_number_suffix"
     TRAILING_LETTER_SUFFIX = "trailing_letter_suffix"
 
 
@@ -61,6 +63,13 @@ class ReplicateGroup:
 # "replicate" token only -- `base` is captured verbatim, case preserved, so
 # "Site_A" and "site_a" are never silently merged).
 _EXPLICIT_REP_RE = re.compile(r"^(?P<base>.+?)[-_](?:rep(?:licate)?)[-_]?(?P<num>\d+)$", re.IGNORECASE)
+
+# Matches "LM 6" and "LM_6", but deliberately not "LM-6" or "LM6".
+_TRAILING_NUMBER_RE = re.compile(r"^(?P<base>.+?)[_ ]+(?P<num>\d+)$")
+_GENERIC_NUMBERED_SAMPLE_BASE_RE = re.compile(
+    r"^(?:bio)?samples?|specimens?|isolates?|libraries?|runs?$",
+    re.IGNORECASE,
+)
 
 # Matches "Site_A", "Site-b" -- exactly one letter directly after a
 # separator at the end of the string. Does NOT match "Station_Alpha" (the
@@ -104,6 +113,24 @@ def detect_replicate_groups(
             continue
         ordered = tuple(sample_id for sample_id, _ in sorted(members, key=lambda pair: pair[1]))
         groups.append(ReplicateGroup(members=ordered, signal=ReplicateSignal.EXPLICIT_REP_MARKER))
+        consumed.update(ordered)
+
+    numeric_buckets: dict[str, list[tuple[str, int]]] = {}
+    for sample_id, name in sample_names_by_id.items():
+        if sample_id in consumed:
+            continue
+        match = _TRAILING_NUMBER_RE.match(name.strip())
+        if match:
+            if _GENERIC_NUMBERED_SAMPLE_BASE_RE.match(match.group("base").strip()):
+                continue
+            numeric_buckets.setdefault(match.group("base"), []).append(
+                (sample_id, int(match.group("num")))
+            )
+    for members in numeric_buckets.values():
+        if len(members) < 2:
+            continue
+        ordered = tuple(sample_id for sample_id, _ in sorted(members, key=lambda pair: pair[1]))
+        groups.append(ReplicateGroup(members=ordered, signal=ReplicateSignal.TRAILING_NUMBER_SUFFIX))
         consumed.update(ordered)
 
     if include_letter_suffix_signal:

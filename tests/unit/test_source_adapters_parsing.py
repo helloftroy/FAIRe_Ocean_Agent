@@ -416,7 +416,6 @@ def test_ena_extracts_run_accession_and_library_construction_protocol(retrieval_
                 {
                     "run_accession": "ERR123",
                     "sample_accession": "SAMEA1",
-                    "library_layout": "PAIRED",
                     "library_construction_protocol": "PCR amplified the V4 region with 515F/806R primers.",
                 }
             ],

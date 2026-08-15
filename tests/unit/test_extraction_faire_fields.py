@@ -62,10 +62,17 @@ _ALL_FLAGS = frozenset({"pcr_0_1", "probe_based_qPCR_ddPCR_assay_0_1"})
 def test_render_field_reference_includes_every_field_and_group_header():
     rendered = render_field_reference(active_flags=_ALL_FLAGS)
     for group_name, fields in FIELD_GROUPS.items():
+        askable_fields = [f for f in fields if f.faire_hint not in LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS]
+        if not askable_fields:
+            # "Sequencing / library prep" is currently the one group with
+            # no askable fields (platform/instrument/seq_kit/
+            # adapter_forward/adapter_reverse are "No LLM"; lib_layout and
+            # phix_percentage were removed from the paper-text taxonomy) --
+            # no header is rendered for an empty group.
+            assert f"{group_name}:" not in rendered
+            continue
         assert f"{group_name}:" in rendered
-        for f in fields:
-            if f.faire_hint in LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS:
-                continue
+        for f in askable_fields:
             assert f.native_name in rendered
             assert f.hint in rendered
 
@@ -74,24 +81,6 @@ def test_render_field_reference_includes_faire_hints():
     rendered = render_field_reference(active_flags=_ALL_FLAGS)
     for hint in all_faire_hints() - LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS:
         assert hint in rendered
-
-
-def test_primer_volume_and_concentration_hints_cover_the_aggregate_each_primer_phrasing():
-    """Regression guard: a real paper (ISME J 10.1093/ismejo/wrae013) states
-    "...and 1 uL of each primer" -- one aggregate volume covering both
-    primers, never naming forward/reverse separately. Confirmed live that
-    the model reliably fills both forward_primer_volume/
-    reverse_primer_volume from this phrasing once explicitly told to reuse
-    an aggregate 'each primer'/'both primers' value for both fields."""
-    rendered = render_field_reference(active_flags=frozenset({"pcr_0_1"}))
-    for native_name in (
-        "forward_primer_volume",
-        "reverse_primer_volume",
-        "forward_primer_concentration",
-        "reverse_primer_concentration",
-    ):
-        line = next(line for line in rendered.splitlines() if line.startswith(f"- {native_name}:"))
-        assert "each primer" in line
 
 
 def test_render_field_reference_includes_fallback_section():
@@ -112,17 +101,27 @@ def test_fallback_fields_have_no_faire_hint():
 
 
 def test_field_groups_cover_concepts_named_in_the_milestone_8_request():
-    """Regression guard for the concrete gap the user named: PCR volumes,
-    primer concentrations, assay names, controls, replicate structure,
-    thresholds, standard curves, taxonomy outputs. Checked via native_name
-    (a raw fact's real identity), not FAIRe's own spelling."""
+    """Regression guard for the concrete gap the user named: assay names,
+    replicate structure, thresholds, standard curves, taxonomy outputs.
+    Checked via native_name (a raw fact's real identity), not FAIRe's own
+    spelling.
+
+    The original "controls" concept (negative_control_type) was dropped
+    from this check: that field, and its positive_control_type sibling,
+    were removed from the taxonomy entirely per an explicit, repeated
+    user request, and no other taxonomy field represents the concept.
+    "PCR volumes"/"primer concentrations" were dropped the same way --
+    pcr_reaction_volume/forward_primer_concentration's own FAIRe targets
+    (amplificationReactionVolume/pcr_primer_conc_forward) were removed
+    entirely per an explicit, repeated user request. "Replicate structure"
+    is now checked via pcr_replicate_count, not biological_replicate_count:
+    the latter was removed per a later explicit user request, after a live
+    audit of a real 5-paper run found it never actually fired (see
+    faire_fields.py's "Controls & replicates" group comment)."""
     names = all_field_names()
     requested = {
-        "pcr_reaction_volume",  # PCR volumes
-        "forward_primer_concentration",  # primer concentrations
         "assay_name",  # assay names
-        "negative_control_type",  # controls
-        "biological_replicate_count",  # replicate structure
+        "pcr_replicate_count",  # replicate structure
         "quantification_cycle_threshold",  # thresholds
         "standard_curve_slope",  # standard curves
         "scientific_name",  # taxonomy outputs
@@ -137,22 +136,13 @@ def test_native_name_to_faire_hint_round_trips_a_known_field():
     assert mapping["standard_curve_r_squared"] == "r2"
 
 
-# biological_rep is the one deliberate exception to "exclude or gate":
-# search_flags.CONTROLLED_SEARCH_FIELDS's own "biological_rep" entry is
-# itself unconditional (matches the real FAIRe schema, which has no
-# conditional requirement for it -- a general sample-design concept, not a
-# PCR-specific one), and gold case controls-replicates-001 proves the LLM
-# checklist side must stay unconditionally active too (the benchmark only
-# exercises the LLM path, and that gold case expects
-# "biological_replicate_count" regardless of PCR content). Excluding the
-# LLM version would silently break that passing gold case; gating it (as a
-# prior round did) would wrongly hide it from non-PCR papers (e.g. shotgun
-# metagenomics) that still report replicate counts. Unlike the
-# adapter_forward/adapter_reverse duplicate this same guard caught (where
-# one mechanism could rewrite/mangle a sequence the other reports
-# verbatim), a plain replicate count has low real risk of the two
-# mechanisms disagreeing harmfully -- this is accepted, deliberate
-# redundancy for coverage, not an unreconciled gap.
+# biological_rep (search_flags.CONTROLLED_SEARCH_FIELDS's own deterministic
+# text-regex entry) used to have a documented LLM-checklist twin here,
+# biological_replicate_count -- removed entirely per an explicit user
+# request after a live audit of a real 5-paper run found the LLM checklist
+# side never fired. biological_rep itself stays (see faire_fields.py's
+# "Controls & replicates" group comment); with its LLM twin gone there's no
+# overlap left for this guard to reconcile.
 #
 # trim_method/min_len_tool/min_len_cutoff (LLM native names
 # adapter_trimming_method/length_filtering_tool/minimum_read_length):
@@ -165,10 +155,9 @@ def test_native_name_to_faire_hint_round_trips_a_known_field():
 # detector alone would never catch them. On a real Trimmomatic paper (PLOS
 # ONE 10.1371/journal.pone.0303937) both mechanisms already fire today and
 # agree ("trimmomatic"/"trimmomatic", "500 bp"/"500 bp"), confirming this
-# is the same low-conflict-risk pattern as biological_rep, not a genuine
-# unreconciled gap.
+# is a low-conflict-risk pattern, not a genuine unreconciled gap.
 _ACCEPTED_UNCONDITIONAL_OVERLAPS = frozenset(
-    {"biological_rep", "trim_method", "min_len_tool", "min_len_cutoff"}
+    {"trim_method", "min_len_tool", "min_len_cutoff"}
 )
 
 
@@ -339,27 +328,15 @@ def test_low_value_optional_fields_are_excluded_from_llm_only():
             "samp_collect_method",
             "samp_store_method_additional",
             "assay_name",
-            "lib_conc",
-            "lib_conc_unit",
-            "lib_conc_meth",
             "platform",
             "instrument",
             "lib_layout",
             "seq_kit",
             "adapter_forward",
             "adapter_reverse",
-            "trim_method",
-            "trim_param",
-            "error_rate_tool",
-            "error_rate_type",
-            "demux_tool",
-            "chimera_check_method",
             "otu_clust_tool",
-            "otu_clust_cutoff",
             "otu_db",
             "tax_assign_cat",
-            "tax_class_other",
-            "otu_raw_description",
             "targetTaxonomicAssay",
             "targetTaxonomicScope",
         }
@@ -430,15 +407,15 @@ def test_sample_metadata_llm_checklist_is_narrowed_to_location_date_depth():
     assert "samp_category" not in all_field_names()
 
 
-def test_platform_instrument_lib_layout_excluded_from_llm_checklist():
+def test_platform_instrument_excluded_and_library_layout_absent_from_llm_checklist():
     """Regression guard for a follow-up NOAA checklist review: these are
     real projectMetadata fields (not experimentRunMetadata, contrary to an
     earlier decision in this module's history), already 100% covered by
-    ENA's own structured instrument_platform/instrument_model/
-    library_layout facts wherever a study has one -- excluded from the LLM
-    checklist, kept in the taxonomy/registry/exports for structured
-    adapters."""
+    ENA's own structured instrument_platform/instrument_model facts
+    wherever a study has them. lib_layout is derived from FASTQ file counts,
+    so no paper-text library_layout term remains in the taxonomy."""
     names = field_names_for_reference()
-    for excluded in ("sequencing_platform_general", "sequencing_instrument", "library_layout"):
+    for excluded in ("sequencing_platform_general", "sequencing_instrument"):
         assert excluded not in names
-    assert {"sequencing_platform_general", "sequencing_instrument", "library_layout"} <= all_field_names()
+    assert {"sequencing_platform_general", "sequencing_instrument"} <= all_field_names()
+    assert "library_layout" not in all_field_names()

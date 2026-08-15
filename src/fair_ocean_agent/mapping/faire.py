@@ -125,24 +125,6 @@ def _resolve_entity_id(session: Session, study_id: str, fact: RawFact, rule: Map
     return None  # study-wide fact mapped onto a sample-scoped field: broadcast default
 
 
-def _lib_layout_preferred_value(left: str, right: str) -> str | None:
-    """Resolve project-wide lib_layout conflicts deterministically.
-
-    ENA can expose mixed SINGLE/PAIRED rows for a BioProject, especially
-    when records include older linked runs or downstream/reanalysis runs.
-    FAIRe has one projectMetadata.lib_layout value, so the old generic
-    "first fact wins" rule made output depend on row order. When any
-    accepted evidence says paired-end, prefer that over single-end and keep
-    review_required=True to expose the source conflict.
-    """
-    values = {left.casefold(), right.casefold()}
-    if "paired end" in values:
-        return "paired end"
-    if values == {"single end"}:
-        return "single end"
-    return None
-
-
 # targetTaxonomicAssay/targetTaxonomicScope: never "first wins, flag review,
 # drop the rest" -- every distinct value across every contributing fact is
 # kept, pipe-joined, per an explicit user request. targetTaxonomicAssay
@@ -151,10 +133,53 @@ def _lib_layout_preferred_value(left: str, right: str) -> str | None:
 # LLM-judged-search signal without ever discarding the LLM's own values --
 # a paper's stated assay target can be more specific than any one
 # BioSample's own `organism` field.
-_PIPE_UNION_TARGET_FIELDS = frozenset({"targetTaxonomicAssay", "targetTaxonomicScope", "platform", "instrument"})
+# samp_mat_process joins the same way for a different reason: it's a
+# free-text, potentially multi-sentence processing narrative (allows_
+# multi_sentence=True in extraction/section_categories.py), and a real
+# paper's Methods commonly describes distinct processing steps in more
+# than one separate paragraph (e.g. a storage/freeze-drying paragraph and
+# a separate DNA-extraction paragraph) -- each one, independently
+# classified and extracted as its own sample_prep run, should contribute
+# its own verbatim quote rather than the first one winning and the rest
+# being discarded, per an explicit user request.
+# x_env_var_block is the same shape as samp_mat_process for the same
+# reason: it bundles ~18 physicochemical variables (allows_multi_sentence=
+# True too), and a paper can report different environmental measurements
+# in more than one paragraph or in a separate supplement table -- every
+# contributing quote should show up in the pipe-joined value, not just
+# the first one found.
+# spreadsheet_headers unions for a related but simpler reason: a study can
+# have more than one structured supplement file (e.g. one sample-metadata
+# table, one separate environmental-data table), and each file's own
+# header row should show up, not just the first file's.
+_PIPE_UNION_TARGET_FIELDS = frozenset(
+    {
+        "targetTaxonomicAssay", "targetTaxonomicScope", "platform", "instrument", "samp_mat_process", "otu_db",
+        "x_env_var_block", "spreadsheet_headers",
+    }
+)
 _PIPE_UNION_REVIEW_ON_MULTIPLE_FIELDS = frozenset({"platform", "instrument"})
 _API_SUPPORT_TYPES = frozenset({SupportType.STRUCTURED_SOURCE.value, SupportType.DETERMINISTICALLY_DERIVED.value})
 _NOT_FOUND_VALUE = "not found"
+_COLLAPSED_SAMPLE_UNIT_FIELDS = {
+    "concentration": "concentration_unit",
+    "diss_inorg_carb": "diss_inorg_carb_unit",
+    "diss_inorg_nitro": "diss_inorg_nitro_unit",
+    "diss_org_carb": "diss_org_carb_unit",
+    "diss_org_nitro": "diss_org_nitro_unit",
+    "diss_oxygen": "diss_oxygen_unit",
+    "nitrate": "nitrate_unit",
+    "nitrite": "nitrite_unit",
+    "org_matter": "org_matter_unit",
+    "part_org_carb": "part_org_carb_unit",
+    "part_org_nitro": "part_org_nitro_unit",
+    "tot_carb": "tot_carb_unit",
+    "tot_diss_nitro": "tot_diss_nitro_unit",
+    "tot_inorg_nitro": "tot_inorg_nitro_unit",
+    "tot_nitro": "tot_nitro_unit",
+    "tot_org_carb": "tot_org_carb_unit",
+    "tot_part_carb": "tot_part_carb_unit",
+}
 
 
 def _split_pipe_values(value: str) -> list[str]:
@@ -182,8 +207,226 @@ def _pipe_union(*groups: list[str]) -> str:
     return " | ".join(merged)
 
 
+def _collapsed_unit_lookup(facts: list[RawFact]) -> dict[tuple[str, str | None], str]:
+    """First accepted raw unit fact by (unit field, entity).
+
+    The unit fields are no longer FAIRe output columns, but structured
+    sources may still report them separately from the numeric value. Keep
+    that information by appending the unit to the value field during mapping.
+    """
+    unit_fields = set(_COLLAPSED_SAMPLE_UNIT_FIELDS.values())
+    lookup: dict[tuple[str, str | None], str] = {}
+    for fact in facts:
+        if fact.fact_type_candidate not in unit_fields or fact.raw_value is None:
+            continue
+        unit = str(fact.raw_value).strip()
+        if not unit:
+            continue
+        lookup.setdefault((fact.fact_type_candidate, fact.entity_id), unit)
+    return lookup
+
+
+def _append_collapsed_unit(
+    value: str,
+    rule: MappingRule,
+    source_fact: RawFact,
+    unit_lookup: dict[tuple[str, str | None], str],
+) -> str:
+    if rule.target_table != "sampleMetadata":
+        return value
+    unit_field = _COLLAPSED_SAMPLE_UNIT_FIELDS.get(rule.target_field)
+    if not unit_field:
+        return value
+    unit = unit_lookup.get((unit_field, source_fact.entity_id)) or unit_lookup.get((unit_field, None))
+    if not unit or unit.casefold() in value.casefold():
+        return value
+    return f"{value} {unit}"
+
+
+def _lib_layout_from_fastq_facts(facts: list[RawFact]) -> tuple[str, bool, list[RawFact]]:
+    """Derive layout from verified-accessible FASTQ entries when the source
+    has run the accessibility check.
+
+    One `fastq_ftp` entry means single-end; two or more semicolon-separated
+    entries means paired-end. If no accepted FASTQ file facts exist, report
+    "no files" instead of trusting prose or ENA/SRA's declared layout.
+    """
+    access_status_by_entity = {
+        fact.entity_id: str(fact.raw_value).strip().casefold()
+        for fact in facts
+        if fact.fact_type_candidate == "fastq_access_status"
+        and fact.entity_level == EntityLevel.SEQUENCING_RUN.value
+        and fact.entity_id is not None
+        and fact.raw_value is not None
+    }
+    require_accessible = bool(access_status_by_entity)
+    file_counts: list[int] = []
+    evidence: list[RawFact] = []
+    for fact in facts:
+        if (
+            fact.fact_type_candidate != "fastq_ftp"
+            or fact.entity_level != EntityLevel.SEQUENCING_RUN.value
+            or fact.raw_value is None
+        ):
+            continue
+        count = len(_split_semicolon_nonempty(str(fact.raw_value)))
+        if count < 1:
+            continue
+        if require_accessible and access_status_by_entity.get(fact.entity_id) != "accessible":
+            continue
+        file_counts.append(count)
+        evidence.append(fact)
+    if not file_counts:
+        return "no files", False, []
+    has_paired = any(count >= 2 for count in file_counts)
+    has_single = any(count == 1 for count in file_counts)
+    return ("paired end" if has_paired else "single end"), bool(has_paired and has_single), evidence
+
+
+def _split_semicolon_nonempty(value: str) -> list[str]:
+    return [part.strip() for part in value.split(";") if part.strip()]
+
+
+# A real live audit (10.7717/peerj.333, STUDY-9b31d2733994) found a second
+# (indexing) PCR whose forward/reverse primers are the study's own PCR1
+# primers with a 454-Titanium sequencing adapter fused on -- e.g. the
+# study's forward_primer_sequence facts contain BOTH "TCTCAAAGACTAAGCCATGC"
+# (the clean PCR1 primer, SP-F-30) and
+# "CCTATCCCCTGTGTGCCTTGGCAGTCTCAGTCTCAAAGACTAAGCCATGC" (the PCR2 fusion
+# oligo), and the paper's own text confirms the longer one's tail "matches
+# SP-F-30 primer". Crucially, the paper never once uses the word "adapter"
+# (it says "454-Titanium primers" instead), so search_flags.py's own
+# keyword/quote-anchored adapter_forward/adapter_reverse mechanism never
+# fires here. Detected by substring instead: whenever the same primer
+# field yields two distinct sequences and the shorter is an exact
+# substring of the longer, the longer one is a fusion (adapter + primer),
+# not a second distinct primer -- the leftover portion is the adapter.
+#
+# The two sequences can legitimately land in different entity scopes: this
+# same real study's PCR1 facts broadcast (entity_id=None) while its PCR2
+# facts carry a model-assigned assay_tag ("18S-V3V4" -- the model's own
+# mistake, tagging the second PCR of the SAME assay as if it were a
+# distinct one), giving them their own ASSAY-entity StandardizedValue row
+# per real FAIRe's one-row-per-assay projectMetadata layout (see
+# _resolve_entity_id's docstring above). The fusion pair is therefore
+# detected globally across every scope, but the derived override is
+# applied separately to EVERY entity_id that actually contributed the long
+# (fused) value -- broadcast and/or any assay row -- so whichever row(s)
+# the export ultimately emits, none of them keep showing the raw fusion
+# oligo as if it were just "the primer".
+_MIN_CLEAN_PRIMER_LENGTH = 15  # shorter risks spurious substring coincidences
+_MIN_ADAPTER_TAIL_LENGTH = 4  # a couple of stray bases left over isn't a real adapter tag
+_NUCLEOTIDE_ONLY_RE = re.compile(r"^[ACGTURYSWKMBDHVN]+$", re.IGNORECASE)
+_FUSED_PRIMER_ADAPTER_DIRECTIONS = (
+    ("forward_primer_sequence", "pcr_primer_forward", "adapter_forward"),
+    ("reverse_primer_sequence", "pcr_primer_reverse", "adapter_reverse"),
+)
+
+
+def _normalize_sequence_value(value: str) -> str:
+    return re.sub(r"\s+", "", value).upper()
+
+
+def _projectmetadata_entity_id_for_fact(fact: RawFact) -> str | None:
+    """Mirrors _resolve_entity_id's own projectMetadata rule: a fact tagged
+    onto a real ASSAY entity gets its own per-assay row; every other
+    projectMetadata-targeted fact broadcasts (entity_id=None)."""
+    return fact.entity_id if fact.entity_level == EntityLevel.ASSAY.value else None
+
+
+def _derive_fused_primer_adapter_values(
+    facts: list[RawFact],
+) -> dict[tuple[str, str | None], tuple[str, bool, list[RawFact]]]:
+    results: dict[tuple[str, str | None], tuple[str, bool, list[RawFact]]] = {}
+    for source_native_name, primer_target, adapter_target in _FUSED_PRIMER_ADAPTER_DIRECTIONS:
+        value_to_facts: dict[str, list[RawFact]] = {}
+        for fact in facts:
+            if fact.fact_type_candidate != source_native_name or not fact.raw_value:
+                continue
+            if fact.entity_level not in (EntityLevel.STUDY.value, EntityLevel.ASSAY.value):
+                continue
+            for part in _split_pipe_values(fact.raw_value):
+                normalized = _normalize_sequence_value(part)
+                if normalized and _NUCLEOTIDE_ONLY_RE.fullmatch(normalized):
+                    value_to_facts.setdefault(normalized, []).append(fact)
+        if len(value_to_facts) < 2:
+            continue
+
+        sorted_values = sorted(value_to_facts, key=len)
+        fusion: tuple[str, str] | None = None
+        for i, short in enumerate(sorted_values):
+            if len(short) < _MIN_CLEAN_PRIMER_LENGTH:
+                continue
+            for longer in sorted_values[i + 1 :]:
+                if short in longer:
+                    fusion = (short, longer)
+                    break
+            if fusion:
+                break
+        if fusion is None:
+            continue
+
+        short, longer = fusion
+        index = longer.index(short)
+        adapter_seq = longer[len(short) :] if index == 0 else longer[:index]
+        if len(adapter_seq) < _MIN_ADAPTER_TAIL_LENGTH:
+            continue
+
+        entity_ids_with_longer = {
+            _projectmetadata_entity_id_for_fact(fact) for fact in value_to_facts[longer]
+        }
+        for entity_id in entity_ids_with_longer:
+            results[(primer_target, entity_id)] = (short, False, value_to_facts[short])
+            results[(adapter_target, entity_id)] = (adapter_seq, False, value_to_facts[longer])
+    return results
+
+
 _GENE_SHORT_NAME_RE = re.compile(r"(\d+)\s*S\b", re.IGNORECASE)
 _DASH_NORMALIZE_RE = re.compile(r"[‐-―]")
+_MOJIBAKE_DASH_RE = re.compile(r"(?:\u7ab6\u5929|\u7ab6\u96fb|\u7ab6\u642d|\u7ab6\u7763|\u7ab6\u6d9b)")
+_RRNA_REGION_ASSAY_NAME_RE = re.compile(
+    r"^(?P<gene>1[68]\s*S)(?:\s*rRNA)?\s*[- ]\s*(?P<region>V\d(?:-V\d)?)$",
+    re.IGNORECASE,
+)
+_BARE_FUNCTIONAL_GENE_ASSAY_NAME_RE = re.compile(
+    r"^(?:hzs[ABC]?|hzo(?:F1|R1)?|narG|nir[SK]|amoA|nxr[AB]|nosZ|nifH|dsr[AB]|mcrA)$",
+    re.IGNORECASE,
+)
+
+
+def _normalize_assay_name_part(value: str) -> str:
+    part = _MOJIBAKE_DASH_RE.sub("-", value.strip())
+    part = _DASH_NORMALIZE_RE.sub("-", part)
+    part = re.sub(r"\s*-\s*", "-", part)
+    part = re.sub(r"\s+", " ", part)
+    marker_region = _RRNA_REGION_ASSAY_NAME_RE.fullmatch(part)
+    if marker_region:
+        gene = re.sub(r"\s+", "", marker_region.group("gene")).upper()
+        return f"{gene}-{marker_region.group('region').upper()}"
+    return part
+
+
+def clean_assay_name_value(value: str) -> str | None:
+    """Drop primer-pair strings and bare functional-gene targets from assay_name.
+
+    Those values are useful elsewhere (`pcr_primer_*`, `target_gene`, qPCR
+    fields) but they make experimentRunMetadata.assay_name unreadable when a
+    study-wide assay_name is inherited by sequencing runs.
+    """
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for part in _split_pipe_values(value):
+        part = _normalize_assay_name_part(part)
+        if "/" in part:
+            continue
+        if _BARE_FUNCTIONAL_GENE_ASSAY_NAME_RE.fullmatch(part.strip()):
+            continue
+        key = part.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(part)
+    return " | ".join(cleaned) if cleaned else None
 
 
 def _compose_assay_name(target_gene: str | None, target_subfragment: str | None) -> str | None:
@@ -223,12 +466,21 @@ _WATER_KEYWORD_RE = re.compile(r"\bwater\b", re.IGNORECASE)
 # candidate for this -- per an explicit user request, not just
 # samp_vol_we_dna_ext -- plus the older broad-checklist mechanism's own
 # sample_volume_for_extraction(_unit), kept for direct comparison.
-_SAMPLE_TYPE_ROUTED_NATIVE_NAMES = frozenset(
-    term.native_name
-    for category in SECTION_CATEGORIES
-    if category.name == "sample_prep"
-    for term in category.terms
-) | frozenset({"sample_volume_for_extraction", "sample_volume_for_extraction_unit"})
+_SAMPLE_TYPE_ROUTED_NATIVE_NAMES = (
+    frozenset(
+        term.native_name
+        for category in SECTION_CATEGORIES
+        if category.name == "sample_prep"
+        for term in category.terms
+    )
+    | frozenset({"sample_volume_for_extraction", "sample_volume_for_extraction_unit"})
+) - frozenset({"samp_category"})
+# samp_category is excluded even though it lives in the sample_prep
+# category: its own "type" axis is real-sample-vs-control, not
+# water-vs-sediment, so this router's water/sediment detection
+# (_detect_sample_type_from_quote) is the wrong tool for it -- see the
+# CategoryTerm's own comment in extraction/section_categories.py for why
+# it also deliberately has no MappingRule to broadcast through anyway.
 
 # Real BioSample-API-derived attributes checked, in order, for a sample's
 # own type -- isolation_source first (the most direct, canonical signal,
@@ -340,6 +592,92 @@ def _detect_sample_type_routed_facts(
     return routed
 
 
+def _apply_biological_rep_from_relations(
+    session: Session,
+    study_id: str,
+    seen: dict[tuple[str, str, str | None], StandardizedValue],
+) -> int:
+    """projectMetadata.biological_rep comes ONLY from this study's own
+    sampleMetadata biological_rep_relation facts (each sample's real
+    replicate-group membership, itself derived from structured-API/
+    supplement data -- never the paper's text) -- per an explicit user
+    request, the deterministic-text-regex and LLM-checklist mechanisms
+    that used to compete for this field were removed entirely.
+
+    Each distinct group's size is its replicate count; the study-level
+    value is that single number, or a "min-max" range across groups when
+    sizes vary (e.g. "2-4"), or "0" when no replicate group was
+    detected at all -- this function is now the field's sole writer, so
+    it always sets a value rather than only conditionally overriding one."""
+    sample_entities = _authoritative_sample_entities(session, study_id)
+    if not sample_entities:
+        return 0
+    sample_ids = {entity.entity_id for entity in sample_entities}
+    relation_facts = session.scalars(
+        select(RawFact)
+        .where(
+            RawFact.study_id == study_id,
+            RawFact.entity_id.in_(sample_ids),
+            RawFact.fact_type_candidate == "biological_rep_relation",
+            RawFact.review_status != ReviewStatus.REJECTED.value,
+        )
+        .order_by(RawFact.created_at)
+    ).all()
+
+    group_sizes: dict[str, int] = {}
+    evidence_fact_id_by_group: dict[str, str] = {}
+    for fact in relation_facts:
+        if fact.raw_value not in group_sizes:
+            group_sizes[fact.raw_value] = len(fact.raw_value.split(" | "))
+            evidence_fact_id_by_group[fact.raw_value] = fact.fact_id
+    sizes = sorted(group_sizes.values())
+    if not sizes:
+        value = "0"
+        evidence_fact_id = None
+    else:
+        value = str(sizes[0]) if sizes[0] == sizes[-1] else f"{sizes[0]}-{sizes[-1]}"
+        evidence_fact_id = next(iter(evidence_fact_id_by_group.values()))
+
+    key = ("projectMetadata", "biological_rep", None)
+    existing = seen.get(key)
+    if existing is not None:
+        if existing.standardized_value != value:
+            existing.standardized_value = value
+            existing.mapping_method = MappingMethod.DETERMINISTIC_SYNONYM.value
+            existing.review_required = False
+            if evidence_fact_id is not None:
+                session.add(
+                    StandardizedValueEvidence(
+                        standardized_value_id=existing.standardized_value_id,
+                        fact_id=evidence_fact_id,
+                    )
+                )
+        return 0
+
+    standardized_value = StandardizedValue(
+        study_id=study_id,
+        entity_id=None,
+        target_schema=TARGET_SCHEMA,
+        target_schema_version=TARGET_SCHEMA_VERSION,
+        target_field="biological_rep",
+        standardized_value=value,
+        mapping_method=MappingMethod.DETERMINISTIC_SYNONYM.value,
+        review_required=False,
+        missingness_status=MissingnessStatus.PRESENT.value,
+    )
+    session.add(standardized_value)
+    session.flush()
+    if evidence_fact_id is not None:
+        session.add(
+            StandardizedValueEvidence(
+                standardized_value_id=standardized_value.standardized_value_id,
+                fact_id=evidence_fact_id,
+            )
+        )
+    seen[key] = standardized_value
+    return 1
+
+
 def _apply_sample_type_routed_facts(
     session: Session,
     study_id: str,
@@ -386,6 +724,8 @@ def _apply_sample_type_routed_facts(
         fact_by_type: dict[str, RawFact] = {}
         for fact, sample_type in tagged_facts:
             value = rule.transform(fact.raw_value)
+            if rule.target_field == "assay_name" and value is not None:
+                value = clean_assay_name_value(value)
             if value is None:
                 continue
             value_by_type.setdefault(sample_type, value)
@@ -581,6 +921,7 @@ def map_study_to_faire(session: Session, study_id: str) -> int:
             .order_by(RawFact.created_at)
         )
     )
+    collapsed_unit_lookup = _collapsed_unit_lookup(facts)
     created = 0
     seen: dict[tuple[str, str, str | None], StandardizedValue] = {}
     pipe_union_state: dict[tuple[str, str, str | None], dict[str, list[str] | bool]] = {}
@@ -599,8 +940,11 @@ def map_study_to_faire(session: Session, study_id: str) -> int:
                 entity_id = _resolve_entity_id(session, study_id, fact, rule)
 
             value = rule.transform(fact.raw_value)
+            if rule.target_field == "assay_name" and value is not None:
+                value = clean_assay_name_value(value)
             if value is None:
                 continue
+            value = _append_collapsed_unit(value, rule, fact, collapsed_unit_lookup)
 
             review_required = rule.review_required
             if rule.enum_name:
@@ -667,11 +1011,6 @@ def map_study_to_faire(session: Session, study_id: str) -> int:
             existing = seen.get(key)
             if existing is not None:
                 if existing.standardized_value != value:
-                    if rule.target_table == "projectMetadata" and rule.target_field == "lib_layout":
-                        preferred = _lib_layout_preferred_value(existing.standardized_value or "", value)
-                        if preferred:
-                            existing.standardized_value = preferred
-                            existing.mapping_method = rule.mapping_method
                     existing.review_required = True
                     session.add(
                         StandardizedValueEvidence(
@@ -703,52 +1042,131 @@ def map_study_to_faire(session: Session, study_id: str) -> int:
             seen[key] = standardized_value
             created += 1
 
+    created += _apply_biological_rep_from_relations(session, study_id, seen)
+
     for entity in session.scalars(select(Entity).where(Entity.study_id == study_id)):
         if not entity.external_identifier:
             continue
         if entity.entity_level == EntityLevel.SAMPLE.value:
-            key = ("sampleMetadata", "samp_name", entity.entity_id)
-            target_field = "samp_name"
+            targets = ("samp_name", "materialSampleID")
         elif (
             entity.entity_level == EntityLevel.EXPERIMENT_RUN.value
             and not entity.external_identifier.startswith("internal:")
         ):
-            key = ("experimentRunMetadata", "lib_id", entity.entity_id)
-            target_field = "lib_id"
+            targets = ("lib_id",)
         else:
             continue
-        if key in seen:
-            continue
+        for target_field in targets:
+            key = ("sampleMetadata" if entity.entity_level == EntityLevel.SAMPLE.value else "experimentRunMetadata",
+                   target_field, entity.entity_id)
+            if key in seen:
+                continue
+            standardized_value = StandardizedValue(
+                study_id=study_id,
+                entity_id=entity.entity_id,
+                target_schema=TARGET_SCHEMA,
+                target_schema_version=TARGET_SCHEMA_VERSION,
+                target_field=target_field,
+                standardized_value=entity.external_identifier,
+                mapping_method=MappingMethod.EXACT_IDENTIFIER.value,
+                review_required=False,
+                missingness_status=MissingnessStatus.PRESENT.value,
+            )
+            session.add(standardized_value)
+            session.flush()
+            seen[key] = standardized_value
+            created += 1
+
+    lib_layout_key = ("projectMetadata", "lib_layout", None)
+    if lib_layout_key not in seen:
+        lib_layout, review_required, evidence_facts = _lib_layout_from_fastq_facts(facts)
         standardized_value = StandardizedValue(
             study_id=study_id,
-            entity_id=entity.entity_id,
+            entity_id=None,
             target_schema=TARGET_SCHEMA,
             target_schema_version=TARGET_SCHEMA_VERSION,
-            target_field=target_field,
-            standardized_value=entity.external_identifier,
-            mapping_method=MappingMethod.EXACT_IDENTIFIER.value,
-            review_required=False,
+            target_field="lib_layout",
+            standardized_value=lib_layout,
+            mapping_method=MappingMethod.DETERMINISTIC_SYNONYM.value,
+            review_required=review_required,
             missingness_status=MissingnessStatus.PRESENT.value,
         )
         session.add(standardized_value)
         session.flush()
-        seen[key] = standardized_value
+        for fact in evidence_facts:
+            session.add(
+                StandardizedValueEvidence(
+                    standardized_value_id=standardized_value.standardized_value_id,
+                    fact_id=fact.fact_id,
+                )
+            )
+        seen[lib_layout_key] = standardized_value
         created += 1
 
-    # otu_db / otu_db_custom are mutually exclusive per an explicit user
-    # request: whichever one a study actually reports should cross-fill
-    # the other with "N/A see <field>" rather than leaving it blank, since
-    # a study either used a named public reference database or built its
-    # own custom one, never neither.
-    otu_db_key = ("projectMetadata", "otu_db", None)
-    otu_db_custom_key = ("projectMetadata", "otu_db_custom", None)
-    otu_db_present = otu_db_key in seen
-    otu_db_custom_present = otu_db_custom_key in seen
-    if otu_db_present != otu_db_custom_present:
+    # Overrides (not gap-fills) whatever the generic per-fact loop above
+    # already picked for pcr_primer_forward/reverse and adapter_forward/
+    # reverse when a genuine fusion pair is detected -- the generic loop's
+    # "oldest wins" tie-break has no way to know that a longer sequence is
+    # really the shorter one plus an adapter tag, so it can't be trusted
+    # to already have picked the clean primer on its own.
+    for (target_field, entity_id), (value, review_required, evidence_facts) in _derive_fused_primer_adapter_values(
+        facts
+    ).items():
+        key = ("projectMetadata", target_field, entity_id)
+        existing = seen.get(key)
+        if existing is not None:
+            existing.standardized_value = value
+            existing.mapping_method = MappingMethod.DETERMINISTIC_SYNONYM.value
+            existing.review_required = review_required
+            existing.missingness_status = MissingnessStatus.PRESENT.value
+            session.execute(
+                delete(StandardizedValueEvidence).where(
+                    StandardizedValueEvidence.standardized_value_id == existing.standardized_value_id
+                )
+            )
+            for fact in evidence_facts:
+                session.add(
+                    StandardizedValueEvidence(
+                        standardized_value_id=existing.standardized_value_id,
+                        fact_id=fact.fact_id,
+                    )
+                )
+        else:
+            standardized_value = StandardizedValue(
+                study_id=study_id,
+                entity_id=entity_id,
+                target_schema=TARGET_SCHEMA,
+                target_schema_version=TARGET_SCHEMA_VERSION,
+                target_field=target_field,
+                standardized_value=value,
+                mapping_method=MappingMethod.DETERMINISTIC_SYNONYM.value,
+                review_required=review_required,
+                missingness_status=MissingnessStatus.PRESENT.value,
+            )
+            session.add(standardized_value)
+            session.flush()
+            for fact in evidence_facts:
+                session.add(
+                    StandardizedValueEvidence(
+                        standardized_value_id=standardized_value.standardized_value_id,
+                        fact_id=fact.fact_id,
+                    )
+                )
+            seen[key] = standardized_value
+            created += 1
+
+    master_mix_pairs = (("commercial_mm", "custom_mm"),)
+    for commercial_field, custom_field in master_mix_pairs:
+        commercial_key = ("projectMetadata", commercial_field, None)
+        custom_key = ("projectMetadata", custom_field, None)
+        commercial_present = commercial_key in seen
+        custom_present = custom_key in seen
+        if commercial_present == custom_present:
+            continue
         missing_field, missing_key, other_field = (
-            ("otu_db_custom", otu_db_custom_key, "otu_db")
-            if otu_db_present
-            else ("otu_db", otu_db_key, "otu_db_custom")
+            (custom_field, custom_key, commercial_field)
+            if commercial_present
+            else (commercial_field, commercial_key, custom_field)
         )
         standardized_value = StandardizedValue(
             study_id=study_id,

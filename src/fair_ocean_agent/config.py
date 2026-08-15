@@ -113,14 +113,11 @@ class SupplementConfig(BaseModel):
 
 
 class DiscoveryConfig(BaseModel):
-    # Caps how many discovery_depth hops a citing-paper chain (Study ->
-    # cites its BioProject -> new citing Study -> cites ITS OWN BioProject
-    # -> ...) is allowed to auto-expand before workflow/handlers.py's
-    # handle_discover_citing_studies stops creating new Study rows and
-    # instead just flags the remainder for review. Kept at 1 for the
-    # initial ~3000-paper discovery run; raise only after inspecting real
-    # fan-out numbers from a pilot subset (see docs/architecture.md).
-    citation_expansion_max_depth: int = 1
+    # Caps how many discovery_depth hops a citing/reuse chain is allowed to
+    # auto-expand before workflow/handlers.py's
+    # handle_discover_citing_studies stops creating new Study rows and flags
+    # the remainder. BioProject and BioSample PubMed links both use this cap.
+    citation_expansion_max_depth: int = 100
     # Caps how many of one BioProject's citing PMIDs get auto-expanded into
     # new Studies per handle_discover_citing_studies run -- the real
     # protection against one highly-reused public dataset (very plausible

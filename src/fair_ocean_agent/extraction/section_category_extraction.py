@@ -8,16 +8,16 @@ this module is where the LLM actually gets invoked.
 Both calls follow the same "quote-candidate-then-judge" discipline already
 proven in extraction/search_flags.py's LLMJudgedSearchField mechanism: the
 LLM is never shown free-running whole-document text, only already
-keyword-gated candidates, and every one of the 114 term definitions
+keyword-gated candidates, and every one of the 106 term definitions
 carries the SAME shared instruction to copy values verbatim rather than
 generate them -- an explicit user instruction ("In all cases, have the
 program take word for word from text and not generate."), applied via one
-shared prompt template rather than 114 bespoke output instructions, plus a
+shared prompt template rather than 106 bespoke output instructions, plus a
 programmatic guard (Stage 3 discards any extracted value that doesn't
 literally appear in its own cited quote) since a prompt instruction alone
 is never trusted to be self-enforcing anywhere else in this codebase.
 
-Deliberately additive, not a replacement: every one of these 114 fields
+Deliberately additive, not a replacement: every one of these 106 fields
 already has some existing extraction path (the broad `FaireExtractionField`
 checklist, or a standalone `LLMJudgedSearchField` entry) that keeps running
 unchanged. Per an explicit user request, this new pipeline's own output is
@@ -29,10 +29,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import Callable
 
+from fair_ocean_agent.config import MIN_LLM_MAX_OUTPUT_TOKENS
 from fair_ocean_agent.database.enums import EntityLevel, SupportType
 from fair_ocean_agent.extraction.section_categories import (
     SECTION_CATEGORIES,
+    CategoryTerm,
     SectionCategory,
     _term_pattern,
     candidate_categories_for_paragraph,
@@ -45,10 +48,139 @@ from fair_ocean_agent.sources.base import RawFactCandidate
 
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 _SENTENCE_ID_RE = re.compile(r"^S(\d+)\.(\d+)$")
+_AMOUNT_WITH_UNIT_RE = re.compile(
+    r"(?:[~∼≈]\s*)?\d+(?:\.\d+)?\s*(?:mg|g|kg|mL|ml|L|liters?|litres?|µL|uL)\b",
+    re.IGNORECASE,
+)
+_DNA_EXTRACTION_AMOUNT_CONTEXT_RE = re.compile(
+    r"\b(?:DNA|RNA|nucleic\s+acid).{0,80}\bextract(?:ed|ion)\b|\b(?:used|processed)\s+for\s+(?:DNA|RNA|nucleic\s+acid)\s+extraction\b",
+    re.IGNORECASE,
+)
+_SAMPLE_SIZE_CONTEXT_RE = re.compile(
+    r"\b(?:samples?\s+were\s+)?(?:collected|sampled|obtained)\b|"
+    r"\b(?:total\s+)?(?:volume|mass|amount)\s+(?:collected|sampled)\b|"
+    r"\b(?:L|mL|g|kg)\s+of\s+(?:water|sediment)\s+were\s+collected\b",
+    re.IGNORECASE,
+)
+_UNIT_COMPANION_FIELDS = {
+    "samp_vol_we_dna_ext_unit": "samp_vol_we_dna_ext",
+    "samp_size_unit": "samp_size",
+}
+# A bare author-year citation, e.g. "(Vidal, Meneses & Smith, 2002)" or
+# "(Caporaso et al., 2011)" -- the shape real papers overwhelmingly use to
+# cite a primer's own source, right after naming/sequencing it, rather than
+# explicit "described by"/"reference"/"published in" phrasing. A DOI is
+# accepted too. Requires an uppercase-led author name before the year (not
+# re.IGNORECASE) to keep this from matching an unrelated parenthetical
+# aside that happens to contain a 4-digit number.
+_PRIMER_REFERENCE_CITATION_CONTEXT_RE = re.compile(
+    r"\([A-Z][^()0-9]{0,60}\d{4}[a-z]?\)|10\.\d{4,9}/\S+"
+)
+_PRIMER_SEQUENCE_FIELDS = {"pcr_primer_reference_forward": "pcr_primer_forward", "pcr_primer_reference_reverse": "pcr_primer_reverse"}
+# Internal-only diagnostic facts (never a real FAIRe field, same
+# non-exported-checklist precedent as internal_information_withheld_llm_
+# guess): flags a primer whose name we found in the text but whose actual
+# sequence AND reference/DOI could not be pinned down -- a candidate for a
+# future targeted supplement crawl per an explicit user request, not
+# something to guess at here.
+_PRIMER_TRACEABILITY_FLAG_FIELDS = {
+    "pcr_primer_reference_forward": ("pcr_primer_name_forward", "primer_forward_source_unresolved"),
+    "pcr_primer_reference_reverse": ("pcr_primer_name_reverse", "primer_reverse_source_unresolved"),
+}
+# concentration is meant to hold a short numeric measurement (e.g.
+# "25.4 ng/uL"), not a description of how it was measured -- confirmed
+# live, a real bug (10.1002/ece3.6071): a sentence describing the kit/
+# instrument used ("DNA concentration was measured with the Quant-iT
+# dsDNA HS assay kit ... using a Qubit 2.0 Fluorometer ...") was accepted
+# as the concentration VALUE itself. A plain "contains a digit" check
+# wouldn't have caught it, since "Qubit 2.0" has one. A generous length cap
+# does: no real reported concentration value runs anywhere near this long.
+_SHORT_NUMERIC_VALUE_MAX_CHARS = {"concentration": 30}
+# A dotted, multi-letter abbreviation/brand name (e.g. "E.Z.N.A.", "U.S.A.")
+# at the very end of a split piece: the naive [.!?] split above treats each
+# of its internal periods as a sentence end, real problem confirmed live --
+# "resuspended in the lysis buffer of the E.Z.N.A.® Soil DNA kit ..." was
+# shredded into "...the E.Z.N.A." and "® Soil DNA kit ...", corrupting both
+# nucl_acid_ext_lysis (truncated) and nucl_acid_ext_kit (missing its own
+# brand prefix) in the same real sentence. 2+ single-letter-dot groups is
+# deliberately the threshold (not 1) so an ordinary sentence ending in a
+# single initial ("... call it X.") is left alone.
+_DOTTED_ABBREVIATION_TAIL_RE = re.compile(r"(?:\b[A-Za-z]\.){2,}$")
+# "vol." (volume/volumes) is a real, common wet-lab-protocol abbreviation
+# the naive [.!?]-then-whitespace splitter above mistakes for a sentence
+# end -- confirmed live (10.1371/journal.pone.0303937): "1 vol. of
+# phenol/chloroform/isoamyalcohol..." got shredded into "1 vol." and "of
+# phenol/chloroform/isoamyalcohol...", corrupting the DNA-cleanup methods
+# paragraph's own sentence boundaries and, downstream, its Stage 2
+# categorization.
+# "et al." is the other ubiquitous academic abbreviation this naive
+# period-based splitter mistakes for a sentence boundary -- a real problem
+# confirmed live while building primer-reference extraction: "...primer
+# 515F, originally described by Caporaso et al. (2011), and the reverse
+# primer 806R..." was shredded right between the author name and its own
+# year, permanently separating a primer's name from the citation meant to
+# identify it (the exact adjacency pcr_primer_reference_forward/reverse
+# depends on).
+_COMMON_ABBREVIATION_TAIL_RE = re.compile(r"\b(?:vol|et\s+al)\.$", re.IGNORECASE)
+# A real bug found live (10.1093/ismejo/wrae013): a methods paragraph
+# describing three DIFFERENT tools for three DIFFERENT purposes as one
+# semicolon-joined enumerated list -- "...using SeqPrep 1.2...[64]; (ii)
+# ...using bowtie2 2.3.5.1 [65], and (iii) ...using Trimmomatic 0.39..." --
+# never got split at all by the period-only splitter above (its only
+# terminal period is at the very end), so every downstream field pulled
+# from this text saw all three tools/purposes jumbled into one candidate,
+# corrupting trim_method/error_rate_tool alike. A top-level (non-
+# parenthetical) semicolon is a common, genuine sentence-equivalent
+# boundary in academic writing; ", and (iii)" is the same list-marker
+# convention joined by a comma instead, normalized to a semicolon first so
+# one splitter handles both. Never applied INSIDE parentheses/brackets --
+# a semicolon-joined citation list like "(Smith 2020; Jones 2021)" must
+# never be split.
+_LIST_MARKER_COMMA_BOUNDARY_RE = re.compile(
+    r",\s+and\s+(?=\((?:i{1,3}|iv|vi{0,3}|ix|x|\d{1,2})\)\s)"
+)
+
+
+def _split_top_level_semicolons(piece: str) -> list[str]:
+    # Keeps the semicolon attached to the END of its own piece (mirroring
+    # how the period-based split above keeps its own terminal "."/"!"/"?")
+    # rather than discarding it -- Stage 2.5's own run-assembly
+    # (group_sentences_into_category_runs) rejoins same-category sentences
+    # with a plain space, so a split boundary that isn't preserved in the
+    # text itself would be silently lost the moment Stage 3 re-splits the
+    # assembled run text, right back into the same unsplit blob this fix
+    # is for.
+    normalized = _LIST_MARKER_COMMA_BOUNDARY_RE.sub("; ", piece)
+    parts: list[str] = []
+    depth = 0
+    start = 0
+    for index, ch in enumerate(normalized):
+        if ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth = max(0, depth - 1)
+        elif ch == ";" and depth == 0:
+            parts.append(normalized[start : index + 1])
+            start = index + 1
+    parts.append(normalized[start:])
+    return [p.strip() for p in parts if p.strip()]
 
 
 def _split_into_sentences(paragraph: str) -> list[str]:
-    return [s.strip() for s in _SENTENCE_SPLIT_RE.split(paragraph) if s.strip()]
+    sentences: list[str] = []
+    for piece in _SENTENCE_SPLIT_RE.split(paragraph):
+        piece = piece.strip()
+        if not piece:
+            continue
+        for sub_piece in _split_top_level_semicolons(piece):
+            if sentences and (
+                _DOTTED_ABBREVIATION_TAIL_RE.search(sentences[-1])
+                or _COMMON_ABBREVIATION_TAIL_RE.search(sentences[-1])
+            ):
+                sentences[-1] = f"{sentences[-1]} {sub_piece}"
+            else:
+                sentences.append(sub_piece)
+    return sentences
 
 
 def _build_categorization_prompt(
@@ -89,7 +221,21 @@ def categorize_paragraphs(
     backend: LLMBackend,
     gated_paragraphs: list[tuple[str, frozenset[str]]],
     *,
-    max_output_tokens: int | None = 1024,
+    # A real live audit (10.1371/journal.pone.0303937) caught this: one
+    # call for the whole paper's worth of candidate sentences (112 here)
+    # needed 2443 completion tokens and got silently cut off at 1024
+    # (finish_reason "length"), tagging only 47 of them -- everything past
+    # the cutoff, including the sentence naming SILVA_132/FreshTrain for
+    # otu_db and the chimera-filtration sentence feeding
+    # otu_asv_generation_filtering, was never categorized at all, so
+    # nothing downstream in Stage 3 ever saw it as a candidate. Even 2048
+    # (this codebase's usual floor, MIN_LLM_MAX_OUTPUT_TOKENS) still cut
+    # off at 92/112 sentences on this same paper; 4096 was the first budget
+    # that reached finish_reason "stop". A large enough paper could still
+    # exceed even this -- Stage 2's own "one shot for the whole paper"
+    # design has an inherent scaling ceiling that a fixed budget can't
+    # fully close; chunking the batch would be the real long-term fix.
+    max_output_tokens: int | None = 4096,
 ) -> dict[int, list[tuple[str, frozenset[str]]]]:
     """Stage 2. `gated_paragraphs` is (paragraph_text, candidate_categories)
     pairs, already filtered by Stage 1's keyword gate -- typically
@@ -188,6 +334,10 @@ sequences, and phrases must all be verbatim, not generated or reworded). Return 
 explicitly supports it. If multiple distinct values for the same field are explicitly supported by different
 quotes, return one object per value.
 
+Each quote below is labeled with the field name(s) in brackets it was pre-matched for -- only extract one of
+those bracketed field(s) for that quote, even if the quote's text also happens to contain a number or phrase
+that could look relevant to a different, unbracketed field.
+
 Fields:
 {fields_reference}
 
@@ -199,13 +349,109 @@ Candidate quotes:
 """
 
 
+def _is_valid_short_numeric_value(field_name: str, value: str) -> bool:
+    max_chars = _SHORT_NUMERIC_VALUE_MAX_CHARS.get(field_name)
+    return max_chars is None or len(value) <= max_chars
+
+
+def _valid_context_for_amount_field(field_name: str, quote: str) -> bool:
+    if field_name in {"samp_vol_we_dna_ext", "samp_vol_we_dna_ext_unit"}:
+        return bool(_DNA_EXTRACTION_AMOUNT_CONTEXT_RE.search(quote))
+    if field_name in {"samp_size", "samp_size_unit"}:
+        return bool(_SAMPLE_SIZE_CONTEXT_RE.search(quote))
+    return True
+
+
+def _valid_primer_reference_context(field_name: str, quote: str) -> bool:
+    # pcr_primer_reference_forward/reverse now share pcr_primer_name_*'s
+    # own broad cues (see section_categories.py) so a plain primer-naming
+    # sentence becomes a candidate at all -- this is what actually keeps
+    # it precise: only a quote that carries a real citation/DOI shape is
+    # accepted, never a bare primer-name sentence with nothing to cite.
+    if field_name in _PRIMER_SEQUENCE_FIELDS:
+        return bool(_PRIMER_REFERENCE_CITATION_CONTEXT_RE.search(quote))
+    return True
+
+
+def _amount_with_unit_from_quote(quote: str) -> str | None:
+    match = _AMOUNT_WITH_UNIT_RE.search(quote)
+    if not match:
+        return None
+    return " ".join(match.group(0).split())
+
+
+_BOOLEAN_FIELD_SUFFIX = "_0_1"
+
+
+def _resolve_boolean_field_entries(group: dict) -> None:
+    """"1" always outranks "0" when different candidate quotes disagree --
+    real, explicit evidence the condition holds (e.g. "connected to
+    compressed air and an overpressure of 2 bar was applied", clearly
+    active filtration) beats a separate, merely-uninformative quote that
+    didn't happen to state it either way. Mirrors the same precedent
+    already established for neg_cont_0_1/pos_cont_0_1 in
+    extraction/search_flags.py's own _llm_judged_value_priority."""
+    entries = group.get("entries") or []
+    winner = "1" if "1" in entries else ("0" if entries else None)
+    if winner is None:
+        return
+    group["entries"] = [winner]
+    # Narrow the evidence quotes down to only the ones that actually
+    # supported the winning value -- a losing "0" quote (e.g. a mini-
+    # flowmeter's own model number, uninformative on its own) shouldn't
+    # be cited as evidence for a final "1" answer.
+    winning_quotes = group.get("entry_quotes", {}).get(winner)
+    if winning_quotes:
+        group["quotes"] = winning_quotes
+
+
+def _add_missing_amount_companions(grouped: dict[str, dict]) -> None:
+    for unit_field, amount_field in _UNIT_COMPANION_FIELDS.items():
+        if amount_field in grouped or unit_field not in grouped:
+            continue
+        for quote in grouped[unit_field]["quotes"]:
+            if not _valid_context_for_amount_field(amount_field, quote):
+                continue
+            amount = _amount_with_unit_from_quote(quote)
+            if not amount:
+                continue
+            grouped[amount_field] = {"entries": [amount], "quotes": [quote]}
+            break
+
+
+def _resolve_primer_reference_fields(grouped: dict[str, dict]) -> list[str]:
+    """Cross-field primer-traceability resolution, run once per category
+    after every field has been extracted (it needs to know whether the
+    sequence field also got a value). Per an explicit user request:
+    reference/DOI extraction is a fallback for when the primer's own
+    sequence isn't reported, never additive alongside it; and when a
+    primer's name is known but neither its sequence nor a reference/DOI
+    could be pinned down, that's a real gap worth flagging (a future
+    targeted supplement-crawl candidate) rather than silently leaving it
+    blank. Returns the internal-only flag field names to emit."""
+    for reference_field, sequence_field in _PRIMER_SEQUENCE_FIELDS.items():
+        if reference_field in grouped and sequence_field in grouped:
+            del grouped[reference_field]
+    flags: list[str] = []
+    for reference_field, (name_field, flag_field) in _PRIMER_TRACEABILITY_FLAG_FIELDS.items():
+        sequence_field = _PRIMER_SEQUENCE_FIELDS[reference_field]
+        if name_field in grouped and sequence_field not in grouped and reference_field not in grouped:
+            flags.append(flag_field)
+    return flags
+
+
 def extract_category_terms(
     backend: LLMBackend,
     category: SectionCategory,
     run_text: str,
     *,
     locator_prefix: str,
-    max_output_tokens: int | None = 1024,
+    # Raised from 1024 to this codebase's usual floor alongside the same
+    # truncation bug's more severe Stage 2 instance (see categorize_
+    # paragraphs) -- no direct evidence yet of this one truncating on a
+    # real paper, but a category with a dense run-text (e.g.
+    # pcr1_primary_amplification) is exposed to the identical risk.
+    max_output_tokens: int | None = MIN_LLM_MAX_OUTPUT_TOKENS,
 ) -> list[RawFactCandidate]:
     """Stage 3 for one category. `run_text` is Stage 2.5's assembled
     per-category run text (`group_sentences_into_category_runs`'s
@@ -242,19 +488,60 @@ def extract_category_terms(
         candidate = candidates_by_id.get(quote_id)
         if term is None or candidate is None or not value:
             continue
+        # A real live audit caught the model answering a quote_id with a
+        # field name that quote was never even offered for (e.g. Q002 was
+        # only tagged/candidate-listed for screen_other, but the model
+        # attached its value to min_reads_cutoff instead, since that
+        # value happened to also appear verbatim in the same quote text).
+        # The verbatim guard below only checks the TEXT, not which field
+        # the quote was actually tagged for -- this closes that gap.
+        if field_name not in candidate.term_names:
+            continue
+        if not _valid_context_for_amount_field(field_name, candidate.text):
+            continue
+        if not _valid_primer_reference_context(field_name, candidate.text):
+            continue
+        if not _is_valid_short_numeric_value(field_name, value):
+            continue
+        if field_name.endswith(_BOOLEAN_FIELD_SUFFIX):
+            # A real live audit (10.1371/journal.pone.0303937) caught
+            # this: filter_passive_active_0_1 is a JUDGED classification
+            # ("1"/"0"), not a copied value -- the verbatim check below is
+            # meaningless for it (a single digit character coincidentally
+            # appears in almost any real quote, e.g. a catalog/model
+            # number), and worse, actively harmful here: the one quote
+            # that unambiguously supports "1" ("...connected to
+            # compressed air and an overpressure of 2 bar was applied.")
+            # has no literal "1" anywhere in it, while an unrelated quote
+            # that only names a flowmeter MODEL NUMBER happened to
+            # contain a stray "0" and won by pure chance. Boolean fields
+            # are validated by shape instead (only "0"/"1" survive), with
+            # the actual value chosen after the loop by _resolve_boolean_
+            # field_entries below.
+            if value not in ("0", "1"):
+                continue
         # Verbatim-only guard: a prompt instruction alone is never trusted
         # to be self-enforcing anywhere else in this codebase -- discard
         # any value that doesn't literally appear in its own cited quote,
         # rather than trusting the model's self-report of verbatim-ness.
-        if value.casefold() not in candidate.text.casefold():
+        elif value.casefold() not in candidate.text.casefold():
             continue
-        group = grouped.setdefault(field_name, {"entries": [], "quotes": []})
+        group = grouped.setdefault(field_name, {"entries": [], "quotes": [], "entry_quotes": {}})
         key = value.casefold()
+        group["entry_quotes"].setdefault(key, [])
+        if candidate.text not in group["entry_quotes"][key]:
+            group["entry_quotes"][key].append(candidate.text)
         if any(entry.casefold() == key for entry in group["entries"]):
             continue
         group["entries"].append(value)
         if candidate.text not in group["quotes"]:
             group["quotes"].append(candidate.text)
+
+    _add_missing_amount_companions(grouped)
+    for field_name, group in grouped.items():
+        if field_name.endswith(_BOOLEAN_FIELD_SUFFIX):
+            _resolve_boolean_field_entries(group)
+    primer_traceability_flags = _resolve_primer_reference_fields(grouped)
 
     facts: list[RawFactCandidate] = []
     for field_name, group in grouped.items():
@@ -268,6 +555,23 @@ def extract_category_terms(
                 support_type=SupportType.EXPLICIT,
                 evidence_quote=" | ".join(group["quotes"]),
                 confidence_metadata={"detector": "section_category_term_extraction", "category": category.name},
+            )
+        )
+    for flag_field in primer_traceability_flags:
+        facts.append(
+            RawFactCandidate(
+                entity_level=EntityLevel.STUDY,
+                fact_type_candidate=flag_field,
+                raw_field_name=flag_field,
+                raw_value="1",
+                source_locator=f"{locator_prefix}:section_category_terms:{category.name}:{flag_field}",
+                support_type=SupportType.DETERMINISTICALLY_DERIVED,
+                evidence_quote=None,
+                confidence_metadata={
+                    "detector": "primer_traceability_flag",
+                    "category": category.name,
+                    "description": "Primer name found but neither its sequence nor a reference/DOI could be pinned down.",
+                },
             )
         )
     return facts
@@ -308,216 +612,130 @@ def extract_section_category_facts(
         facts.extend(
             extract_category_terms(backend, category, combined_run_text, locator_prefix=locator_prefix)
         )
-    facts.extend(_bioinfo_method_additional_fact(run_texts_by_category, locator_prefix=locator_prefix))
-    facts.extend(
-        _generate_otu_raw_description_fact(backend, run_texts_by_category, locator_prefix=locator_prefix)
-    )
-    facts.extend(
-        _generate_tax_class_other_fact(backend, run_texts_by_category, locator_prefix=locator_prefix)
-    )
+    facts.extend(_fallback_only_leftover_facts(run_texts_by_category, locator_prefix=locator_prefix))
     return facts
 
 
-# The categories that make up "the bioinformatics pipeline section" for
-# bioinfo_method_additional's purposes -- raw-read preprocessing through
-# OTU/ASV generation through taxonomic assignment, deliberately excluding
-# the wet-lab categories (assay definition, PCR1/PCR2, library prep) that
-# precede sequencing.
-_BIOINFORMATICS_CATEGORY_NAMES = (
-    "raw_read_preprocessing",
-    "otu_asv_generation_filtering",
-    "taxonomic_assignment",
-)
-
-_BIOINFO_PIPELINE_SENTENCE_RE = re.compile(
+# A category can have more than one fallback_only term when a specific
+# sub-topic warrants its own catch-all separate from the category's
+# general one -- per an explicit user request: nucl_acid_ext_method_
+# additional should only catch nucleic-acid-extraction-shaped leftover
+# text within sample_prep, not the whole category's leftovers (that's
+# prep_method_additional's own job). A leftover sentence matching a
+# listed native_name's own predicate is claimed by that term FIRST; only
+# sentences no entry here claims fall through to the category's other
+# (unscoped) fallback_only term(s).
+_NUCL_ACID_EXT_GENERIC_PROCEDURE_RE = re.compile(
     r"\b(?:"
-    r"raw\s+(?:paired[-\s]+end\s+)?reads?|sequence\s+reads?|clean\s+reads?|"
-    r"quality\s+(?:check|control|filter(?:ed|ing)?)|trim(?:med|ming)|"
-    r"demultiplex(?:ed|ing)?|merge(?:d|ing)?|denois(?:ed|ing)?|dereplicat(?:ed|ion)|"
-    r"FastQC|Trimmomatic|Cutadapt|fastp|QIIME2?|DADA2|UCHIME|VSEARCH|USEARCH|UPARSE|"
-    r"ASVs?|amplicon\s+sequence\s+variants?|OTUs?|operational\s+taxonomic\s+units?|"
-    r"feature\s+table|raref(?:ied|action)|chimer(?:a|as|ic)|bimeras?|"
-    r"cluster(?:ed|ing)?|reference\s+(?:database|library|sequences?)|"
-    r"SILVA|PR2|GenBank|UNITE|RDP|BOLD|MIDORI|taxonom(?:y|ic|ically)|"
-    r"classified\s+taxonomically|taxonomy\s+was\s+assigned|assigned\s+taxonomy|BLASTn?|"
-    r"classify-sklearn|feature-classifier|naive\s+Bayes"
+    r"bead[-\s]?beat(?:ing|en)?|zirconium\s+beads?|sonicat(?:ed|ion)|ultrasonic|"
+    r"centrifug(?:ed|ation)|wash(?:ed|ing)?\s+step|"
+    r"precipitat(?:ed|ion)|elut(?:ed|ion)|reagent|repeated\s+(?:treatment|extraction)|"
+    r"extraction\s+(?:step|procedure|protocol)|DNA\s+(?:was\s+)?extract\w*|"
+    r"RNA\s+(?:was\s+)?extract\w*|nucleic\s+acid\w*\s+extract\w*"
     r")\b",
     re.IGNORECASE,
 )
-
-_DOWNSTREAM_COMMUNITY_STATS_RE = re.compile(
-    r"\b(?:"
-    r"correlation\s+plots?|correlation\s+between|PAST|SIMPER|similarity\s+percentage\s+analysis|"
-    r"alpha\s+diversity|diversity\s+indices|Shannon|Simpson|Pielou|richness|observed\s+species|"
-    r"physicochemical|vertical\s+(?:comparison|distribution)|prokaryotic\s+distribution|"
-    r"differences\s+between|dissimilarity|compared\s+(?:against|to)|comparison\s+of|"
-    r"sample\s+groups?|water\s+depths?|depth\s+across|taxa\s+change\s+with\s+depth|"
-    r"abundances?\s+between\s+the\s+samples?"
-    r")\b",
+# "incubat(?:ed|ion)" alone was a real bug found live (10.1093/ismejo/
+# wrae013): a paragraph entirely about a flux-incubation EXPERIMENT
+# ("submersed... inside two incubation chambers... Throughout the
+# acclimation phase...") -- nothing to do with nucleic acid extraction at
+# all -- got swept into nucl_acid_ext_method_additional purely because it
+# mentions "incubation chambers". Unlike the other generic procedure
+# words above (bead-beating, centrifugation, reagent, ...), "incubated"
+# is used constantly across unrelated wet-lab/experimental contexts, so
+# it's scoped separately here, requiring an actual nucleic-acid/
+# extraction-specific anchor word nearby before it counts.
+_NUCL_ACID_EXT_INCUBATION_RE = re.compile(r"\bincubat(?:ed|ion)\b", re.IGNORECASE)
+_NUCL_ACID_EXT_CONTEXT_ANCHOR_RE = re.compile(
+    r"\bDNA\b|\bRNA\b|nucleic\s+acid|\blysis\b|\bextraction\b|\bkit\b|\bbuffer\b|\bpellet\b|\belution\b",
     re.IGNORECASE,
 )
 
 
-def _bioinfo_pipeline_sentences(run_text: str) -> list[str]:
-    sentences: list[str] = []
-    for sentence in _split_into_sentences(run_text):
-        if not _BIOINFO_PIPELINE_SENTENCE_RE.search(sentence):
-            continue
-        if _DOWNSTREAM_COMMUNITY_STATS_RE.search(sentence):
-            continue
-        sentences.append(sentence)
-    return sentences
+def _matches_nucl_acid_ext_method_additional(sentence: str) -> bool:
+    if _NUCL_ACID_EXT_GENERIC_PROCEDURE_RE.search(sentence):
+        return True
+    return bool(
+        _NUCL_ACID_EXT_INCUBATION_RE.search(sentence) and _NUCL_ACID_EXT_CONTEXT_ANCHOR_RE.search(sentence)
+    )
 
 
-def _bioinfo_method_additional_fact(
+_SCOPED_FALLBACK_KEYWORD_FILTERS: dict[str, Callable[[str], bool]] = {
+    "nucl_acid_ext_method_additional": _matches_nucl_acid_ext_method_additional,
+}
+
+
+def _fallback_only_terms_for_category(category: SectionCategory) -> list[CategoryTerm]:
+    return [term for term in category.terms if term.fallback_only]
+
+
+def _fallback_only_leftover_facts(
     run_texts_by_category: dict[str, list[str]], *, locator_prefix: str
 ) -> list[RawFactCandidate]:
-    """Per an explicit user request, now that the bioinformatics section
-    is classified (Stage 1/2/2.5 above): capture source-faithful
-    bioinformatics-pipeline sentences from Stage 2.5's assembled runs. A
-    final deterministic sentence filter keeps raw-read/feature/taxonomic
-    assignment processing and drops downstream ecological/statistical
-    analyses that were over-tagged by the sentence classifier."""
-    sections = [
-        " ".join(
-            sentence
-            for run_text in run_texts_by_category[category_name]
-            for sentence in _bioinfo_pipeline_sentences(run_text)
-        )
-        for category_name in _BIOINFORMATICS_CATEGORY_NAMES
-        if run_texts_by_category.get(category_name)
-    ]
-    sections = [section for section in sections if section]
-    if not sections:
-        return []
-    return [
-        RawFactCandidate(
-            entity_level=EntityLevel.STUDY,
-            fact_type_candidate="bioinfo_method_additional",
-            raw_field_name="bioinfo_method_additional",
-            raw_value=" || ".join(sections),
-            source_locator=f"{locator_prefix}:section_category_terms:bioinfo_method_additional",
-            support_type=SupportType.DETERMINISTICALLY_DERIVED,
-            confidence_metadata={
-                "detector": "bioinformatics_category_run_text_capture",
-                "categories": [
-                    category_name for category_name in _BIOINFORMATICS_CATEGORY_NAMES if run_texts_by_category.get(category_name)
-                ],
-            },
-        )
-    ]
-
-
-def _generate_otu_raw_description_fact(
-    backend: LLMBackend,
-    run_texts_by_category: dict[str, list[str]],
-    *,
-    locator_prefix: str,
-    max_output_tokens: int | None = 256,
-) -> list[RawFactCandidate]:
-    """otu_raw_description is deliberately GENERATED, not extracted, per
-    an explicit user instruction: "i'd prefer if the LLM generates 1-2
-    sentences of its own description of the OTU process, the quotes
-    captured are not meaningful for either paper" -- confirmed against a
-    real paper whose only "raw OTU table" sentence was an unhelpful
-    cross-reference to another paper's methods ("we ... employed the same
-    data analysis pipeline") rather than any real description. Mirrors
-    extraction/study_factor.py's generative pattern (SupportType.INFERRED,
-    evidence_quote holds the source material rather than a literal
-    supporting quote), but summarizes this category's own run-text
-    instead of the paper's abstract.
-    """
-    run_texts = run_texts_by_category.get("otu_asv_generation_filtering")
-    if not run_texts:
-        return []
-    source_text = " ".join(run_texts)
-    prompt = f"""Write your own concise 1-2 sentence description of how the initial/raw OTU, ASV, or feature
-table was generated and initially processed, based on the source text below. Summarize in your own words --
-do not copy sentences verbatim from the source text. If the source text does not actually describe this
-processing (for example, it only refers to another paper's methods without giving any real detail), briefly
-say so rather than inventing detail.
-
-Return ONLY a JSON object: {{"otu_raw_description": "<your 1-2 sentence description>"}}
-
-Source text:
-{source_text}
-"""
-    parsed, _response = backend.generate_json(
-        prompt,
-        system="You summarize a paper's own OTU/ASV/feature-table generation process in your own words from its methods text.",
-        temperature=0,
-        max_tokens=max_output_tokens,
-    )
-    if parsed is None:
-        raise LLMBackendError(f"{backend.label}: otu_raw_description generation returned invalid JSON after retries")
-    sentence = str(parsed.get("otu_raw_description") or "").strip() if isinstance(parsed, dict) else ""
-    if not sentence:
-        return []
-    return [
-        RawFactCandidate(
-            entity_level=EntityLevel.STUDY,
-            fact_type_candidate="otu_raw_description",
-            raw_field_name="otu_raw_description",
-            raw_value=sentence,
-            source_locator=f"{locator_prefix}:section_category_terms:otu_raw_description:llm_generated",
-            support_type=SupportType.INFERRED,
-            evidence_quote=source_text,
-            confidence_metadata={"detector": "llm_generated_otu_raw_description"},
-        )
-    ]
-
-
-def _generate_tax_class_other_fact(
-    backend: LLMBackend,
-    run_texts_by_category: dict[str, list[str]],
-    *,
-    locator_prefix: str,
-    max_output_tokens: int | None = 256,
-) -> list[RawFactCandidate]:
-    """tax_class_other is deliberately GENERATED, not extracted, per an
-    explicit user instruction: "tax_class_other can be all classified
-    'TAXONOMIC ASSIGNMENT'. can ask the LLM to summarize based on the
-    section classified 'TAXONOMIC ASSIGNMENT'." -- rather than requiring
-    one narrow quote to explicitly state "additional parameters/cutoffs"
-    verbatim, this summarizes the whole taxonomic_assignment category's
-    already-classified (Stage 2) run-text in the model's own words.
-    Mirrors _generate_otu_raw_description_fact's generative pattern."""
-    run_texts = run_texts_by_category.get("taxonomic_assignment")
-    if not run_texts:
-        return []
-    source_text = " ".join(run_texts)
-    prompt = f"""Write your own concise 1-2 sentence summary of the taxonomic-assignment parameters, cutoffs,
-thresholds, ambiguity-handling rules, or other taxonomic-assignment details described in the source text below
--- the FAIRe field this feeds is defined as "additional information on parameters and cutoffs used for
-taxonomic assignment". Summarize in your own words -- do not copy sentences verbatim from the source text. If
-the source text does not describe any such additional parameters/cutoffs/rules (for example, it only names the
-tool and reference database with no further detail), return an empty string rather than inventing detail.
-
-Return ONLY a JSON object: {{"tax_class_other": "<your 1-2 sentence summary, or empty string>"}}
-
-Source text:
-{source_text}
-"""
-    parsed, _response = backend.generate_json(
-        prompt,
-        system="You summarize a paper's own taxonomic-assignment parameters/cutoffs in your own words from its methods text.",
-        temperature=0,
-        max_tokens=max_output_tokens,
-    )
-    if parsed is None:
-        raise LLMBackendError(f"{backend.label}: tax_class_other generation returned invalid JSON after retries")
-    sentence = str(parsed.get("tax_class_other") or "").strip() if isinstance(parsed, dict) else ""
-    if not sentence:
-        return []
-    return [
-        RawFactCandidate(
-            entity_level=EntityLevel.STUDY,
-            fact_type_candidate="tax_class_other",
-            raw_field_name="tax_class_other",
-            raw_value=sentence,
-            source_locator=f"{locator_prefix}:section_category_terms:tax_class_other:llm_generated",
-            support_type=SupportType.INFERRED,
-            evidence_quote=source_text,
-            confidence_metadata={"detector": "llm_generated_tax_class_other"},
-        )
-    ]
+    """Populates each category's own fallback_only term(s) (prep_method_
+    additional, nucl_acid_ext_method_additional, pcr_method_additional,
+    pcr2_method_additional, seq_method_additional, targeted_detection_
+    method_additional) with whatever in-category sentences didn't match
+    any other term's own cues -- this is the ORIGINAL design intent for
+    fallback_only terms ("captures whatever in-category text didn't
+    match any other term's own cues... do not independently keyword-
+    search", see CategoryTerm's own docstring), confirmed live to have
+    never actually been built: extract_category_terms's own terms_by_name
+    excludes fallback_only terms entirely, so nothing ever populated them
+    (a real gap found live, 10.1371/journal.pone.0303937: prep_method_
+    additional stayed empty for a paper whose Methods described a
+    compressed-air/overpressure filtration rig, an Arduino flowmeter, and
+    threshold-based filtration stopping in real detail that fit no other
+    sample_prep field). Deliberately separate from bioinfo_method_
+    additional above, which is a different, purpose-built keyword-driven
+    mechanism scoped to the bioinformatics categories specifically, not
+    this generic one."""
+    categories_by_name = {category.name: category for category in SECTION_CATEGORIES}
+    facts: list[RawFactCandidate] = []
+    for category_name, run_texts in run_texts_by_category.items():
+        category = categories_by_name.get(category_name)
+        if category is None:
+            continue
+        fallback_terms = _fallback_only_terms_for_category(category)
+        if not fallback_terms:
+            continue
+        scoped_terms = [t for t in fallback_terms if t.native_name in _SCOPED_FALLBACK_KEYWORD_FILTERS]
+        unscoped_terms = [t for t in fallback_terms if t.native_name not in _SCOPED_FALLBACK_KEYWORD_FILTERS]
+        searchable_terms = tuple(term for term in category.terms if not term.fallback_only)
+        leftover_by_term: dict[str, list[str]] = {term.native_name: [] for term in fallback_terms}
+        seen_sentences: set[str] = set()
+        for run_text in run_texts:
+            for sentence in _split_into_sentences(run_text):
+                if sentence in seen_sentences:
+                    continue
+                seen_sentences.add(sentence)
+                if any(
+                    _term_pattern(cue).search(sentence)
+                    for term in searchable_terms
+                    for cue in term.search_cues
+                ):
+                    continue
+                claimed_by = next(
+                    (t for t in scoped_terms if _SCOPED_FALLBACK_KEYWORD_FILTERS[t.native_name](sentence)),
+                    None,
+                )
+                if claimed_by is not None:
+                    leftover_by_term[claimed_by.native_name].append(sentence)
+                elif unscoped_terms:
+                    leftover_by_term[unscoped_terms[0].native_name].append(sentence)
+        for term_name, leftover_sentences in leftover_by_term.items():
+            if not leftover_sentences:
+                continue
+            combined = " ".join(leftover_sentences)
+            facts.append(
+                RawFactCandidate(
+                    entity_level=EntityLevel.STUDY,
+                    fact_type_candidate=term_name,
+                    raw_field_name=term_name,
+                    raw_value=combined,
+                    source_locator=f"{locator_prefix}.{category_name}.fallback_leftover",
+                    support_type=SupportType.EXPLICIT,
+                    evidence_quote=combined,
+                )
+            )
+    return facts

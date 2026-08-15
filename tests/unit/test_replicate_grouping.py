@@ -24,6 +24,22 @@ def test_bare_trailing_digit_suffix_is_not_treated_as_replicate():
     assert detect_replicate_groups(names) == []
 
 
+def test_detects_trailing_number_suffix_after_space_or_underscore_by_exact_prefix():
+    names = {"S1": "LM_2", "S2": "LM 1", "S3": "LMM 2", "S4": "LMM 1"}
+    groups = detect_replicate_groups(names)
+
+    by_members = {group.members: group.signal for group in groups}
+    assert by_members == {
+        ("S2", "S1"): ReplicateSignal.TRAILING_NUMBER_SUFFIX,
+        ("S4", "S3"): ReplicateSignal.TRAILING_NUMBER_SUFFIX,
+    }
+
+
+def test_trailing_number_suffix_ignores_generic_sample_titles():
+    names = {"S1": "sample 1", "S2": "sample 2", "S3": "BioSample_3"}
+    assert detect_replicate_groups(names) == []
+
+
 def test_singleton_explicit_marker_produces_no_group():
     names = {"S1": "Site_A_rep1"}
     assert detect_replicate_groups(names) == []

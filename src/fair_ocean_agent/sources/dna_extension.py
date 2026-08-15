@@ -72,11 +72,6 @@ DNA_DERIVED_FACT_ALIASES: dict[str, tuple[str, ...]] = {
         "ampliconSize",
         "amplicon_size",
     ),
-    "pcr_cond": (
-        "pcr_cond",
-        "pcrConditions",
-        "pcr_amplification_conditions",
-    ),
     "assay_type": (
         "assay_type",
         "assayType",

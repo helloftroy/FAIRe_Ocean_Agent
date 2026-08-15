@@ -69,7 +69,34 @@ def test_gold_cases_use_native_taxonomy_names_or_a_documented_fallback():
     from fair_ocean_agent.extraction.faire_fields import all_field_names
 
     known_names = all_field_names()
-    documented_fallback_exceptions = {"collection_date", "sampling_depth"}
+    documented_fallback_exceptions = {
+        "adapter_trimming_method",
+        "chimera_detection_method",
+        "clustering_similarity_threshold",
+        "collection_date",
+        "demux_tool",
+        "denoising_tool",
+        "dna_concentration_method",
+        "forward_primer_concentration",
+        "forward_primer_volume",
+        "length_filtering_tool",
+        "library_concentration",
+        "library_concentration_method",
+        "library_layout",
+        "minimum_read_length",
+        "pcr_conditions",
+        "pcr_reaction_volume",
+        "phix_percentage",
+        "positive_control_type",
+        "read_merge_minimum_overlap",
+        "read_merging_tool",
+        "reverse_primer_concentration",
+        "reverse_primer_volume",
+        "sampling_depth",
+        "sequencing_location",
+        "template_dna_volume",
+        "thermocycler",
+    }
 
     for case in load_gold_cases("data/benchmark/gold"):
         for fact in case.expected_facts:

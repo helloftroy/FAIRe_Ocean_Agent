@@ -257,8 +257,8 @@ def test_retrieve_parses_a_small_csv_and_creates_raw_facts(db_session, monkeypat
     assert asset.access_status == "open"
 
     facts = db_session.query(RawFact).filter_by(study_id=study.study_id, extraction_method="supplement_table_parsing").all()
-    assert {f.fact_type_candidate for f in facts} == {"temp"}
-    assert {f.raw_value for f in facts} == {"18.2", "17.9"}
+    assert {f.fact_type_candidate for f in facts} == {"temp", "spreadsheet_headers"}
+    assert {f.raw_value for f in facts if f.fact_type_candidate == "temp"} == {"18.2", "17.9"}
     assert all(f.source_locator.startswith("supplement.Table_1.csv!") for f in facts)
 
 
@@ -587,7 +587,7 @@ def test_retrieve_parses_supported_tables_inside_zip_supplement(db_session, monk
     asset = db_session.query(DataAsset).filter_by(study_id=study.study_id, file_name="metadata.zip").one()
     assert asset.inspection_level == "full"
     facts = db_session.query(RawFact).filter_by(study_id=study.study_id, extraction_method="supplement_table_parsing").all()
-    assert {fact.fact_type_candidate for fact in facts} == {"latitude", "longitude"}
+    assert {fact.fact_type_candidate for fact in facts} == {"latitude", "longitude", "spreadsheet_headers"}
     assert all("metadata.zip!samples.csv" in fact.source_locator for fact in facts)
 
 
@@ -637,8 +637,8 @@ def test_retrieve_is_idempotent_skips_already_parsed_assets(db_session, monkeypa
     db_session.commit()
 
     facts = db_session.query(RawFact).filter_by(study_id=study.study_id, extraction_method="supplement_table_parsing").all()
-    assert len({(f.fact_type_candidate, f.raw_value) for f in facts}) == 2
-    assert len(facts) == 2  # no duplicates from the second run
+    assert len({(f.fact_type_candidate, f.raw_value) for f in facts}) == 3
+    assert len(facts) == 3  # no duplicates from the second run
 
 
 def test_retrieve_marks_missing_zip_member_not_accessible(db_session, monkeypatch):

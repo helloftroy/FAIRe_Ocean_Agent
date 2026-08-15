@@ -39,8 +39,6 @@ pcr_primer_name_forward: # 515F-Y
 pcr_primer_name_reverse: # 926R
 pcr_primer_reference_forward: # 10.1111/1462-2920.13023
 pcr_primer_reference_reverse: # 10.1111/1462-2920.13023
-pcr_primer_vol_forward: # 1.0
-pcr_primer_vol_reverse: # 1.0
 pcr_primer_conc_forward: # 10
 pcr_primer_conc_reverse: # 10
 probeReporter: # not applicable

@@ -17,11 +17,13 @@ adding a new mapped field should only ever mean adding a rule here.
   `collection_date`, `depth`, `env_broad_scale`, `env_local_scale`,
   `env_medium`, `geo_loc_name`, `lat_lon`, `collection_method`,
   `elev`, `samp_collect_device`, `samp_size`, `samp_size_unit`, `temp`,
-  `salinity`, `ph`, `diss_oxygen`, plus every other FAIRe field tagged
-  `in_subset: Environment` in the vendored schema (63 more --
-  `_ADDITIONAL_ENVIRONMENTAL_SAMPLE_ATTRIBUTES`: `chlorophyll`, `turbidity`,
-  `nitrate`/`nitrite`, `host_species`/`host_length`/`host_tot_mass`/...,
-  `tidal_stage`, `wind_speed`, and all their `_unit`/method companions).
+  `salinity`, `ph`, `diss_oxygen`, plus selected FAIRe fields tagged
+  `in_subset: Environment` in the vendored schema
+  (`_ADDITIONAL_ENVIRONMENTAL_SAMPLE_ATTRIBUTES`: `chlorophyll`,
+  `nitrate`/`nitrite`, `host_species`/`host_length`/`host_tot_mass`/...).
+  Separate `_unit` companions for chemistry measurements are intentionally
+  not emitted as FAIRe columns; `mapping/faire.py` folds them into the value
+  fields when the raw source provides both parts.
   None of these -- not even the original 8 -- produce a StandardizedValue
   for a given sample unless that sample's real BioSample record actually
   reported that attribute; a rule existing here only means one is captured
@@ -34,8 +36,9 @@ adding a new mapped field should only ever mean adding a rule here.
   present) a deterministic `checksum_method` = "MD5" -- ENA's read_run
   report only ever gives MD5 checksums, never states the algorithm
   explicitly, so this is inferred rather than read verbatim, but no less
-  deterministic for it. `library_layout` (added to `sources/ena.py`'s
-  `RUN_FIELDS` alongside this) -> FAIRe's `lib_layout`.
+  deterministic for it. FAIRe's `lib_layout` is derived in mapping/faire.py
+  from the number of files in `fastq_ftp`, not from ENA's declared
+  `library_layout` value or paper prose.
 - A few unambiguous project-level facts from ENA/BioProject: `study_title`,
   `center_name`.
 - `citation` (OBIS/GBIF/PANGAEA, all three emit this exact field name at
@@ -46,7 +49,7 @@ adding a new mapped field should only ever mean adding a rule here.
   exact Darwin Core/GBIF DNA-derived-data terms such as
   `associatedSequences`, `target_gene`, `pcr_primer_forward`,
   `pcr_primer_reverse`, primer names/references, `annealingTemp`,
-  `ampliconSize`, `pcr_cond`, `assay_type`, and `assay_name`.
+  `ampliconSize`, `assay_type`, and `assay_name`.
 - ENA run-level identifiers/protocol text: `run_accession` becomes
   FAIRe `associatedSequences`, and `library_construction_protocol` is
   retained as PCR/library-method narrative text for review.
@@ -99,7 +102,13 @@ from typing import Callable
 
 from fair_ocean_agent.database.enums import EntityLevel, MappingMethod
 from fair_ocean_agent.extraction.faire_fields import assay_scoped_field_names, native_name_to_faire_hint
-from fair_ocean_agent.mapping.units import to_decimal_latitude, to_decimal_longitude, to_iso_event_date, to_meters
+from fair_ocean_agent.mapping.units import (
+    to_decimal_latitude,
+    to_decimal_longitude,
+    to_iso_event_date,
+    to_max_meters,
+    to_min_meters,
+)
 from fair_ocean_agent.standards.faire_registry import build_faire_registry
 
 
@@ -119,6 +128,25 @@ def _lon_only(value: str) -> str | None:
 
 def _identity(value: str) -> str | None:
     return value
+
+
+_PLACEHOLDER_REFERENCE_VALUES = {
+    "as described above",
+    "as described below",
+    "see above",
+    "see below",
+    "see text",
+}
+
+
+def _non_placeholder_text(value: str) -> str | None:
+    stripped = value.strip()
+    if not stripped:
+        return None
+    normalized = " ".join(stripped.casefold().split()).strip(" .;:")
+    if normalized in _PLACEHOLDER_REFERENCE_VALUES:
+        return None
+    return stripped
 
 
 def _license_url(value: str) -> str | None:
@@ -204,7 +232,8 @@ def _percent_without_unit(value: str) -> str | None:
 
 
 _VOLUME_VALUE_RE = re.compile(
-    r"\b\d+(?:\.\d+)?\s*(?:uL|µL|μL|ul|mL|ml|L|lit(?:er|re)s?)\b",
+    r"\b\d+(?:\.\d+)?\s*(?:uL|µL|μL|ul|mL|ml|L|lit(?:er|re)s?)\b|"
+    r"\b\d+(?:\.\d+)?\s*(?:ng|µg|ug)\s*(?:/|\s+)?(?:uL|µL|μL|ul)(?:\s*(?:-1|−1))?\b",
     re.IGNORECASE,
 )
 
@@ -214,6 +243,15 @@ def _volume_value(value: str) -> str | None:
     if not normalized:
         return None
     return normalized if _VOLUME_VALUE_RE.search(normalized) else None
+
+
+def _error_rate_tool_value(value: str) -> str | None:
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if re.search(r"\bFastQC\b", normalized, re.IGNORECASE):
+        return None
+    return normalized
 
 
 def _control_flag_value(value: str, control_terms: tuple[str, ...]) -> str | None:
@@ -288,19 +326,6 @@ def _positive_control_flag(value: str) -> str | None:
     return _control_flag_value(value, _POSITIVE_CONTROL_TERMS)
 
 
-def _normalize_lib_layout(value: str) -> str:
-    """ENA's read_run report gives PAIRED/SINGLE; FAIRe's lib_layout_enum
-    wants "paired end"/"single end". Falls back to the raw value
-    unrecognized -- mapping/faire.py's enum check then flags it for review
-    rather than silently guessing."""
-    normalized = value.strip().upper()
-    if normalized == "PAIRED":
-        return "paired end"
-    if normalized == "SINGLE":
-        return "single end"
-    return value
-
-
 def _control_sample_category(value: str) -> str | None:
     normalized = value.strip().lower()
     if "negative" in normalized or "blank" in normalized or "no template" in normalized or normalized == "ntc":
@@ -328,20 +353,20 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
     # --- Sample-level structured facts (NCBI BioSample / ENA) ---
     MappingRule("collection_date", EntityLevel.SAMPLE.value, "sampleMetadata", "eventDate",
                 MappingMethod.DETERMINISTIC_SYNONYM.value, transform=to_iso_event_date),
-    MappingRule("collection_date", EntityLevel.SAMPLE.value, "sampleMetadata", "verbatimEventDate",
-                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=_identity),
+    MappingRule("eventDate_submitted", EntityLevel.SAMPLE.value, "sampleMetadata", "eventDate_submitted",
+                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=to_iso_event_date),
     MappingRule("depth", EntityLevel.SAMPLE.value, "sampleMetadata", "minimumDepthInMeters",
-                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=to_meters),
+                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=to_min_meters),
     MappingRule("depth", EntityLevel.SAMPLE.value, "sampleMetadata", "maximumDepthInMeters",
-                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=to_meters),
+                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=to_max_meters),
     MappingRule("Depth", EntityLevel.SAMPLE.value, "sampleMetadata", "minimumDepthInMeters",
-                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=to_meters),
+                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=to_min_meters),
     MappingRule("Depth", EntityLevel.SAMPLE.value, "sampleMetadata", "maximumDepthInMeters",
-                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=to_meters),
+                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=to_max_meters),
     MappingRule("depth_(m)", EntityLevel.SAMPLE.value, "sampleMetadata", "minimumDepthInMeters",
-                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=to_meters),
+                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=to_min_meters),
     MappingRule("depth_(m)", EntityLevel.SAMPLE.value, "sampleMetadata", "maximumDepthInMeters",
-                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=to_meters),
+                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=to_max_meters),
     MappingRule("samp_category", EntityLevel.SAMPLE.value, "sampleMetadata", "samp_category",
                 MappingMethod.EXACT_LABEL.value, enum_name="samp_category_enum"),
     MappingRule("sample_type", EntityLevel.SAMPLE.value, "sampleMetadata", "samp_category",
@@ -359,13 +384,9 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
     MappingRule("samp_category", EntityLevel.SAMPLE.value, "projectMetadata", "pos_cont_0_1",
                 MappingMethod.DETERMINISTIC_SYNONYM.value, transform=_positive_control_flag,
                 enum_name="pos_cont_0_1_enum"),
-    MappingRule("neg_cont_type", EntityLevel.SAMPLE.value, "sampleMetadata", "neg_cont_type",
-                MappingMethod.EXACT_LABEL.value, enum_name="neg_cont_type_enum"),
     MappingRule("neg_cont_type", EntityLevel.SAMPLE.value, "projectMetadata", "neg_cont_0_1",
                 MappingMethod.DETERMINISTIC_SYNONYM.value, transform=_negative_control_flag,
                 enum_name="neg_cont_0_1_enum"),
-    MappingRule("pos_cont_type", EntityLevel.SAMPLE.value, "sampleMetadata", "pos_cont_type",
-                MappingMethod.EXACT_LABEL.value, enum_name="pos_cont_type_enum"),
     MappingRule("pos_cont_type", EntityLevel.SAMPLE.value, "projectMetadata", "pos_cont_0_1",
                 MappingMethod.DETERMINISTIC_SYNONYM.value, transform=_positive_control_flag,
                 enum_name="pos_cont_0_1_enum"),
@@ -375,8 +396,30 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
                 MappingMethod.EXACT_LABEL.value, enum_name="env_local_scale_enum"),
     MappingRule("env_medium", EntityLevel.SAMPLE.value, "sampleMetadata", "env_medium",
                 MappingMethod.EXACT_LABEL.value, enum_name="env_medium_enum"),
+    MappingRule("isolation_source", EntityLevel.SAMPLE.value, "sampleMetadata", "env_medium",
+                MappingMethod.DETERMINISTIC_SYNONYM.value, enum_name="env_medium_enum"),
     MappingRule("geo_loc_name", EntityLevel.SAMPLE.value, "sampleMetadata", "geo_loc_name",
                 MappingMethod.EXACT_LABEL.value),
+    MappingRule("cruise", EntityLevel.SAMPLE.value, "sampleMetadata", "internal_expedition_id",
+                MappingMethod.DETERMINISTIC_SYNONYM.value),
+    MappingRule("cruise_id", EntityLevel.SAMPLE.value, "sampleMetadata", "internal_expedition_id",
+                MappingMethod.DETERMINISTIC_SYNONYM.value),
+    MappingRule("expedition", EntityLevel.SAMPLE.value, "sampleMetadata", "internal_expedition_id",
+                MappingMethod.DETERMINISTIC_SYNONYM.value),
+    MappingRule("expedition_id", EntityLevel.SAMPLE.value, "sampleMetadata", "internal_expedition_id",
+                MappingMethod.DETERMINISTIC_SYNONYM.value),
+    MappingRule("campaign", EntityLevel.SAMPLE.value, "sampleMetadata", "internal_expedition_id",
+                MappingMethod.DETERMINISTIC_SYNONYM.value),
+    MappingRule("campaign_id", EntityLevel.SAMPLE.value, "sampleMetadata", "internal_expedition_id",
+                MappingMethod.DETERMINISTIC_SYNONYM.value),
+    MappingRule("voyage", EntityLevel.SAMPLE.value, "sampleMetadata", "internal_expedition_id",
+                MappingMethod.DETERMINISTIC_SYNONYM.value),
+    MappingRule("voyage_id", EntityLevel.SAMPLE.value, "sampleMetadata", "internal_expedition_id",
+                MappingMethod.DETERMINISTIC_SYNONYM.value),
+    MappingRule("station", EntityLevel.SAMPLE.value, "sampleMetadata", "internal_expedition_id",
+                MappingMethod.DETERMINISTIC_SYNONYM.value),
+    MappingRule("station_id", EntityLevel.SAMPLE.value, "sampleMetadata", "internal_expedition_id",
+                MappingMethod.DETERMINISTIC_SYNONYM.value),
     MappingRule("lat_lon", EntityLevel.SAMPLE.value, "sampleMetadata", "decimalLatitude",
                 MappingMethod.DETERMINISTIC_SYNONYM.value, transform=_lat_only),
     MappingRule("lat_lon", EntityLevel.SAMPLE.value, "sampleMetadata", "decimalLongitude",
@@ -404,13 +447,21 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
     MappingRule("filter_material", EntityLevel.SAMPLE.value, "sampleMetadata", "filter_material",
                 MappingMethod.EXACT_LABEL.value, enum_name="filter_material_enum", review_required=True),
     MappingRule("filter_name", EntityLevel.SAMPLE.value, "sampleMetadata", "filter_name",
-                MappingMethod.EXACT_LABEL.value, review_required=True),
+                MappingMethod.EXACT_LABEL.value, transform=_non_placeholder_text, review_required=True),
     MappingRule("filter_name", EntityLevel.STUDY.value, "sampleMetadata", "filter_name",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
+                MappingMethod.SUGGESTED_SEMANTIC.value, transform=_non_placeholder_text, review_required=True),
     MappingRule("filter_passive_active_0_1", EntityLevel.SAMPLE.value, "sampleMetadata", "filter_passive_active_0_1",
                 MappingMethod.EXACT_LABEL.value, enum_name="filter_passive_active_0_1_enum", review_required=True),
     MappingRule("samp_collect_device", EntityLevel.SAMPLE.value, "sampleMetadata", "samp_collect_device",
                 MappingMethod.EXACT_LABEL.value),
+    # sample_derived_from: emitted by sources/ncbi.py's own accession
+    # extraction out of a MAG/MIMAG record's "derived-from" attribute
+    # (real value is a full sentence, e.g. "This BioSample is a
+    # metagenomic assembly obtained from the marine sediment metagenome
+    # BioSample: SAMN11268106" -- the accession is pulled out of it), not
+    # a literal NCBI attribute name itself, so review_required=True.
+    MappingRule("sample_derived_from", EntityLevel.SAMPLE.value, "sampleMetadata", "sample_derived_from",
+                MappingMethod.DETERMINISTIC_SYNONYM.value, review_required=True),
     # samp_mat_process: a real, literal NCBI BioSample attribute name when
     # present (confirmed live, 10.3389/fmicb.2024.1295149's one real
     # sediment sample: samp_mat_process="DNA extraction from sediment
@@ -431,6 +482,22 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
                 MappingMethod.EXACT_LABEL.value),
     MappingRule("diss_oxygen", EntityLevel.SAMPLE.value, "sampleMetadata", "diss_oxygen",
                 MappingMethod.EXACT_LABEL.value),
+    # in_situ_temp/in_situ_diss_oxygen/in_situ_salinity: a real paper's own
+    # methods text describing conditions measured at the time/site of
+    # sample collection (search_flags.py's own LLMJudgedSearchField
+    # mechanism, distinct native names from the BioSample-sourced
+    # temp/salinity/diss_oxygen rules above so the two sources are never
+    # confused) -- STUDY-level since a single collection event's in-situ
+    # reading is typically reported once for the whole site, not per
+    # sample; broadcasts into every sample's row exactly like other
+    # STUDY-level sampleMetadata facts (see exports/faire.py's own
+    # broadcast-as-default docstring).
+    MappingRule("in_situ_temp", EntityLevel.STUDY.value, "sampleMetadata", "temp",
+                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
+    MappingRule("in_situ_diss_oxygen", EntityLevel.STUDY.value, "sampleMetadata", "diss_oxygen",
+                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
+    MappingRule("in_situ_salinity", EntityLevel.STUDY.value, "sampleMetadata", "salinity",
+                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     # biological_rep_relation: emitted by sources/replicate_grouping.py's
     # sample-name-suffix detector (via supplement_parsing.py and ncbi.py),
     # never a literal source column -- review_required=True since this is a
@@ -438,8 +505,12 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
     # worth a human sanity check regardless of which detection signal fired.
     MappingRule("biological_rep_relation", EntityLevel.SAMPLE.value, "sampleMetadata", "biological_rep_relation",
                 MappingMethod.EXACT_LABEL.value, review_required=True),
-    MappingRule("biological_rep_presence", EntityLevel.STUDY.value, "projectMetadata", "biological_rep",
-                MappingMethod.DETERMINISTIC_SYNONYM.value),
+    # biological_rep_presence (TRUE/FALSE) and a raw "biological_rep" pass-
+    # through rule used to live here -- both removed per an explicit user
+    # request. biological_rep is now derived purely from the
+    # biological_rep_relation facts above (mapping/faire.py::
+    # _apply_biological_rep_from_relations), never a RawFact/MappingRule
+    # of its own.
 
     # --- Sequencing-run-level structured facts (ENA) ---
     MappingRule("instrument_platform", EntityLevel.SEQUENCING_RUN.value, "projectMetadata", "platform",
@@ -450,8 +521,6 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
                 MappingMethod.DETERMINISTIC_SYNONYM.value),
     MappingRule("fastq_md5", EntityLevel.SEQUENCING_RUN.value, "projectMetadata", "checksum_method",
                 MappingMethod.DETERMINISTIC_SYNONYM.value, transform=_constant_md5, enum_name="checksum_method_enum"),
-    MappingRule("library_layout", EntityLevel.SEQUENCING_RUN.value, "projectMetadata", "lib_layout",
-                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=_normalize_lib_layout, enum_name="lib_layout_enum"),
     MappingRule("library_construction_protocol", EntityLevel.SEQUENCING_RUN.value, "projectMetadata",
                 "pcr_method_additional", MappingMethod.DETERMINISTIC_SYNONYM.value, review_required=True),
 
@@ -476,17 +545,7 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
                 MappingMethod.DETERMINISTIC_SYNONYM.value),
     MappingRule("associatedSequences", EntityLevel.EXPERIMENT_RUN.value, "experimentRunMetadata", "associatedSequences",
                 MappingMethod.EXACT_LABEL.value),
-    MappingRule("lib_conc", EntityLevel.EXPERIMENT_RUN.value, "experimentRunMetadata", "lib_conc",
-                MappingMethod.EXACT_LABEL.value),
-    MappingRule("lib_conc_unit", EntityLevel.EXPERIMENT_RUN.value, "experimentRunMetadata", "lib_conc_unit",
-                MappingMethod.EXACT_LABEL.value, enum_name="lib_conc_unit_enum"),
-    MappingRule("lib_conc_meth", EntityLevel.EXPERIMENT_RUN.value, "experimentRunMetadata", "lib_conc_meth",
-                MappingMethod.EXACT_LABEL.value),
     MappingRule("phix_perc", EntityLevel.EXPERIMENT_RUN.value, "experimentRunMetadata", "phix_perc",
-                MappingMethod.EXACT_LABEL.value),
-    MappingRule("mid_forward", EntityLevel.EXPERIMENT_RUN.value, "experimentRunMetadata", "mid_forward",
-                MappingMethod.EXACT_LABEL.value),
-    MappingRule("mid_reverse", EntityLevel.EXPERIMENT_RUN.value, "experimentRunMetadata", "mid_reverse",
                 MappingMethod.EXACT_LABEL.value),
     MappingRule("filename", EntityLevel.EXPERIMENT_RUN.value, "experimentRunMetadata", "filename",
                 MappingMethod.EXACT_LABEL.value),
@@ -504,6 +563,8 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
                 MappingMethod.DETERMINISTIC_SYNONYM.value, transform=_fastq_filename_forward),
     MappingRule("fastq_ftp", EntityLevel.EXPERIMENT_RUN.value, "experimentRunMetadata", "filename2",
                 MappingMethod.DETERMINISTIC_SYNONYM.value, transform=_fastq_filename_reverse),
+    MappingRule("fastq_access_status", EntityLevel.EXPERIMENT_RUN.value, "experimentRunMetadata", "fastq_access_status",
+                MappingMethod.EXACT_LABEL.value),
     MappingRule("fastq_md5", EntityLevel.EXPERIMENT_RUN.value, "experimentRunMetadata", "checksum_filename",
                 MappingMethod.DETERMINISTIC_SYNONYM.value, transform=_fastq_checksum_forward),
     MappingRule("fastq_md5", EntityLevel.EXPERIMENT_RUN.value, "experimentRunMetadata", "checksum_filename2",
@@ -512,8 +573,6 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
                 MappingMethod.DETERMINISTIC_SYNONYM.value, enum_name="platform_enum"),
     MappingRule("instrument_model", EntityLevel.EXPERIMENT_RUN.value, "projectMetadata", "instrument",
                 MappingMethod.DETERMINISTIC_SYNONYM.value, enum_name="instrument_enum", review_required=True),
-    MappingRule("library_layout", EntityLevel.EXPERIMENT_RUN.value, "projectMetadata", "lib_layout",
-                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=_normalize_lib_layout, enum_name="lib_layout_enum"),
     MappingRule("fastq_md5", EntityLevel.EXPERIMENT_RUN.value, "projectMetadata", "checksum_method",
                 MappingMethod.DETERMINISTIC_SYNONYM.value, transform=_constant_md5, enum_name="checksum_method_enum"),
     MappingRule("library_construction_protocol", EntityLevel.EXPERIMENT_RUN.value, "projectMetadata",
@@ -528,19 +587,17 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
     MappingRule("citation", EntityLevel.PROJECT.value, "projectMetadata", "bibliographicCitation",
                 MappingMethod.DETERMINISTIC_SYNONYM.value),
 
-    # --- Deterministic publication-metadata facts (extraction/publication_metadata.py) ---
+    # --- Publication-metadata facts (extraction/publication_metadata.py) ---
     # Literal FAIRe field names as fact_type_candidate (this module's own
-    # structured-adapter convention -- see extraction/publication_metadata.py's
+    # project-metadata convention -- see extraction/publication_metadata.py's
     # docstring), EntityLevel.STUDY since every fact here is a plain
-    # one-per-study value, no LLM/model-vocabulary coupling to guard
-    # against. Every one of these was marked "No LLM" in an explicit user
-    # review of a NOAA/SEUS-MBON FAIRe checklist.
+    # one-per-study value.
     MappingRule("license", EntityLevel.STUDY.value, "projectMetadata", "license",
                 MappingMethod.DETERMINISTIC_SYNONYM.value, transform=_license_url),
     MappingRule("license", EntityLevel.STUDY.value, "projectMetadata", "accessRights",
                 MappingMethod.DETERMINISTIC_SYNONYM.value, transform=_open_access_from_license),
     MappingRule("rightsHolder", EntityLevel.STUDY.value, "projectMetadata", "rightsHolder",
-                MappingMethod.EXACT_LABEL.value),
+                MappingMethod.EXACT_LABEL.value, review_required=True),
     MappingRule("accessRights", EntityLevel.STUDY.value, "projectMetadata", "accessRights",
                 MappingMethod.EXACT_LABEL.value),
     MappingRule("bibliographicCitation", EntityLevel.STUDY.value, "projectMetadata", "bibliographicCitation",
@@ -549,6 +606,8 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
                 MappingMethod.EXACT_LABEL.value),
     MappingRule("code_repo", EntityLevel.STUDY.value, "projectMetadata", "code_repo",
                 MappingMethod.EXACT_LABEL.value),
+    MappingRule("funding_source", EntityLevel.STUDY.value, "projectMetadata", "funding_source",
+                MappingMethod.EXACT_LABEL.value, review_required=True),
     MappingRule("recordedBy", EntityLevel.STUDY.value, "projectMetadata", "recordedBy",
                 MappingMethod.EXACT_LABEL.value),
     # recordedByID deliberately removed: an explicit user instruction to
@@ -591,8 +650,6 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
                 MappingMethod.EXACT_LABEL.value),
     MappingRule("ampliconSize", EntityLevel.PROJECT.value, "projectMetadata", "ampliconSize",
                 MappingMethod.EXACT_LABEL.value),
-    MappingRule("pcr_cond", EntityLevel.PROJECT.value, "projectMetadata", "pcr_cond",
-                MappingMethod.EXACT_LABEL.value),
     MappingRule("assay_type", EntityLevel.PROJECT.value, "projectMetadata", "assay_type",
                 MappingMethod.EXACT_LABEL.value, enum_name="assay_type_enum"),
     MappingRule("assay_name", EntityLevel.PROJECT.value, "projectMetadata", "assay_name",
@@ -611,63 +668,45 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("sterilise_method", EntityLevel.STUDY.value, "projectMetadata", "sterilise_method",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("biological_rep", EntityLevel.STUDY.value, "projectMetadata", "biological_rep",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
+    # biological_rep's own raw-fact pass-through rule removed per an
+    # explicit user request -- see the biological_rep_relation comment
+    # above this MappingRules tuple.
     MappingRule("assay_type", EntityLevel.STUDY.value, "projectMetadata", "assay_type",
                 MappingMethod.SUGGESTED_SEMANTIC.value, enum_name="assay_type_enum", review_required=True),
     MappingRule("assay_type", EntityLevel.ASSAY.value, "projectMetadata", "assay_type",
                 MappingMethod.SUGGESTED_SEMANTIC.value, enum_name="assay_type_enum", review_required=True),
     MappingRule("barcoding_pcr_appr", EntityLevel.STUDY.value, "projectMetadata", "barcoding_pcr_appr",
                 MappingMethod.SUGGESTED_SEMANTIC.value, enum_name="barcoding_pcr_appr_enum", review_required=True),
-    MappingRule("lib_screen", EntityLevel.STUDY.value, "projectMetadata", "lib_screen",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("informationWithheld", EntityLevel.STUDY.value, "projectMetadata", "informationWithheld",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("adapter_forward", EntityLevel.STUDY.value, "projectMetadata", "adapter_forward",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("adapter_reverse", EntityLevel.STUDY.value, "projectMetadata", "adapter_reverse",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("demux_tool", EntityLevel.STUDY.value, "projectMetadata", "demux_tool",
+    MappingRule("pcr_primer_forward", EntityLevel.STUDY.value, "projectMetadata", "pcr_primer_forward",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("error_rate_tool", EntityLevel.STUDY.value, "projectMetadata", "error_rate_tool",
+    MappingRule("pcr_primer_reverse", EntityLevel.STUDY.value, "projectMetadata", "pcr_primer_reverse",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("error_rate_type", EntityLevel.STUDY.value, "projectMetadata", "error_rate_type",
-                MappingMethod.SUGGESTED_SEMANTIC.value, enum_name="error_rate_type_enum", review_required=True),
     MappingRule("checksum_method", EntityLevel.STUDY.value, "projectMetadata", "checksum_method",
                 MappingMethod.DETERMINISTIC_SYNONYM.value, enum_name="checksum_method_enum"),
-    MappingRule("chimera_check_method", EntityLevel.STUDY.value, "projectMetadata", "chimera_check_method",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("inhibition_check_0_1", EntityLevel.STUDY.value, "projectMetadata", "inhibition_check_0_1",
                 MappingMethod.SUGGESTED_SEMANTIC.value, enum_name="inhibition_check_0_1_enum", review_required=True),
     MappingRule("inhibition_check", EntityLevel.STUDY.value, "projectMetadata", "inhibition_check",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("min_reads_tool", EntityLevel.STUDY.value, "projectMetadata", "min_reads_tool",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("otu_clust_tool", EntityLevel.STUDY.value, "projectMetadata", "otu_clust_tool",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("otu_clust_cutoff", EntityLevel.STUDY.value, "projectMetadata", "otu_clust_cutoff",
-                MappingMethod.SUGGESTED_SEMANTIC.value, transform=_percent_without_unit, review_required=True),
     MappingRule("otu_db", EntityLevel.STUDY.value, "projectMetadata", "otu_db",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    # otu_db_custom/otu_seq_comp_appr/tax_class_collapse/tax_assign_cat: a
-    # real gap found live -- these (and 67 further section_categories.py
-    # CategoryTerm fields) had a RawFact extraction path but NO MappingRule
-    # at all, so a real extracted value could never reach the FAIRe export
-    # regardless of extraction quality. Fixed here for the four fields an
-    # explicit live audit specifically confirmed; the remaining ~67 are a
-    # known, flagged follow-up (see conversation), not silently addressed.
-    MappingRule("otu_db_custom", EntityLevel.STUDY.value, "projectMetadata", "otu_db_custom",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
+    # otu_seq_comp_appr/tax_assign_cat: a real gap found live -- these
+    # (and further section_categories.py CategoryTerm fields) had a
+    # RawFact extraction path but NO MappingRule at all, so a real
+    # extracted value could never reach the FAIRe export regardless of
+    # extraction quality. Fixed here for the fields an explicit live audit
+    # specifically confirmed.
     MappingRule("otu_seq_comp_appr", EntityLevel.STUDY.value, "projectMetadata", "otu_seq_comp_appr",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("tax_class_collapse", EntityLevel.STUDY.value, "projectMetadata", "tax_class_collapse",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("tax_assign_cat", EntityLevel.STUDY.value, "projectMetadata", "tax_assign_cat",
                 MappingMethod.SUGGESTED_SEMANTIC.value, enum_name="tax_assign_cat_enum", review_required=True),
-    MappingRule("tax_class_other", EntityLevel.STUDY.value, "projectMetadata", "tax_class_other",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("otu_raw_description", EntityLevel.STUDY.value, "projectMetadata", "otu_raw_description",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("pcr_0_1", EntityLevel.STUDY.value, "projectMetadata", "pcr_0_1",
                 MappingMethod.SUGGESTED_SEMANTIC.value, transform=_pcr_flag, enum_name="pcr_0_1_enum",
                 review_required=True),
@@ -687,20 +726,18 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
     # --- LLM-extracted study-level sampling facts: broadcast defaults ---
     MappingRule("collection_date", EntityLevel.STUDY.value, "sampleMetadata", "eventDate",
                 MappingMethod.SUGGESTED_SEMANTIC.value, transform=to_iso_event_date, review_required=True),
-    MappingRule("collection_date", EntityLevel.STUDY.value, "sampleMetadata", "verbatimEventDate",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("depth", EntityLevel.STUDY.value, "sampleMetadata", "minimumDepthInMeters",
-                MappingMethod.SUGGESTED_SEMANTIC.value, transform=to_meters, review_required=True),
+                MappingMethod.SUGGESTED_SEMANTIC.value, transform=to_min_meters, review_required=True),
     MappingRule("depth", EntityLevel.STUDY.value, "sampleMetadata", "maximumDepthInMeters",
-                MappingMethod.SUGGESTED_SEMANTIC.value, transform=to_meters, review_required=True),
+                MappingMethod.SUGGESTED_SEMANTIC.value, transform=to_max_meters, review_required=True),
     MappingRule("depths", EntityLevel.STUDY.value, "sampleMetadata", "minimumDepthInMeters",
-                MappingMethod.SUGGESTED_SEMANTIC.value, transform=to_meters, review_required=True),
+                MappingMethod.SUGGESTED_SEMANTIC.value, transform=to_min_meters, review_required=True),
     MappingRule("depths", EntityLevel.STUDY.value, "sampleMetadata", "maximumDepthInMeters",
-                MappingMethod.SUGGESTED_SEMANTIC.value, transform=to_meters, review_required=True),
+                MappingMethod.SUGGESTED_SEMANTIC.value, transform=to_max_meters, review_required=True),
     MappingRule("sediment_sampling_depth", EntityLevel.STUDY.value, "sampleMetadata", "minimumDepthInMeters",
-                MappingMethod.SUGGESTED_SEMANTIC.value, transform=to_meters, review_required=True),
+                MappingMethod.SUGGESTED_SEMANTIC.value, transform=to_min_meters, review_required=True),
     MappingRule("sediment_sampling_depth", EntityLevel.STUDY.value, "sampleMetadata", "maximumDepthInMeters",
-                MappingMethod.SUGGESTED_SEMANTIC.value, transform=to_meters, review_required=True),
+                MappingMethod.SUGGESTED_SEMANTIC.value, transform=to_max_meters, review_required=True),
     MappingRule("coordinates", EntityLevel.STUDY.value, "sampleMetadata", "decimalLatitude",
                 MappingMethod.SUGGESTED_SEMANTIC.value, transform=_lat_only, review_required=True),
     MappingRule("coordinates", EntityLevel.STUDY.value, "sampleMetadata", "decimalLongitude",
@@ -723,16 +760,8 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
                 "projectMetadata", "pcr_primer_forward", MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("PCR_amplification_conditions_reverse_primer_sequence", EntityLevel.STUDY.value,
                 "projectMetadata", "pcr_primer_reverse", MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("PCR_conditions", EntityLevel.STUDY.value, "projectMetadata", "pcr_cond",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("PCR_amplification_conditions_temp_cycles", EntityLevel.STUDY.value, "projectMetadata",
                 "pcr_cycles", MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("PCR_amplification_conditions_temp_initial", EntityLevel.STUDY.value, "projectMetadata",
-                "pcr_cond", MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("PCR_amplification_conditions_temp_final", EntityLevel.STUDY.value, "projectMetadata",
-                "pcr_cond", MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("PCR_amplification_conditions_thermocycler", EntityLevel.STUDY.value, "projectMetadata",
-                "thermocycler", MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("PCR_amplification_conditions_PCR_adaptor", EntityLevel.STUDY.value, "projectMetadata",
                 "pcr_method_additional", MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("PCR_amplification_conditions_spacer", EntityLevel.STUDY.value, "projectMetadata",
@@ -749,17 +778,6 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
                 MappingMethod.SUGGESTED_SEMANTIC.value, enum_name="probeQuencher_enum", review_required=True),
     MappingRule("metabarcoding_region", EntityLevel.STUDY.value, "projectMetadata", "target_gene",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("bioinformatics_workflow", EntityLevel.STUDY.value, "projectMetadata",
-                "bioinfo_method_additional", MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    # Direct identity mapping for extraction/section_category_extraction.py's
-    # own bioinfo_method_additional producer (verbatim capture of the
-    # classified bioinformatics-pipeline categories' run-text) -- a
-    # different source_fact_type than bioinformatics_workflow above (the
-    # older, still-running-in-parallel broad-checklist LLM field), both
-    # targeting the same real FAIRe field per an explicit user request to
-    # compare the two before retiring either.
-    MappingRule("bioinfo_method_additional", EntityLevel.STUDY.value, "projectMetadata",
-                "bioinfo_method_additional", MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("sequencing_methodology", EntityLevel.STUDY.value, "projectMetadata",
                 "seq_method_additional", MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
 
@@ -775,19 +793,7 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
     # precedent as _ADDITIONAL_ENVIRONMENTAL_SAMPLE_ATTRIBUTES below).
 
     # PCR1 / primary amplification
-    MappingRule("amplificationReactionVolume", EntityLevel.STUDY.value, "projectMetadata",
-                "amplificationReactionVolume", MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("pcr_analysis_software", EntityLevel.STUDY.value, "projectMetadata", "pcr_analysis_software",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("pcr_dna_vol", EntityLevel.STUDY.value, "projectMetadata", "pcr_dna_vol",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("pcr_primer_conc_forward", EntityLevel.STUDY.value, "projectMetadata", "pcr_primer_conc_forward",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("pcr_primer_conc_reverse", EntityLevel.STUDY.value, "projectMetadata", "pcr_primer_conc_reverse",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("pcr_primer_vol_forward", EntityLevel.STUDY.value, "projectMetadata", "pcr_primer_vol_forward",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("pcr_primer_vol_reverse", EntityLevel.STUDY.value, "projectMetadata", "pcr_primer_vol_reverse",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("pcr_rep", EntityLevel.STUDY.value, "projectMetadata", "pcr_rep",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
@@ -853,71 +859,25 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
                 "thresholdQuantificationCycle", MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
 
     # PCR2 / indexing
-    MappingRule("pcr2_amplificationReactionVolume", EntityLevel.STUDY.value, "projectMetadata",
-                "pcr2_amplificationReactionVolume", MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("pcr2_analysis_software", EntityLevel.STUDY.value, "projectMetadata", "pcr2_analysis_software",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("pcr2_annealingTemp", EntityLevel.STUDY.value, "projectMetadata", "pcr2_annealingTemp",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("pcr2_commercial_mm", EntityLevel.STUDY.value, "projectMetadata", "pcr2_commercial_mm",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("pcr2_custom_mm", EntityLevel.STUDY.value, "projectMetadata", "pcr2_custom_mm",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("pcr2_cond", EntityLevel.STUDY.value, "projectMetadata", "pcr2_cond",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("pcr2_cycles", EntityLevel.STUDY.value, "projectMetadata", "pcr2_cycles",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("pcr2_dna_vol", EntityLevel.STUDY.value, "projectMetadata", "pcr2_dna_vol",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("pcr2_method_additional", EntityLevel.STUDY.value, "projectMetadata", "pcr2_method_additional",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("pcr2_plate_id", EntityLevel.STUDY.value, "projectMetadata", "pcr2_plate_id",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("pcr2_thermocycler", EntityLevel.STUDY.value, "projectMetadata", "pcr2_thermocycler",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
 
     # Raw read preprocessing
-    MappingRule("demux_max_mismatch", EntityLevel.STUDY.value, "projectMetadata", "demux_max_mismatch",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("error_rate_cutoff", EntityLevel.STUDY.value, "projectMetadata", "error_rate_cutoff",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("merge_min_overlap", EntityLevel.STUDY.value, "projectMetadata", "merge_min_overlap",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("merge_tool", EntityLevel.STUDY.value, "projectMetadata", "merge_tool",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("min_len_cutoff", EntityLevel.STUDY.value, "projectMetadata", "min_len_cutoff",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("min_len_tool", EntityLevel.STUDY.value, "projectMetadata", "min_len_tool",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("trim_method", EntityLevel.STUDY.value, "projectMetadata", "trim_method",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("trim_param", EntityLevel.STUDY.value, "projectMetadata", "trim_param",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
 
     # OTU/ASV generation + filtering
-    MappingRule("chimera_check_param", EntityLevel.STUDY.value, "projectMetadata", "chimera_check_param",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("min_reads_cutoff", EntityLevel.STUDY.value, "projectMetadata", "min_reads_cutoff",
-                MappingMethod.SUGGESTED_SEMANTIC.value, enum_name="min_reads_cutoff_enum", review_required=True),
-    MappingRule("min_reads_cutoff_unit", EntityLevel.STUDY.value, "projectMetadata", "min_reads_cutoff_unit",
-                MappingMethod.SUGGESTED_SEMANTIC.value, enum_name="min_reads_cutoff_unit_enum",
-                review_required=True),
-    MappingRule("otu_final_description", EntityLevel.STUDY.value, "projectMetadata", "otu_final_description",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("screen_contam_method", EntityLevel.STUDY.value, "projectMetadata", "screen_contam_method",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("screen_geograph_method", EntityLevel.STUDY.value, "projectMetadata", "screen_geograph_method",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("screen_nontarget_method", EntityLevel.STUDY.value, "projectMetadata", "screen_nontarget_method",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("screen_other", EntityLevel.STUDY.value, "projectMetadata", "screen_other",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
+    # screen_geograph_method/screen_nontarget_method/screen_other removed
+    # entirely per an explicit user request -- no longer extracted,
+    # mapped, or exported anywhere.
 
     # Taxonomic assignment
-    MappingRule("tax_class_id_cutoff", EntityLevel.STUDY.value, "projectMetadata", "tax_class_id_cutoff",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("tax_class_query_cutoff", EntityLevel.STUDY.value, "projectMetadata", "tax_class_query_cutoff",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
 
     # targetTaxonomicAssay: the CategoryTerm pipeline's own source for this
     # `required: true`, pipe-union field (mapping/faire.py's
@@ -971,8 +931,6 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("size_frac", EntityLevel.STUDY.value, "sampleMetadata", "size_frac",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("size_frac_low", EntityLevel.STUDY.value, "sampleMetadata", "size_frac_low",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("prefilter_material", EntityLevel.STUDY.value, "sampleMetadata", "prefilter_material",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("filter_passive_active_0_1", EntityLevel.STUDY.value, "sampleMetadata", "filter_passive_active_0_1",
@@ -992,35 +950,13 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
                 MappingMethod.SUGGESTED_SEMANTIC.value, enum_name="samp_store_sol_enum", review_required=True),
     MappingRule("samp_store_method_additional", EntityLevel.STUDY.value, "sampleMetadata",
                 "samp_store_method_additional", MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("prepped_samp_store_temp", EntityLevel.STUDY.value, "sampleMetadata", "prepped_samp_store_temp",
-                MappingMethod.SUGGESTED_SEMANTIC.value, enum_name="prepped_samp_store_temp_enum",
-                review_required=True),
-    MappingRule("prepped_samp_store_dur", EntityLevel.STUDY.value, "sampleMetadata", "prepped_samp_store_dur",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("prepped_samp_store_sol", EntityLevel.STUDY.value, "sampleMetadata", "prepped_samp_store_sol",
-                MappingMethod.SUGGESTED_SEMANTIC.value, enum_name="prepped_samp_store_sol_enum",
-                review_required=True),
-    MappingRule("precip_chem_prep", EntityLevel.STUDY.value, "sampleMetadata", "precip_chem_prep",
-                MappingMethod.SUGGESTED_SEMANTIC.value, enum_name="precip_chem_prep_enum", review_required=True),
-    MappingRule("precip_force_prep", EntityLevel.STUDY.value, "sampleMetadata", "precip_force_prep",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("precip_temp_prep", EntityLevel.STUDY.value, "sampleMetadata", "precip_temp_prep",
-                MappingMethod.SUGGESTED_SEMANTIC.value, enum_name="precip_temp_prep_enum", review_required=True),
-    MappingRule("precip_time_prep", EntityLevel.STUDY.value, "sampleMetadata", "precip_time_prep",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("nucl_acid_ext", EntityLevel.STUDY.value, "sampleMetadata", "nucl_acid_ext",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("nucl_acid_ext_kit", EntityLevel.STUDY.value, "sampleMetadata", "nucl_acid_ext_kit",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("nucl_acid_ext_modify", EntityLevel.STUDY.value, "sampleMetadata", "nucl_acid_ext_modify",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("nucl_acid_ext_method_additional", EntityLevel.STUDY.value, "sampleMetadata",
                 "nucl_acid_ext_method_additional", MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("dna_cleanup_0_1", EntityLevel.STUDY.value, "sampleMetadata", "dna_cleanup_0_1",
                 MappingMethod.SUGGESTED_SEMANTIC.value, enum_name="dna_cleanup_0_1_enum", review_required=True),
     MappingRule("pool_dna_num", EntityLevel.STUDY.value, "sampleMetadata", "pool_dna_num",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("dna_store_loc", EntityLevel.STUDY.value, "sampleMetadata", "dna_store_loc",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("samp_vol_we_dna_ext", EntityLevel.STUDY.value, "sampleMetadata", "samp_vol_we_dna_ext",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
@@ -1032,51 +968,65 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
     MappingRule("nucl_acid_ext_sep", EntityLevel.STUDY.value, "sampleMetadata", "nucl_acid_ext_sep",
                 MappingMethod.SUGGESTED_SEMANTIC.value, enum_name="nucl_acid_ext_sep_enum", review_required=True),
 
-    # sample_prep category, second batch: DNA quantification/purity and
-    # deployment duration, per an explicit user-supplied term list.
-    MappingRule("stationed_sample_dur", EntityLevel.STUDY.value, "sampleMetadata", "stationed_sample_dur",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("date_ext", EntityLevel.STUDY.value, "sampleMetadata", "date_ext",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
+    # sample_prep category, second batch: DNA quantification/purity.
     MappingRule("concentration", EntityLevel.STUDY.value, "sampleMetadata", "concentration",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("concentration_method", EntityLevel.STUDY.value, "sampleMetadata", "concentration_method",
+
+    # sample_prep category, sample-collection terms: samp_collect_device/
+    # samp_size/samp_size_unit already have SAMPLE-level rules (real,
+    # literal BioSample attribute passthrough) -- these are the STUDY-level
+    # (paper-text) counterparts. samp_collect_method's existing STUDY-level
+    # rules use the "collection_method"/"sample_collection_method"/
+    # "sediment_sampling_method" native names from a different extraction
+    # path; this is the new sample_prep CategoryTerm's own native name.
+    # sample_composed_of/sample_derived_from have no prior rule at any
+    # level. samp_category is deliberately NOT given a rule here -- see the
+    # CategoryTerm's own comment in extraction/section_categories.py.
+    MappingRule("samp_collect_device", EntityLevel.STUDY.value, "sampleMetadata", "samp_collect_device",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("concentration_unit", EntityLevel.STUDY.value, "sampleMetadata", "concentration_unit",
-                MappingMethod.SUGGESTED_SEMANTIC.value, enum_name="concentration_unit_enum", review_required=True),
-    MappingRule("ratioOfAbsorbance260_280", EntityLevel.STUDY.value, "sampleMetadata", "ratioOfAbsorbance260_280",
+    MappingRule("samp_collect_method", EntityLevel.STUDY.value, "sampleMetadata", "samp_collect_method",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
+    MappingRule("samp_size", EntityLevel.STUDY.value, "sampleMetadata", "samp_size",
+                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
+    MappingRule("samp_size_unit", EntityLevel.STUDY.value, "sampleMetadata", "samp_size_unit",
+                MappingMethod.SUGGESTED_SEMANTIC.value, enum_name="samp_size_unit_enum", review_required=True),
+    MappingRule("sample_composed_of", EntityLevel.STUDY.value, "sampleMetadata", "sample_composed_of",
+                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
+    MappingRule("sample_derived_from", EntityLevel.STUDY.value, "sampleMetadata", "sample_derived_from",
+                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
+    MappingRule("internal_expedition_id", EntityLevel.STUDY.value, "sampleMetadata", "internal_expedition_id",
+                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
+    # x_env_var_block: bundles ~18 individually low-yield physicochemical
+    # sampleMetadata fields into one pipe-joined free-text broadcast, per an
+    # explicit user request -- not a real FAIRe field (exports/faire.py's
+    # CUSTOM_ENV_VAR_BLOCK_FIELD carries it as a custom, non-schema column;
+    # SAMPLE_METADATA_SUPPRESSED_FIELDS hides the 18 individual fields it
+    # replaces). STUDY-level like internal_expedition_id above: this
+    # CategoryTerm only ever produces a paper/supplement-text broadcast,
+    # never a real per-sample structured value.
+    MappingRule("x_env_var_block", EntityLevel.STUDY.value, "sampleMetadata", "x_env_var_block",
+                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
+    # spreadsheet_headers: a real column header row's own verbatim text
+    # (sources/supplement_parsing.py::_facts_from_rows), not an LLM
+    # judgment call -- a clean deterministic transcription, so no review
+    # needed. Not a real FAIRe field (exports/faire.py's
+    # CUSTOM_SPREADSHEET_HEADERS_FIELD carries it as a custom, non-schema
+    # projectMetadata column), per an explicit user request.
+    MappingRule("spreadsheet_headers", EntityLevel.STUDY.value, "projectMetadata", "spreadsheet_headers",
+                MappingMethod.DETERMINISTIC_SYNONYM.value),
 )
 
 
-# Every FAIRe field tagged in_subset: Environment in the vendored schema,
-# minus the ones already given an explicit rule above (elev, temp,
-# salinity, ph, diss_oxygen, minimumDepthInMeters/maximumDepthInMeters).
-# All 63 arrive through the exact same NCBI BioSample Attributes/Attribute
-# passthrough as everything else in this table -- a real BioSample MIxS
-# submission's attribute name is expected to equal the FAIRe field name
-# exactly (same assumption geo_loc_name/env_broad_scale/elev/etc. already
-# make). None of these produce a real StandardizedValue today (checked
-# directly against the real database: no BioSample record in this corpus
-# has reported any of them yet) -- the rules are correct and inert until a
-# real source has the attribute, same as elev/temp/salinity/ph/diss_oxygen
-# were before this. A tuple of (field, enum_name_or_None) rather than a
-# flat name list since about half of these have a closed-vocabulary
-# `_unit`/`_enum` companion; `enum_name` is safe to pass even if a name
-# here turns out wrong (mapping/vocabularies.check_value treats an unknown
-# enum as "not checked", never a crash or false failure).
+# Selected FAIRe Environment-subset fields that we still keep in sample
+# output. Fields the user explicitly removed from sampleMetadata are absent,
+# and chemistry `_unit` companions are folded into their value fields by
+# mapping/faire.py instead of being exported as separate columns.
 _ADDITIONAL_ENVIRONMENTAL_SAMPLE_ATTRIBUTES: tuple[tuple[str, str | None], ...] = (
-    ("alt", None),
     ("chlorophyll", None),
     ("diss_inorg_carb", None),
-    ("diss_inorg_carb_unit", "diss_inorg_carb_unit_enum"),
     ("diss_inorg_nitro", None),
-    ("diss_inorg_nitro_unit", "diss_inorg_nitro_unit_enum"),
     ("diss_org_carb", None),
-    ("diss_org_carb_unit", "diss_org_carb_unit_enum"),
     ("diss_org_nitro", None),
-    ("diss_org_nitro_unit", "diss_org_nitro_unit_enum"),
-    ("diss_oxygen_unit", "diss_oxygen_unit_enum"),
     ("host_height", None),
     ("host_height_unit", "host_height_unit_enum"),
     ("host_length", None),
@@ -1085,50 +1035,20 @@ _ADDITIONAL_ENVIRONMENTAL_SAMPLE_ATTRIBUTES: tuple[tuple[str, str | None], ...] 
     ("host_species", None),
     ("host_tot_mass", None),
     ("host_tot_mass_unit", "host_tot_mass_unit_enum"),
-    ("humidity", None),
-    ("light_intensity", None),
     ("nitrate", None),
-    ("nitrate_unit", "nitrate_unit_enum"),
     ("nitrite", None),
-    ("nitrite_unit", "nitrite_unit_enum"),
-    ("nitro", None),
     ("nitro_unit", "nitro_unit_enum"),
-    ("org_carb", None),
-    ("org_carb_unit", "org_carb_unit_enum"),
     ("org_matter", None),
-    ("org_matter_unit", "org_matter_unit_enum"),
-    ("org_nitro", None),
-    ("org_nitro_unit", "org_nitro_unit_enum"),
     ("part_org_carb", None),
-    ("part_org_carb_unit", "part_org_carb_unit_enum"),
     ("part_org_nitro", None),
-    ("part_org_nitro_unit", "part_org_nitro_unit_enum"),
-    ("ph_meth", None),
-    ("samp_weather", None),
-    ("solar_irradiance", None),
     ("suspend_part_matter", None),
-    ("tidal_stage", None),
     ("tot_carb", None),
-    ("tot_carb_unit", "tot_carb_unit_enum"),
     ("tot_depth_water_col", None),
     ("tot_diss_nitro", None),
-    ("tot_diss_nitro_unit", "tot_diss_nitro_unit_enum"),
     ("tot_inorg_nitro", None),
-    ("tot_inorg_nitro_unit", "tot_inorg_nitro_unit_enum"),
     ("tot_nitro", None),
-    ("tot_nitro_cont_meth", None),
-    ("tot_nitro_content", None),
-    ("tot_nitro_content_unit", "tot_nitro_content_unit_enum"),
-    ("tot_nitro_unit", "tot_nitro_unit_enum"),
-    ("tot_org_c_meth", None),
     ("tot_org_carb", None),
-    ("tot_org_carb_unit", "tot_org_carb_unit_enum"),
     ("tot_part_carb", None),
-    ("tot_part_carb_unit", "tot_part_carb_unit_enum"),
-    ("turbidity", None),
-    ("water_current", None),
-    ("wind_direction", None),
-    ("wind_speed", None),
 )
 
 
@@ -1175,8 +1095,6 @@ _PREFERRED_TABLES = (
 )
 
 _V3_NATIVE_TRANSFORMS: dict[str, Callable[[str], str | None]] = {
-    "forward_primer_volume": _volume_value,
-    "reverse_primer_volume": _volume_value,
     "pcr_reaction_volume": _volume_value,
     "template_dna_volume": _volume_value,
     "second_pcr_reaction_volume": _volume_value,
@@ -1209,14 +1127,10 @@ def _generated_v3_llm_rules() -> tuple[MappingRule, ...]:
     """Every generated rule here is scoped to EntityLevel.STUDY -- so only
     an _EXPLICIT_RULES entry that also applies at STUDY level (its own
     source_entity_level is STUDY, or None for "any level") should suppress
-    one. A structured-source rule scoped to a *different* entity level
-    (e.g. ENA's "library_layout" at SEQUENCING_RUN) must never suppress
-    this taxonomy's own "library_layout" native_name (a genuinely different
-    fact, coincidentally sharing a name with an ENA field) at STUDY level --
-    a real regression this exact check caught: adding the ENA rule
-    silently stopped every LLM-extracted STUDY-level "library_layout" fact
-    from mapping at all, since the old check only compared fact_type
-    strings, ignoring entity_level entirely.
+    one. A structured-source rule scoped to a *different* entity level must
+    never suppress a taxonomy native_name at STUDY level -- this check
+    compares entity_level as well as fact_type so generated LLM rules are
+    not accidentally dropped by unrelated API rules.
 
     Assay-scoped native names (extraction/faire_fields.assay_scoped_field_names --
     primers, target gene, PCR/qPCR conditions, ...) additionally get a

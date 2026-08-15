@@ -32,8 +32,17 @@ def test_handle_map_faire_wraps_map_study_to_faire(db_session):
     # checkls_ver is always synced as a constant, independent of any of
     # the study's own facts (mapping/faire.py::_sync_checklist_version).
     # informationWithheld defaults to "Nothing indicated as withheld"
-    # whenever no real withheld-information fact was ever found.
-    assert fields == {"geo_loc_name", "samp_name", "checkls_ver", "informationWithheld"}
+    # whenever no real withheld-information fact was ever found. lib_layout
+    # defaults to "no files" when no FASTQ file facts exist, and
+    # materialSampleID is derived from the sample entity identifier.
+    assert fields == {
+        "geo_loc_name",
+        "samp_name",
+        "materialSampleID",
+        "checkls_ver",
+        "informationWithheld",
+        "lib_layout",
+    }
 
 
 def test_handle_map_faire_is_idempotent_on_retry(db_session):
@@ -60,9 +69,14 @@ def test_handle_map_faire_is_idempotent_on_retry(db_session):
     db_session.commit()
 
     values = db_session.query(StandardizedValue).filter_by(study_id=study.study_id).all()
-    assert len(values) == 4
+    assert len(values) == 6
     assert {value.target_field for value in values} == {
-        "geo_loc_name", "samp_name", "checkls_ver", "informationWithheld",
+        "geo_loc_name",
+        "samp_name",
+        "materialSampleID",
+        "checkls_ver",
+        "informationWithheld",
+        "lib_layout",
     }
 
 

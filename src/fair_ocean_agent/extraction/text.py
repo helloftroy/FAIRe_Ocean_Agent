@@ -205,7 +205,7 @@ from fair_ocean_agent.llm.base import LLMBackend, LLMResponse
 from fair_ocean_agent.mapping.faire import TARGET_SCHEMA
 from fair_ocean_agent.sources.base import RawFactCandidate
 
-PROMPT_VERSION = "text-extraction-v19-library-layout-search"
+PROMPT_VERSION = "text-extraction-v21-expedition-id"
 DEFAULT_MAX_SECTION_CHARS_PER_CALL = 1600
 
 ABSENT_RAW_VALUE_STRINGS = frozenset(
@@ -234,6 +234,9 @@ ABSENT_RAW_VALUE_STRINGS = frozenset(
         "not explicitly reported",
         "not explicitly specified",
         "not explicitly stated",
+        "see above",
+        "see below",
+        "see text",
         "unknown",
         "unresolved",
         "unspecified",
@@ -915,8 +918,6 @@ def _candidate_assay_tag(candidate: dict, fact_type: str) -> str | None:
 
 _LITERAL_VOLUME_FACT_TYPES = frozenset(
     {
-        "forward_primer_volume",
-        "reverse_primer_volume",
         "pcr_reaction_volume",
         "template_dna_volume",
         "second_pcr_reaction_volume",
@@ -935,7 +936,27 @@ def _normalize_volume_text_for_literal_check(value: str) -> str:
     ).casefold()
 
 
+_PRIMER_SEQUENCE_FACT_TYPES = frozenset({"forward_primer_sequence", "reverse_primer_sequence"})
+# IUPAC nucleotide codes (standard + degenerate bases), the only characters
+# a real primer sequence is ever reported in.
+_NUCLEOTIDE_SEQUENCE_RE = re.compile(r"^[ACGTURYSWKMBDHVN]{6,}$", re.IGNORECASE)
+
+
+def _looks_like_nucleotide_sequence(value: str) -> bool:
+    return bool(_NUCLEOTIDE_SEQUENCE_RE.match(value.strip()))
+
+
 def _candidate_value_is_supported_by_quote(fact_type: str, raw_value: object, quote: str) -> bool:
+    if fact_type in _PRIMER_SEQUENCE_FACT_TYPES:
+        # A real bug found live (10.1002/ece3.6071): when a paper only
+        # states a primer's NAME in the main text (its actual sequence
+        # lives in a supplementary table this pass never sees), the model
+        # substituted the name ("1389F", "mlCOIintF") for the sequence
+        # field instead of omitting it -- both are literally present in
+        # the quote, so a plain verbatim check wouldn't have caught this;
+        # the value itself needs to actually look like a sequence.
+        if not _looks_like_nucleotide_sequence(str(raw_value)):
+            return False
     if fact_type not in _LITERAL_VOLUME_FACT_TYPES:
         return True
     return _normalize_volume_text_for_literal_check(str(raw_value)) in _normalize_volume_text_for_literal_check(quote)

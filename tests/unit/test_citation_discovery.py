@@ -10,6 +10,7 @@ from fair_ocean_agent.database.enums import IdentifierType, TaskType
 from fair_ocean_agent.database.models import ExternalIdentifier, RawFact, Study, Task
 from fair_ocean_agent.identity.identifiers import normalize_identifier
 from fair_ocean_agent.sources.base import SourceConfig
+from fair_ocean_agent.sources.ncbi import _elink_ids
 from fair_ocean_agent.sources.ncbi import NcbiBioProjectAdapter
 from fair_ocean_agent.workflow import handlers
 from fair_ocean_agent.workflow.task_queue import enqueue_task
@@ -28,7 +29,13 @@ def _bioproject_adapter(transport, retrieval_config):
     )
 
 
-def _citation_transport(*, bioproject_ids=("529480",), citing_pmids=("33288718",), pubmed_dois=None):
+def _citation_transport(
+    *,
+    bioproject_ids=("529480",),
+    biosample_ids=("11268033",),
+    citing_pmids=("33288718",),
+    pubmed_dois=None,
+):
     pubmed_dois = pubmed_dois if pubmed_dois is not None else {"33288718": "10.1073/pnas.2005917117"}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -36,10 +43,22 @@ def _citation_transport(*, bioproject_ids=("529480",), citing_pmids=("33288718",
         params = dict(request.url.params)
         if path.endswith("esearch.fcgi") and params.get("db") == "bioproject":
             return httpx.Response(200, json={"esearchresult": {"idlist": list(bioproject_ids)}})
-        if path.endswith("elink.fcgi") and params.get("dbfrom") == "bioproject" and params.get("db") == "pubmed":
+        if path.endswith("esearch.fcgi") and params.get("db") == "biosample":
+            return httpx.Response(200, json={"esearchresult": {"idlist": list(biosample_ids)}})
+        if path.endswith("esummary.fcgi") and params.get("db") == "biosample":
+            ids = params.get("id", "").split(",")
+            result = {"uids": ids}
+            for uid in ids:
+                result[uid] = {"accession": "SAMN11268033"}
+            return httpx.Response(200, json={"result": result})
+        if params.get("dbfrom") in {"bioproject", "biosample"} and params.get("db") == "pubmed":
             return httpx.Response(
                 200,
-                json={"linksets": [{"linksetdbs": [{"linkname": "bioproject_pubmed", "links": list(citing_pmids)}]}]},
+                json={
+                    "linksets": [
+                        {"linksetdbs": [{"linkname": f"{params.get('dbfrom')}_pubmed", "links": list(citing_pmids)}]}
+                    ]
+                },
             )
         if path.endswith("esummary.fcgi") and params.get("db") == "pubmed":
             ids = params.get("id", "").split(",")
@@ -80,6 +99,35 @@ def _citing_task(session, parent, bioproject_accession="PRJNA529480"):
     return task
 
 
+def _biosample_citing_task(session, parent, biosample_accession="SAMN11268033"):
+    task = enqueue_task(
+        session,
+        TaskType.DISCOVER_CITING_STUDIES,
+        study_id=parent.study_id,
+        payload={"biosample_accession": biosample_accession},
+        idempotency_key=f"test:biosample:{parent.study_id}",
+    )
+    session.commit()
+    return task
+
+
+def test_elink_ids_collects_all_link_blocks_without_duplicates():
+    class FakeHttp:
+        def get_json(self, url, params):
+            return {
+                "linksets": [
+                    {
+                        "linksetdbs": [
+                            {"linkname": "biosample_pubmed", "links": ["1", "2"]},
+                            {"linkname": "biosample_pubmed_refs", "links": ["2", "3"]},
+                        ]
+                    }
+                ]
+            }, False
+
+    assert _elink_ids(FakeHttp(), "https://example.test", "biosample", "pubmed", "123") == ["1", "2", "3"]
+
+
 def test_creates_new_study_for_citing_pmid_with_doi(db_session, monkeypatch, retrieval_config):
     parent = _seed_parent_study(db_session)
     task = _citing_task(db_session, parent)
@@ -115,6 +163,39 @@ def test_creates_new_study_for_citing_pmid_with_doi(db_session, monkeypatch, ret
     assert new_task is not None
 
 
+def test_biosample_pubmed_links_create_new_study(db_session, monkeypatch, retrieval_config):
+    parent = _seed_parent_study(db_session)
+    db_session.add(
+        ExternalIdentifier(
+            study_id=parent.study_id,
+            identifier_type=IdentifierType.BIOSAMPLE_ACCESSION.value,
+            identifier_value="SAMN11268033",
+        )
+    )
+    db_session.flush()
+    task = _biosample_citing_task(db_session, parent)
+
+    adapter = _bioproject_adapter(_citation_transport(), retrieval_config)
+    monkeypatch.setattr(handlers, "_build_enabled_adapters", lambda: {"ncbi_biosample": adapter})
+
+    handlers.handle_discover_citing_studies(db_session, task)
+    db_session.commit()
+
+    citing = db_session.query(Study).filter(Study.study_id != parent.study_id).one()
+    assert citing.discovery_depth == 1
+    assert citing.discovery_parent_study_id == parent.study_id
+    assert citing.discovery_root_study_id == parent.study_id
+    assert citing.discovery_trigger == "biosample_pubmed_citation"
+
+    doi_ident = (
+        db_session.query(ExternalIdentifier)
+        .filter_by(study_id=citing.study_id, identifier_type=IdentifierType.DOI.value)
+        .one()
+    )
+    assert doi_ident.identifier_value == normalize_identifier(IdentifierType.DOI, "10.1073/pnas.2005917117")
+    assert doi_ident.source == "ncbi_biosample_pubmed_citation"
+
+
 def test_already_known_doi_is_not_duplicated(db_session, monkeypatch, retrieval_config):
     parent = _seed_parent_study(db_session)
     already = Study(canonical_status="candidate")
@@ -143,14 +224,17 @@ def test_already_known_doi_is_not_duplicated(db_session, monkeypatch, retrieval_
 
 
 def test_depth_cap_flags_review_instead_of_expanding(db_session, monkeypatch, retrieval_config):
-    """Default citation_expansion_max_depth is 1 -- a parent already AT that
-    depth must not spawn further citing studies, and must record a review-
-    flagged fact rather than silently doing nothing."""
+    """A parent already AT the configured depth cap must not spawn further
+    citing studies, and must record a review-flagged fact rather than
+    silently doing nothing."""
     parent = _seed_parent_study(db_session, discovery_depth=1)
     task = _citing_task(db_session, parent)
 
     adapter = _bioproject_adapter(_citation_transport(), retrieval_config)
     monkeypatch.setattr(handlers, "_build_enabled_adapters", lambda: {"ncbi_bioproject": adapter})
+    monkeypatch.setattr(
+        handlers, "load_config", lambda: AppConfig(discovery=DiscoveryConfig(citation_expansion_max_depth=1))
+    )
 
     handlers.handle_discover_citing_studies(db_session, task)
     db_session.commit()

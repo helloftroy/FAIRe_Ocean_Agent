@@ -746,13 +746,13 @@ identical treatment when a moved entity's home changes.
 
 New `DISCOVER_CITING_STUDIES` task
 (`workflow/handlers.py::handle_discover_citing_studies`), enqueued right
-after `handle_discover_identifiers` resolves any BioProject accession
-(idempotency key is the accession alone, so two Studies sharing one
-accession only trigger this once for free). One `bioproject->pubmed`
-elink call returns every citing PMID at once -- cheap by construction, no
-per-sample fan-out, and a genuinely different NCBI capability from
-`sources/ncbi.py`'s own `biosample->bioproject` reverse-elink (UID-
-*correctness* verification, not citation discovery).
+after `handle_discover_identifiers` resolves any BioProject or BioSample
+accession (idempotency key is the NCBI database plus accession, so two
+Studies sharing one accession only trigger this once for free). One
+`bioproject->pubmed` or `biosample->pubmed` elink call returns every
+citing PMID for that accession at once. This is deliberately separate from
+`sources/ncbi.py`'s own `biosample->bioproject` reverse-elink, which is
+UID-*correctness* verification, not citation discovery.
 
 Auto-expansion is deliberately aggressive, per an explicit user choice
 after reviewing the tradeoff: a citing paper not already known gets its
@@ -761,11 +761,10 @@ own full `Study` row (`discovery_depth`/`discovery_parent_study_id`/
 `Study`) and re-enters the normal `DISCOVER_IDENTIFIERS` pipeline
 recursively -- via the task queue's own idempotency/resumability, not an
 in-process recursive traversal. Real safety valves make that safe at
-~3000-paper scale: `DiscoveryConfig.citation_expansion_max_depth` (wired
-up for the first time -- previously defined but never read anywhere) caps
-how many hops deep auto-expansion goes (default 1 for the initial
-discovery run); `max_citing_papers_per_bioproject` caps how many of one
-accession's citing PMIDs expand per run. Both caps record a review-flagged
+~3000-paper scale: `DiscoveryConfig.citation_expansion_max_depth` caps
+how many hops deep auto-expansion goes (default 100);
+`max_citing_papers_per_bioproject` caps how many of one accession's citing
+PMIDs expand per run. Both caps record a review-flagged
 `citing_pmid_not_expanded` `RawFact` for whatever they skip, never a
 silent drop.
 

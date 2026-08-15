@@ -118,10 +118,16 @@ def _elink_ids(http, base_url: str, dbfrom: str, db: str, uid: str) -> list[str]
     payload, _ = http.get_json(
         f"{base_url}/elink.fcgi", params={"dbfrom": dbfrom, "db": db, "id": uid, "retmode": "json"}
     )
-    linksets = payload.get("linksets", [])
-    if not linksets or not linksets[0].get("linksetdbs"):
-        return []
-    return list(linksets[0]["linksetdbs"][0].get("links", []))
+    ids: list[str] = []
+    seen: set[str] = set()
+    for linkset in payload.get("linksets", []):
+        for linksetdb in linkset.get("linksetdbs") or []:
+            for linked_id in linksetdb.get("links") or []:
+                if linked_id in seen:
+                    continue
+                seen.add(linked_id)
+                ids.append(linked_id)
+    return ids
 
 
 def _hash_text(text: str) -> str:
@@ -166,6 +172,46 @@ def _is_mag_biosample(sample: dict) -> bool:
     return bool(_MAG_TITLE_RE.search(sample.get("title") or ""))
 
 
+# See extract_structured_facts' own MAG-safe-attribute loop for why this
+# exists: a curated allowlist of attribute names that describe the real
+# physical environment a MAG was assembled from, not the assembled genome
+# bin itself.
+_MAG_SAFE_ENVIRONMENTAL_ATTRIBUTES = frozenset(
+    {
+        "geo_loc_name",
+        "lat_lon",
+        "collection_date",
+        "depth",
+        "elev",
+        "env_broad_scale",
+        "env_local_scale",
+        "env_medium",
+        "isolation_source",
+    }
+)
+
+# A real MIMAG.sediment record (SAMN12415826) carries its own "derived-
+# from" attribute pointing back at the real environmental BioSample it was
+# assembled from -- not an environmental attribute itself (so it's never
+# added to _MAG_SAFE_ENVIRONMENTAL_ATTRIBUTES above), but FAIRe's own
+# sample_derived_from field wants exactly this: "the samp_name of the
+# original (or parent) sample from which the current sample was derived".
+# The real attribute value is a full sentence ("This BioSample is a
+# metagenomic assembly obtained from the marine sediment metagenome
+# BioSample: SAMN11268106"), not a bare accession, so the accession is
+# extracted out of it rather than storing the whole sentence as the
+# "parent sample name" FAIRe wants.
+_DERIVED_FROM_ACCESSION_RE = re.compile(r"\bSAM[NED]\d+\b")
+
+
+def _derive_sample_derived_from(value: str) -> str | None:
+    match = _DERIVED_FROM_ACCESSION_RE.search(value)
+    if match:
+        return match.group(0)
+    stripped = value.strip()
+    return stripped or None
+
+
 # samp_mat_process is schema-documented to hold a full free-text
 # processing narrative (e.g. "0.22 um cartridge filtration followed by DNA
 # extraction") -- these patterns pull the specific sub-facts FAIRe asks
@@ -195,6 +241,70 @@ _FILTER_NAME_TERMS = ("Sterivex", "Millipore", "Whatman", "Nalgene", "Supor", "D
 _FILTER_ACTIVE_RE = re.compile(r"\bcartridge\b|\bpump(?:ed|ing)?\b|\bperistaltic\b", re.IGNORECASE)
 _FILTER_PASSIVE_RE = re.compile(r"\bpassive\b|\bsubmerged\b|\bgravity\b", re.IGNORECASE)
 _CONTEXT_WINDOW = 40
+_GENERIC_BIOSAMPLE_TITLE_RE = re.compile(
+    r"^(?:"
+    r"MIMARKS|MIMS|MIGS|MIMAG|MIUVIG|MISAG|"
+    r"Environmental|Metagenome|Metagenomic"
+    r")\b.*\bsample\b.*$|^(?:Bio)?Sample\s+\d+$",
+    re.IGNORECASE,
+)
+_SOURCE_MATERIAL_SAMPLE_NAME_RE = re.compile(
+    r"^[A-Za-z0-9]+[-_][A-Za-z]+\d+[-_]\d+$"
+)
+
+
+def _source_material_id_sample_name(value: str | None) -> str | None:
+    cleaned = _clean_text(value)
+    if not cleaned:
+        return None
+    normalized = cleaned.replace("-", "_")
+    return normalized if _SOURCE_MATERIAL_SAMPLE_NAME_RE.match(cleaned) else None
+
+
+def _normalize_sample_name(value: str | None) -> str | None:
+    """Normalizes a BioSample's own "Sample name" (the <Ids> element, see
+    NcbiBioSampleAdapter.fetch_record's own comment on where this comes
+    from) the same way _source_material_id_sample_name already normalizes
+    source_material_id -- all "-" become "_" -- so two BioSamples from the
+    same physical replicate series never fail to group together purely
+    because one submitter's convention used a hyphen and detect_replicate_
+    groups' own suffix-pattern matching is separator-sensitive. Unlike
+    source_material_id, sample_name is a dedicated, reliably-populated
+    BioSample element (not a loosely-typed Attribute), so no shape
+    validation is applied here -- confirmed live, a real sample_name
+    ("GS16_GC05_55cm") doesn't match _SOURCE_MATERIAL_SAMPLE_NAME_RE's own
+    stricter source_material_id-specific shape at all."""
+    cleaned = _clean_text(value)
+    if not cleaned:
+        return None
+    return cleaned.replace("-", "_")
+
+
+def _sample_category_from_title_or_name(sample: dict) -> tuple[str, str] | None:
+    """Return a useful BioSample display name for samp_category.
+
+    source_material_id (e.g. GS16-GC05-20 -> GS16_GC05_20) is preferred
+    when present -- an explicit user instruction ("source material id...
+    should stay the default"). A submitted sample_name (from the
+    BioSample's own <Ids> element, e.g. "GS16_GC05_55cm") is the fallback
+    when a record has no source_material_id attribute at all -- a real
+    live gap (SAMN29179945 carries a Sample name but no source_material_id
+    attribute whatsoever). BioSample titles sometimes carry real labels
+    ("LM 7"), but many only say boilerplate like "MIMS Environmental
+    sample"; those are not useful as a category/name log, so title is
+    always the last resort.
+    """
+    attributes = sample.get("attributes", {})
+    for field_name, value in (
+        ("source_material_id", _source_material_id_sample_name(_get_attribute(attributes, "source_material_id"))),
+        ("sample_name", _normalize_sample_name(_get_attribute(attributes, "sample_name"))),
+        ("title", sample.get("title")),
+    ):
+        cleaned = _clean_text(str(value) if value is not None else None)
+        if not cleaned or _GENERIC_BIOSAMPLE_TITLE_RE.match(cleaned):
+            continue
+        return field_name, cleaned
+    return None
 
 
 def _derive_filter_facts(value: str) -> dict[str, str]:
@@ -267,6 +377,15 @@ def _get_attribute(attributes: dict, name: str) -> str | None:
         if _normalize_attribute_name(key) == target:
             return value
     return None
+
+
+def _canonical_biosample_attribute_name(name: str) -> str:
+    normalized = _normalize_attribute_name(name)
+    if normalized == "geographiclocation":
+        return "geo_loc_name"
+    if normalized == "isolationsource":
+        return "isolation_source"
+    return name
 
 
 def _uid_verification_fact(
@@ -449,6 +568,11 @@ class NcbiBioSampleAdapter(SourceAdapter):
                 accession = bs.get("accession")
                 if not accession:
                     continue
+                submitted = _clean_text(
+                    bs.get("submission_date")
+                    or bs.get("submitted")
+                    or bs.get("submission")
+                )
                 organism_el = bs.find("Description/Organism")
                 organism = dict(organism_el.attrib) if organism_el is not None else {}
                 owner_name_el = bs.find("Owner/Name")
@@ -466,18 +590,33 @@ class NcbiBioSampleAdapter(SourceAdapter):
                 contact_first = _clean_text(contact_name_el.findtext("First") if contact_name_el is not None else None)
                 contact_last = _clean_text(contact_name_el.findtext("Last") if contact_name_el is not None else None)
                 contact_name = " ".join(part for part in (contact_first, contact_last) if part)
+                attributes = {
+                    attr.get("attribute_name"): attr.text
+                    for attr in bs.findall("Attributes/Attribute")
+                    if attr.get("attribute_name")
+                }
+                # <Ids><Id db_label="Sample name">...</Id></Ids> is a
+                # standard BioSample element every record carries (never an
+                # Attribute), previously never parsed at all -- confirmed
+                # live (SAMN29179945): its "GS16_GC05_55cm" Sample name
+                # exists only here, not as any Attributes/Attribute, while
+                # this same record has no source_material_id attribute at
+                # all. Only fills the gap: a submitter that redundantly
+                # also declares a real "sample_name" Attribute keeps that
+                # value untouched.
+                if "sample_name" not in attributes:
+                    sample_name_id_el = bs.find('Ids/Id[@db_label="Sample name"]')
+                    if sample_name_id_el is not None and sample_name_id_el.text:
+                        attributes["sample_name"] = sample_name_id_el.text
                 samples.append(
                     {
                         "accession": accession,
                         "title": bs.findtext("Description/Title"),
+                        "submitted": submitted,
                         "package": bs.get("package"),
                         "model": bs.findtext("Models/Model"),
                         "organism": {key: value for key, value in organism.items() if value},
-                        "attributes": {
-                            attr.get("attribute_name"): attr.text
-                            for attr in bs.findall("Attributes/Attribute")
-                            if attr.get("attribute_name")
-                        },
+                        "attributes": attributes,
                         "owner": {
                             key: value
                             for key, value in {
@@ -561,12 +700,40 @@ class NcbiBioSampleAdapter(SourceAdapter):
         for sample in non_mag_samples:
             accession = sample["accession"]
             normalized_attrs: dict[str, str] = {}
+            sample_category = _sample_category_from_title_or_name(sample)
+            if sample_category:
+                raw_field_name, raw_value = sample_category
+                facts.append(
+                    RawFactCandidate(
+                        entity_level=EntityLevel.SAMPLE,
+                        fact_type_candidate="samp_category",
+                        raw_field_name=raw_field_name,
+                        raw_value=raw_value,
+                        source_locator=f"ncbi_biosample.{accession}.{raw_field_name}",
+                        entity_external_id=accession,
+                        entity_label=sample.get("title"),
+                    )
+                )
+            submitted = _clean_text(sample.get("submitted"))
+            if submitted:
+                facts.append(
+                    RawFactCandidate(
+                        entity_level=EntityLevel.SAMPLE,
+                        fact_type_candidate="eventDate_submitted",
+                        raw_field_name="submission_date",
+                        raw_value=submitted,
+                        source_locator=f"ncbi_biosample.{accession}.submission_date",
+                        entity_external_id=accession,
+                        entity_label=sample.get("title"),
+                    )
+                )
             for attr_name, attr_value in sample.get("attributes", {}).items():
                 if attr_value in (None, ""):
                     continue
                 normalized_attrs[attr_name] = str(attr_value)
-                if attr_name.casefold() == "geographic location":
-                    normalized_attrs["geo_loc_name"] = str(attr_value)
+                canonical_attr_name = _canonical_biosample_attribute_name(attr_name)
+                if canonical_attr_name != attr_name:
+                    normalized_attrs[canonical_attr_name] = str(attr_value)
                 if attr_name.casefold() == "cultivar":
                     normalized_attrs["host_species"] = str(attr_value)
             organism = sample.get("organism") or {}
@@ -617,11 +784,70 @@ class NcbiBioSampleAdapter(SourceAdapter):
                             support_type=SupportType.DETERMINISTICALLY_DERIVED,
                         )
                     )
+        # A MAG record is still excluded from every per-sample-derived
+        # signal above and below (entity_label/replicate grouping/generic
+        # attribute passthrough all stay scoped to non_mag_samples, see its
+        # own comment) -- but the premise that a MAG record "never carries
+        # the real sample's own attributes themselves" doesn't hold for
+        # every submitter's convention: confirmed live, a real
+        # MIMAG.sediment-packaged record (SAMN42764696) directly carries
+        # geo_loc_name/lat_lon/collection_date/depth/elev/env_*/
+        # isolation_source, identical in spirit to the original sample it
+        # was assembled from. Deliberately a narrow allowlist, not the
+        # generic attribute passthrough: excludes the MAG's own
+        # assembly-specific attributes (assembly software, completeness/
+        # contamination score, binning software, the assembled genome's
+        # own organism/taxonomy, ...), which describe the bin, not the
+        # environment it came from. Writing these here (not into
+        # non_mag_samples) can't reintroduce the replicate-grouping bug
+        # the comment above describes, since all three replicate tiers
+        # only ever read non_mag_samples, never these facts.
+        for sample in r.get("samples", []):
+            if not _is_mag_biosample(sample):
+                continue
+            accession = sample["accession"]
+            for attr_name, attr_value in sample.get("attributes", {}).items():
+                if attr_value in (None, ""):
+                    continue
+                attr_name = _canonical_biosample_attribute_name(attr_name)
+                if attr_name not in _MAG_SAFE_ENVIRONMENTAL_ATTRIBUTES:
+                    continue
+                facts.append(
+                    RawFactCandidate(
+                        entity_level=EntityLevel.SAMPLE,
+                        fact_type_candidate=attr_name,
+                        raw_field_name=attr_name,
+                        raw_value=str(attr_value),
+                        source_locator=f"ncbi_biosample.{accession}.Attributes.{attr_name}",
+                        entity_external_id=accession,
+                        entity_label=sample.get("title"),
+                    )
+                )
+            # _get_attribute already matches "derived-from"/"derived_from"
+            # interchangeably (case/separator-insensitive fallback).
+            derived_from = _get_attribute(sample.get("attributes", {}), "derived_from")
+            if derived_from:
+                parent_sample = _derive_sample_derived_from(str(derived_from))
+                if parent_sample:
+                    facts.append(
+                        RawFactCandidate(
+                            entity_level=EntityLevel.SAMPLE,
+                            fact_type_candidate="sample_derived_from",
+                            raw_field_name="derived_from",
+                            raw_value=parent_sample,
+                            source_locator=f"ncbi_biosample.{accession}.Attributes.derived_from",
+                            entity_external_id=accession,
+                            entity_label=sample.get("title"),
+                            support_type=SupportType.DETERMINISTICALLY_DERIVED,
+                        )
+                    )
+
         facts.extend(self._recorded_by_facts(non_mag_samples))
         # Three replicate-grouping signals, most confident first, each
         # scoped to only the samples the earlier signal(s) left ungrouped:
         # (1) an explicit BioSample `replicate` attribute, (2) a sample-
-        # name suffix pattern (sources/replicate_grouping.py), (3) an
+        # name/title suffix pattern (sources/replicate_grouping.py, including
+        # exact-prefix title shapes like "LM 6"/"LM_7"), (3) an
         # explicit user request: samples sharing the same coordinates,
         # collection date, and depth (and the same assay when one is
         # actually reported per-sample, otherwise assumed the same) are
@@ -641,29 +867,13 @@ class NcbiBioSampleAdapter(SourceAdapter):
             non_mag_samples, excluded_accessions=metadata_excluded
         )
         facts.extend(metadata_match_rep_facts)
-        all_rep_facts = explicit_rep_facts + name_pattern_rep_facts + metadata_match_rep_facts
-        # Emit an explicit TRUE/FALSE whenever there were real (non-MAG)
-        # samples to actually check -- per a real live-audit complaint,
-        # silently emitting nothing when no replicate group was found left
-        # biological_rep blank rather than a clear negative, indistinguishable
-        # from "never checked". Stays silent only when there's genuinely
-        # nothing to assess (no samples at all), matching this pipeline's
-        # standing "never guess absent data" discipline.
-        if non_mag_samples:
-            facts.append(
-                RawFactCandidate(
-                    entity_level=EntityLevel.STUDY,
-                    fact_type_candidate="biological_rep_presence",
-                    raw_field_name="replicate",
-                    raw_value="TRUE" if all_rep_facts else "FALSE",
-                    source_locator="ncbi_biosample.biological_rep_relation",
-                    support_type=SupportType.DETERMINISTICALLY_DERIVED,
-                    confidence_metadata={
-                        "replicate_detection_signal": "any_tier" if all_rep_facts else "none",
-                        "replicate_group_count": len({fact.raw_value for fact in all_rep_facts}),
-                    },
-                )
-            )
+        # The study-level projectMetadata.biological_rep value itself (a
+        # replicate count/range, e.g. "2-4", or "0") is no longer computed
+        # here -- per an explicit user request, it's derived once at
+        # map-time from ALL of a study's biological_rep_relation facts
+        # (mapping/faire.py::_apply_biological_rep_from_relations), across
+        # every source (this adapter, supplement_parsing.py, ...), not just
+        # this one adapter's own local view of the study's samples.
         return facts
 
     @staticmethod
@@ -745,16 +955,24 @@ class NcbiBioSampleAdapter(SourceAdapter):
     def _biological_rep_relation_facts(
         samples: list[dict], excluded_accessions: set[str] | None = None
     ) -> list[RawFactCandidate]:
-        """Detects replicate groupings from each BioSample's sample_name
-        attribute (falling back to its title when no sample_name attribute
-        was submitted) via sources/replicate_grouping.py's shared,
-        source-agnostic suffix-pattern detector, and emits one
-        biological_rep_relation fact per grouped sample. The BioSample
-        accession -- never the free-text name/title used only to detect the
-        pattern -- is what ends up in raw_value, since exports/faire.py uses
-        the accession as the exported samp_name for NCBI-sourced samples;
-        pipe-joining the name/title text instead would reference values that
-        never appear in that exported column."""
+        """Detects replicate groupings from each BioSample's own name
+        signal via sources/replicate_grouping.py's shared, source-agnostic
+        suffix-pattern detector, and emits one biological_rep_relation
+        fact per grouped sample. source_material_id is the preferred
+        signal when present (an explicit user instruction: "source
+        material id... should stay the default"), normalized the same way
+        as sample_name below (all "-" become "_") so two replicates never
+        fail to group together purely because of a hyphen-vs-underscore
+        naming difference. Falls back to the BioSample's own submitted
+        sample_name when source_material_id is absent (a real live gap:
+        SAMN29179945 has a Sample name but no source_material_id
+        attribute at all), then to its title as the last resort. The
+        BioSample accession -- never the free-text name/title used only
+        to detect the pattern -- is what ends up in raw_value, since
+        exports/faire.py uses the accession as the exported samp_name for
+        NCBI-sourced samples; pipe-joining the name/title text instead
+        would reference values that never appear in that exported
+        column."""
         excluded_accessions = excluded_accessions or set()
         name_and_field_by_accession: dict[str, tuple[str, str]] = {}
         titles_by_accession: dict[str, str | None] = {}
@@ -763,11 +981,16 @@ class NcbiBioSampleAdapter(SourceAdapter):
             if not accession or accession in excluded_accessions:
                 continue
             titles_by_accession[accession] = sample.get("title")
-            sample_name_attr = sample.get("attributes", {}).get("sample_name")
-            if sample_name_attr:
-                name_and_field_by_accession[accession] = (sample_name_attr, "sample_name")
-            elif sample.get("title"):
-                name_and_field_by_accession[accession] = (sample["title"], "title")
+            attributes = sample.get("attributes", {})
+            source_material_name = _source_material_id_sample_name(_get_attribute(attributes, "source_material_id"))
+            if source_material_name:
+                name_and_field_by_accession[accession] = (source_material_name, "source_material_id")
+            else:
+                sample_name_attr = _normalize_sample_name(_get_attribute(attributes, "sample_name"))
+                if sample_name_attr:
+                    name_and_field_by_accession[accession] = (sample_name_attr, "sample_name")
+                elif sample.get("title"):
+                    name_and_field_by_accession[accession] = (sample["title"], "title")
 
         replicate_group_by_accession = {
             member: group

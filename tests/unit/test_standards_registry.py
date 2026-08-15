@@ -73,8 +73,8 @@ def test_crosswalk_resolves_every_real_field_with_no_review_or_unresolved():
     crosswalk = build_crosswalk(fields, faire_terms, miop_terms)
 
     resolutions = {row.resolution for row in crosswalk}
-    assert resolutions == {RESOLUTION_MIOP, RESOLUTION_FAIRE}
-    assert all(row.canonical_id is not None for row in crosswalk)
+    assert resolutions == {RESOLUTION_MIOP, RESOLUTION_FAIRE, RESOLUTION_BEBOP_SPECIFIC}
+    assert all(row.canonical_id is not None for row in crosswalk if row.resolution != RESOLUTION_BEBOP_SPECIFIC)
 
 
 def test_crosswalk_faire_section_fields_resolve_to_exact_faire_slot():
@@ -85,8 +85,11 @@ def test_crosswalk_faire_section_fields_resolve_to_exact_faire_slot():
 
     for row in crosswalk:
         if row.protocol_section == "FAIRe terms":
-            assert row.resolution == RESOLUTION_FAIRE
-            assert row.canonical_id == f"faire:{row.field_name}"
+            if row.resolution == RESOLUTION_BEBOP_SPECIFIC:
+                assert row.canonical_id is None
+            else:
+                assert row.resolution == RESOLUTION_FAIRE
+                assert row.canonical_id == f"faire:{row.field_name}"
 
 
 def test_registry_validation_report_all_checks_pass_on_real_schemas():

@@ -67,6 +67,7 @@ def test_maps_sample_level_structured_facts(db_session):
     db_session.add(sample)
     db_session.flush()
     _fact(db_session, study, entity=sample, field="collection_date", value="2023-12-06", entity_level="sample")
+    _fact(db_session, study, entity=sample, field="eventDate_submitted", value="2024-02-03", entity_level="sample")
     _fact(db_session, study, entity=sample, field="depth", value="5 meters", entity_level="sample")
     _fact(db_session, study, entity=sample, field="env_broad_scale", value="http://purl.obolibrary.org/obo/ENVO_00000447", entity_level="sample")
     _fact(db_session, study, entity=sample, field="geo_loc_name", value="USA: California", entity_level="sample")
@@ -81,7 +82,8 @@ def test_maps_sample_level_structured_facts(db_session):
         for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id, entity_id=sample.entity_id)
     }
     assert values["eventDate"].standardized_value == "2023-12-06"
-    assert values["verbatimEventDate"].standardized_value == "2023-12-06"
+    assert values["eventDate_submitted"].standardized_value == "2024-02-03"
+    assert "verbatimEventDate" not in values
     assert values["minimumDepthInMeters"].standardized_value == "5"
     assert values["maximumDepthInMeters"].standardized_value == "5"
     assert values["env_broad_scale"].standardized_value == "http://purl.obolibrary.org/obo/ENVO_00000447"
@@ -93,12 +95,47 @@ def test_maps_sample_level_structured_facts(db_session):
     assert values["samp_name"].standardized_value == "SAMN1"
     assert values["samp_name"].mapping_method == "exact_identifier"
     assert values["samp_name"].missingness_status == "present"
-    # +2 for checkls_ver and informationWithheld (entity_id=None, so
+    # +3 for checkls_ver, informationWithheld, and lib_layout (entity_id=None, so
     # outside this sample-scoped `values` dict) -- both always synced as
     # constants/defaults regardless of a study's own facts (mapping/
     # faire.py::_sync_checklist_version, and the informationWithheld
     # "Nothing indicated as withheld" default).
-    assert created == len(values) + 2
+    assert created == len(values) + 3
+
+
+def test_maps_concentration_with_legacy_unit_fact_collapsed_into_value(db_session):
+    study = _study(db_session, title="Concentration unit collapse")
+    _fact(
+        db_session,
+        study,
+        field="concentration",
+        value="12.4",
+        entity_level=EntityLevel.STUDY.value,
+        support=SupportType.EXPLICIT,
+    )
+    # Legacy/raw source compatibility: concentration_unit is no longer mapped
+    # or exported as its own FAIRe column, but if a raw fact exists, preserve
+    # it by appending it to concentration.
+    _fact(
+        db_session,
+        study,
+        field="concentration_unit",
+        value="ng/uL",
+        entity_level=EntityLevel.STUDY.value,
+        support=SupportType.EXPLICIT,
+    )
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    values = {
+        sv.target_field: sv.standardized_value
+        for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id)
+    }
+    assert values["concentration"] == "12.4 ng/uL"
+    assert "concentration_unit" not in values
+    assert "concentration_method" not in values
 
 
 def test_maps_biological_rep_relation_sample_level_fact(db_session):
@@ -128,28 +165,104 @@ def test_maps_biological_rep_relation_sample_level_fact(db_session):
     assert values["biological_rep_relation"].review_required is True
 
 
-def test_maps_structured_biological_rep_presence_without_review(db_session):
-    study = _study(db_session, title="Structured replicate presence")
-    _fact(
-        db_session,
-        study,
-        field="biological_rep_presence",
-        value="TRUE",
-        entity_level="study",
-        support=SupportType.DETERMINISTICALLY_DERIVED,
-    )
+def test_biological_rep_derives_a_single_count_from_one_relation_group(db_session):
+    """projectMetadata.biological_rep is now derived purely from this
+    study's own sampleMetadata biological_rep_relation facts (mapping/
+    faire.py::_apply_biological_rep_from_relations) -- per an explicit
+    user request, the paper's text is never queried for this field
+    anymore. One group of 3 members -> "3", the group's own size."""
+    study = _study(db_session, title="Single replicate group")
+    samples = [
+        Entity(study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier=f"S{i}")
+        for i in range(5)
+    ]
+    db_session.add_all(samples)
+    db_session.flush()
+    for sample in samples:
+        db_session.add(_home_entity_study(sample))
+    for sample in samples[:3]:
+        _fact(
+            db_session,
+            study,
+            entity=sample,
+            field="biological_rep_relation",
+            value="S0 | S1 | S2",
+            entity_level="sample",
+            support=SupportType.DETERMINISTICALLY_DERIVED,
+        )
     db_session.commit()
 
     map_study_to_faire(db_session, study.study_id)
     db_session.commit()
 
-    values = {
-        sv.target_field: sv
-        for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id, entity_id=None)
-    }
-    assert values["biological_rep"].standardized_value == "TRUE"
-    assert values["biological_rep"].mapping_method == "deterministic_synonym"
-    assert values["biological_rep"].review_required is False
+    value = db_session.query(StandardizedValue).filter_by(
+        study_id=study.study_id,
+        entity_id=None,
+        target_field="biological_rep",
+    ).one()
+    assert value.standardized_value == "3"
+    assert value.mapping_method == "deterministic_synonym"
+    assert value.review_required is False
+
+
+def test_biological_rep_reports_a_range_across_differently_sized_groups(db_session):
+    """Some samples might have 2 replicates, others 4 -- the study-level
+    value is the "min-max" range across the study's own distinct
+    replicate groups, per an explicit user request."""
+    study = _study(db_session, title="Mixed replicate group sizes")
+    samples = [
+        Entity(study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier=f"S{i}")
+        for i in range(6)
+    ]
+    db_session.add_all(samples)
+    db_session.flush()
+    for sample in samples:
+        db_session.add(_home_entity_study(sample))
+    # Group A: S0/S1 (size 2). Group B: S2/S3/S4/S5 (size 4).
+    for sample in samples[:2]:
+        _fact(
+            db_session, study, entity=sample, field="biological_rep_relation",
+            value="S0 | S1", entity_level="sample", support=SupportType.DETERMINISTICALLY_DERIVED,
+        )
+    for sample in samples[2:]:
+        _fact(
+            db_session, study, entity=sample, field="biological_rep_relation",
+            value="S2 | S3 | S4 | S5", entity_level="sample", support=SupportType.DETERMINISTICALLY_DERIVED,
+        )
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    value = db_session.query(StandardizedValue).filter_by(
+        study_id=study.study_id,
+        entity_id=None,
+        target_field="biological_rep",
+    ).one()
+    assert value.standardized_value == "2-4"
+
+
+def test_biological_rep_is_zero_when_no_replicate_group_is_found(db_session):
+    """No biological_rep_relation evidence anywhere for the study -> "0",
+    per an explicit user request, rather than leaving the field blank."""
+    study = _study(db_session, title="No replicate evidence")
+    sample = Entity(study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="S0")
+    db_session.add(sample)
+    db_session.flush()
+    db_session.add(_home_entity_study(sample))
+    _fact(db_session, study, entity=sample, field="geo_loc_name", value="USA: California", entity_level="sample")
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    value = db_session.query(StandardizedValue).filter_by(
+        study_id=study.study_id,
+        entity_id=None,
+        target_field="biological_rep",
+    ).one()
+    assert value.standardized_value == "0"
+    assert value.review_required is False
 
 
 def test_maps_depth_aliases_and_control_sample_category(db_session):
@@ -240,15 +353,62 @@ def test_maps_sample_level_biosample_attributes_not_previously_covered(db_sessio
     assert values["diss_oxygen"] == "6.2"
 
 
+def test_maps_in_situ_temp_oxygen_salinity_to_sample_metadata_fields_at_study_level(db_session):
+    """Real audit (10.1093/ismejo/wrae013, STUDY-295abf4a8f43): the paper's
+    own text reports temp/diss_oxygen/salinity measured at the time of
+    sample collection -- the first TEXT-based source for these fields
+    (previously structured-BioSample-only). STUDY-level since one
+    collection event's in-situ reading is typically reported once for the
+    whole site, not per sample."""
+    study = _study(db_session, title="In-situ measurements from text")
+    _fact(db_session, study, field="in_situ_temp", value="6.5C", entity_level="study", support=SupportType.EXPLICIT)
+    _fact(db_session, study, field="in_situ_diss_oxygen", value="11.9 mg L-1", entity_level="study", support=SupportType.EXPLICIT)
+    _fact(db_session, study, field="in_situ_salinity", value="6.4 PSU", entity_level="study", support=SupportType.EXPLICIT)
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    values = {
+        sv.target_field: sv.standardized_value
+        for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id, entity_id=None)
+    }
+    assert values["temp"] == "6.5C"
+    assert values["diss_oxygen"] == "11.9 mg L-1"
+    assert values["salinity"] == "6.4 PSU"
+
+
+# Real FAIRe Environment-subset fields deliberately dropped entirely per
+# an explicit, repeated user request -- removed from
+# _ADDITIONAL_ENVIRONMENTAL_SAMPLE_ATTRIBUTES (mapping/rules.py) and
+# suppressed from export (exports/faire.py's SAMPLE_METADATA_SUPPRESSED_
+# FIELDS), so no SAMPLE-level rule is expected for them anymore.
+# tot_depth_water_col was on this list too, but was restored (real audit,
+# STUDY-295abf4a8f43): it's the correct FAIRe home for a sediment/soil
+# sample's site water depth, a genuinely different concept from
+# minimumDepthInMeters/maximumDepthInMeters's own within-sediment depth --
+# see extraction/api_verification.py.
+_DELIBERATELY_UNMAPPED_ENVIRONMENT_FIELDS = frozenset(
+    {
+        "nitro", "org_carb", "org_nitro", "tot_nitro_cont_meth", "tot_nitro_content", "tot_org_c_meth",
+        # Removed entirely per an explicit user request ("negligible...
+        # don't want to waste compute on them or clutter the code with
+        # them").
+        "alt", "humidity", "light_intensity", "samp_weather", "solar_irradiance",
+    }
+)
+
+
 def test_every_faire_environment_field_has_a_sample_level_rule():
     """Systematic guard: every FAIRe field tagged in_subset: Environment in
     the vendored schema (70 total) must be reachable *as a target_field* by
     some SAMPLE-level rule -- either an explicit rule above
     (minimumDepthInMeters/maximumDepthInMeters via "depth", elev/temp/
     salinity/ph/diss_oxygen via their own name) or the generated
-    _ADDITIONAL_ENVIRONMENTAL_SAMPLE_ATTRIBUTES batch. Catches a future
-    schema update silently adding a new environmental field this table
-    never learns about."""
+    _ADDITIONAL_ENVIRONMENTAL_SAMPLE_ATTRIBUTES batch, except the handful
+    deliberately dropped entirely (_DELIBERATELY_UNMAPPED_ENVIRONMENT_
+    FIELDS). Catches a future schema update silently adding a new
+    environmental field this table never learns about."""
     import yaml
 
     from fair_ocean_agent.database.enums import EntityLevel as _EntityLevel
@@ -262,7 +422,7 @@ def test_every_faire_environment_field_has_a_sample_level_rule():
         rule.target_field for rule in RULES
         if rule.source_entity_level == _EntityLevel.SAMPLE.value
     }
-    missing = env_fields - sample_level_target_fields
+    missing = env_fields - sample_level_target_fields - _DELIBERATELY_UNMAPPED_ENVIRONMENT_FIELDS
     assert not missing, f"FAIRe Environment fields with no SAMPLE-level rule: {sorted(missing)}"
 
 
@@ -271,9 +431,9 @@ def test_maps_a_sample_of_the_generated_environmental_attributes(db_session):
     sample = Entity(study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN1")
     db_session.add(sample)
     db_session.flush()
-    _fact(db_session, study, entity=sample, field="turbidity", value="4.2 NTU", entity_level="sample")
     _fact(db_session, study, entity=sample, field="chlorophyll", value="0.8 mg/m3", entity_level="sample")
     _fact(db_session, study, entity=sample, field="host_species", value="Thunnus albacares", entity_level="sample")
+    _fact(db_session, study, entity=sample, field="tot_nitro", value="2.3", entity_level="sample")
     _fact(db_session, study, entity=sample, field="tot_nitro_unit", value="mg/L", entity_level="sample")
     db_session.commit()
 
@@ -284,10 +444,10 @@ def test_maps_a_sample_of_the_generated_environmental_attributes(db_session):
         sv.target_field: sv.standardized_value
         for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id, entity_id=sample.entity_id)
     }
-    assert values["turbidity"] == "4.2 NTU"
     assert values["chlorophyll"] == "0.8 mg/m3"
     assert values["host_species"] == "Thunnus albacares"
-    assert values["tot_nitro_unit"] == "mg/L"
+    assert values["tot_nitro"] == "2.3 mg/L"
+    assert "tot_nitro_unit" not in values
 
 
 def test_generated_environmental_attribute_names_have_no_duplicates():
@@ -295,12 +455,130 @@ def test_generated_environmental_attribute_names_have_no_duplicates():
     assert len(names) == len(set(names))
 
 
+def test_splits_fused_primer_sequence_into_clean_primer_and_adapter(db_session):
+    """Real audit (10.7717/peerj.333, STUDY-9b31d2733994): a second
+    (indexing) PCR's forward primer is the study's own PCR1 primer with a
+    454-Titanium sequencing adapter fused on -- forward_primer_sequence
+    facts contain BOTH the clean 20nt PCR1 primer and the 49nt PCR2 fusion
+    oligo that contains it as a substring. The paper's own text confirms
+    this ("underlined stretch matches SP-F-30 primer") but never once uses
+    the word "adapter", so the keyword-based adapter_forward mechanism
+    never fires -- this is detected by substring instead."""
+    study = _study(db_session, title="Fused primer study")
+    _fact(
+        db_session, study, field="forward_primer_sequence", value="TCTCAAAGACTAAGCCATGC",
+        entity_level="study", support=SupportType.EXPLICIT,
+    )
+    _fact(
+        db_session, study, field="forward_primer_sequence",
+        value="CCTATCCCCTGTGTGCCTTGGCAGTCTCAG TCTCAAAGACTAAGCCATGC",
+        entity_level="study", support=SupportType.EXPLICIT,
+    )
+    _fact(
+        db_session, study, field="reverse_primer_sequence", value="TTACAGAGCTGGAATTACCG",
+        entity_level="study", support=SupportType.EXPLICIT,
+    )
+    _fact(
+        db_session, study, field="reverse_primer_sequence",
+        value="CCATCTCATCCCTGCGTGTCTCCGACTCAG TACT TTACAGAGCTGGAATTACCG",
+        entity_level="study", support=SupportType.EXPLICIT,
+    )
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    values = {
+        row.target_field: row.standardized_value
+        for row in db_session.query(StandardizedValue).filter_by(study_id=study.study_id, entity_id=None)
+        if row.target_field in ("pcr_primer_forward", "pcr_primer_reverse", "adapter_forward", "adapter_reverse")
+    }
+    assert values["pcr_primer_forward"] == "TCTCAAAGACTAAGCCATGC"
+    assert values["adapter_forward"] == "CCTATCCCCTGTGTGCCTTGGCAGTCTCAG"
+    assert values["pcr_primer_reverse"] == "TTACAGAGCTGGAATTACCG"
+    assert values["adapter_reverse"] == "CCATCTCATCCCTGCGTGTCTCCGACTCAGTACT"
+
+
+def test_splits_fused_primer_sequence_across_a_mistagged_assay_row_too(db_session):
+    """Same real study as above, but faithfully reproducing the exact
+    entity split found live: PCR1's clean primer broadcasts (entity_id
+    None) while PCR2's fused primer landed on its own ASSAY-tagged row
+    (the extraction model mistakenly gave the second PCR of the SAME
+    assay its own assay_tag). The fused value must be split wherever it
+    actually ends up, not just on the broadcast row -- otherwise the
+    per-assay projectMetadata row (the one real FAIRe's own export layout
+    would actually keep) still shows the raw, unsplit fusion oligo."""
+    study = _study(db_session, title="Fused primer study, assay-tagged PCR2")
+    assay = Entity(study_id=study.study_id, entity_level=EntityLevel.ASSAY.value, external_identifier="18S-V3V4")
+    db_session.add(assay)
+    db_session.flush()
+    _fact(
+        db_session, study, field="forward_primer_sequence", value="TCTCAAAGACTAAGCCATGC",
+        entity_level="study", support=SupportType.EXPLICIT,
+    )
+    _fact(
+        db_session, study, entity=assay, field="forward_primer_sequence",
+        value="CCTATCCCCTGTGTGCCTTGGCAGTCTCAG TCTCAAAGACTAAGCCATGC",
+        entity_level="assay", support=SupportType.EXPLICIT,
+    )
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    rows = {
+        row.entity_id: row.standardized_value
+        for row in db_session.query(StandardizedValue).filter_by(
+            study_id=study.study_id, target_field="pcr_primer_forward"
+        )
+    }
+    assert rows[None] == "TCTCAAAGACTAAGCCATGC"
+    assert rows[assay.entity_id] == "TCTCAAAGACTAAGCCATGC"
+
+    # Only the assay row ever saw the fused value, so only it gets an
+    # adapter_forward -- the broadcast row's own primer fact was already
+    # clean and is left untouched (nothing to split there).
+    adapter_rows = {
+        row.entity_id: row.standardized_value
+        for row in db_session.query(StandardizedValue).filter_by(
+            study_id=study.study_id, target_field="adapter_forward"
+        )
+    }
+    assert adapter_rows == {assay.entity_id: "CCTATCCCCTGTGTGCCTTGGCAGTCTCAG"}
+
+
+def test_does_not_split_two_genuinely_different_primers_with_no_substring_relationship(db_session):
+    """Two real, independently-designed primers of ordinary length must
+    never be treated as a fusion pair just because both exist -- only an
+    actual substring relationship (one sequence embedded in the other)
+    triggers the split."""
+    study = _study(db_session, title="Two distinct primers, no fusion")
+    _fact(
+        db_session, study, field="forward_primer_sequence", value="GTGYCAGCMGCCGCGGTAA",
+        entity_level="study", support=SupportType.EXPLICIT,
+    )
+    _fact(
+        db_session, study, field="forward_primer_sequence", value="CCTACGGGNGGCWGCAG",
+        entity_level="study", support=SupportType.EXPLICIT,
+    )
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    assert (
+        db_session.query(StandardizedValue)
+        .filter_by(study_id=study.study_id, target_field="adapter_forward")
+        .first()
+        is None
+    )
+
+
 def test_maps_run_level_fastq_and_checksum_and_lib_layout(db_session):
     """ENA's fastq_ftp/fastq_md5 (';'-joined forward;reverse pairs) split
     into FAIRe's filename/filename2/checksum_filename/checksum_filename2;
     checksum_method is inferred as a constant ("MD5" -- ENA never reports
-    another algorithm); library_layout normalizes ENA's PAIRED/SINGLE into
-    FAIRe's lib_layout_enum spelling."""
+    another algorithm); lib_layout is derived from the FASTQ file count."""
     study = _study(db_session, title="Run-level file facts")
     run = Entity(study_id=study.study_id, entity_level=EntityLevel.SEQUENCING_RUN.value, external_identifier="SRR1")
     db_session.add(run)
@@ -309,24 +587,20 @@ def test_maps_run_level_fastq_and_checksum_and_lib_layout(db_session):
         db_session, study, entity=run, entity_level="sequencing_run", field="fastq_ftp",
         value="ftp.sra.ebi.ac.uk/vol1/fastq/SRR001/SRR1_1.fastq.gz;ftp.sra.ebi.ac.uk/vol1/fastq/SRR001/SRR1_2.fastq.gz",
     )
+    _fact(db_session, study, entity=run, entity_level="sequencing_run", field="fastq_access_status", value="accessible")
     _fact(
         db_session, study, entity=run, entity_level="sequencing_run", field="fastq_md5",
         value="aaa111;bbb222",
     )
     _fact(db_session, study, entity=run, entity_level="sequencing_run", field="read_count", value="1000000")
-    _fact(db_session, study, entity=run, entity_level="sequencing_run", field="library_layout", value="PAIRED")
+    _fact(db_session, study, entity=run, entity_level="sequencing_run", field="library_layout", value="SINGLE")
     _fact(db_session, study, entity=run, entity_level="sequencing_run", field="run_accession", value="SRR1")
     _fact(db_session, study, entity=run, entity_level="sequencing_run", field="sample_accession", value="SAMN1")
     _fact(db_session, study, entity=run, entity_level="sequencing_run", field="instrument_platform", value="ILLUMINA")
     _fact(db_session, study, entity=run, entity_level="sequencing_run", field="assay_name", value="16S metabarcoding")
     _fact(db_session, study, entity=run, entity_level="sequencing_run", field="pcr_plate_id", value="plate-1")
     _fact(db_session, study, entity=run, entity_level="sequencing_run", field="lib_id", value="lib-1")
-    _fact(db_session, study, entity=run, entity_level="sequencing_run", field="lib_conc", value="4.2")
-    _fact(db_session, study, entity=run, entity_level="sequencing_run", field="lib_conc_unit", value="ng/μL")
-    _fact(db_session, study, entity=run, entity_level="sequencing_run", field="lib_conc_meth", value="Qubit")
     _fact(db_session, study, entity=run, entity_level="sequencing_run", field="phix_perc", value="15")
-    _fact(db_session, study, entity=run, entity_level="sequencing_run", field="mid_forward", value="ACGT")
-    _fact(db_session, study, entity=run, entity_level="sequencing_run", field="mid_reverse", value="TGCA")
     db_session.commit()
 
     map_study_to_faire(db_session, study.study_id)
@@ -335,6 +609,7 @@ def test_maps_run_level_fastq_and_checksum_and_lib_layout(db_session):
     values = {sv.target_field: sv for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id)}
     assert values["filename"].standardized_value == "SRR1_1.fastq.gz"
     assert values["filename2"].standardized_value == "SRR1_2.fastq.gz"
+    assert values["fastq_access_status"].standardized_value == "accessible"
     assert values["checksum_filename"].standardized_value == "aaa111"
     assert values["checksum_filename2"].standardized_value == "bbb222"
     assert values["checksum_method"].standardized_value == "MD5"
@@ -348,12 +623,41 @@ def test_maps_run_level_fastq_and_checksum_and_lib_layout(db_session):
     assert values["assay_name"].standardized_value == "16S metabarcoding"
     assert values["pcr_plate_id"].standardized_value == "plate-1"
     assert values["lib_id"].standardized_value == "lib-1"
-    assert values["lib_conc"].standardized_value == "4.2"
-    assert values["lib_conc_unit"].standardized_value == "ng/μL"
-    assert values["lib_conc_meth"].standardized_value == "Qubit"
     assert values["phix_perc"].standardized_value == "15"
-    assert values["mid_forward"].standardized_value == "ACGT"
-    assert values["mid_reverse"].standardized_value == "TGCA"
+    assert "lib_conc" not in values
+
+
+def test_inaccessible_fastq_files_do_not_prove_library_layout(db_session):
+    study = _study(db_session, title="Inaccessible files")
+    run = Entity(study_id=study.study_id, entity_level=EntityLevel.SEQUENCING_RUN.value, external_identifier="SRR1")
+    db_session.add(run)
+    db_session.flush()
+    _fact(
+        db_session,
+        study,
+        entity=run,
+        entity_level="sequencing_run",
+        field="fastq_ftp",
+        value="ftp.sra.ebi.ac.uk/vol1/fastq/SRR001/SRR1_1.fastq.gz;ftp.sra.ebi.ac.uk/vol1/fastq/SRR001/SRR1_2.fastq.gz",
+    )
+    _fact(db_session, study, entity=run, entity_level="sequencing_run", field="fastq_access_status", value="not_accessible")
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    values = {
+        sv.target_field: sv
+        for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id)
+    }
+    assert values["filename"].standardized_value == "SRR1_1.fastq.gz"
+    assert values["filename2"].standardized_value == "SRR1_2.fastq.gz"
+    assert values["fastq_access_status"].standardized_value == "not_accessible"
+    assert values["lib_layout"].standardized_value == "no files"
+    assert "lib_conc_unit" not in values
+    assert "lib_conc_meth" not in values
+    assert "mid_forward" not in values
+    assert "mid_reverse" not in values
 
 
 def test_single_end_run_gets_no_filename2_or_checksum_filename2(db_session):
@@ -366,7 +670,7 @@ def test_single_end_run_gets_no_filename2_or_checksum_filename2(db_session):
     _fact(db_session, study, entity=run, entity_level="sequencing_run", field="fastq_ftp",
           value="ftp.sra.ebi.ac.uk/vol1/fastq/SRR001/SRR1.fastq.gz")
     _fact(db_session, study, entity=run, entity_level="sequencing_run", field="fastq_md5", value="ccc333")
-    _fact(db_session, study, entity=run, entity_level="sequencing_run", field="library_layout", value="SINGLE")
+    _fact(db_session, study, entity=run, entity_level="sequencing_run", field="library_layout", value="PAIRED")
     db_session.commit()
 
     map_study_to_faire(db_session, study.study_id)
@@ -429,22 +733,22 @@ def test_run_level_file_facts_get_one_row_per_run_not_collapsed(db_session):
     assert not ({run_a.entity_id, run_b.entity_id} & set(filenames))
 
 
-def test_run_level_checksum_method_and_lib_layout_still_collapse_project_wide(db_session):
+def test_run_level_checksum_method_and_fastq_derived_lib_layout_still_collapse_project_wide(db_session):
     """Unlike filename/checksum_filename/input_read_count above,
     checksum_method and lib_layout map onto projectMetadata (not
-    experimentRunMetadata) -- these are expected to agree across a study's
-    runs (ENA always reports MD5; a study's runs are consistently
-    paired-end or single-end), so they should still collapse to one
-    project-wide row, same as instrument_platform always has."""
+    experimentRunMetadata). lib_layout is derived from fastq_ftp file
+    counts, not ENA's declared library_layout field."""
     study = _study(db_session, title="Two runs, same layout")
     run_a = Entity(study_id=study.study_id, entity_level=EntityLevel.SEQUENCING_RUN.value, external_identifier="SRR_A")
     run_b = Entity(study_id=study.study_id, entity_level=EntityLevel.SEQUENCING_RUN.value, external_identifier="SRR_B")
     db_session.add_all([run_a, run_b])
     db_session.flush()
     _fact(db_session, study, entity=run_a, entity_level="sequencing_run", field="fastq_md5", value="aaa")
-    _fact(db_session, study, entity=run_a, entity_level="sequencing_run", field="library_layout", value="PAIRED")
+    _fact(db_session, study, entity=run_a, entity_level="sequencing_run", field="fastq_ftp", value="host/SRR_A_1.fastq.gz;host/SRR_A_2.fastq.gz")
+    _fact(db_session, study, entity=run_a, entity_level="sequencing_run", field="library_layout", value="SINGLE")
     _fact(db_session, study, entity=run_b, entity_level="sequencing_run", field="fastq_md5", value="bbb")
-    _fact(db_session, study, entity=run_b, entity_level="sequencing_run", field="library_layout", value="PAIRED")
+    _fact(db_session, study, entity=run_b, entity_level="sequencing_run", field="fastq_ftp", value="host/SRR_B_1.fastq.gz;host/SRR_B_2.fastq.gz")
+    _fact(db_session, study, entity=run_b, entity_level="sequencing_run", field="library_layout", value="SINGLE")
     db_session.commit()
 
     map_study_to_faire(db_session, study.study_id)
@@ -456,10 +760,12 @@ def test_run_level_checksum_method_and_lib_layout_still_collapse_project_wide(db
     assert checksum_method_rows[0].entity_id is None
     assert len(lib_layout_rows) == 1
     assert lib_layout_rows[0].entity_id is None
+    assert lib_layout_rows[0].standardized_value == "paired end"
+    assert lib_layout_rows[0].review_required is False
 
 
-def test_mixed_run_level_lib_layout_prefers_paired_end_and_flags_review(db_session):
-    study = _study(db_session, title="Mixed ENA layout")
+def test_mixed_fastq_derived_lib_layout_prefers_paired_end_and_flags_review(db_session):
+    study = _study(db_session, title="Mixed FASTQ file layout")
     run_single = Entity(
         study_id=study.study_id,
         entity_level=EntityLevel.SEQUENCING_RUN.value,
@@ -477,17 +783,19 @@ def test_mixed_run_level_lib_layout_prefers_paired_end_and_flags_review(db_sessi
         study,
         entity=run_single,
         entity_level="sequencing_run",
-        field="library_layout",
-        value="SINGLE",
+        field="fastq_ftp",
+        value="host/SRR_SINGLE.fastq.gz",
     )
     paired_fact = _fact(
         db_session,
         study,
         entity=run_paired,
         entity_level="sequencing_run",
-        field="library_layout",
-        value="PAIRED",
+        field="fastq_ftp",
+        value="host/SRR_PAIRED_1.fastq.gz;host/SRR_PAIRED_2.fastq.gz",
     )
+    _fact(db_session, study, entity=run_single, entity_level="sequencing_run", field="library_layout", value="PAIRED")
+    _fact(db_session, study, entity=run_paired, entity_level="sequencing_run", field="library_layout", value="SINGLE")
     db_session.commit()
 
     map_study_to_faire(db_session, study.study_id)
@@ -508,6 +816,25 @@ def test_mixed_run_level_lib_layout_prefers_paired_end_and_flags_review(db_sessi
     assert evidence_fact_ids == {single_fact.fact_id, paired_fact.fact_id}
 
 
+def test_lib_layout_no_files_when_no_fastq_facts(db_session):
+    study = _study(db_session, title="No downloadable files")
+    run = Entity(study_id=study.study_id, entity_level=EntityLevel.SEQUENCING_RUN.value, external_identifier="SRR1")
+    db_session.add(run)
+    db_session.flush()
+    _fact(db_session, study, entity=run, entity_level="sequencing_run", field="library_layout", value="PAIRED")
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    lib_layout = db_session.query(StandardizedValue).filter_by(
+        study_id=study.study_id,
+        target_field="lib_layout",
+    ).one()
+    assert lib_layout.standardized_value == "no files"
+    assert lib_layout.review_required is False
+
+
 def test_maps_citation_from_any_repository_adapter_to_bibliographic_citation(db_session):
     """OBIS, GBIF, and PANGAEA all emit this exact field name ("citation")
     at project level -- one rule covers whichever adapter a study
@@ -523,19 +850,20 @@ def test_maps_citation_from_any_repository_adapter_to_bibliographic_citation(db_
     assert row.standardized_value == "Smith et al. 2024. Dataset X. OBIS."
 
 
-def test_maps_deterministic_publication_metadata_facts_to_faire(db_session):
-    """extraction/publication_metadata.py's deterministic (no-LLM) facts --
-    literal FAIRe field names at EntityLevel.STUDY -- all map through.
+def test_maps_publication_metadata_facts_to_faire(db_session):
+    """extraction/publication_metadata.py's project-level facts use
+    literal FAIRe field names at EntityLevel.STUDY and all map through.
     recordedByID is deliberately absent: no longer extracted or mapped at
     all (an explicit user instruction)."""
-    study = _study(db_session, title="Deterministic publication metadata")
+    study = _study(db_session, title="Publication metadata")
     values = {
         "license": "http://creativecommons.org/licenses/by/3.0/",
         "rightsHolder": "Davies et al.",
         "accessRights": "open access",
         "bibliographicCitation": "Davies SW, et al. (2014). A cross-ocean comparison. PeerJ 2:e333.",
-        "associated_resource": "**Methods**: https://doi.org/10.1234/protocol.1",
+        "associated_resource": "**Methods**: doi: 10.1234/protocol.1",
         "code_repo": "https://github.com/someorg/somerepo",
+        "funding_source": "National Science Foundation | Gordon and Betty Moore Foundation",
         "recordedBy": "Sarah W. Davies | Eli Meyer",
         "project_contact": "daviessw@gmail.com",
     }
@@ -558,6 +886,20 @@ def test_maps_deterministic_publication_metadata_facts_to_faire(db_session):
         .one()
         .review_required
         is False
+    )
+    assert (
+        db_session.query(StandardizedValue)
+        .filter_by(study_id=study.study_id, target_field="rightsHolder")
+        .one()
+        .review_required
+        is True
+    )
+    assert (
+        db_session.query(StandardizedValue)
+        .filter_by(study_id=study.study_id, target_field="funding_source")
+        .one()
+        .review_required
+        is True
     )
 
 
@@ -685,10 +1027,48 @@ def test_dedups_identical_project_wide_facts_across_many_runs(db_session):
     assert len(run_rows) == 0
     assert project_rows[0].standardized_value == "ILLUMINA"
     assert not project_rows[0].review_required
-    # +1 for checkls_ver and +1 for informationWithheld, both always
+    # +1 each for checkls_ver, informationWithheld, and lib_layout, all
     # synced/defaulted regardless of a study's own facts (mapping/
     # faire.py::_sync_checklist_version, informationWithheld default).
-    assert created == 3
+    assert created == 4
+
+
+def test_pipe_joins_samp_mat_process_from_two_separate_paper_paragraphs(db_session):
+    """Grounded in a real gap (10.3389/fmicb.2024.1295149): a storage/
+    freeze-drying paragraph and a separate DNA-extraction paragraph each
+    independently get classified and extracted as their own sample_prep
+    run, producing two distinct STUDY-level samp_mat_process facts. Per an
+    explicit user request, both should be kept (pipe-joined), not "first
+    wins, second discarded" like a typical broadcast conflict."""
+    study = _study(db_session, title="Two processing paragraphs")
+    _fact(
+        db_session,
+        study,
+        field="samp_mat_process",
+        value="the sub-sectioned sediment samples were freeze-dried in a freeze-dryer",
+        entity_level="study",
+        support=SupportType.EXPLICIT,
+    )
+    _fact(
+        db_session,
+        study,
+        field="samp_mat_process",
+        value="the Sterivex filter cartridges were cracked open and the filter paper was chipped into small pieces",
+        entity_level="study",
+        support=SupportType.EXPLICIT,
+    )
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    row = db_session.query(StandardizedValue).filter_by(
+        study_id=study.study_id, target_field="samp_mat_process", entity_id=None
+    ).one()
+    assert row.standardized_value == (
+        "the sub-sectioned sediment samples were freeze-dried in a freeze-dryer | "
+        "the Sterivex filter cartridges were cracked open and the filter paper was chipped into small pieces"
+    )
 
 
 def test_pipe_joins_conflicting_project_wide_platforms_with_review(db_session):
@@ -803,6 +1183,48 @@ def test_project_level_structured_assay_name_still_broadcasts_unaffected(db_sess
     assert rows[0].entity_id is None
 
 
+def test_assay_name_mapping_drops_primer_pairs_and_bare_functional_genes(db_session):
+    study = _study(db_session, title="Assay name cleanup")
+    _fact(
+        db_session,
+        study,
+        field="assay_name",
+        value="16S | hzsA | 515F/806R | hzsA_1597A/hzsA_1857R",
+        entity_level="study",
+        support=SupportType.EXPLICIT,
+    )
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    value = db_session.query(StandardizedValue).filter_by(
+        study_id=study.study_id, target_field="assay_name"
+    ).one()
+    assert value.standardized_value == "16S"
+
+
+def test_assay_name_mapping_normalizes_rRNA_region_dash_mojibake(db_session):
+    study = _study(db_session, title="Assay name dash cleanup")
+    _fact(
+        db_session,
+        study,
+        field="assay_name",
+        value="16S rRNA-V3\u7ab6\u5929V4",
+        entity_level="study",
+        support=SupportType.EXPLICIT,
+    )
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    value = db_session.query(StandardizedValue).filter_by(
+        study_id=study.study_id, target_field="assay_name"
+    ).one()
+    assert value.standardized_value == "16S-V3-V4"
+
+
 def test_rejected_facts_are_excluded_from_mapping_entirely(db_session):
     """review_status=REJECTED (the quarantine mechanism for facts extracted
     under a since-fixed bug, or from a superseded model/prompt version)
@@ -861,35 +1283,6 @@ def test_flags_review_required_when_value_fails_closed_vocab_check(db_session):
     assert project_row.review_required is True
 
 
-def test_llm_pcr_volume_fields_require_volume_units(db_session):
-    study = _study(db_session, title="PCR volume guard")
-    _fact(
-        db_session,
-        study,
-        field="second_pcr_reaction_volume",
-        value="two-round PCR amplification strategy",
-        entity_level="study",
-    )
-    _fact(
-        db_session,
-        study,
-        field="pcr_reaction_volume",
-        value="25 uL",
-        entity_level="study",
-    )
-    db_session.commit()
-
-    map_study_to_faire(db_session, study.study_id)
-    db_session.commit()
-
-    values = {
-        row.target_field: row.standardized_value
-        for row in db_session.query(StandardizedValue).filter_by(study_id=study.study_id)
-    }
-    assert values["amplificationReactionVolume"] == "25 uL"
-    assert "pcr2_amplificationReactionVolume" not in values
-
-
 def test_sample_accession_redirects_to_matching_sample_entity_not_the_run(db_session):
     study = _study(db_session, title="materialSampleID redirect")
     sample = Entity(study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN999")
@@ -905,6 +1298,26 @@ def test_sample_accession_redirects_to_matching_sample_entity_not_the_run(db_ses
     row = db_session.query(StandardizedValue).filter_by(study_id=study.study_id, target_field="materialSampleID").one()
     assert row.entity_id == sample.entity_id
     assert row.entity_id != run.entity_id
+
+
+def test_sample_identifier_defaults_to_material_sample_id_without_run_fact(db_session):
+    study = _study(db_session, title="BioSample-only materialSampleID")
+    sample = Entity(study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN12415826")
+    db_session.add(sample)
+    db_session.flush()
+    _fact(db_session, study, entity=sample, field="collection_date", value="2014-07-22", entity_level="sample")
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    values = {
+        row.target_field: row
+        for row in db_session.query(StandardizedValue).filter_by(study_id=study.study_id, entity_id=sample.entity_id)
+    }
+    assert values["samp_name"].standardized_value == "SAMN12415826"
+    assert values["materialSampleID"].standardized_value == "SAMN12415826"
+    assert values["materialSampleID"].mapping_method == "exact_identifier"
 
 
 def test_sample_accession_materializes_referenced_sample_identity(db_session):
@@ -933,10 +1346,13 @@ def test_sample_accession_materializes_referenced_sample_identity(db_session):
         entity_level=EntityLevel.EXPERIMENT_RUN.value,
     ).one()
     assert experiment.parent_entity_id == sample.entity_id
-    # +1 for checkls_ver and +1 for informationWithheld, both always
+    # +1 each for checkls_ver, informationWithheld, and lib_layout, all
     # synced/defaulted regardless of a study's own facts (mapping/
-    # faire.py::_sync_checklist_version, informationWithheld default).
-    assert created == 5
+    # faire.py::_sync_checklist_version, informationWithheld default), plus
+    # +1 for biological_rep="0" (mapping/faire.py::
+    # _apply_biological_rep_from_relations always writes a value, "0" when
+    # no biological_rep_relation evidence exists for the study).
+    assert created == 7
 
 
 def test_llm_blob_fact_is_broadcast_and_flagged_for_review(db_session):
@@ -968,6 +1384,10 @@ def test_llm_study_level_sampling_facts_broadcast_to_sample_metadata(db_session)
         db_session, study, field="depths", value="5 meters",
         entity_level="study", support=SupportType.EXPLICIT,
     )
+    _fact(
+        db_session, study, field="internal_expedition_id", value="Malaspina 2010",
+        entity_level="study", support=SupportType.EXPLICIT,
+    )
     db_session.commit()
 
     map_study_to_faire(db_session, study.study_id)
@@ -981,6 +1401,7 @@ def test_llm_study_level_sampling_facts_broadcast_to_sample_metadata(db_session)
     assert values["decimalLongitude"].standardized_value == "-122.151667"
     assert values["minimumDepthInMeters"].standardized_value == "5"
     assert values["maximumDepthInMeters"].standardized_value == "5"
+    assert values["internal_expedition_id"].standardized_value == "Malaspina 2010"
     # checkls_ver and informationWithheld are always synced/defaulted as
     # confident constants (mapping/faire.py::_sync_checklist_version, the
     # informationWithheld "Nothing indicated as withheld" default), never
@@ -989,7 +1410,7 @@ def test_llm_study_level_sampling_facts_broadcast_to_sample_metadata(db_session)
     assert all(
         row.review_required is True
         for field, row in values.items()
-        if field not in ("checkls_ver", "informationWithheld")
+        if field not in ("checkls_ver", "informationWithheld", "lib_layout")
     )
 
 
@@ -1017,6 +1438,91 @@ def test_study_level_filter_name_maps_as_sample_broadcast_default(db_session):
     assert value.review_required is True
 
 
+def test_sample_level_isolation_source_maps_to_env_medium(db_session):
+    study = _study(db_session, title="Isolation source")
+    sample = Entity(study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN1")
+    db_session.add(sample)
+    db_session.flush()
+    _fact(
+        db_session,
+        study,
+        entity=sample,
+        field="isolation_source",
+        value="coral cue material",
+        entity_level="sample",
+    )
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    value = db_session.query(StandardizedValue).filter_by(
+        study_id=study.study_id,
+        entity_id=sample.entity_id,
+        target_field="env_medium",
+    ).one()
+    assert value.standardized_value == "coral cue material"
+    assert value.mapping_method == "deterministic_synonym"
+
+
+def test_sample_level_cruise_or_station_attribute_maps_to_internal_expedition_id(db_session):
+    study = _study(db_session, title="Cruise attribute")
+    sample = Entity(study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN1")
+    db_session.add(sample)
+    db_session.flush()
+    _fact(
+        db_session,
+        study,
+        entity=sample,
+        field="cruise",
+        value="Tara Oceans",
+        entity_level="sample",
+    )
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    value = db_session.query(StandardizedValue).filter_by(
+        study_id=study.study_id,
+        entity_id=sample.entity_id,
+        target_field="internal_expedition_id",
+    ).one()
+    assert value.standardized_value == "Tara Oceans"
+    assert value.mapping_method == "deterministic_synonym"
+
+
+def test_filter_name_placeholder_is_ignored_when_real_filter_name_exists(db_session):
+    study = _study(db_session, title="Filter placeholder")
+    _fact(
+        db_session,
+        study,
+        field="filter_name",
+        value="see below",
+        entity_level="study",
+        support=SupportType.EXPLICIT,
+    )
+    _fact(
+        db_session,
+        study,
+        field="filter_name",
+        value="Swinnex 47 mm filter holder",
+        entity_level="study",
+        support=SupportType.EXPLICIT,
+    )
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    value = db_session.query(StandardizedValue).filter_by(
+        study_id=study.study_id,
+        target_field="filter_name",
+        entity_id=None,
+    ).one()
+    assert value.standardized_value == "Swinnex 47 mm filter holder"
+
+
 def test_llm_atomic_assay_facts_map_to_faire_protocol_fields_with_review(db_session):
     study = _study(db_session, title="LLM protocol facts")
     _fact(
@@ -1025,15 +1531,6 @@ def test_llm_atomic_assay_facts_map_to_faire_protocol_fields_with_review(db_sess
     )
     _fact(
         db_session, study, field="PCR_reverse_primer_sequence", value="1406r",
-        entity_level="study", support=SupportType.EXPLICIT,
-    )
-    _fact(
-        db_session, study, field="PCR_amplification_conditions_thermocycler",
-        value="Veriti Thermal Cycler (Applied Biosystems)",
-        entity_level="study", support=SupportType.EXPLICIT,
-    )
-    _fact(
-        db_session, study, field="bioinformatics_workflow", value="DADA2 (v1.16) in R",
         entity_level="study", support=SupportType.EXPLICIT,
     )
     db_session.commit()
@@ -1047,12 +1544,10 @@ def test_llm_atomic_assay_facts_map_to_faire_protocol_fields_with_review(db_sess
     }
     assert values["pcr_primer_forward"].standardized_value == "1055f"
     assert values["pcr_primer_reverse"].standardized_value == "1406r"
-    assert values["thermocycler"].standardized_value == "Veriti Thermal Cycler (Applied Biosystems)"
-    assert values["bioinfo_method_additional"].standardized_value == "DADA2 (v1.16) in R"
     assert all(
         row.review_required is True
         for field, row in values.items()
-        if field not in ("checkls_ver", "informationWithheld")
+        if field not in ("checkls_ver", "informationWithheld", "lib_layout")
     )
 
 
@@ -1063,30 +1558,15 @@ def test_controlled_text_search_project_facts_map_to_faire_with_review(db_sessio
     _fact(db_session, study, field="probeQuencher", value="BHQ-1 | quencher", entity_level="study")
     _fact(db_session, study, field="commercial_mm", value="TaqMan", entity_level="study")
     _fact(db_session, study, field="sterilise_method", value="Bottles were rinsed with bleach.", entity_level="study")
-    _fact(db_session, study, field="biological_rep", value="3", entity_level="study")
     _fact(db_session, study, field="assay_type", value="targeted | metabarcoding", entity_level="study")
     _fact(db_session, study, field="barcoding_pcr_appr", value="two-step PCR", entity_level="study")
-    _fact(db_session, study, field="lib_screen", value="cleaned with AMPure beads", entity_level="study")
     _fact(db_session, study, field="adapter_forward", value="AATGATACGGCGACCACCGAGATCTACACGCT", entity_level="study")
     _fact(db_session, study, field="adapter_reverse", value="CAAGCAGAAGACGGCATACGAGAT", entity_level="study")
-    _fact(db_session, study, field="demux_tool", value="QIIME 2 demux emp-paired", entity_level="study")
-    _fact(db_session, study, field="error_rate_tool", value="DADA2 filterAndTrim maxEE=2", entity_level="study")
-    _fact(db_session, study, field="error_rate_type", value="expected error rate", entity_level="study")
     _fact(db_session, study, field="checksum_method", value="SHA-256", entity_level="study")
-    _fact(db_session, study, field="chimera_check_method", value="VSEARCH --uchime_denovo de novo", entity_level="study")
     _fact(db_session, study, field="inhibition_check_0_1", value="1", entity_level="study")
     _fact(db_session, study, field="inhibition_check", value="IPC spike-in with 1:10 dilution", entity_level="study")
-    _fact(db_session, study, field="min_reads_tool", value="phyloseq prune_taxa | decontam isContaminant", entity_level="study")
     _fact(db_session, study, field="otu_clust_tool", value="VSEARCH --cluster_fast", entity_level="study")
-    _fact(db_session, study, field="otu_clust_cutoff", value="97%", entity_level="study")
     _fact(db_session, study, field="otu_db", value="SILVA release 138", entity_level="study")
-    _fact(
-        db_session,
-        study,
-        field="otu_raw_description",
-        value="raw ASV table filtered to remove chloroplast, mitochondria, and contaminants",
-        entity_level="study",
-    )
     _fact(
         db_session,
         study,
@@ -1112,36 +1592,23 @@ def test_controlled_text_search_project_facts_map_to_faire_with_review(db_sessio
     assert values["probeReporter"].standardized_value == "FAM"
     assert values["probeQuencher"].standardized_value == "BHQ-1 | quencher"
     assert values["commercial_mm"].standardized_value == "TaqMan"
+    assert values["custom_mm"].standardized_value == "N/A see commercial_mm"
     assert values["sterilise_method"].standardized_value == "Bottles were rinsed with bleach."
-    assert values["biological_rep"].standardized_value == "3"
     assert values["assay_type"].standardized_value == "targeted | metabarcoding"
     assert values["barcoding_pcr_appr"].standardized_value == "two-step PCR"
-    assert values["lib_screen"].standardized_value == "cleaned with AMPure beads"
     assert values["adapter_forward"].standardized_value == "AATGATACGGCGACCACCGAGATCTACACGCT"
     assert values["adapter_reverse"].standardized_value == "CAAGCAGAAGACGGCATACGAGAT"
-    assert values["demux_tool"].standardized_value == "QIIME 2 demux emp-paired"
-    assert values["error_rate_tool"].standardized_value == "DADA2 filterAndTrim maxEE=2"
-    assert values["error_rate_type"].standardized_value == "expected error rate"
     assert values["checksum_method"].standardized_value == "SHA-256"
-    assert values["chimera_check_method"].standardized_value == "VSEARCH --uchime_denovo de novo"
     assert values["inhibition_check_0_1"].standardized_value == "1"
     assert values["inhibition_check"].standardized_value == "IPC spike-in with 1:10 dilution"
-    assert values["min_reads_tool"].standardized_value == "phyloseq prune_taxa | decontam isContaminant"
     assert values["otu_clust_tool"].standardized_value == "VSEARCH --cluster_fast"
-    assert values["otu_clust_cutoff"].standardized_value == "97"
     assert values["otu_db"].standardized_value == "SILVA release 138"
-    assert values["otu_raw_description"].standardized_value == (
-        "raw ASV table filtered to remove chloroplast, mitochondria, and contaminants"
-    )
     assert values["pcr_0_1"].standardized_value == "1"
     assert values["neg_cont_0_1"].standardized_value == "1"
     assert values["pos_cont_0_1"].standardized_value == "0"
     assert "sample_type" not in values
-    # otu_db_custom cross-fills deterministically from otu_db (see
-    # map_study_to_faire's mutual-exclusion fixup) -- not a review-worthy
-    # LLM/quote-judged mapping, same as checksum_method.
-    assert values["otu_db_custom"].standardized_value == "N/A see otu_db"
-    assert values["otu_db_custom"].review_required is False
+    assert "otu_db_custom" not in values
+    assert values["custom_mm"].review_required is False
     assert values["checksum_method"].review_required is False
     non_review_fields = {
         field
@@ -1152,7 +1619,8 @@ def test_controlled_text_search_project_facts_map_to_faire_with_review(db_sessio
             "checksum_method",
             "checkls_ver",
             "informationWithheld",
-            "otu_db_custom",
+            "lib_layout",
+            "custom_mm",
             "pcr_0_1",
             "neg_cont_0_1",
             "pos_cont_0_1",
@@ -1167,17 +1635,56 @@ def test_all_v3_extraction_hints_have_mapping_rules():
     assert not missing
 
 
+def test_custom_master_mix_cross_fills_commercial_master_mix(db_session):
+    study = _study(db_session, title="Custom mix only")
+    _fact(
+        db_session,
+        study,
+        field="custom_mm",
+        value="0.02 U/ul polymerase, 1X buffer, and 200 uM dNTPs",
+        entity_level="study",
+    )
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    values = {
+        sv.target_field: sv
+        for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id, entity_id=None)
+    }
+    assert values["custom_mm"].standardized_value == "0.02 U/ul polymerase, 1X buffer, and 200 uM dNTPs"
+    assert values["commercial_mm"].standardized_value == "N/A see custom_mm"
+    assert values["commercial_mm"].review_required is False
+
+
+def test_otu_db_pipe_joins_public_and_custom_database_values(db_session):
+    study = _study(db_session, title="Multiple taxonomy databases")
+    _fact(db_session, study, field="otu_db", value="SILVA_132", entity_level="study")
+    _fact(db_session, study, field="otu_db", value="FreshTrain", entity_level="study")
+    _fact(db_session, study, field="otu_db", value="custom database curated for lake taxa", entity_level="study")
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    values = {
+        sv.target_field: sv
+        for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id, entity_id=None)
+    }
+    assert values["otu_db"].standardized_value == "SILVA_132 | FreshTrain | custom database curated for lake taxa"
+    assert "otu_db_custom" not in values
+
+
 def test_all_v3_extraction_hints_have_a_study_level_rule_specifically():
     """Regression guard for a real bug: a native_name string existing
     *somewhere* in RULES (checked above) is not the same as it being
     reachable at EntityLevel.STUDY, which is the only level LLM-extracted
     v3 facts are ever persisted at. Adding an _EXPLICIT_RULES entry for a
     structured-source fact that happens to share a name with a v3
-    native_name (e.g. ENA's "library_layout" at SEQUENCING_RUN vs this
-    taxonomy's own "library_layout" native_name) used to silently delete
-    the STUDY-level rule for every such name, because
-    _generated_v3_llm_rules only checked fact_type strings, never
-    entity_level, before excluding one from generation."""
+    native_name used to silently delete the STUDY-level rule for every
+    such name, because _generated_v3_llm_rules only checked fact_type
+    strings, never entity_level, before excluding one from generation."""
     for native_name in native_name_to_faire_hint():
         assert rules_for(native_name, EntityLevel.STUDY.value), (
             f"{native_name!r} has no rule reachable at EntityLevel.STUDY -- "
@@ -1209,7 +1716,6 @@ def test_v3_native_atomic_facts_map_through_faire_hints_with_review(db_session):
         "forward_primer_sequence": "GTGYCAGCMGCCGCGGTAA",
         "reverse_primer_sequence": "GGACTACNVGGGTWTCTAAT",
         "assay_target_taxa": "Chordata | Crustose coralline algae",
-        "denoising_tool": "DADA2 v1.16",
         "reference_database": "SILVA 138",
         "standard_curve_r_squared": "0.997",
         "scientific_name": "Acropora cervicornis",
@@ -1232,17 +1738,14 @@ def test_v3_native_atomic_facts_map_through_faire_hints_with_review(db_session):
     assert values["pcr_primer_forward"].standardized_value == "GTGYCAGCMGCCGCGGTAA"
     assert values["pcr_primer_reverse"].standardized_value == "GGACTACNVGGGTWTCTAAT"
     assert values["targetTaxonomicAssay"].standardized_value == "Chordata | Crustose coralline algae"
-    assert values["error_rate_tool"].standardized_value == "DADA2 v1.16"
     assert values["otu_db"].standardized_value == "SILVA 138"
     assert values["r2"].standardized_value == "0.997"
     assert values["scientificName"].standardized_value == "Acropora cervicornis"
-    # otu_db_custom cross-fills deterministically from otu_db -- not
-    # review-worthy, same as checkls_ver.
-    assert values["otu_db_custom"].standardized_value == "N/A see otu_db"
+    assert "otu_db_custom" not in values
     assert all(
         row.review_required is True
         for field, row in values.items()
-        if field not in ("checkls_ver", "otu_db_custom", "informationWithheld")
+        if field not in ("checkls_ver", "informationWithheld", "lib_layout")
     )
 
 
@@ -1794,3 +2297,46 @@ def test_sample_type_for_entity_falls_back_to_env_medium_then_samp_mat_process(d
     db_session.commit()
     # isolation_source (checked first) now wins over both fallbacks.
     assert _sample_type_for_entity(db_session, sample.entity_id) == "sediment"
+
+
+def test_sample_collection_terms_have_study_level_rules_except_samp_category():
+    """samp_collect_device/samp_collect_method/samp_size/samp_size_unit/
+    sample_composed_of/sample_derived_from/internal_expedition_id are
+    broadcast-safe (the same physical collection process applies uniformly
+    to a study's samples, matching every other sample_prep field), so each needs a reachable
+    STUDY-level rule. samp_category deliberately has none -- see its own
+    CategoryTerm comment in extraction/section_categories.py: broadcasting
+    one extracted "negative control" quote onto every sample would
+    mislabel the real environmental samples too."""
+    for native_name in (
+        "samp_collect_device",
+        "samp_collect_method",
+        "samp_size",
+        "samp_size_unit",
+        "sample_composed_of",
+        "sample_derived_from",
+        "internal_expedition_id",
+    ):
+        assert rules_for(native_name, EntityLevel.STUDY.value), (
+            f"{native_name!r} has no STUDY-level rule -- its sample_prep CategoryTerm fact would never map"
+        )
+    assert rules_for("samp_category", EntityLevel.STUDY.value) == []
+
+
+def test_samp_category_excluded_from_sample_type_routing():
+    """samp_category lives in the sample_prep category (per an explicit
+    user instruction not to give it its own classifier) but its own "type"
+    axis is real-sample-vs-control, not water-vs-sediment -- the wrong fit
+    for this router's water/sediment detection."""
+    from fair_ocean_agent.mapping.faire import _SAMPLE_TYPE_ROUTED_NATIVE_NAMES
+
+    assert "samp_category" not in _SAMPLE_TYPE_ROUTED_NATIVE_NAMES
+    for native_name in (
+        "samp_collect_device",
+        "samp_collect_method",
+        "samp_size",
+        "samp_size_unit",
+        "sample_composed_of",
+        "sample_derived_from",
+    ):
+        assert native_name in _SAMPLE_TYPE_ROUTED_NATIVE_NAMES

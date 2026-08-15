@@ -149,8 +149,154 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
             # alongside a second batch of user-supplied term definitions.
             "DNA concentration", "Qubit", "NanoDrop", "260/280", "A260/280", "absorbance ratio",
             "deployed", "deployment period", "extracted on",
+            # Sample collection -- deliberately folded into this same
+            # category rather than a new classifier, per an explicit user
+            # instruction ("i don't think this needs its own classifier...
+            # if its included in the paper, its going to be right before
+            # the sample"): collection language sits immediately adjacent
+            # to preparation language in a paper's methods narrative.
+            "Niskin bottle", "grab sampler", "van Veen grab", "gravity corer", "box corer",
+            "plankton net", "collected using a", "collected with a", "collection device",
+            "sampling device", "samples were collected", "collected by", "hand-collected",
+            "collection method", "sampling method", "obtained by", "L of water were collected",
+            "g of sediment were collected", "total volume collected", "pooled from",
+            "composite sample", "composed of", "combined into one sample", "subsampled from",
+            "subsample of", "parent sample", "negative control", "positive control",
+            "PCR standard", "no-template control", "blank sample", "field blank",
+            "cruise", "expedition", "voyage", "campaign", "sampling mission", "sampling campaign",
+            "aboard R/V", "aboard the R/V", "research vessel", "station", "sampling station",
+            # In-situ physicochemical/environmental measurements taken at the
+            # sampling event -- bundled into one x_env_var_block term rather
+            # than one CategoryTerm per variable, per an explicit user
+            # request ("group all the above together, just to make it
+            # easier for Qwen").
+            "temperature", "water temperature", "in situ temperature", "in-situ temperature", "Temp",
+            "salinity", "Sal", "dissolved oxygen", "pH", "chlorophyll", "chlorophyll a", "Chl a", "Chl-a",
+            "chloro",
+            "suspended particulate matter", "SPM", "total suspended solids", "TSS",
+            "suspended solids", "organic matter", "particulate organic matter",
+            "particulate organic carbon", "POC", "particulate organic nitrogen", "PON",
+            "dissolved organic carbon", "DOC", "dissolved organic nitrogen", "DON",
+            "dissolved inorganic carbon", "DIC", "dissolved inorganic nitrogen", "DIN",
+            "total organic carbon", "TOC", "total nitrogen", "TN", "total dissolved nitrogen", "TDN",
+            "total carbon", "total particulate carbon", "TPC", "nitrate", "NO3", "nitrite", "NO2",
+            "physicochemical", "physico-chemical", "water quality parameters",
+            "environmental parameters", "environmental variables", "in situ measurements",
+            "in-situ measurements",
         ),
         terms=(
+            # Sample collection -- device/method/size describe how the
+            # ORIGINAL environmental sample was obtained, distinct from
+            # samp_mat_process (post-collection handling) below.
+            CategoryTerm("samp_collect_device", (
+                "Niskin bottle", "corer", "gravity corer", "box corer", "van Veen grab",
+                "grab sampler", "plankton net", "collected using a", "collected with a",
+                "sampler", "syringe", "swab", "pump",
+            ), definition='The physical instrument, container, sampler, or equipment used to collect the environmental sample, such as a Niskin bottle, corer, net, grab sampler, syringe, swab, or pump.'),
+            CategoryTerm("samp_collect_method", (
+                "collected by", "samples were collected using", "collection method",
+                "sampling method", "obtained by", "hand-collected", "collected via",
+                "samples were obtained by",
+                # Real papers commonly say "taken", not "collected" --
+                # confirmed live, a real gap (10.1371/journal.pone.0303937's
+                # own "were taken by ship using an integrating water
+                # sampler" matched none of the original cues).
+                "were taken by", "were taken using", "taken by ship", "depth integration",
+                "integrated samples", "integrating water sampler",
+            ), definition='The procedure used to obtain the environmental or biological sample from its source. Describe how the sample was collected, including relevant collection technique, depth integration, coring, pumping, netting, swabbing, grabbing, or similar actions. This is about collection from the environment, not later filtration, storage, DNA extraction, PCR, or sequencing.'),
+            # Moved here from a deterministic ControlledSearchField per an
+            # explicit user request: sterilization/decontamination of
+            # sampling equipment is itself a sample-collection concept, not
+            # a project-level free-text search.
+            CategoryTerm("sterilise_method", (
+                "sterile", "sterilized", "sterilised", "decontaminated", "autoclaved", "bleach",
+                "sodium hypochlorite", "ethanol", "UV", "UV-sterilized", "flamed", "DNA-away",
+                "RNase-free", "DNase-free",
+                "flame sterilised", "decontamination", "decontaminate", "clean room", "DNAZap",
+                "single-use equipment",
+            ), definition=(
+                'Extract the method used to sterilize or decontaminate sampling, laboratory, or '
+                'processing equipment/materials to prevent cross-sample contamination before or between '
+                'samples. Include the sterilizing agent or procedure and, when stated, relevant '
+                'conditions such as concentration, exposure time, temperature, UV treatment, autoclaving, '
+                'flaming, or bleach treatment.'
+            )),
+            CategoryTerm("samp_size", (
+                "L of water were collected", "liters of water were collected",
+                "g of sediment were collected", "total volume collected",
+                "mass of sediment collected", "volume of water sampled", "kg of sediment",
+            ), definition='The total amount of environmental material originally collected for that sample, such as 10 L of water or 500 g of sediment. Do not confuse with the smaller amount later used for DNA extraction.'),
+            CategoryTerm("samp_size_unit", (
+                "L of water", "mL of water", "g of sediment", "mg of sediment", "kg of sediment",
+                "cm2 of surface", "cm² of surface",
+            ), definition='The unit associated with `samp_size`, such as L, mL, g, mg, cm², or another explicitly reported unit.'),
+            CategoryTerm("sample_composed_of", (
+                "pooled from", "combined from", "composite sample", "composed of",
+                "pooled samples", "combined into one sample", "samples were pooled",
+            ), definition='The material or component(s) that make up the sample, especially when a sample contains multiple identifiable constituents or pooled components. Preserve the source description rather than inferring composition.'),
+            CategoryTerm("sample_derived_from", (
+                "subsampled from", "derived from sample", "subsample of", "parent sample",
+                "originated from sample", "a subsample of sample",
+            ), definition='The original sample, material, or parent specimen from which the current sample was produced by subsampling or processing. Use this to express parent→derived-sample relationships.'),
+            CategoryTerm("internal_expedition_id", (
+                "cruise", "cruise ID", "cruise_id", "expedition", "expedition ID",
+                "voyage", "campaign", "sampling mission", "sampling campaign", "aboard R/V",
+                "aboard the R/V", "research vessel", "station", "station ID", "station_id",
+            ), definition='Extract the explicit name or identifier of the research expedition, campaign, ship cruise/voyage, broader sampling mission, or named sampling station/station series. Examples: Tara Oceans, MOSAiC, Malaspina 2010. Look for phrases such as cruise, expedition, voyage, station, campaign, or aboard R/V ... during .... Preserve the source identifier exactly.'),
+            # Bundles ~18 real but individually low-yield physicochemical
+            # FAIRe sampleMetadata fields (diss_inorg_carb, diss_inorg_nitro,
+            # diss_org_carb, diss_org_nitro, nitrate, nitrite, org_matter,
+            # part_org_carb, part_org_nitro, ph, suspend_part_matter,
+            # tot_carb, tot_diss_nitro, tot_nitro, tot_org_carb,
+            # tot_part_carb, chlorophyll, temp, salinity) into ONE term, per
+            # an explicit user request -- deliberately excludes diss_oxygen,
+            # which already has its own working LLMJudgedSearchField entry
+            # (search_flags.py). Per a follow-up explicit user request, the
+            # raw pipe-joined value is exported as its own single column
+            # (mapping/rules.py's own MappingRule, exports/faire.py's
+            # CUSTOM_ENV_VAR_BLOCK_FIELD) and all 18 individual fields it
+            # replaces are suppressed from export entirely (exports/
+            # faire.py's SAMPLE_METADATA_SUPPRESSED_FIELDS) -- deliberately
+            # NOT decomposed back into those 18 real columns.
+            CategoryTerm("x_env_var_block", (
+                "temperature", "water temperature", "Temp", "salinity", "Sal", "dissolved oxygen", "pH",
+                "chlorophyll", "chlorophyll a", "Chl a", "Chl-a", "chloro", "suspended particulate matter",
+                "SPM", "total suspended solids", "TSS", "suspended solids", "organic matter",
+                "particulate organic matter", "particulate organic carbon", "POC",
+                "particulate organic nitrogen", "PON", "dissolved organic carbon", "DOC",
+                "dissolved organic nitrogen", "DON", "dissolved inorganic carbon", "DIC",
+                "dissolved inorganic nitrogen", "DIN", "total organic carbon", "TOC",
+                "total nitrogen", "TN", "total dissolved nitrogen", "TDN", "total carbon",
+                "total particulate carbon", "TPC", "nitrate", "NO3", "nitrite", "NO2",
+                "physicochemical", "physico-chemical", "water quality parameters",
+                "environmental parameters", "environmental variables", "in situ measurements",
+                "in-situ measurements",
+            ), allows_multi_sentence=True, definition=(
+                'Environmental measurements: Extract measured environmental variables associated '
+                'with sampling, including temperature, salinity, dissolved oxygen, carbon-containing '
+                'environmental variable, nitrogen-containing environmental variable, pH, chlorophyll, '
+                'suspended particulate matter, and similar physicochemical measurements. Preserve the '
+                'variable name, value, unit, depth/location/context, and measurement method when '
+                'stated. Format each variable as "name/formula: value unit" (using whichever name or '
+                'chemical formula is given in the text); if the quote reports more than one variable, '
+                'return one object per variable so they can be combined.'
+            )),
+            # samp_category: deliberately NOT wired into a MappingRule (see
+            # mapping/rules.py) -- capturing the raw evidence is useful,
+            # but broadcasting a single extracted "negative control"/"PCR
+            # standard" quote onto every authoritative sample in the study
+            # would mislabel the real environmental samples too, since this
+            # field identifies *which specific* sample is a control, unlike
+            # every other sample_prep field's "same process applied to all
+            # samples" semantics. Per an explicit user instruction, real
+            # per-sample resolution should come from API/structured data
+            # (already covered by the existing SAMPLE-level MappingRules);
+            # this term exists only so the raw quote is visible for review.
+            CategoryTerm("samp_category", (
+                "negative control", "positive control", "PCR standard", "no-template control",
+                "blank sample", "field blank", "served as a control", "included as a control",
+            ), definition='Whether this text explicitly identifies a described sample as a negative control, positive control, PCR standard, or blank, as opposed to a regular environmental sample.'),
+
             # General sample-handling narrative -- FAIRe's own samp_mat_process
             # is explicitly defined as "any processing applied to the sample
             # during or after retrieving the sample from environment (e.g.
@@ -162,8 +308,12 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
                 "sample handling", "processed prior to extraction", "subsampled", "subsampling",
                 "aliquoted", "homogenized", "homogenised", "ground", "crushed", "milled",
                 "centrifuged", "pelleted", "resuspended", "washed", "rinsed",
-            ), allows_multi_sentence=True, definition='Physical or chemical processing applied to a sample during or after collection, such as filtration, sieving, homogenization, precipitation, or subsampling.'),
-            CategoryTerm("prep_method_additional", fallback_only=True, definition='Additional information about sample preparation, preservation, or pre-extraction storage that does not fit another specific field.'),
+                # Real papers describe the physical handling steps, not the
+                # word "processing" itself -- confirmed live, a real gap
+                "filter membrane was", "membrane was curled", "curled up", "transferred into",
+                "conical tube", "immersed", "cut into pieces", "chopped up",
+            ), allows_multi_sentence=True, definition='Physical or chemical processing applied to the collected sample before nucleic-acid extraction. This can include filtration, pre-filtration, sieving, subsampling, homogenization, grinding, cutting, centrifugation, precipitation, freeze-drying, drying, washing, concentrating, or other preparation of the sample material. Do not include PCR, library preparation, sequencing, or bioinformatics.'),
+            CategoryTerm("prep_method_additional", fallback_only=True, definition='Additional useful details about sample preparation that do not fit another specific sample-preparation field. Use this for important procedural details such as pressure used during filtration, order of multiple preparation steps, unusual apparatus, stopping criteria, special handling, or other preparation conditions. Do not duplicate information that is already fully captured by specific fields such as filter pore size, filter material, storage temperature, or extraction kit.'),
 
             # Filtration
             CategoryTerm("filter_material", (
@@ -174,7 +324,7 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
             CategoryTerm("filter_name", (
                 "Sterivex", "filter cartridge", "cartridge filter", "commercial filter",
                 "filter brand", "filter product",
-            ), definition='Commercial name or brand/model of the filter used.'),
+            ), definition='Commercial name or brand/model of the filter used. Do not return cross-reference placeholders such as "see below" or "see above".'),
             CategoryTerm("filter_diameter", (
                 "filter diameter", "diameter of the filter", "mm filter", "mm diameter filter",
             ), definition='Physical diameter of a circular filter, usually in mm. Do not confuse with pore size.'),
@@ -185,28 +335,29 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
                 "pore size", "filtering pore size", "filter pore size", "µm filter", "um filter",
                 "0.22 µm", "0.2 µm", "0.45 µm",
             ), definition='Pore size of the main filter used to collect/sample material, in µm.'),
-            CategoryTerm("size_frac_low", (
-                "pre-filter", "prefilter pore size", "mesh size", "pre-filtered through",
-                "pre-sorted through",
-            ), definition='Mesh or pore size of a pre-filter used to exclude material larger than that threshold, in µm.'),
             CategoryTerm("prefilter_material", (
                 "pre-filter material", "prefilter material", "pre-sort material",
             ), definition='Material used for a pre-filter or pre-sort step before the main sample filtration.'),
+            # Real papers overwhelmingly describe the mechanism (compressed
+            # air, overpressure, a named pump) rather than ever using the
+            # bare phrase "active filtration" -- confirmed live, a real gap
+            # (10.1371/journal.pone.0303937's own compressed-air/overpressure
+            # pressure-barrel filtration rig matched none of the original
+            # cues, so this term was never even offered as a candidate).
             CategoryTerm("filter_passive_active_0_1", (
                 "active filtration", "passive filtration", "pumped through the filter",
                 "submerged filter", "passive sampler", "actively filtered", "passively filtered",
-            ), definition='Whether filtration/collection was active using a pump or fan (1) or passive by environmental exposure/submersion (0).'),
+                "compressed air", "overpressure", "pressure vessel", "pressure barrel",
+                "vacuum pump", "vacuum filtration", "peristaltic pump", "syringe pressure",
+                "under pressure", "pressurized", "forced through the filter", "flowmeter",
+                "flow rate", "flowrate",
+            ), definition='Whether the filtration/collection of water or air was active or passive. Return exactly 1 for active filtration and 0 for passive filtration. Active = 1: water or air is actively forced or moved through a filter using a pump, compressed air, vacuum, fan, syringe pressure, peristaltic pump, pressure vessel, or another mechanical driving force. Passive = 0: the filter/material is simply exposed, submerged, suspended, or stationed in the environment and material accumulates without mechanically forcing water or air through it. Do not interpret 0 as "no filtration" or 1 as "filtration present" -- this field distinguishes active versus passive filtration only.'),
             CategoryTerm("pump_flow_rate", (
                 "pump flow rate", "flow rate of", "pumped at a rate", "L/min", "flow rate was",
             ), definition='Flow rate of the pump used during filtration.'),
             CategoryTerm("pump_flow_rate_unit", (
                 "L/min", "L/h", "L/s", "m3/min", "m3/h", "m3/s",
             ), definition='Unit associated with the filtration pump flow rate.'),
-            CategoryTerm("stationed_sample_dur", (
-                "deployed for", "deployment period", "filter was deployed", "sampler was deployed",
-                "in situ for", "deployed in the environment",
-            ), definition='Length of time a filter or other stationed sampler was deployed directly in the environment.'),
-
             # Sample storage / preservation (prior to DNA extraction)
             CategoryTerm("samp_store_temp", (
                 "stored at", "storage temperature", "-20°C", "-80°C", "4°C", "on ice",
@@ -221,68 +372,63 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
             CategoryTerm("samp_store_sol", (
                 "stored in RNAlater", "stored in ethanol", "storage solution", "preservation buffer",
                 "stored in lysis buffer", "Longmire's buffer", "preserved in ethanol",
-            ), definition='Solution in which the original environmental sample was stored or preserved.'),
+                # Bare, single-word cues deliberately, not 2-word phrases --
+                # confirmed live that real phrasing inserts words between
+                # them ("immersed EACH with 3 ml of lysis buffer"), which a
+                # fixed multi-word phrase cue silently never matches
+                # (10.1371/journal.pone.0303937).
+                "immersed", "resuspended", "submerged",
+            ), definition='The solution in which the sample (original or, after processing, e.g. a filter membrane) was stored, preserved, immersed, or resuspended, such as RNAlater, ethanol, or a lysis buffer -- even if the immersion and a later storage event (e.g. "stored at -20C") are described in separate nearby sentences. Return ONLY the short solution name/phrase itself (e.g. for "the biomass was immersed with 3 ml of lysis buffer", return "lysis buffer"), never the surrounding sentence.'),
             CategoryTerm("samp_store_method_additional", (
                 "transported frozen", "transported on ice", "shipped frozen", "storage conditions",
                 "shipped on dry ice", "shipped on ice",
             ), allows_multi_sentence=True, definition='Additional useful information about how the original environmental sample was stored or preserved.'),
-            CategoryTerm("prepped_samp_store_temp", (
-                "prepared sample was stored at", "processed sample was stored at",
-                "extract was stored at prior to", "subsample was stored at",
-            ), definition='Temperature at which the processed/prepared sample was stored before DNA extraction.'),
-            CategoryTerm("prepped_samp_store_dur", (
-                "prepared sample was stored for", "processed sample was stored for",
-            ), definition='Duration a processed sample, such as a filter or homogenized subsample, was stored before DNA extraction.'),
-            CategoryTerm("prepped_samp_store_sol", (
-                "prepared sample was stored in", "processed sample was stored in",
-            ), definition='Solution in which the processed/prepared sample was stored before DNA extraction.'),
-            CategoryTerm("dna_store_loc", (
-                "extracted DNA was stored", "DNA samples were stored at", "extracts were stored in",
-            ), definition='Physical location where the extracted DNA was stored, such as a freezer or laboratory room.'),
 
-            # Drying / concentration / precipitation
-            CategoryTerm("precip_chem_prep", (
-                "precipitated with", "ethanol precipitation", "isopropanol precipitation",
-                "sodium chloride precipitation", "precipitation buffer",
-            ), definition='Chemical(s) used to precipitate/concentrate sample material before DNA extraction.'),
-            CategoryTerm("precip_force_prep", (
-                "centrifuged at", "centrifuge force", "x g for", "rpm for", "relative centrifugal force",
-            ), definition='Centrifugation force used during pre-extraction precipitation.'),
-            CategoryTerm("precip_temp_prep", (
-                "precipitated at", "precipitation temperature",
-            ), definition='Temperature used during pre-extraction precipitation.'),
-            CategoryTerm("precip_time_prep", (
-                "precipitated for", "precipitation for", "precipitation time",
-            ), definition='Duration of the pre-extraction precipitation step.'),
+            # precip_chem_prep/precip_force_prep/precip_temp_prep/
+            # precip_time_prep removed entirely per an explicit user
+            # request ("negligible... don't want to waste compute on
+            # them") -- suppressed from export in exports/faire.py's
+            # SAMPLE_METADATA_SUPPRESSED_FIELDS and no longer extracted.
 
             # Nucleic-acid extraction
-            CategoryTerm("nucl_acid_ext", (
-                "extraction protocol", "extraction procedure", "extracted according to",
-                "following the protocol of", "extraction SOP", "protocol available at",
-            ), definition='Citation, URL, SOP, or protocol reference describing the nucleic acid extraction procedure.'),
+            # Broadened per an explicit user-supplied cue list.
             CategoryTerm("nucl_acid_ext_kit", (
                 "extraction kit", "DNA kit", "RNA kit", "using the kit", "manufacturer's instructions",
                 "manufacturer's protocol", "Soil DNA kit", "DNeasy", "PowerSoil",
+                "DNA extraction kit", "RNA extraction kit", "nucleic acid extraction kit",
+                "DNA isolation kit", "RNA isolation kit", "DNA purification kit", "genomic DNA kit",
+                "commercial extraction kit", "extracted using", "isolated using",
+                "DNA was extracted with", "DNA was isolated with",
+                "according to the manufacturer's instructions", "according to the manufacturer's protocol",
+                "following the kit protocol",
+                "PowerWater", "PowerLyzer", "PowerLyze", "NucleoSpin", "E.Z.N.A.", "MagAttract",
+                "Quick-DNA", "AllPrep", "PureLink", "QIAamp",
             ), definition='Name of the commercial kit used to extract DNA/RNA from the sample.'),
-            CategoryTerm("nucl_acid_ext_modify", (
-                "modified the manufacturer's protocol", "protocol was modified",
-                "with the following modification", "deviating from the manufacturer's instructions",
-            ), definition='Any explicitly stated modification made to a commercial or established extraction protocol.'),
-            CategoryTerm("nucl_acid_ext_method_additional", (
-                "DNA extraction was performed", "DNA was extracted", "RNA extraction",
-                "RNA was extracted", "nucleic acid extraction", "nucleic acids were extracted",
-                "DNA isolation", "RNA isolation", "extraction procedure",
-            ), allows_multi_sentence=True, definition='Additional useful nucleic-acid extraction details not captured by another extraction field.'),
-            CategoryTerm("date_ext", (
-                "extraction was performed on", "extracted on", "DNA was extracted on",
-                "extraction date",
-            ), definition='Date on which nucleic acid extraction was performed.'),
+            # fallback_only per an explicit user request: a dedicated
+            # leftover-capture pass (see _nucl_acid_ext_method_additional_
+            # fact) scoped specifically to nucleic-acid-extraction-shaped
+            # leftover sentences within the sample_prep run, not the whole
+            # category's leftovers (that's prep_method_additional's job).
+            CategoryTerm("nucl_acid_ext_method_additional", fallback_only=True, definition='Additional useful details about the nucleic-acid extraction workflow that do not fit another specific extraction field, such as reagent amounts or concentrations, bead-beating or sonication conditions, incubation times and temperatures, centrifugation conditions, wash steps, precipitation steps, elution conditions, repeated treatment steps, or other detailed extraction procedures.'),
+            # User-supplied cues (verbatim), grounded in two real papers:
+            # "DNA contamination was removed with the TURBO DNA-free kit
+            # (Invitrogen)" (10.1093/ismejo/wrae013) and an isopropanol/
+            # ethanol precipitation cleanup (10.1371/journal.pone.0303937)
+            # -- the original cue lists only had "cleaned"/"purified"
+            # phrasing, missing both "contamination was removed" and
+            # precipitation-based cleanup language entirely.
             CategoryTerm("dna_cleanup_0_1", (
                 "DNA was cleaned", "DNA was purified", "DNA purification", "cleanup was performed",
                 "no additional cleanup", "purification step",
-            ), definition='Whether extracted DNA was subsequently cleaned or purified: yes = 1, no = 0.'),
+                "contamination was removed", "DNA-free kit", "DNase treatment", "DNase treated",
+                "treated with DNase", "removed with the", "isopropanol precipitation",
+                "ethanol precipitation", "DNA pellet was washed", "precipitated DNA",
+            ), definition='Whether extracted DNA was subsequently cleaned or purified after the initial extraction: yes = 1, no = 0. This includes a commercial cleanup/purification kit, a DNA-free/DNase treatment to remove contaminants, AND a precipitation-based cleanup (e.g. isopropanol or ethanol precipitation followed by removing the supernatant/washing the pellet) -- precipitation-and-wash steps described narratively (without ever using the word "cleanup" or "purification") still count as yes = 1.'),
             CategoryTerm("dna_cleanup_method", (
                 "cleaned using", "purified using", "cleanup kit", "purification kit",
+                "contamination was removed with", "removed with the", "DNA-free kit",
+                "DNase treatment", "treated with DNase", "isopropanol precipitation",
+                "ethanol precipitation", "precipitated with isopropanol", "precipitated with ethanol",
             ), definition='Method or commercial kit used to clean/purify extracted DNA.'),
             CategoryTerm("pool_dna_num", (
                 "extracts were pooled", "pooled extracts", "number of extracts pooled",
@@ -290,35 +436,45 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
             ), definition='Number of separate DNA extracts pooled together into one sample before PCR.'),
             CategoryTerm("concentration", (
                 "DNA concentration was", "concentration of the extracted DNA", "concentration of DNA",
-                "concentration was measured", "final DNA concentration",
-            ), definition='Concentration of total DNA after extraction.'),
-            CategoryTerm("concentration_method", (
-                "measured using a Qubit", "measured using a NanoDrop", "concentration was measured using",
-                "quantified using", "Qubit fluorometer", "NanoDrop spectrophotometer",
-            ), definition='Method or instrument used to measure extracted DNA concentration.'),
-            CategoryTerm("concentration_unit", (
-                "ng/µL", "ng/mL", "µg/mL", "ng per µL",
-            ), definition='Unit used for extracted DNA concentration, such as ng/µL.'),
-            CategoryTerm("ratioOfAbsorbance260_280", (
-                "260/280 ratio", "A260/280", "absorbance ratio", "260/280 nm ratio", "A260/A280",
-            ), definition='Reported absorbance-ratio measurement used to assess extracted DNA purity.'),
+                "concentration was measured", "final DNA concentration", "ng/µL", "ng/mL", "µg/mL",
+                "ng per µL", "ng/uL", "ng per uL",
+            ), definition='Concentration of total DNA after extraction, preserving both the numeric value and unit in the same value when reported, e.g. "12.4 ng/uL". Do not return only the unit.'),
             CategoryTerm("samp_vol_we_dna_ext", (
                 "used for DNA extraction", "used for extraction", "processed for DNA extraction",
                 "used for RNA extraction", "used for nucleic acid extraction",
+                "DNA was extracted from", "DNA extracted from", "extracted from",
             ), definition='Amount of sample or subsample actually processed for DNA extraction; this is not necessarily the total amount originally collected.'),
             CategoryTerm("samp_vol_we_dna_ext_unit", (
                 "mg of dried", "mg of sediment", "g of sediment", "mL of", "L of water",
             ), definition='Unit for the amount of sample processed for DNA extraction, such as mg, g, mL, L, or cm².'),
 
             # Lysis
+            # Both broadened per an explicit user-supplied cue list.
             CategoryTerm("nucl_acid_ext_lysis", (
                 "lysis", "lysed", "cell lysis", "bead beating", "bead-beating", "bead mill",
                 "homogenizer", "sonication", "sonicated", "freeze-thaw", "proteinase K",
                 "chemical lysis", "enzymatic lysis", "thermal lysis",
+                "lysis buffer", "disruption", "cell disruption", "mechanical disruption",
+                "zirconium beads", "glass beads", "ultrasonic", "heat lysis", "lysozyme",
+                "SDS", "CTAB", "detergent", "osmotic lysis", "homogenized for lysis",
+                "vortexed with beads", "cells were lysed by", "samples were disrupted using",
+                "lysis was performed by", "bead-beaten for", "treated with lysozyme",
+                "incubated with proteinase K", "SDS was added for lysis",
             ), definition='General approach used to lyse DNA-containing material, such as physical, thermal, chemical, enzymatic, or osmotic lysis.'),
             CategoryTerm("nucl_acid_ext_sep", (
                 "separated using", "column-based", "spin column", "magnetic beads",
                 "phenol-chloroform", "phenol chloroform", "silica column",
+                "DNA was purified", "RNA was purified", "nucleic acid purification",
+                "phase separation", "organic extraction", "phenol/chloroform", "chloroform extraction",
+                "phenol chloroform isoamyl alcohol", "PCI extraction", "column purification",
+                "silica membrane", "binding column", "magnetic bead purification",
+                "bead-based purification", "solid-phase extraction", "precipitated DNA",
+                "DNA precipitation", "isopropanol precipitation", "ethanol precipitation",
+                "alcohol precipitation", "centrifuged for phase separation", "aqueous phase",
+                "supernatant transferred", "DNA pellet", "eluted", "elution buffer",
+                "DNA was purified by", "nucleic acids were separated using",
+                "the aqueous phase was transferred", "DNA was precipitated with",
+                "DNA bound to the column", "DNA was eluted from", "magnetic beads were used to purify",
             ), definition='Approach used to separate/purify DNA from the sample mixture, such as column-based separation, magnetic beads, centrifugation, precipitation, or phenol-chloroform.'),
         ),
     ),
@@ -333,6 +489,7 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
             "locus", "target gene", "target region", "target locus", "amplicon", "amplicon size",
             "amplicon length", "12S", "16S", "18S", "23S", "28S", "COI", "CO1", "cox1", "CytB",
             "cytochrome b", "rbcL", "ITS", "ITS1", "ITS2",
+            "SSU", "small-subunit", "small subunit", "5' portion", "5′ portion",
             "V1", "V2", "V3", "V4", "V5", "V6", "V7", "V8", "V9",
             "V3-V4", "V4-V5", "D1-D2", "D2-D3",
             "MiFish", "Teleo", "Leray", "TAReuk", "universal primers", "species-specific primers",
@@ -373,11 +530,14 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
             CategoryTerm("target_subfragment", (
                 "target subfragment", "hypervariable region", "variable region", "V4 region",
                 "V9 region", "V3-V4 region", "ITS1 region", "ITS2 region", "D1-D2 region", "P6 loop",
-            ), definition='A smaller named region within the target gene/locus, such as V4, V9, V3-V4, ITS1, ITS2, D1-D2, or the trnL P6 loop.'),
+                "conserved 5' portion", "conserved 5′ portion", "5' portion", "5′ portion",
+                "5' end", "5′ end", "small-subunit ribosomal RNA", "small subunit ribosomal RNA",
+            ), definition="A smaller named region or portion within the target gene/locus, such as V4, V9, V3-V4, ITS1, ITS2, D1-D2, the trnL P6 loop, or a described 5' portion/end of an SSU/rRNA gene."),
             CategoryTerm("ampliconSize", (
                 "amplicon size", "amplicon length", "expected amplicon", "expected product size",
                 "PCR product size", "amplicon of approximately", "bp amplicon", "base-pair amplicon",
-                "target fragment length", "product length",
+                "target fragment length", "product length", "bp band", "bp bands", "base-pair band",
+                "base-pair bands", "successful amplicons", "amplicons were successfully obtained",
             ), definition='The expected length of the amplified target DNA fragment in base pairs, excluding primers, adapters, and indexes.'),
             # nucl_acid_amp removed entirely per an explicit user request
             # ("remove nucl_acid_amp from the search, and from the list --
@@ -393,7 +553,7 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
             "PCR", "PCR amplification", "amplification", "amplified", "amplicon",
             "polymerase chain reaction", "PCR reaction", "PCR reactions", "reaction mixture",
             "PCR mixture", "master mix", "mastermix", "template DNA", "DNA template", "primer",
-            "primers", "forward primer", "reverse primer", "primer concentration", "primer volume",
+            "primers", "forward primer", "reverse primer", "primer concentration",
             "reaction volume", "thermal cycling", "cycling conditions", "PCR conditions",
             "initial denaturation", "denaturation", "annealing", "annealing temperature", "extension",
             "elongation", "final extension", "final elongation", "PCR cycles", "cycles of amplification",
@@ -402,11 +562,6 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
             "inhibition test", "inhibition check", "internal amplification control",
         ),
         terms=(
-            CategoryTerm("amplificationReactionVolume", (
-                "total reaction volume", "final reaction volume", "PCR reaction volume",
-                "reaction volume of", "performed in a volume of", "uL reaction", "amplification volume",
-                "total PCR volume", "final volume per reaction", "reaction mixture volume",
-            ), definition='The total final volume of one PCR reaction, not the amount of DNA, primer, or master mix added.'),
             CategoryTerm("annealingTemp", (
                 "annealing temperature", "annealed at", "annealing at", "annealing step",
                 "annealing phase", "primer annealing", "C annealing", "touchdown annealing",
@@ -422,7 +577,7 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
                 "master mix was prepared", "buffer and dNTPs", "MgCl2 and dNTPs",
                 "polymerase and buffer", "BSA was added", "reaction components were",
                 "components per reaction",
-            ), definition='The explicitly reported composition of a PCR reaction mixture assembled from individual components rather than a commercial pre-made master mix.'),
+            ), definition='The explicitly reported composition of a PCR reaction mixture assembled from individual components rather than a commercial pre-made master mix. Extract only the reagent/component composition; do not include thermocycler, cycling-profile, denaturation, annealing, extension, cycle-count, or temperature/time program details.'),
             CategoryTerm("inhibition_check_0_1", (
                 "tested for PCR inhibition", "inhibition was checked", "inhibition testing",
                 "PCR inhibition assessment", "inhibition control included",
@@ -441,38 +596,12 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
                 "Ct values calculated using", "PCR run analyzed with", "fluorescence data analyzed using",
                 "PCR analysis software", "instrument data analysis software",
             ), definition='Software used to analyze PCR/qPCR amplification-run data, such as amplification curves, Ct/Cq values, or instrument output. Do not return general sequence-analysis software.'),
-            CategoryTerm("pcr_cond", (
-                "PCR conditions", "cycling conditions", "thermal cycling profile",
-                "thermocycling conditions", "PCR program", "thermal profile", "amplification conditions",
-                "cycling protocol", "denaturation annealing extension",
-                "initial denaturation followed by",
-            ), definition='The overall PCR thermal-cycling conditions, including stages such as initial denaturation, denaturation, annealing, extension, and final extension.'),
             CategoryTerm("pcr_cycles", (
                 "PCR cycles", "amplification cycles", "cycles of amplification", "cycled for",
                 "number of cycles", "35 cycles", "40 cycles", "x 35 cycles", "35-cycle amplification",
                 "repeated for 35 cycles",
             ), definition='The number of amplification cycles performed during the primary PCR.'),
-            CategoryTerm("pcr_dna_vol", (
-                "template DNA volume", "DNA volume per reaction", "uL template DNA",
-                "DNA template added", "template added per reaction", "DNA input volume",
-                "PCR template volume", "volume of DNA extract", "extract volume per reaction",
-                "uL of extract",
-            ), definition='The volume of DNA extract or DNA template added to each primary PCR reaction.'),
             CategoryTerm("pcr_method_additional", fallback_only=True, definition='Other explicitly reported information about the primary PCR method that is useful but does not belong in another specific PCR field.'),
-            CategoryTerm("pcr_primer_conc_forward", (
-                "forward primer concentration", "final forward primer concentration",
-                "forward primer at", "nM forward primer", "uM forward primer",
-                "concentration of forward primer", "forward primer final concentration",
-                "forward oligo concentration", "F primer concentration",
-                "forward primer stock concentration",
-            ), definition='The concentration of the forward PCR primer used in the reaction. Preserve whether the reported value is stock or final concentration.'),
-            CategoryTerm("pcr_primer_conc_reverse", (
-                "reverse primer concentration", "final reverse primer concentration",
-                "reverse primer at", "nM reverse primer", "uM reverse primer",
-                "concentration of reverse primer", "reverse primer final concentration",
-                "reverse oligo concentration", "R primer concentration",
-                "reverse primer stock concentration",
-            ), definition='The concentration of the reverse PCR primer used in the reaction. Preserve whether the reported value is stock or final concentration.'),
             CategoryTerm("pcr_primer_forward", (
                 "forward primer sequence", "forward oligonucleotide sequence", "forward primer 5'-3'",
                 "F primer sequence", "forward sequence", "forward primer:", "sense primer sequence",
@@ -483,55 +612,85 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
                 "R primer sequence", "reverse sequence", "reverse primer:", "antisense primer sequence",
                 "Rev primer sequence", "reverse oligo 5'",
             ), definition="The nucleotide sequence of the reverse PCR primer, reported in the 5'->3' direction."),
+            # Real papers overwhelmingly just name the primer pair directly
+            # ("universal primers of Uni519F/806r", "using primers 515F/806R")
+            # rather than using any of the meta-descriptive phrasing
+            # ("primer designated", "primer ID", "primer abbreviation") the
+            # cues below originally assumed -- confirmed live, a real gap
+            # (10.1038/s42003-024-06136-2's own primer sentence matched none
+            # of the original cues, so this term was never even shown as a
+            # candidate to the LLM). Broadened with cues for the actual
+            # common surrounding language instead of the primer name itself
+            # (which varies without limit and can't be enumerated).
             CategoryTerm("pcr_primer_name_forward", (
                 "forward primer name", "forward primer designated", "forward primer called",
                 "forward primer identifier", "forward primer ID", "F primer name",
                 "forward oligo name", "forward primer label", "Fwd primer name",
                 "forward primer abbreviation", "primer pair", "primer names",
-                "primer set", "16S rRNA F",
+                "primer set", "16S rRNA F", "universal primer", "universal primers",
+                "primers of", "using the primers", "using primers", "amplified using primers",
+                "PCR primers", "primer combination",
             ), definition='The published or study-specific name/identifier of the forward primer, not its nucleotide sequence.'),
             CategoryTerm("pcr_primer_name_reverse", (
                 "reverse primer name", "reverse primer designated", "reverse primer called",
                 "reverse primer identifier", "reverse primer ID", "R primer name",
                 "reverse oligo name", "reverse primer label", "Rev primer name",
                 "reverse primer abbreviation", "primer pair", "primer names",
-                "primer set", "16S rRNA R",
+                "primer set", "16S rRNA R", "universal primer", "universal primers",
+                "primers of", "using the primers", "using primers", "amplified using primers",
+                "PCR primers", "primer combination",
             ), definition='The published or study-specific name/identifier of the reverse primer, not its nucleotide sequence.'),
+            # Broadened with pcr_primer_name_forward/reverse's own cues
+            # (real papers overwhelmingly just name the primer pair and
+            # place a bare citation at the very end of the same sentence,
+            # e.g. "...forward primer SP-F-30 ... and the reverse primer
+            # SP-R-540 ... (Vidal, Meneses & Smith, 2002)" -- confirmed
+            # live, 10.7717/peerj.333 -- rather than explicit "described
+            # by"/"reference"/"published in" phrasing). Precision comes
+            # from section_category_extraction.py's dedicated citation-
+            # shape context check (_valid_primer_reference_context), not
+            # from the cue list, so broadening these cues doesn't risk
+            # firing on every plain primer-name sentence.
             CategoryTerm("pcr_primer_reference_forward", (
                 "forward primer described by", "forward primer from", "forward primer reference",
                 "forward primer published in", "forward primer developed by",
                 "forward primer according to", "forward primer adapted from", "forward primer source",
                 "forward primer citation", "forward primer DOI",
-            ), definition='The citation, DOI, publication, or source describing the forward primer.'),
+                "forward primer name", "forward primer designated", "forward primer called",
+                "forward primer identifier", "forward primer ID", "F primer name",
+                "forward oligo name", "forward primer label", "Fwd primer name",
+                "forward primer abbreviation", "primer pair", "primer names",
+                "primer set", "16S rRNA F", "universal primer", "universal primers",
+                "primers of", "using the primers", "using primers", "amplified using primers",
+                "PCR primers", "primer combination",
+            ), definition=(
+                'The citation, DOI, publication, or source describing the forward primer -- typically a bare '
+                '"(Author et al., Year)" citation placed right after the primer name/sequence at the end of '
+                'the sentence. Only extract when a real citation or DOI is present in the quote, never invent one.'
+            )),
             CategoryTerm("pcr_primer_reference_reverse", (
                 "reverse primer described by", "reverse primer from", "reverse primer reference",
                 "reverse primer published in", "reverse primer developed by",
                 "reverse primer according to", "reverse primer adapted from", "reverse primer source",
                 "reverse primer citation", "reverse primer DOI",
-            ), definition='The citation, DOI, publication, or source describing the reverse primer.'),
-            CategoryTerm("pcr_primer_vol_forward", (
-                "forward primer volume", "volume of forward primer", "uL forward primer",
-                "forward primer added per reaction", "forward primer volume per reaction",
-                "F primer volume", "aliquot of forward primer", "forward oligo volume",
-                "uL of forward primer",
-            ), definition='The physical volume of forward-primer solution added to each PCR reaction. Do not confuse with concentration.'),
-            CategoryTerm("pcr_primer_vol_reverse", (
-                "reverse primer volume", "volume of reverse primer", "uL reverse primer",
-                "reverse primer added per reaction", "reverse primer volume per reaction",
-                "R primer volume", "aliquot of reverse primer", "reverse oligo volume",
-                "uL of reverse primer",
-            ), definition='The physical volume of reverse-primer solution added to each PCR reaction. Do not confuse with concentration.'),
+                "reverse primer name", "reverse primer designated", "reverse primer called",
+                "reverse primer identifier", "reverse primer ID", "R primer name",
+                "reverse oligo name", "reverse primer label", "Rev primer name",
+                "reverse primer abbreviation", "primer pair", "primer names",
+                "primer set", "16S rRNA R", "universal primer", "universal primers",
+                "primers of", "using the primers", "using primers", "amplified using primers",
+                "PCR primers", "primer combination",
+            ), definition=(
+                'The citation, DOI, publication, or source describing the reverse primer -- typically a bare '
+                '"(Author et al., Year)" citation placed right after the primer name/sequence at the end of '
+                'the sentence. Only extract when a real citation or DOI is present in the quote, never invent one.'
+            )),
             CategoryTerm("pcr_rep", (
                 "PCR technical replicates", "technical PCR replicates", "replicate PCR reactions",
                 "replicate PCRs", "PCRs performed in duplicate", "PCRs performed in triplicate",
                 "duplicate PCR reactions", "triplicate PCR reactions", "independent PCR reactions",
                 "PCR replicates per sample",
             ), definition='The number of technical PCR replicate reactions performed per biological sample. Do not count biological, field, or extraction replicates.'),
-            CategoryTerm("thermocycler", (
-                "thermocycler", "thermal cycler", "PCR instrument", "PCR machine", "PCR performed on",
-                "PCR performed using", "amplification performed on", "cycled in a",
-                "thermal cycling system", "manufacturer and model",
-            ), definition='The manufacturer and model of the thermal cycler used to perform the primary PCR. Do not return the sequencing instrument.'),
             CategoryTerm("block_ref", (
                 "blocking primer described by", "blocking primer reference",
                 "blocking oligonucleotide reference", "blocker developed by", "blocker published in",
@@ -743,12 +902,6 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
         # within this category's own run-text) satisfies this
         # structurally, without duplicating the requirement per term.
         terms=(
-            CategoryTerm("pcr2_amplificationReactionVolume", (
-                "second PCR reaction volume", "PCR2 reaction volume", "indexing PCR volume",
-                "index PCR volume", "second amplification volume", "second PCR in a volume of",
-                "PCR2 total volume", "indexing reaction volume", "uL second PCR",
-                "uL indexing PCR",
-            ), definition='The total final volume of one second/indexing-PCR reaction.'),
             CategoryTerm("pcr2_analysis_software", (
                 "second PCR data analyzed using", "PCR2 data analyzed using",
                 "indexing PCR analysis software", "second amplification analyzed with",
@@ -762,48 +915,12 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
                 "annealing temperature for second PCR", "indexing annealing temperature",
                 "second-step annealing", "PCR2 annealing temperature",
             ), definition='The primer-annealing temperature used specifically during the second/indexing PCR.'),
-            CategoryTerm("pcr2_commercial_mm", (
-                "second PCR master mix", "PCR2 master mix", "indexing PCR master mix",
-                "index PCR master mix", "commercial mix for second PCR",
-                "second-step commercial master mix", "indexing reaction premix",
-                "2x mix for indexing PCR", "PCR2 premixed master mix",
-                "master mix used in second PCR",
-            ), definition='The commercial pre-made master mix used specifically for PCR2/indexing PCR.'),
-            CategoryTerm("pcr2_custom_mm", (
-                "second PCR reaction contained", "PCR2 reaction mixture", "indexing PCR contained",
-                "second PCR components", "PCR2 custom mix",
-                "second amplification mixture consisted of", "index PCR reaction contained",
-                "buffer in second PCR", "PCR2 dNTP concentration", "PCR2 polymerase concentration",
-            ), definition='The explicitly reported composition of a custom reaction mixture used specifically for PCR2/indexing PCR.'),
-            CategoryTerm("pcr2_cond", (
-                "second PCR conditions", "PCR2 conditions", "indexing PCR conditions",
-                "index PCR cycling conditions", "second amplification conditions",
-                "second PCR thermal profile", "PCR2 cycling protocol", "indexing thermal cycling",
-                "second-step PCR program", "PCR2 thermocycling conditions",
-            ), definition='The full thermal-cycling conditions used for PCR2/indexing PCR.'),
             CategoryTerm("pcr2_cycles", (
                 "second PCR cycles", "PCR2 cycles", "indexing PCR cycles", "index PCR cycles",
                 "second amplification cycles", "limited-cycle PCR", "8 indexing cycles",
                 "cycled for eight cycles", "number of PCR2 cycles", "second-step cycle number",
             ), definition='The number of amplification cycles performed in PCR2/indexing PCR.'),
-            CategoryTerm("pcr2_dna_vol", (
-                "DNA volume in second PCR", "PCR2 template volume", "template added to second PCR",
-                "first PCR product volume", "amplicon volume for indexing PCR",
-                "uL PCR1 product", "PCR product added to PCR2", "template volume for index PCR",
-                "DNA input to PCR2", "indexing PCR template volume",
-            ), definition='The volume of template entering PCR2, often PCR1 product/amplicon rather than original extracted DNA.'),
             CategoryTerm("pcr2_method_additional", fallback_only=True, definition='Additional useful PCR2/indexing-PCR methodological information not captured in another PCR2 field.'),
-            CategoryTerm("pcr2_plate_id", (
-                "PCR2 plate ID", "second PCR plate", "indexing plate", "index PCR plate",
-                "plate identifier", "plate ID", "plate barcode", "indexing PCR plate ID",
-                "second-step plate", "PCR2 plate identifier",
-            ), definition='The identifier/name assigned to the plate used for PCR2/indexing PCR.'),
-            CategoryTerm("pcr2_thermocycler", (
-                "second PCR performed on", "PCR2 performed on", "indexing PCR performed on",
-                "index PCR performed using", "second amplification performed on",
-                "PCR2 thermocycler", "indexing thermocycler", "second PCR thermal cycler",
-                "PCR2 instrument", "second-step PCR system",
-            ), definition='The manufacturer and model of the thermocycler used specifically for PCR2/indexing PCR.'),
         ),
     ),
     SectionCategory(
@@ -853,21 +970,11 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
                 "second PCR indexing", "fusion-primer approach", "tailed-primer approach",
                 "indices incorporated during PCR", "adapter ligation", "ligation-based library",
             ), definition='How adapters/indexes/barcodes were incorporated into metabarcoding libraries: one-step PCR, two-step PCR, or ligation-based preparation.'),
-            CategoryTerm("lib_screen", (
-                "library screening", "library enrichment", "library size selection",
-                "library purification", "library cleanup", "library quality control", "library QC",
-                "library quantified", "library normalization", "equimolar pooling",
-            ), definition='A description of library screening, purification, size selection, enrichment, quantification, QC, normalization, or related preparation before sequencing.'),
             CategoryTerm("instrument", (
                 "sequencing instrument", "sequencer model", "instrument model",
                 "sequenced using a", "sequenced on a", "sequencing performed on", "sequencer used",
                 "manufacturer and model", "sequencing system model", "instrument used for sequencing",
             ), definition='The specific manufacturer/model of the sequencing instrument used.'),
-            CategoryTerm("lib_layout", (
-                "paired-end sequencing", "paired end reads", "single-end sequencing",
-                "single end reads", "2 x 150 bp", "2 x 250 bp", "2x150", "2x250", "PE reads",
-                "SE reads",
-            ), definition='Whether sequencing reads were generated in paired-end or single-end configuration.'),
             CategoryTerm("platform", (
                 "sequencing platform", "sequencing technology", "platform used for sequencing",
                 "sequencing platform was", "high-throughput sequencing platform",
@@ -910,81 +1017,16 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
             "forward and reverse reads", "minimum overlap", "overlap", "mergePairs",
             "fastq_mergepairs", "FLASH", "PEAR",
         ),
-        # min_len_tool/min_reads_tool are deliberately kept apart from
-        # each other: read-length filtering here vs. feature/ASV-abundance
-        # filtering under otu_asv_generation_filtering below -- an
-        # explicit user note ("This makes min_len_tool and min_reads_tool
-        # much harder to confuse: read length versus feature abundance.").
-        terms=(
-            CategoryTerm("demux_max_mismatch", (
-                "maximum barcode mismatches", "allowed barcode mismatches",
-                "barcode mismatch tolerance", "maximum index mismatches", "allowed index mismatches",
-                "index mismatch tolerance", "one mismatch allowed", "zero barcode mismatches",
-                "mismatches in MID", "demultiplexing mismatch threshold",
-            ), definition='The maximum number/rate of barcode or index mismatches permitted while assigning reads to samples during demultiplexing.'),
-            CategoryTerm("demux_tool", (
-                "demultiplexed using", "demultiplexing performed with", "reads demultiplexed with",
-                "barcodes separated using", "reads assigned to samples using",
-                "index-based demultiplexing with", "barcode splitting performed with",
-                "demultiplexing software", "sample assignment performed using",
-                "sequence reads were demultiplexed",
-            ), definition='The software/tool used specifically to demultiplex reads--that is, assign multiplexed reads to samples using their barcode/index sequences.'),
-            CategoryTerm("error_rate_cutoff", (
-                "maximum expected errors", "expected error cutoff", "error threshold",
-                "quality cutoff", "quality threshold", "minimum Phred score",
-                "mean quality threshold", "reads below Q", "maxEE =", "maximum error rate",
-            ), definition='The numerical threshold used to remove or trim reads based on sequencing quality/error, such as maxEE=2 or Q20.'),
-            CategoryTerm("error_rate_tool", (
-                "quality filtered using", "quality filtering performed with",
-                "low-quality reads removed using", "reads filtered by quality using",
-                "expected-error filtering using", "Phred filtering performed with",
-                "quality trimming using", "read quality filtering software",
-                "reads exceeding error threshold removed with", "quality-based filtering performed using",
-            ), definition='The software/function used specifically to remove or trim reads according to a sequencing-quality/error threshold.'),
-            CategoryTerm("error_rate_type", (
-                "expected error", "expected errors", "expected error rate", "Phred score",
-                "Phred quality", "quality filter", "quality filtered", "quality filtering",
-                "quality trimmed", "quality trimming", "Q score", "quality score",
-                "mean read quality", "average quality score", "predicted read accuracy",
-            ), definition='The kind of error/quality metric used for filtering, principally Phred quality score, expected error rate, or another explicitly stated metric.'),
-            CategoryTerm("merge_min_overlap", (
-                "minimum overlap", "minimum overlap length", "minimum paired-end overlap",
-                "at least 20 bp overlap", "overlap of at least", "required overlap",
-                "minimum bases overlapping", "merge overlap threshold",
-                "minimum forward-reverse overlap", "overlap requirement",
-            ), definition='The minimum number of overlapping bases required to merge forward and reverse paired-end reads.'),
-            CategoryTerm("merge_tool", (
-                "paired reads merged using", "paired-end reads merged with",
-                "forward and reverse reads merged using", "read pairs joined using",
-                "pair merging performed with", "merged sequences using",
-                "paired reads assembled using", "merging software", "forward/reverse assembly using",
-                "read merging performed by",
-            ), definition='The software/tool used specifically to merge paired-end forward and reverse reads.'),
-            CategoryTerm("min_len_cutoff", (
-                "minimum read length", "minimum sequence length", "length cutoff",
-                "reads shorter than", "sequences shorter than", "minimum length threshold",
-                "short reads removed below", "minimum retained length", "read length >=",
-                "bp minimum length", "trimmed to",
-            ), definition='The minimum sequence/read length allowed after preprocessing; shorter reads are removed.'),
-            CategoryTerm("min_len_tool", (
-                "length filtering performed using", "short reads removed using",
-                "reads filtered by length using", "sequence length filtering with",
-                "minimum-length filtering using", "reads below length removed with",
-                "length-based filtering software", "read length cutoff applied using",
-                "short sequence filtering using", "length filter implemented with",
-            ), definition='The software/tool used specifically to remove reads because they are shorter than an allowed minimum length.'),
-            CategoryTerm("trim_method", (
-                "primer trimming performed with", "primer removal using", "adapter trimming using",
-                "adapter removal using", "primers were removed with", "adapters were removed with",
-                "technical sequences removed using", "primer sequences trimmed with",
-                "adapter sequences trimmed with", "trimming software",
-            ), definition='The software/method used specifically to remove PCR primers, sequencing adapters, adapter tails, or other technical sequences from reads.'),
-            CategoryTerm("trim_param", (
-                "minimum adapter overlap", "allowed primer mismatches", "maximum primer mismatches",
-                "adapter error rate", "discard untrimmed reads", "anchored primer",
-                "anchored adapter", "allow indels", "no indels", "primer trimming parameters",
-            ), definition='Parameters controlling primer/adapter trimming, such as mismatch allowance, adapter error rate, minimum overlap, anchored matching, or discard-untrimmed behavior.'),
-        ),
+        # trim_method/trim_param, demux_tool/demux_max_mismatch,
+        # error_rate_tool/error_rate_type, merge_tool/merge_min_overlap,
+        # and min_len_cutoff/min_len_tool all removed entirely per an
+        # explicit user request ("negligible... don't want to waste
+        # compute on them") -- suppressed from export in exports/faire.py's
+        # PROJECT_METADATA_SUPPRESSED_FIELDS and no longer extracted.
+        # screen_nontarget_method removed entirely per an explicit user
+        # request -- no longer extracted, mapped, or exported anywhere
+        # (its own MappingRule and target column are gone too).
+        terms=(),
     ),
     SectionCategory(
         name="otu_asv_generation_filtering",
@@ -1013,7 +1055,8 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
             # Contaminant / control filtering
             "contaminant", "contamination filtering", "decontam", "microDecon",
             "negative control filtering", "blank filtering", "blank threshold", "background reads",
-            "control threshold",
+            "control threshold", "PhiX", "PhiX control", "PhiX genome", "PhiX reads",
+            "PhiX sequences", "leftover PhiX",
             # Final feature curation
             "non-target taxa removed", "non-target sequences removed", "host sequences removed",
             "chloroplast removed", "mitochondrial sequences removed", "unclassified removed",
@@ -1021,90 +1064,41 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
             "feature table was filtered", "LULU", "replicates combined", "PCR replicates pooled",
         ),
         terms=(
-            CategoryTerm("chimera_check_method", (
-                "chimeras removed using", "chimera detection performed with",
-                "chimeric sequences identified using", "bimeras removed using",
-                "chimera checking using", "chimera removal software", "de novo chimera detection",
-                "reference-based chimera detection", "chimeric reads filtered using",
-                "chimera screening performed with",
-            ), definition='The software/method used specifically to detect and/or remove chimeric PCR sequences during sequence processing.'),
-            CategoryTerm("chimera_check_param", (
-                "chimera parameters", "chimera filtering parameters", "chimera detection threshold",
-                "minimum divergence", "abundance skew", "chimera score cutoff",
-                "non-default chimera parameters", "chimera reference database parameter",
-                "chimera detection settings", "chimera filtering cutoff",
-            ), definition='Non-default parameters, thresholds, reference settings, or other settings used during chimera detection/removal.'),
-            CategoryTerm("otu_clust_cutoff", (
-                "clustered at 97% similarity", "clustered at 99% similarity",
-                "OTU similarity threshold", "clustering similarity cutoff",
-                "sequence identity threshold for clustering", "percent similarity for OTUs",
-                "clustering cutoff", "0.03 distance cutoff", "3% sequence divergence",
-                "100% similarity ASVs",
-            ), definition='The sequence-similarity/identity threshold used to form OTUs; for exact sequence-variant workflows, preserve the explicitly stated ASV/100%-identity treatment rather than assuming one when absent.'),
             CategoryTerm("otu_clust_tool", (
                 "OTUs clustered using", "OTU clustering performed with", "sequences clustered using",
                 "ASVs inferred using", "ASV inference performed with",
                 "sequence variants inferred using", "denoising performed with",
                 "feature inference using", "OTU generation software", "ASV generation software",
             ), definition='The software/method used to generate OTUs or infer ASVs/sequence variants from cleaned reads.'),
-            # otu_raw_description is deliberately NOT a CategoryTerm here --
-            # per an explicit user request, it's generated by the LLM in its
-            # own words from this category's combined run-text
-            # (extraction/section_category_extraction.py's
-            # _generate_otu_raw_description_fact), not extracted verbatim,
-            # since a real paper's own raw-table sentence is often an
-            # unhelpful cross-reference ("we employed the same pipeline as
-            # [citation]") rather than a real description.
-            CategoryTerm("min_reads_cutoff", (
-                "minimum read count", "minimum reads", "read-count threshold", "fewer than 10 reads",
-                "less than 10 reads", "low-abundance threshold", "relative abundance threshold",
-                "minimum feature abundance", "singleton removal threshold", "minimum sequence count",
-            ), definition='The minimum abundance/read-count threshold required for an ASV, OTU, sequence, or detection to be retained.'),
-            CategoryTerm("min_reads_cutoff_unit", (
-                "reads", "read count", "number of reads", "percent reads", "% relative abundance",
-                "relative read abundance", "fraction of reads", "reads per sample", "reads per ASV",
-                "reads per OTU",
-            ), definition='The unit in which the minimum-abundance threshold is expressed, such as number of reads, percent relative abundance, or fraction of reads.'),
-            CategoryTerm("min_reads_tool", (
-                "low-abundance features removed using", "minimum-read filtering performed with",
-                "rare ASVs removed using", "rare OTUs removed using",
-                "feature abundance filtering using", "singletons removed using",
-                "read-count filtering software", "relative-abundance filtering using",
-                "low-count features filtered with", "abundance threshold applied using",
-            ), definition='The software/method used specifically to remove low-abundance ASVs, OTUs, sequences, or detections based on a minimum read-count/relative-abundance rule.'),
-            # FAIRe defines otu_final_description as a description of
-            # processing applied to the FINAL (post-curation) OTU/ASV
-            # table -- also multi-sentence.
-            CategoryTerm("otu_final_description", (
-                "final OTU table", "final ASV table", "final feature table", "curated OTU table",
-                "curated ASV table", "final table curation", "post-curation table",
-                "final dataset after filtering", "final community table", "final abundance table",
-            ), allows_multi_sentence=True, definition='A source-faithful description of processing and curation applied to produce the final OTU/ASV/feature table after filtering. This may span multiple sentences.'),
+            # otu_raw_description, otu_final_description, min_reads_cutoff/
+            # min_reads_tool/min_reads_cutoff_unit, and otu_clust_cutoff
+            # all removed entirely per an explicit user request
+            # ("negligible... don't want to waste compute on them") --
+            # suppressed from export in exports/faire.py's PROJECT_
+            # METADATA_SUPPRESSED_FIELDS and no longer extracted or
+            # generated anywhere.
+            # screen_geograph_method/screen_nontarget_method/screen_other
+            # removed entirely per an explicit user request -- no longer
+            # extracted, mapped, or exported anywhere. screen_contam_method
+            # stays (real bioinformatics-pipeline decontamination step) but
+            # its own cues/definition were replaced with a user-supplied
+            # prompt.
             CategoryTerm("screen_contam_method", (
                 "contaminants screened using", "contaminant removal", "contamination filtering",
                 "negative-control filtering", "blank-based filtering",
                 "control-based contaminant removal", "features detected in blanks",
                 "background contamination threshold", "contaminant sequences removed",
                 "contamination screening method",
-            ), definition='The method used to identify/remove likely contamination, often using negative controls, blanks, prevalence/frequency rules, or contaminant-detection algorithms.'),
-            CategoryTerm("screen_geograph_method", (
-                "geographic screening", "geographical screening", "species distribution screened",
-                "known geographic range", "known distribution", "outside known range",
-                "geographically implausible", "regional occurrence records",
-                "distribution information applied", "geographic plausibility",
-            ), definition='The method used to remove or flag taxonomic detections based on geographic plausibility or known species distributions.'),
-            CategoryTerm("screen_nontarget_method", (
-                "non-target taxa removed", "non-target species removed",
-                "non-target sequences filtered", "target taxa retained", "off-target taxa removed",
-                "excluded non-target taxa", "taxonomic exclusion", "sequences outside target group",
-                "non-target screening", "target-group filtering",
-            ), definition='The method used to remove organisms/sequences outside the intended taxonomic target of the study.'),
-            CategoryTerm("screen_other", (
-                "additional screening criteria", "other screening criteria", "manual screening",
-                "manual curation criteria", "ecological plausibility filtering",
-                "additional sequence screening", "other filtering approach",
-                "custom screening criterion", "further curation", "additional biological filtering",
-            ), definition='Any other explicitly described biological/ecological screening or curation procedure that is not contamination, geography, or non-target filtering.'),
+                # User-supplied cues (verbatim).
+                "contaminant", "contamination", "blank", "negative control", "extraction blank",
+                "PCR blank", "decontam", "prevalence", "frequency", "removed if present in controls",
+            ), definition=(
+                'Extract the method or rule used after sequencing to identify, flag, or remove '
+                'sequences/OTUs/ASVs/taxa considered contaminants. This may include comparison with '
+                'negative controls, prevalence- or frequency-based contaminant detection, removal of taxa '
+                'enriched in blanks, or use of dedicated contamination-screening software. Include the '
+                'software, threshold, or decision rule when stated.'
+            )),
         ),
     ),
     SectionCategory(
@@ -1125,8 +1119,10 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
             # Reference databases
             "reference database", "reference library", "reference sequences", "SILVA", "PR2",
             "GenBank", "NCBI nt", "NCBI nucleotide", "BOLD", "BOLD Systems", "UNITE", "RDP",
+            "NCBI nr", "NCBI database", "nonredundant NCBI database", "non-redundant NCBI database",
+            "nonredundant (nr) NCBI database", "nr database",
             "Greengenes", "MIDORI", "MIDORI2", "MitoFish", "MetaZooGene", "Diat.barcode", "PhytoREF",
-            "custom database", "custom reference database", "in-house database",
+            "FreshTrain", "custom database", "custom reference database", "in-house database",
             # Assignment criteria
             "percent identity", "percentage identity", "% identity", "sequence identity",
             "similarity cutoff", "identity cutoff", "query coverage", "coverage threshold",
@@ -1140,14 +1136,14 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
                 "reference database", "taxonomic reference database", "taxonomy database",
                 "reference sequence database", "reference library", "matched against the database",
                 "searched against the database", "taxonomy assigned against",
-                "reference database version", "reference sequences from",
-            ), definition='The reference sequence/taxonomy database used to assign taxonomic identities to OTUs/ASVs/sequences, including version/release when reported.'),
-            CategoryTerm("otu_db_custom", (
+                "reference database version", "reference sequences from", "FreshTrain", "SILVA_132",
+                "NCBI nr", "NCBI database", "nonredundant NCBI database",
+                "non-redundant NCBI database", "nonredundant (nr) NCBI database", "nr database",
                 "custom reference database", "custom database", "in-house database",
                 "locally curated database", "custom reference library", "database constructed from",
                 "reference database was built", "database curated for this study",
                 "bespoke database", "study-specific reference database",
-            ), definition='A description of a custom, locally built, curated, or study-specific reference database used for taxonomic assignment.'),
+            ), definition='The reference sequence/taxonomy database used to assign taxonomic identities to OTUs/ASVs/sequences, including version/release when reported. Include custom, locally built, curated, or study-specific databases here too.'),
             CategoryTerm("otu_seq_comp_appr", (
                 "sequences aligned using", "sequence comparison performed using",
                 "alignment performed with", "queries aligned against",
@@ -1165,7 +1161,7 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
                 "compared with reference sequences", "searched against", "aligned against",
                 "matched against", "sequence similarity search", "best hit", "reference database",
                 "reference sequences", "BLAST", "BLASTn", "MegaBLAST", "USEARCH", "VSEARCH",
-                "CREST", "CREST4",
+                "CREST", "CREST4", "Kraken", "Kraken2", "Kraken 2",
             ), definition='Extract the name and version, if available, of the software, algorithm, or sequence-comparison tool used to compare OTU/ASV/feature sequences against reference sequences for taxonomic assignment. This includes alignment, similarity-search, or taxonomic sequence-comparison tools. Extract the tool only when the text shows that it was used to assign or identify taxonomy. Do not extract software used only for OTU/ASV generation, read trimming, assembly, or unrelated sequence comparisons.'),
             # tax_assign_cat is deliberately NOT a CategoryTerm here -- the
             # real FAIRe field is a controlled enum (sequence similarity /
@@ -1179,40 +1175,12 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
             # instead by extraction/search_flags.py's tax_assign_cat
             # LLMJudgedSearchField, which has no such guard and is
             # explicitly allowed to classify/infer into the fixed enum.
-            CategoryTerm("tax_class_collapse", (
-                "lowest common ancestor", "LCA", "collapsed to higher taxonomic level",
-                "assigned to lowest common taxon", "lowest common taxonomic rank",
-                "collapsed to genus", "collapsed to family", "consensus taxonomic level",
-                "ambiguous hits assigned to", "taxonomic rank reduced to",
-                # User-supplied cues (verbatim).
-                "lowest common taxon", "lowest shared taxon", "lowest shared taxonomic rank",
-                "common ancestor", "consensus taxonomy", "consensus classification",
-                "consensus assignment", "assigned to genus level", "assigned to family level",
-                "assigned to higher taxonomic level", "higher taxonomic rank", "resolved to genus",
-                "retained at genus level", "reported at genus level", "assigned at the lowest rank",
-                "lowest confidently assigned rank", "multiple hits", "ambiguous hits",
-                "equally matching sequences", "best hits", "shared taxonomy", "common taxonomy",
-            ), definition='Extract the rule used to resolve uncertain, ambiguous, or multiple taxonomic matches by assigning a sequence to a broader taxonomic rank. Examples include lowest common ancestor (LCA), consensus taxonomy, assignment to the lowest shared taxonomic rank, or falling back from species to genus/family when confidence or identity is insufficient. Do not require the paper to use the word "collapse."'),
-            CategoryTerm("tax_class_id_cutoff", (
-                "minimum percent identity", "minimum sequence identity", "identity cutoff",
-                "identity threshold", "% identity required", "at least 97% identity",
-                "sequence identity >=", "percent identity threshold", "minimum match identity",
-                "taxonomic identity cutoff",
-            ), definition='The minimum sequence-identity/percent-identity criterion required to accept a taxonomic assignment.'),
-            CategoryTerm("tax_class_query_cutoff", (
-                "minimum query coverage", "query coverage cutoff", "query coverage threshold",
-                "% query coverage", "at least 90% query coverage", "alignment coverage threshold",
-                "minimum query alignment", "query coverage >=", "fraction of query aligned",
-                "minimum sequence coverage",
-            ), definition='The minimum query/alignment coverage required to accept a taxonomic assignment.'),
-            # tax_class_other is deliberately NOT a CategoryTerm here --
-            # per an explicit user request ("tax_class_other can be all
-            # classified 'TAXONOMIC ASSIGNMENT'. can ask the LLM to
-            # summarize based on the section classified 'TAXONOMIC
-            # ASSIGNMENT'."), it's generated by the LLM in its own words
-            # from this category's combined run-text
-            # (extraction/section_category_extraction.py's
-            # _generate_tax_class_other_fact), not extracted verbatim.
+            # tax_class_other/tax_class_collapse/tax_class_id_cutoff/
+            # tax_class_query_cutoff all removed entirely per an explicit
+            # user request ("negligible... don't want to waste compute on
+            # them") -- suppressed from export in exports/faire.py's
+            # PROJECT_METADATA_SUPPRESSED_FIELDS and no longer extracted or
+            # generated anywhere.
         ),
     ),
 )
@@ -1241,6 +1209,23 @@ _NUMBERED_REFERENCE_ENTRY_RE = re.compile(r"^\s*\d{1,3}\.\s+[A-Z]")
 # without \s* between the optional "S" and the digit, this silently missed
 # real captions.
 _FIGURE_TABLE_CAPTION_RE = re.compile(r"^\s*(fig(?:ure)?\.?|table)\s*s?\s*\d", re.IGNORECASE)
+_TABLE_BODY_SEQUENCE_METRIC_RE = re.compile(
+    r"\b(?:"
+    r"#\s*of\s+(?:quality[-\s]*filtered\s+)?reads|"
+    r"#\s*of\s+OTUs|"
+    r"uniquely\s+mapping\s+to\s+OTUs|"
+    r"mapping\s+efficiency"
+    r")\b",
+    re.IGNORECASE,
+)
+_METHOD_SENTENCE_START_RE = re.compile(
+    r"\b(?:"
+    r"DNA\s+was\s+(?:isolated|extracted)|"
+    r"RNA\s+was\s+(?:isolated|extracted)|"
+    r"nucleic\s+acids?\s+were\s+(?:isolated|extracted)"
+    r")\b",
+    re.IGNORECASE,
+)
 
 
 def _drop_reference_section(paragraphs: list[str]) -> list[str]:
@@ -1257,6 +1242,23 @@ def _drop_reference_section(paragraphs: list[str]) -> list[str]:
     return paragraphs
 
 
+def _strip_leading_table_body(paragraph: str) -> str:
+    """Trim PDF-extracted table bodies accidentally glued to methods prose.
+
+    Some PDFs emit a bare table body without a leading "Table N" caption,
+    followed immediately by the next real methods sentence. If the table
+    contains sequencing metrics, and the paragraph later resumes with a
+    nucleic-acid extraction sentence, keep the real method sentence and drop
+    the table rows before it.
+    """
+    if not _TABLE_BODY_SEQUENCE_METRIC_RE.search(paragraph):
+        return paragraph
+    method_start = _METHOD_SENTENCE_START_RE.search(paragraph)
+    if method_start is None:
+        return paragraph
+    return paragraph[method_start.start() :].strip()
+
+
 def split_into_paragraphs(text: str) -> list[str]:
     """Blank-line-delimited paragraphs, references section dropped
     (see `_drop_reference_section`) and bare figure/table captions
@@ -1267,7 +1269,14 @@ def split_into_paragraphs(text: str) -> list[str]:
     matching "amplicon")."""
     paragraphs = [p.strip() for p in _PARAGRAPH_SPLIT_RE.split(text) if p.strip()]
     paragraphs = _drop_reference_section(paragraphs)
-    return [p for p in paragraphs if not _FIGURE_TABLE_CAPTION_RE.match(p)]
+    cleaned: list[str] = []
+    for paragraph in paragraphs:
+        if _FIGURE_TABLE_CAPTION_RE.match(paragraph):
+            continue
+        stripped = _strip_leading_table_body(paragraph)
+        if stripped:
+            cleaned.append(stripped)
+    return cleaned
 
 
 def candidate_categories_for_paragraph(paragraph: str) -> frozenset[str]:
@@ -1325,12 +1334,14 @@ def group_sentences_into_category_runs(
     tagged X and extends through following untagged (bridging) sentences,
     ending the instant a sentence tagged with a DIFFERENT category (not
     including X, even if X is also present on that same sentence)
-    appears. Separate runs of the same category within one paragraph
-    (category flips away and back) are concatenated together, in order,
-    with the interrupting category's own sentences excluded throughout --
-    an explicit user specification: "if a paragraph goes from cat 1 to
-    cat 2 back to cat 1, the two cat 1 [runs] will be grouped
-    consecutively with cat 2 removed."
+    appears -- or the instant more than _MAX_BRIDGING_SENTENCES untagged
+    sentences appear in a row (see _runs_for_category's own docstring).
+    Separate runs of the same category within one paragraph (category
+    flips away and back) are concatenated together, in order, with the
+    interrupting category's own sentences excluded throughout -- an
+    explicit user specification: "if a paragraph goes from cat 1 to cat 2
+    back to cat 1, the two cat 1 [runs] will be grouped consecutively
+    with cat 2 removed."
 
     Computed independently per category (not as a single linear pass)
     so a sentence tagged with more than one category correctly continues
@@ -1343,21 +1354,54 @@ def group_sentences_into_category_runs(
     }
 
 
+# A real live audit (10.7717/peerj.333) found a run for "sample_prep"
+# started by one genuine sentence ("Samples were stored in seawater at 80
+# C.") and then, via unlimited bridging, silently absorbed an entire
+# table caption, two figure captions, and several paragraphs of coral-
+# settlement-assay narrative -- none of it ever tagged with ANY category
+# by Stage 2 (this source paper's own fulltext extraction apparently
+# never inserts a blank line between what should be separate paragraphs,
+# so split_into_paragraphs's own paragraph boundary never kicks in
+# either). The SAME failure mode independently corrupted
+# nucl_acid_ext_method_additional for a different real paper
+# (10.1093/ismejo/wrae013): a run absorbed a whole unrelated incubation-
+# experiment paragraph with nothing to do with nucleic acid extraction.
+# A short, genuine connective sentence between two same-category
+# sentences ("This was done as follows.") is common and should still
+# bridge; an entire off-topic section should not. 2 consecutive untagged
+# sentences is a deliberately conservative cutoff for the former without
+# enabling the latter.
+_MAX_BRIDGING_SENTENCES = 2
+
+
 def _runs_for_category(tagged_sentences: list[tuple[str, frozenset[str]]], category: str) -> list[str]:
     runs: list[str] = []
     current: list[str] = []
+    pending_bridge: list[str] = []
     in_run = False
     for sentence, categories in tagged_sentences:
         if category in categories:
+            current.extend(pending_bridge)
+            pending_bridge = []
             current.append(sentence)
             in_run = True
         elif not categories:
             if in_run:
-                current.append(sentence)
+                pending_bridge.append(sentence)
+                if len(pending_bridge) > _MAX_BRIDGING_SENTENCES:
+                    # Too many untagged sentences in a row to still be a
+                    # brief connective gap -- close the run here, without
+                    # ever including the unrelated bridge sentences.
+                    if current:
+                        runs.append(" ".join(current))
+                    current = []
+                    pending_bridge = []
+                    in_run = False
         else:
             if current:
                 runs.append(" ".join(current))
             current = []
+            pending_bridge = []
             in_run = False
     if current:
         runs.append(" ".join(current))

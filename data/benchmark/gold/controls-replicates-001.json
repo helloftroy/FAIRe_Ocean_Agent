@@ -1,25 +1,10 @@
 {
   "case_id": "controls-replicates-001",
   "curated_by": "claude",
-  "notes": "Fictional example -- exercises the controls/replicates field group using v3's standard-agnostic native names: negative_control_type, positive_control_type, biological_replicate_count, pcr_replicate_count.",
+  "notes": "Fictional example -- exercises the replicates field group using v3's standard-agnostic native name pcr_replicate_count. negative_control_type/positive_control_type were removed from this case (and from the taxonomy entirely) per an explicit, repeated user request; biological_replicate_count was removed the same way after a later explicit user request (a live audit of a real 5-paper run found it never actually fired).",
   "section_title": "Sampling design",
-  "source_text": "Each sampling event included an equipment blank as a negative control and a synthetic DNA standard as a positive control. Three biological replicates were collected at each station, and each sample was amplified in triplicate PCR reactions.",
+  "source_text": "Three biological replicates were collected at each station, and each sample was amplified in triplicate PCR reactions.",
   "expected_facts": [
-    {
-      "fact_type_candidate": "negative_control_type",
-      "raw_value": "equipment blank",
-      "evidence_quote": "an equipment blank as a negative control"
-    },
-    {
-      "fact_type_candidate": "positive_control_type",
-      "raw_value": "synthetic DNA standard",
-      "evidence_quote": "a synthetic DNA standard as a positive control"
-    },
-    {
-      "fact_type_candidate": "biological_replicate_count",
-      "raw_value": "Three",
-      "evidence_quote": "Three biological replicates were collected"
-    },
     {
       "fact_type_candidate": "pcr_replicate_count",
       "raw_value": "triplicate",

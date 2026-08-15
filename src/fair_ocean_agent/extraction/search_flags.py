@@ -11,6 +11,7 @@ import re
 from dataclasses import dataclass
 from typing import Iterable
 
+from fair_ocean_agent.config import MIN_LLM_MAX_OUTPUT_TOKENS
 from fair_ocean_agent.database.enums import EntityLevel, SupportType
 from fair_ocean_agent.llm.base import LLMBackend, LLMBackendError
 from fair_ocean_agent.sources.base import RawFactCandidate
@@ -132,13 +133,13 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
         term_name="assay_name",
         section="PCR",
         description=(
-            "A short, machine-readable name identifying a specific assay or primer/probe set used in the study."
+            "A short, machine-readable name identifying a specific named assay or marker-region assay used in the study."
         ),
         output_instructions=(
-            "Return the published assay name when one exists. Otherwise generate a stable concise name from the "
-            "marker and primer/probe set, such as 16S-V4, 515F/806R, or 12S-V5. Return only the name, not a "
-            "sentence. If multiple distinct assay/primer/probe sets are explicitly supported, return one object "
-            "per value; final merged output is pipe-delimited."
+            "Return the published assay name when one exists. Otherwise use a concise marker-region name only "
+            "when the marker and region are both explicit, such as 16S-V4 or 12S-V5. Return only the name, "
+            "not a sentence. Do not return raw primer-pair names such as 515F/806R, and do not return bare "
+            "functional gene targets such as hzsA as assay names; those belong in primer or target-gene fields."
         ),
         search_terms=(
             "assay",
@@ -157,16 +158,6 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
             "Leray",
             "Folmer",
             "Uni18S",
-            "515F/806R",
-            "515F-Y/926R",
-            "341F/785R",
-            "341F/805R",
-            "TAReuk454FWD1/TAReukREV3",
-            "1389F/EukB",
-            "mlCOIintF/jgHCO2198",
-            "LCO1490/HCO2198",
-            "ITS1F/ITS2",
-            "fITS7/ITS4",
             "16S V4",
             "16S V3-V4",
             "16S V4-V5",
@@ -212,8 +203,6 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
             "assay described by",
             "following the assay of",
             "modified assay",
-            "primer set",
-            "primer pair",
         ),
     ),
     LLMJudgedSearchField(
@@ -230,7 +219,10 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
             "'Atlantic salmon (Salmo salar)'). If multiple distinct target taxa are explicitly supported, "
             "return one object per value; final merged output is pipe-delimited. Do not infer a target taxon "
             "from a primer/assay name alone (e.g. 'MiFish' implies fish, but only return it if the quote "
-            "itself states the target, not just the assay name)."
+            "itself states the target, not just the assay name). Never return the gene/marker/locus itself "
+            "(e.g. '16S rRNA gene', '18S rRNA', 'COI', 'ITS') as the answer -- a gene name is not a taxon; "
+            "if the quote only names the gene amplified without stating which organism(s) or taxonomic group "
+            "it targets, there is no answer in that quote."
         ),
         search_terms=(
             "primers targeting",
@@ -270,74 +262,6 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
     # real audits showed the quote path either kept whole evidence sentences
     # ("AOA's distribution was explored...") or returned "not found" for broad
     # abstract-level scopes like prokaryotic microorganisms/bacteria/archaea.
-    LLMJudgedSearchField(
-        term_name="lib_screen",
-        section="Library preparation sequencing",
-        description=(
-            "Wet-lab methods used to screen, enrich, clean, size-select, quantify, normalize, "
-            "or otherwise check prepared libraries before or after library creation. Not "
-            "bioinformatic filtering of sequencing reads."
-        ),
-        output_instructions=(
-            "Return the best explicit sentence or phrase for wet-lab library screening/QC/enrichment/cleanup/"
-            "size-selection/quantification/normalization/pooling/dilution/loading. Do not return read filtering, "
-            "quality trimming, denoising, or other bioinformatic filtering of sequencing reads."
-        ),
-        search_terms=(
-            "library screening",
-            "library QC",
-            "library quality control",
-            "library enrichment",
-            "size selection",
-            "size-selected",
-            "fragment selection",
-            "selected for fragments",
-            "library purification",
-            "library cleanup",
-            "purified libraries",
-            "cleaned libraries",
-            "AMPure",
-            "AMPure XP",
-            "SPRI beads",
-            "SPRIselect",
-            "magnetic bead purification",
-            "Pippin Prep",
-            "BluePippin",
-            "E-Gel SizeSelect",
-            "gel extraction",
-            "gel purification",
-            "QIAquick PCR Purification Kit",
-            "MinElute",
-            "DNA Clean & Concentrator",
-            "Bioanalyzer",
-            "TapeStation",
-            "Fragment Analyzer",
-            "LabChip",
-            "Qubit",
-            "PicoGreen",
-            "Quant-iT",
-            "fluorometric quantification",
-            "KAPA Library Quantification Kit",
-            "library qPCR",
-            "quantified by qPCR",
-            "library concentration",
-            "library molarity",
-            "fragment distribution",
-            "fragment profile",
-            "normalized",
-            "library normalization",
-            "equimolar",
-            "equimolar pooling",
-            "pooled libraries",
-            "library pooling",
-            "diluted to",
-            "loaded onto the flow cell",
-            "target enrichment",
-            "hybridization capture",
-            "probe capture",
-            "capture enrichment",
-        ),
-    ),
     LLMJudgedSearchField(
         term_name="adapter_forward",
         section="Library preparation sequencing",
@@ -405,385 +329,6 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
             "adapter-linked primer",
             "sequencing tail",
             "adapter",
-        ),
-    ),
-    LLMJudgedSearchField(
-        term_name="trim_method",
-        section="Bioinformatics",
-        description=(
-            "Software or named method used specifically to remove PCR primers, sequencing adapters, "
-            "adapter tails/overhangs, or other technical sequences from sequencing reads before downstream analysis."
-        ),
-        output_instructions=(
-            "Return the tool or named method exactly as reported, ideally including version, such as "
-            "Cutadapt v4.2, QIIME 2 q2-cutadapt v2023.5, or Trimmomatic v0.39. If no software is named "
-            "but primer/adapter/technical-sequence removal is explicit, return the explicit method phrase. "
-            "Do not return general quality filtering, minimum-length filtering, demultiplexing, denoising, "
-            "chimera removal, or OTU/ASV clustering. Do not invent a tool from the described operation."
-        ),
-        search_terms=(
-            "Cutadapt",
-            "q2-cutadapt",
-            "QIIME 2 cutadapt",
-            "QIIME2 cutadapt",
-            "Trimmomatic",
-            "fastp",
-            "BBDuk",
-            "BBTools",
-            "AdapterRemoval",
-            "Trim Galore",
-            "Atropos",
-            "Skewer",
-            "Flexbar",
-            "Porechop",
-            "Dorado trim",
-            "Guppy",
-            "SeqPrep",
-            "USEARCH",
-            "VSEARCH",
-            "mothur",
-            "trim.seqs",
-            "OBITools",
-            "OBITools3",
-            "FASTX Toolkit",
-            "fastx_clipper",
-            "primer trimming",
-            "primer removal",
-            "adapter trimming",
-            "adapter removal",
-            "primers were removed",
-            "adapters were removed",
-            "primer sequences were removed",
-            "adapter sequences were removed",
-            "technical sequences were removed",
-        ),
-    ),
-    LLMJudgedSearchField(
-        term_name="trim_param",
-        section="Bioinformatics",
-        description=(
-            "Specific settings used when removing primers/adapters/technical sequences, such as allowed "
-            "mismatches, error rate, overlap, adapter/primer sequence, discarded untrimmed reads, or indel handling."
-        ),
-        output_instructions=(
-            "Return the parameter/value phrase for the primer/adapter/technical-sequence trimming operation, "
-            "preserving source syntax when possible, such as -e 0.1 -O 5 --discard-untrimmed, "
-            "ILLUMINACLIP:TruSeq3-PE.fa:2:30:10, maximum 2 primer mismatches, or no indels permitted. "
-            "Do not return unrelated quality filtering or length filtering parameters that happen to use the "
-            "same software."
-        ),
-        search_terms=(
-            "minimum overlap",
-            "min overlap",
-            "minimum adapter overlap",
-            "maximum error rate",
-            "error rate",
-            "allowed error rate",
-            "allowed mismatches",
-            "maximum mismatches",
-            "mismatch",
-            "discard-untrimmed",
-            "discard untrimmed",
-            "untrimmed reads discarded",
-            "no-indels",
-            "indels",
-            "anchored adapter",
-            "anchored primer",
-            "adapter sequence",
-            "primer sequence",
-            "front adapter",
-            "forward adapter",
-            "reverse adapter",
-            "5' adapter",
-            "3' adapter",
-            "match-read-wildcards",
-            "wildcards",
-            "-g",
-            "-G",
-            "-a",
-            "-A",
-            "-e",
-            "--error-rate",
-            "-O",
-            "--overlap",
-            "--discard-untrimmed",
-            "--no-indels",
-            "ILLUMINACLIP",
-            "seedMismatches",
-            "palindromeClipThreshold",
-            "simpleClipThreshold",
-            "ktrim",
-            "mink",
-            "hdist",
-            "hdist2",
-            "adapter_sequence",
-            "adapter_sequence_r2",
-            "detect_adapter_for_pe",
-            "minimum trimmed length",
-        ),
-    ),
-    LLMJudgedSearchField(
-        term_name="demux_tool",
-        section="Bioinformatics",
-        description=(
-            "Software and version used to assign multiplexed sequencing reads to their correct "
-            "samples using index, barcode, or MID sequences."
-        ),
-        output_instructions=(
-            "Return the detailed demultiplexing pipeline phrase supported by the quote, including software, "
-            "version, command, and barcode/index mismatch parameters when stated. If multiple demultiplexing "
-            "tools are present, return the best option according to the configured search-term priority."
-        ),
-        search_terms=(
-            "QIIME 2",
-            "QIIME2",
-            "qiime demux",
-            "demux emp-paired",
-            "demux emp-single",
-            "QIIME",
-            "split_libraries_fastq.py",
-            "split_libraries.py",
-            "bcl2fastq",
-            "Illumina bcl2fastq",
-            "BCL Convert",
-            "bcl-convert",
-            "Illumina BCL Convert",
-            "MiSeq Reporter",
-            "BaseSpace",
-            "BaseSpace Sequence Hub",
-            "CASAVA",
-            "Cutadapt",
-            "cutadapt demultiplex",
-            "OBITools",
-            "ngsfilter",
-            "obi ngsfilter",
-            "mothur",
-            "trim.seqs",
-            "USEARCH",
-            "VSEARCH",
-            "Sabre",
-            "deML",
-            "Je",
-            "Je-demultiplex",
-            "fastq-multx",
-            "ea-utils",
-            "Flexbar",
-            "Stacks",
-            "process_radtags",
-            "Guppy barcoder",
-            "guppy_barcoder",
-            "Dorado demux",
-            "dorado demux",
-            "qcat",
-            "Porechop",
-            "Lima",
-            "PacBio Lima",
-            "demultiplexed using",
-            "demultiplexing software",
-            "barcode splitting",
-            "index-based separation",
-            "reads assigned to samples",
-            "barcode mismatch",
-            "index mismatch",
-            "maximum mismatch",
-            "--p-golay-error-correction",
-            "--barcode-mismatches",
-            "--no-index",
-        ),
-    ),
-    LLMJudgedSearchField(
-        term_name="error_rate_tool",
-        section="Bioinformatics",
-        description=(
-            "Software, function, or pipeline step that removes or trims sequencing reads based on a "
-            "stated quality or error threshold."
-        ),
-        output_instructions=(
-            "Return the detailed quality/error filtering pipeline phrase supported by the quote, including "
-            "software, function, version, and threshold parameters when stated. If multiple tools are present, "
-            "return the best option according to the configured search-term priority."
-        ),
-        search_terms=(
-            "DADA2",
-            "filterAndTrim",
-            "QIIME 2",
-            "QIIME2",
-            "q2-dada2",
-            "dada2 denoise-paired",
-            "dada2 denoise-single",
-            "QIIME",
-            "split_libraries_fastq.py",
-            "quality-filter q-score",
-            "USEARCH",
-            "UPARSE",
-            "fastq_filter",
-            "VSEARCH",
-            "--fastq_filter",
-            "Cutadapt",
-            "fastp",
-            "Trimmomatic",
-            "mothur",
-            "trim.seqs",
-            "BBDuk",
-            "BBTools",
-            "Sickle",
-            "PRINSEQ",
-            "FASTX Toolkit",
-            "fastq_quality_filter",
-            "fastq_quality_trimmer",
-            "SolexaQA",
-            "DynamicTrim",
-            "CLC Genomics Workbench",
-            "CLC quality trim",
-            "NanoFilt",
-            "Filtlong",
-            "Dorado",
-            "Guppy",
-            "PacBio CCS",
-            "pbccs",
-            "SMRT Link",
-            "Trim Galore",
-            "Atropos",
-            "Skewer",
-            "Flexbar",
-            "AdapterRemoval",
-            "SeqPrep",
-            "SOAPnuke",
-            "FaQCs",
-            "NGS QC Toolkit",
-            "maxEE",
-            "truncQ",
-            "fastq_maxee",
-            "fastq_maxee_rate",
-            "--p-max-ee-f",
-            "--p-max-ee-r",
-            "--p-trunc-q",
-            "--p-min-quality",
-            "--quality-cutoff",
-            "qualified_quality_phred",
-            "SLIDINGWINDOW",
-            "AVGQUAL",
-            "qtrim",
-            "trimq",
-            "min_qscore",
-        ),
-    ),
-    LLMJudgedSearchField(
-        term_name="error_rate_type",
-        section="Bioinformatics",
-        description="Type of quality/error measurement used to decide whether reads or bases should be removed or trimmed.",
-        allowed_values=("expected error rate", "Phred score", "quality filtered", "other:"),
-        output_instructions=(
-            "Classify the quality/error measurement as one of: expected error rate, Phred score, quality filtered, "
-            "or other:<source phrase>. "
-            "Use expected error rate for expected error/maxEE/max expected error/maxEE-rate parameters. "
-            "Use Phred score for Phred/Q-score/Q20/Q25/Q30/quality-score/truncQ/min-quality style thresholds. "
-            "Use quality filtered for generic quality-filter/quality-trimmed wording when no more specific "
-            "expected-error or Phred/Q-score measurement is stated. "
-            "Use other:<source phrase> only when the quote gives a different explicit quality/error measurement. "
-            "If multiple measurements are explicitly supported, return one object per value; final merged output "
-            "is ordered by the configured search-term priority."
-        ),
-        search_terms=(
-            "expected error",
-            "expected errors",
-            "expected error rate",
-            "maximum expected error",
-            "maxEE",
-            "Phred score",
-            "Phred quality",
-            "quality filtered",
-            "quality filter",
-            "quality filtering",
-            "quality trimmed",
-            "quality trimming",
-            "quality score",
-            "Q score",
-            "Q-score",
-            "Q20",
-            "Q25",
-            "Q30",
-            "bases below Q",
-            "reads below Q",
-            "truncQ",
-            "fastq_maxee",
-            "fastq_maxee_rate",
-            "qualified_quality_phred",
-            "AVGQUAL",
-            "SLIDINGWINDOW",
-            "trimq",
-            "min_qscore",
-            "--p-max-ee-f",
-            "--p-max-ee-r",
-            "--p-trunc-q",
-            "--p-min-quality",
-        ),
-    ),
-    LLMJudgedSearchField(
-        term_name="chimera_check_method",
-        section="Bioinformatics",
-        description=(
-            "How chimeric PCR sequences were identified or removed, including the approach "
-            "(de novo, reference-based, or both) and the software/version used."
-        ),
-        output_instructions=(
-            "Return a compact method phrase supported by the quote, preserving software/command/version and "
-            "approach details such as de novo, reference-based, consensus, pooled, per-sample, or reference "
-            "database. If multiple distinct chimera-checking methods are explicitly supported, return one "
-            "object per value; final merged output is pipe-delimited."
-        ),
-        search_terms=(
-            "chimera",
-            "chimeric",
-            "chimera removal",
-            "chimera checking",
-            "chimera detection",
-            "remove chimeras",
-            "DADA2",
-            "removeBimeraDenovo",
-            "removeBimeraDenovo()",
-            "QIIME 2 DADA2",
-            "q2-dada2",
-            "dada2 denoise-paired",
-            "dada2 denoise-single",
-            "VSEARCH",
-            "uchime_denovo",
-            "uchime_ref",
-            "--uchime_denovo",
-            "--uchime_ref",
-            "USEARCH",
-            "UCHIME",
-            "UCHIME2",
-            "UCHIME3",
-            "UPARSE",
-            "cluster_otus",
-            "unoise3",
-            "mothur",
-            "chimera.vsearch",
-            "chimera.uchime",
-            "chimera.slayer",
-            "QIIME",
-            "identify_chimeric_seqs.py",
-            "DECIPHER",
-            "FindChimeras",
-            "FindChimeras()",
-            "ChimeraSlayer",
-            "Bellerophon",
-            "Pintail",
-            "de novo",
-            "denovo",
-            "de-novo",
-            "reference-based",
-            "reference based",
-            "reference-guided",
-            "consensus",
-            "pooled",
-            "per-sample",
-            "gold database",
-            "Gold database",
-            "SILVA reference",
-            "RDP reference",
-            "UNITE reference",
         ),
     ),
     LLMJudgedSearchField(
@@ -907,87 +452,6 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
         ),
     ),
     LLMJudgedSearchField(
-        term_name="min_reads_tool",
-        section="Bioinformatics",
-        description=(
-            "Software and version used to remove low-abundance reads, ASVs, OTUs, or detections "
-            "based on a minimum read-count threshold, relative-abundance threshold, or background "
-            "detected in blanks."
-        ),
-        output_instructions=(
-            "Return the supported software/version/function/script phrase used for minimum-read, low-abundance, "
-            "relative-abundance, singleton/doubleton, prevalence, or blank/background filtering. If the quote "
-            "does not name software, return the explicit method phrase. If multiple tools are explicitly "
-            "supported, return one object per value; final merged output is pipe-delimited."
-        ),
-        search_terms=(
-            "DADA2",
-            "QIIME 2",
-            "QIIME2",
-            "feature-table filter-features",
-            "feature-table filter-samples",
-            "QIIME",
-            "filter_otus_from_otu_table.py",
-            "OBITools3",
-            "OBITools",
-            "obigrep",
-            "obi grep",
-            "obiclean",
-            "USEARCH",
-            "UPARSE",
-            "sortbysize",
-            "minsize",
-            "VSEARCH",
-            "--sortbysize",
-            "--minsize",
-            "mothur",
-            "remove.rare",
-            "remove.seqs",
-            "phyloseq",
-            "prune_taxa",
-            "filter_taxa",
-            "decontam",
-            "isContaminant",
-            "microDecon",
-            "metabaR",
-            "LULU",
-            "R",
-            "custom R script",
-            "custom script",
-            "Python script",
-            "minimum read count",
-            "minimum reads",
-            "read-count threshold",
-            "low-abundance sequences",
-            "low abundance ASVs",
-            "low abundance OTUs",
-            "rare ASVs",
-            "rare OTUs",
-            "rare sequences",
-            "singletons removed",
-            "doubletons removed",
-            "singleton filtering",
-            "fewer than 10 reads",
-            "less than 10 reads",
-            "<10 reads",
-            "relative abundance threshold",
-            "relative read abundance",
-            "% abundance cutoff",
-            "noise detected in blanks",
-            "blank threshold",
-            "control threshold",
-            "background reads",
-            "removed if present below",
-            "discarded below",
-            "filtered below",
-            "min_count",
-            "min_reads",
-            "abundance_threshold",
-            "prevalence",
-            "threshold",
-        ),
-    ),
-    LLMJudgedSearchField(
         term_name="otu_clust_tool",
         section="Bioinformatics",
         description=(
@@ -997,8 +461,10 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
         ),
         output_instructions=(
             "Return the full OTU/ASV generation tool or pipeline component, including version/command when "
-            "stated. Accept ASV inference/denoising tools such as DADA2 or Deblur when the quote says ASVs/"
-            "exact sequence variants were inferred/generated/denoised. Omit taxonomy-only classifiers or "
+            "stated. When the quote gives both a fully spelled-out algorithm name and its abbreviation (e.g. "
+            "'Markov Cluster algorithm (MCL)'), return the full form with the abbreviation, not the bare "
+            "abbreviation alone. Accept ASV inference/denoising tools such as DADA2 or Deblur when the quote says "
+            "ASVs/exact sequence variants were inferred/generated/denoised. Omit taxonomy-only classifiers or "
             "reference databases. If multiple tools are present, return the best option according to the "
             "configured search-term priority."
         ),
@@ -1070,62 +536,6 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
         ),
     ),
     LLMJudgedSearchField(
-        term_name="otu_clust_cutoff",
-        section="Bioinformatics",
-        description=(
-            "Sequence-similarity percentage used to group sequences into the same OTU. For ASV workflows, "
-            "FAIRe treats exact variants as approximately 100% similarity, but do not claim the paper "
-            "explicitly reported 100 unless this is a derived ASV normalization policy."
-        ),
-        output_instructions=(
-            "Return only the numeric percent value, without a percent sign. Map 97% similarity or --id 0.97 "
-            "to 97; 0.03 distance or 3% divergence to 97; 0.01 distance to 99. For DADA2/ASVs/exact sequence "
-            "variants with no stated similarity threshold, omit this field unless the quote explicitly supports "
-            "a derived ASV-as-100 normalization; if returned, use 100. If multiple cutoffs are present, return "
-            "the best option according to the configured search-term priority."
-        ),
-        search_terms=(
-            "OTU clustering cutoff",
-            "OTU similarity threshold",
-            "clustering threshold",
-            "97% similarity",
-            "99% similarity",
-            "98% similarity",
-            "95% similarity",
-            "100% similarity",
-            "sequence identity threshold",
-            "percent identity",
-            "percentage identity",
-            "clustered at 97%",
-            "clustered at 99%",
-            "grouped at 97%",
-            "operational taxonomic units",
-            "OTUs were clustered",
-            "de novo clustering",
-            "closed-reference clustering",
-            "open-reference clustering",
-            "ASV",
-            "ASVs",
-            "amplicon sequence variant",
-            "exact sequence variant",
-            "100% identity",
-            "distance cutoff",
-            "genetic distance",
-            "0.03 distance",
-            "3% divergence",
-            "--p-perc-identity",
-            "--id",
-            "id=",
-            "--id 0.97",
-            "cutoff=0.03",
-            "similarity=0.97",
-            "threshold=0.97",
-            "-c 0.97",
-            "radius",
-            "d=1",
-        ),
-    ),
-    LLMJudgedSearchField(
         term_name="otu_db",
         section="Bioinformatics",
         description=(
@@ -1133,9 +543,10 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
             "taxonomy to OTUs or ASVs. If authors built their own database, record custom."
         ),
         output_instructions=(
-            "Return the database name plus version/release/download/access date when stated. Return custom "
-            "for a custom/in-house/local/curated database. Do not return assignment software alone, such as "
-            "BLAST, RDP Classifier, QIIME 2, or naive Bayes, unless a reference database is also named."
+            "Return the database name plus version/release/download/access date when stated. If multiple "
+            "databases are used, return one value per database. Return custom plus a short description for a "
+            "custom/in-house/local/curated database. Do not return assignment software alone, such as BLAST, "
+            "RDP Classifier, QIIME 2, or naive Bayes, unless a reference database is also named."
         ),
         search_terms=(
             "reference database",
@@ -1144,12 +555,21 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
             "sequence database",
             "SILVA",
             "SILVA database",
+            "SILVA_132",
             "PR2",
             "Protist Ribosomal Reference database",
+            "FreshTrain",
+            "FreshTrain database",
             "NCBI GenBank",
             "GenBank",
             "NCBI nucleotide",
             "NCBI nt",
+            "NCBI nr",
+            "NCBI database",
+            "nonredundant NCBI database",
+            "non-redundant NCBI database",
+            "nonredundant (nr) NCBI database",
+            "nr database",
             "nt database",
             "BOLD",
             "Barcode of Life Data System",
@@ -1278,24 +698,6 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
             "posterior probability",
         ),
     ),
-    # tax_class_other used to be a quote-judged field here -- replaced per
-    # an explicit user request ("tax_class_other can be all classified
-    # 'TAXONOMIC ASSIGNMENT'. can ask the LLM to summarize based on the
-    # section classified 'TAXONOMIC ASSIGNMENT'.") with a generative
-    # mechanism: extraction/section_category_extraction.py's
-    # _generate_tax_class_other_fact, which summarizes Stage 2's already-
-    # classified taxonomic_assignment run-text in the model's own words
-    # instead of quoting one narrow sentence verbatim.
-    # otu_raw_description used to be a quote-judged field here -- replaced
-    # per an explicit user request ("i'd prefer if the LLM generates 1-2
-    # sentences of its own description of the OTU process, the quotes
-    # captured are not meaningful for either paper") with a generative
-    # mechanism: extraction/section_category_extraction.py's
-    # _generate_otu_raw_description_fact, which summarizes the already-
-    # categorized otu_asv_generation_filtering run-text in the model's own
-    # words instead of quoting a real paper's often-unhelpful cross-
-    # reference sentence (e.g. "we ... employed the same data analysis
-    # pipeline" with no further detail) verbatim.
     LLMJudgedSearchField(
         term_name="informationWithheld",
         section="Data management",
@@ -1384,19 +786,91 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
         ),
         search_terms=("control", "controls", "blank", "blanks"),
     ),
+    # A real audit (10.1093/ismejo/wrae013, STUDY-295abf4a8f43) found rich
+    # in-situ temperature/dissolved-oxygen/salinity measurements in the
+    # paper's own text -- "In situ bottom water temperature (6.5C),
+    # dissolved O2 (11.9 mg/L), and salinity (6.4 PSU) were measured with
+    # a ProODO probe..." -- that never made it into sampleMetadata at all,
+    # since temp/diss_oxygen/salinity previously only ever came from a
+    # structured BioSample attribute (mapping/rules.py's SAMPLE-level
+    # "temp"/"diss_oxygen"/"salinity" rules), never from text. The SAME
+    # real paper also separately reports post-collection INCUBATION-
+    # chamber daily-average temperature/oxygen/salinity ("Throughout the
+    # acclimation phase oxygen, temperature, and salinity were measured
+    # daily inside the two incubation chambers...") -- a genuinely
+    # different concept FAIRe's temp/diss_oxygen/salinity fields don't
+    # want (per temp's own definition: "Temperature of the sample AT THE
+    # TIME OF SAMPLING"), so _SAMPLING_TIME_CONTEXT_RE below requires an
+    # explicit collection-time/in-situ signal, not just the bare
+    # measurement words, to tell the two contexts apart.
+    LLMJudgedSearchField(
+        term_name="in_situ_temp",
+        section="Sample collection",
+        description=(
+            "The water/environment temperature measured in situ, at the time and site of sample "
+            "collection -- not a later experimental, incubation, or laboratory-condition temperature."
+        ),
+        output_instructions=(
+            "Return the numeric temperature value with its unit, verbatim from the quote (e.g. "
+            "'6.5C'). Only accept a value explicitly described as measured in situ, at the time of "
+            "sampling/collection, or at the sampling site -- never a later incubation, acclimation, "
+            "or experimental-condition temperature. If multiple distinct in-situ temperature values "
+            "are explicitly supported, return one object per value; final merged output is "
+            "pipe-delimited."
+        ),
+        search_terms=(
+            "in situ temperature",
+            "in situ bottom water temperature",
+            "temperature at collection",
+            "site temperature",
+            "temperature",
+        ),
+    ),
+    LLMJudgedSearchField(
+        term_name="in_situ_diss_oxygen",
+        section="Sample collection",
+        description=(
+            "The dissolved-oxygen concentration measured in situ, at the time and site of sample "
+            "collection -- not a later experimental, incubation, or laboratory-condition measurement."
+        ),
+        output_instructions=(
+            "Return the numeric dissolved-oxygen value with its unit, verbatim from the quote (e.g. "
+            "'11.9 mg/L'). Only accept a value explicitly described as measured in situ, at the time "
+            "of sampling/collection, or at the sampling site -- never a later incubation, acclimation, "
+            "or experimental-condition measurement. If multiple distinct in-situ values are "
+            "explicitly supported, return one object per value; final merged output is pipe-delimited."
+        ),
+        search_terms=(
+            "dissolved oxygen",
+            "dissolved O2",
+            "dissolved O 2",
+            "oxygen concentration",
+            "O2 concentration",
+        ),
+    ),
+    LLMJudgedSearchField(
+        term_name="in_situ_salinity",
+        section="Sample collection",
+        description=(
+            "The salinity measured in situ, at the time and site of sample collection -- not a later "
+            "experimental, incubation, or laboratory-condition salinity."
+        ),
+        output_instructions=(
+            "Return the numeric salinity value with its unit, verbatim from the quote (e.g. '6.4 "
+            "PSU'). Only accept a value explicitly described as measured in situ, at the time of "
+            "sampling/collection, or at the sampling site -- never a later incubation, acclimation, "
+            "or experimental-condition salinity. If multiple distinct in-situ values are explicitly "
+            "supported, return one object per value; final merged output is pipe-delimited."
+        ),
+        search_terms=("salinity",),
+    ),
 )
 
 SINGLE_BEST_LLM_JUDGED_FIELDS = frozenset(
     {
-        "demux_tool",
-        "error_rate_tool",
         "inhibition_check_0_1",
         "inhibition_check",
-        "lib_screen",
-        "trim_method",
         "otu_clust_tool",
-        "otu_clust_cutoff",
-        "otu_db",
         "tax_assign_cat",
         "neg_cont_0_1",
         "pos_cont_0_1",
@@ -1404,79 +878,11 @@ SINGLE_BEST_LLM_JUDGED_FIELDS = frozenset(
 )
 
 CONTROLLED_SEARCH_FIELDS: tuple[ControlledSearchField, ...] = (
-    ControlledSearchField(
-        term_name="sterilise_method",
-        section="Project",
-        description="Explicit contamination-minimization procedures, retained as direct source text.",
-        value_strategy="sterilise_method_sentences",
-        search_terms=(
-            "contamination control",
-            "single-use equipment",
-            "separate pre-PCR",
-            "decontamination",
-            "decontaminate",
-            "cleaned with",
-            "rinsed with",
-            "sodium hypochlorite",
-            "flame sterilised",
-            "sterilise",
-            "sterilize",
-            "DNA Away",
-            "DNAZap",
-            "clean room",
-            "bleach",
-            "ethanol",
-            "UV-C",
-            "autoclave",
-            "UV",
-            "sterile bags",
-            "sterile tubes",
-            "sterile syringes",
-            "sterile containers",
-            "sterile vials",
-            "sterile bottles",
-        ),
-    ),
-    ControlledSearchField(
-        term_name="biological_rep",
-        section="Sample collection",
-        description=(
-            "Number of independently collected biological/environmental samples at each sampling "
-            "point or treatment; never PCR, extraction, filtration, sequencing, or analytical replicates."
-        ),
-        value_strategy="biological_replicate_integer",
-        search_terms=(
-            "biological replicates",
-            "biological replicate",
-            "independent replicate",
-            "replicate samples",
-            "samples per site",
-            "samples per station",
-            "replicates per site",
-            "replicates per treatment",
-            "collected in duplicate",
-            "collected in triplicate",
-            "three independent samples",
-            "replicate water samples",
-            "replicate sediment samples",
-            "n =",
-            "n=",
-        ),
-    ),
-    ControlledSearchField(
-        term_name="biological_rep_presence",
-        section="Sample collection",
-        description="Explicit source statement that biological/environmental replicates were or were not present.",
-        value_strategy="biological_replicate_presence",
-        search_terms=(
-            "without replicates",
-            "no replicates",
-            "no biological replicates",
-            "no environmental replicates",
-            "without biological replicates",
-            "without environmental replicates",
-        ),
-    ),
+    # biological_rep/biological_rep_presence's own text-search entries were
+    # removed entirely per an explicit user request: biological_rep is now
+    # derived purely from structured-API/supplement biological_rep_relation
+    # data (mapping/faire.py::_apply_biological_rep_from_relations) -- the
+    # paper's own text is deliberately never queried for this field anymore.
     ControlledSearchField(
         term_name="assay_type",
         section="PCR",
@@ -1522,28 +928,6 @@ CONTROLLED_SEARCH_FIELDS: tuple[ControlledSearchField, ...] = (
             "SMRTbell",
             "flow cell",
             "cartridge",
-        ),
-    ),
-    ControlledSearchField(
-        term_name="library_layout",
-        section="Library preparation sequencing",
-        description="single-end or paired-end sequencing read layout.",
-        value_strategy="library_layout_phrase",
-        search_terms=(
-            "paired-end",
-            "paired end",
-            "paired-end reads",
-            "paired end reads",
-            "2 x 300",
-            "2x300",
-            "2 × 300",
-            "2 x 250",
-            "2x250",
-            "2 × 250",
-            "single-end",
-            "single end",
-            "single-end reads",
-            "single end reads",
         ),
     ),
     ControlledSearchField(
@@ -1996,50 +1380,11 @@ CONTROLLED_SEARCH_FIELDS: tuple[ControlledSearchField, ...] = (
         section="Bioinformatics",
         description="Minimum read length threshold used for filtering.",
         value_strategy="trimmomatic_minimum_read_length",
-        search_terms=("MINLEN", "minimum read length", "reads below", "reads shorter than"),
+        search_terms=("MINLEN", "minimum read length", "reads below", "reads shorter than", "shorter than"),
     ),
 )
 
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
-_BIOLOGICAL_REPLICATE_EXCLUSION_RE = re.compile(
-    r"\b(PCR|technical|extraction|filtration|sequencing|analytical|library|qPCR|ddPCR|well)\s+replicates?\b",
-    re.IGNORECASE,
-)
-_BIOLOGICAL_REPLICATE_PATTERNS: tuple[tuple[re.Pattern[str], dict[str, str]], ...] = (
-    (re.compile(r"\bcollected\s+in\s+duplicate\b", re.IGNORECASE), {"value": "2"}),
-    (re.compile(r"\bcollected\s+in\s+triplicate\b", re.IGNORECASE), {"value": "3"}),
-    (re.compile(r"\bthree\s+independent\s+samples?\b", re.IGNORECASE), {"value": "3"}),
-    (re.compile(r"\btwo\s+independent\s+samples?\b", re.IGNORECASE), {"value": "2"}),
-    (re.compile(r"\b(?P<num>\d+)\s+(?:biological|environmental|independent)\s+replicates?\b", re.IGNORECASE), {}),
-    (re.compile(r"\b(?:biological|environmental|independent)\s+replicates?\s*(?:\(?\s*n\s*=\s*)?(?P<num>\d+)\b", re.IGNORECASE), {}),
-    (re.compile(r"\b(?P<num>\d+)\s+replicate\s+(?:water|sediment|environmental\s+)?samples?\b", re.IGNORECASE), {}),
-    (re.compile(r"\breplicate\s+(?:water|sediment|environmental\s+)?samples?\s*(?:\(?\s*n\s*=\s*)?(?P<num>\d+)\b", re.IGNORECASE), {}),
-    (re.compile(r"\b(?P<num>\d+)\s+samples?\s+per\s+(?:site|station|treatment)\b", re.IGNORECASE), {}),
-    (re.compile(r"\bsamples?\s+per\s+(?:site|station|treatment)\s*(?:=|:|was|were)?\s*(?P<num>\d+)\b", re.IGNORECASE), {}),
-    (re.compile(r"\b(?P<num>\d+)\s+replicates?\s+per\s+(?:site|station|treatment)\b", re.IGNORECASE), {}),
-    (re.compile(r"\breplicates?\s+per\s+(?:site|station|treatment)\s*(?:=|:|was|were)?\s*(?P<num>\d+)\b", re.IGNORECASE), {}),
-    # A bare "n = <number>" / "N = <number>" pattern (gated only by a loose
-    # context check requiring the word "sample(s)" ANYWHERE in the same
-    # sentence) used to live here and was removed: confirmed via
-    # a real gold paper (PeerJ 10.7717/peerj.333) that it produced two
-    # unrelated false positives in the same methods paragraph -- "(n = 4
-    # well replicates per cue...)" (a technical well count, not a biological
-    # replicate) and "...x N-72 C 10 min, with N = 17-24 depending on the
-    # sample" (a PCR cycle count) -- both satisfied the loose context check
-    # via the bare word "sample"/"cue...samples" appearing elsewhere in the
-    # sentence, producing a nonsensical joined raw_value ("4 | 17"). No
-    # simple proximity regex reliably distinguishes a genuine "(n = 4
-    # biological replicates)" from these unrelated "n ="/"N =" usages that
-    # are extremely common in PCR/qPCR methods prose (well counts, cycle
-    # counts, dilution series); removed rather than further loosened or
-    # tightened. The LLM's unconditional biological_replicate_count
-    # checklist field remains the complementary source for well-phrased
-    # cases this narrower deterministic set no longer covers.
-)
-_BIOLOGICAL_REPLICATE_NEGATIVE_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\bwithout\s+(?:biological\s+|environmental\s+)?replicates?\b", re.IGNORECASE),
-    re.compile(r"\bno\s+(?:biological\s+|environmental\s+)?replicates?\b", re.IGNORECASE),
-)
 
 _ASSAY_TYPE_CUES: tuple[tuple[str, tuple[re.Pattern[str], ...]], ...] = (
     (
@@ -2129,6 +1474,13 @@ _LENGTH_QUALITY_TRIM_CONTEXT_RE = re.compile(
 _MINIMUM_READ_LENGTH_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bMINLEN\s*:\s*(?P<value>\d+)\b", re.IGNORECASE),
     re.compile(
+        r"\breads?\s+(?:that\s+)?(?:became|become|were|are)?\s*"
+        r"shorter\s+than\s+(?P<value>\d+)\s*"
+        r"(?P<unit>bp|base\s+pairs?|bases?|nt|nucleotides?)?"
+        r"\b[^.]{0,120}\bdiscard(?:ed|ing)?\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
         r"\b(?:remov(?:e|ed|ing)|discard(?:ed|ing)?|filter(?:ed|ing)?)\s+"
         r"(?:all\s+)?reads?\s+(?:shorter\s+than|below|less\s+than|under)\s+"
         r"(?P<value>\d+)\s*(?P<unit>bp|base\s+pairs?|bases?|nt|nucleotides?)?\b",
@@ -2167,16 +1519,78 @@ _PRIMER_DIRECTIONAL_NAME_RE = re.compile(
 )
 _PRIMER_NAME_EXCLUSIONS = frozenset({"unique", "universal", "indexed", "tailed"})
 
+# A real bug found live (10.1093/ismejo/wrae013): a methods sentence
+# describing three DIFFERENT tools for three DIFFERENT purposes as one
+# semicolon-joined enumerated list -- "Quality trimming was conducted by:
+# (i) removing Illumina adapters using SeqPrep 1.2...[64]; (ii) remove any
+# leftover PhiX...using bowtie2 2.3.5.1 [65], and (iii) remove low quality
+# and short reads using Trimmomatic 0.39..." -- has only ONE terminal
+# period (at the very end), so the period-only split above offered this
+# whole blob as a SINGLE candidate quote tagged for seven different
+# fields at once (adapter_forward/reverse, error_rate_tool/type/cutoff,
+# neg_cont_0_1/pos_cont_0_1) -- confirmed live, the model then attached
+# "SeqPrep 1.2" (really the adapter-trimming tool) to error_rate_tool
+# instead of "Trimmomatic 0.39" (the real quality-trimming tool), simply
+# because both names were sitting in the same oversized quote. Mirrors
+# section_category_extraction.py's own identical fix (independent
+# duplicate, not a shared import -- these two modules have never
+# cross-imported, and this is a small, self-contained helper either way).
+_LIST_MARKER_COMMA_BOUNDARY_RE = re.compile(
+    r",\s+and\s+(?=\((?:i{1,3}|iv|vi{0,3}|ix|x|\d{1,2})\)\s)"
+)
+
+
+def _split_top_level_semicolons(piece: str) -> list[str]:
+    normalized = _LIST_MARKER_COMMA_BOUNDARY_RE.sub("; ", piece)
+    parts: list[str] = []
+    depth = 0
+    start = 0
+    for index, ch in enumerate(normalized):
+        if ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth = max(0, depth - 1)
+        elif ch == ";" and depth == 0:
+            parts.append(normalized[start : index + 1])
+            start = index + 1
+    parts.append(normalized[start:])
+    return [p.strip() for p in parts if p.strip()]
+
+
+# "vol." (volume/volumes) is a real, common wet-lab-protocol abbreviation
+# the naive [.!?]-then-whitespace split above mistakes for a sentence end
+# -- confirmed live (10.1371/journal.pone.0303937): "1 vol. of phenol/
+# chloroform/isoamyalcohol..." got shredded into "1 vol." and "of phenol/
+# chloroform/isoamyalcohol...". "et al." is the other ubiquitous academic
+# abbreviation with the same problem -- confirmed live while building
+# primer-reference extraction, a citation like "Caporaso et al. (2011)"
+# split right between the author name and its own year. Mirrors
+# section_category_extraction.py's own identical fix.
+_COMMON_ABBREVIATION_TAIL_RE = re.compile(r"\b(?:vol|et\s+al)\.$", re.IGNORECASE)
+
 
 def _snippets(text: str) -> Iterable[tuple[int, str]]:
     """Yield short candidate evidence snippets with stable local positions."""
     normalized = " ".join(text.split())
     if not normalized:
         return
-    for index, sentence in enumerate(_SENTENCE_SPLIT_RE.split(normalized)):
-        cleaned = sentence.strip()
-        if cleaned:
+    index = 0
+    pending: str | None = None
+    for sentence in _SENTENCE_SPLIT_RE.split(normalized):
+        for sub_sentence in _split_top_level_semicolons(sentence):
+            cleaned = sub_sentence.strip()
+            if not cleaned:
+                continue
+            if pending is not None:
+                cleaned = f"{pending} {cleaned}"
+            if _COMMON_ABBREVIATION_TAIL_RE.search(cleaned):
+                pending = cleaned
+                continue
+            pending = None
             yield index, cleaned
+            index += 1
+    if pending is not None:
+        yield index, pending
 
 
 def _snippet_matches(patterns: tuple[re.Pattern[str], ...], snippet: str) -> tuple[str, ...]:
@@ -2370,46 +1784,6 @@ def _match_controlled_sentences(
     return values, values, match_metadata
 
 
-_STERILE_CONTAINER_TOOL_RE = re.compile(
-    r"\bsterile\s+(?:[\w.+\-]+\s+){0,5}?"
-    r"(?:bags?|tubes?|syringes?|containers?|vials?|bottles?)\b",
-    re.IGNORECASE,
-)
-
-
-def _match_sterilise_method_sentences(
-    field: ControlledSearchField,
-    texts: Iterable[tuple[str, str]],
-    locator_prefix: str,
-) -> tuple[list[str], list[str], list[dict]]:
-    values, evidence_quotes, match_metadata = _match_controlled_sentences(field, texts, locator_prefix)
-    seen_sentences = {value.casefold() for value in values}
-    for title, text in texts:
-        for snippet_index, snippet in _snippets(text):
-            if snippet.casefold() in seen_sentences or not _STERILE_CONTAINER_TOOL_RE.search(snippet):
-                continue
-            seen_sentences.add(snippet.casefold())
-            values.append(snippet)
-            evidence_quotes.append(snippet)
-            match_metadata.append(
-                {
-                    "matched_terms": ["sterile container/tool"],
-                    "source_locator": f"{locator_prefix}:{title}:sentence[{snippet_index}]",
-                }
-            )
-    unique_values: list[str] = []
-    unique_metadata: list[dict] = []
-    seen_unique: set[str] = set()
-    for value, metadata in zip(values, match_metadata):
-        key = value.casefold()
-        if key in seen_unique:
-            continue
-        seen_unique.add(key)
-        unique_values.append(value)
-        unique_metadata.append(metadata)
-    return unique_values, unique_values, unique_metadata
-
-
 def _match_regex_phrases(
     field: ControlledSearchField,
     texts: Iterable[tuple[str, str]],
@@ -2518,68 +1892,6 @@ def _match_primer_phrase(
     return values, evidence_quotes, match_metadata
 
 
-def _match_biological_replicates(
-    field: ControlledSearchField,
-    texts: Iterable[tuple[str, str]],
-    locator_prefix: str,
-) -> tuple[list[str], list[str], list[dict]]:
-    values: list[str] = []
-    evidence_quotes: list[str] = []
-    match_metadata: list[dict] = []
-    seen_values: set[str] = set()
-    for title, text in texts:
-        for snippet_index, snippet in _snippets(text):
-            if _BIOLOGICAL_REPLICATE_EXCLUSION_RE.search(snippet):
-                continue
-            for pattern, options in _BIOLOGICAL_REPLICATE_PATTERNS:
-                match = pattern.search(snippet)
-                if match is None:
-                    continue
-                value = options.get("value") or match.group("num")
-                if value in seen_values:
-                    continue
-                seen_values.add(value)
-                values.append(value)
-                if snippet not in evidence_quotes:
-                    evidence_quotes.append(snippet)
-                match_metadata.append(
-                    {
-                        "matched_value": value,
-                        "matched_pattern": pattern.pattern,
-                        "source_locator": f"{locator_prefix}:{title}:sentence[{snippet_index}]",
-                    }
-                )
-                break
-    return values, evidence_quotes, match_metadata
-
-
-def _match_biological_replicate_presence(
-    field: ControlledSearchField,
-    texts: Iterable[tuple[str, str]],
-    locator_prefix: str,
-) -> tuple[list[str], list[str], list[dict]]:
-    for title, text in texts:
-        for snippet_index, snippet in _snippets(text):
-            if _BIOLOGICAL_REPLICATE_EXCLUSION_RE.search(snippet):
-                continue
-            for pattern in _BIOLOGICAL_REPLICATE_NEGATIVE_PATTERNS:
-                match = pattern.search(snippet)
-                if match is None:
-                    continue
-                return (
-                    ["FALSE"],
-                    [snippet],
-                    [
-                        {
-                            "matched_value": "FALSE",
-                            "matched_pattern": pattern.pattern,
-                            "source_locator": f"{locator_prefix}:{title}:sentence[{snippet_index}]",
-                        }
-                    ],
-                )
-    return [], [], []
-
-
 # Broad "there's a PCR-mixture-composition sentence here" trigger, shared
 # by commercial_mm and custom_mm -- which field it belongs to is decided
 # afterward by _COMMERCIAL_MASTER_MIX_BRAND_RE, not by this regex. Matches
@@ -2615,6 +1927,21 @@ _COMMERCIAL_MASTER_MIX_BRAND_RE = re.compile(
     r"\bmaster\s*mix\b|\bTaqMan\b|\bSYBR\b|\bLuna\b|\bPowerUp\b|\bQuantiTect\b|\bSsoAdvanced\b",
     re.IGNORECASE,
 )
+_PCR_MIXTURE_VALUE_STOP_RE = re.compile(
+    r"\s*,?\s+(?:and\s+)?(?:was|were)\s+amplified\s+using\b|"
+    r"\s*,?\s+with\s+a\s+cycling\s+profile\b|"
+    r"\s*,?\s+with\s+cycling\s+conditions\b|"
+    r"\s*,?\s+under\s+(?:the\s+)?(?:following\s+)?cycling\s+conditions\b|"
+    r"\s+PCR\s+conditions\s+were\b",
+    re.IGNORECASE,
+)
+
+
+def _clean_pcr_mixture_value(snippet: str) -> str:
+    match = _PCR_MIXTURE_VALUE_STOP_RE.search(snippet)
+    if match is None:
+        return snippet.strip()
+    return snippet[: match.start()].strip(" ,;")
 
 
 def _match_pcr_mixture_phrase(
@@ -2639,11 +1966,12 @@ def _match_pcr_mixture_phrase(
                 continue
             if snippet in evidence_quotes:
                 continue
-            values.append(snippet)
+            value = _clean_pcr_mixture_value(snippet)
+            values.append(value)
             evidence_quotes.append(snippet)
             match_metadata.append(
                 {
-                    "matched_value": snippet,
+                    "matched_value": value,
                     "source_locator": f"{locator_prefix}:{title}:sentence[{snippet_index}]",
                 }
             )
@@ -2731,6 +2059,11 @@ def _match_trimmomatic_minimum_read_length(
                 "minlen" not in folded
                 and not _TRIMMOMATIC_RE.search(snippet)
                 and not re.search(r"\btrim(?:med|ming)?\s+(?:reads?\s+)?to\s+\d+", snippet, re.IGNORECASE)
+                and not re.search(
+                    r"\breads?\s+(?:that\s+)?(?:became|become|were|are)?\s*shorter\s+than\s+\d+",
+                    snippet,
+                    re.IGNORECASE,
+                )
             ):
                 continue
             for pattern in _MINIMUM_READ_LENGTH_PATTERNS:
@@ -2754,15 +2087,6 @@ def _match_trimmomatic_minimum_read_length(
                 )
                 break
     return values, evidence_quotes, match_metadata
-
-
-_PAIRED_END_LAYOUT_PATTERNS = (
-    re.compile(r"\bpaired[-\s]+end(?:\s+reads?)?\b", re.IGNORECASE),
-    re.compile(r"\b2\s*(?:x|×)\s*(?:150|250|300)\b", re.IGNORECASE),
-)
-_SINGLE_END_LAYOUT_PATTERNS = (
-    re.compile(r"\bsingle[-\s]+end(?:\s+reads?)?\b", re.IGNORECASE),
-)
 
 
 _CHECKSUM_METHOD_PATTERNS: tuple[tuple[str, tuple[re.Pattern[str], ...]], ...] = (
@@ -2792,38 +2116,6 @@ def _match_checksum_method(
     for title, text in texts:
         for snippet_index, snippet in _snippets(text):
             for value, patterns in _CHECKSUM_METHOD_PATTERNS:
-                matches = _snippet_matches(patterns, snippet)
-                if not matches or value in seen_values:
-                    continue
-                seen_values.add(value)
-                values.append(value)
-                if snippet not in evidence_quotes:
-                    evidence_quotes.append(snippet)
-                match_metadata.append(
-                    {
-                        "matched_value": value,
-                        "matched_terms": list(matches),
-                        "source_locator": f"{locator_prefix}:{title}:sentence[{snippet_index}]",
-                    }
-                )
-    return values, evidence_quotes, match_metadata
-
-
-def _match_library_layout(
-    field: ControlledSearchField,
-    texts: Iterable[tuple[str, str]],
-    locator_prefix: str,
-) -> tuple[list[str], list[str], list[dict]]:
-    values: list[str] = []
-    evidence_quotes: list[str] = []
-    match_metadata: list[dict] = []
-    seen_values: set[str] = set()
-    for title, text in texts:
-        for snippet_index, snippet in _snippets(text):
-            for value, patterns in (
-                ("paired end", _PAIRED_END_LAYOUT_PATTERNS),
-                ("single end", _SINGLE_END_LAYOUT_PATTERNS),
-            ):
                 matches = _snippet_matches(patterns, snippet)
                 if not matches or value in seen_values:
                     continue
@@ -2877,12 +2169,6 @@ def _match_controlled_field(
 ) -> tuple[list[str], list[str], list[dict]]:
     if field.value_strategy == "evidence_sentences":
         return _match_controlled_sentences(field, texts, locator_prefix)
-    if field.value_strategy == "sterilise_method_sentences":
-        return _match_sterilise_method_sentences(field, texts, locator_prefix)
-    if field.value_strategy == "biological_replicate_integer":
-        return _match_biological_replicates(field, texts, locator_prefix)
-    if field.value_strategy == "biological_replicate_presence":
-        return _match_biological_replicate_presence(field, texts, locator_prefix)
     if field.value_strategy == "assay_type_classifier":
         return _classify_assay_type(field, texts, locator_prefix)
     if field.value_strategy == "commercial_pcr_mixture_phrase":
@@ -2891,8 +2177,6 @@ def _match_controlled_field(
         return _match_pcr_mixture_phrase(field, texts, locator_prefix, classification="custom")
     if field.value_strategy == "sequencing_kit_phrase":
         return _match_regex_phrases(field, texts, locator_prefix, _SEQUENCING_KIT_PATTERNS)
-    if field.value_strategy == "library_layout_phrase":
-        return _match_library_layout(field, texts, locator_prefix)
     if field.value_strategy == "checksum_method_algorithm":
         return _match_checksum_method(field, texts, locator_prefix)
     if field.value_strategy == "thermocycler_phrase":
@@ -2916,17 +2200,17 @@ def _match_controlled_field(
     return _match_controlled_terms(field, texts, locator_prefix)
 
 
-_MIN_READS_CONTEXT_RE = re.compile(
-    r"\b(?:"
-    r"minimum\s+reads?|read[-\s]+count\s+threshold|low[-\s]+abundance|"
-    r"rare\s+(?:ASVs?|OTUs?|sequences?)|singletons?|doubletons?|"
-    r"fewer\s+than\s+\d+\s+reads?|less\s+than\s+\d+\s+reads?|"
-    r"relative\s+(?:read\s+)?abundance|blank\s+threshold|control\s+threshold|"
-    r"background\s+reads?|noise\s+detected\s+in\s+blanks|"
-    r"removed\s+if\s+present\s+below|discarded\s+below|filtered\s+below|"
-    r"minsize|min_count|min_reads|abundance_threshold|prevalence|"
-    r"prune_taxa|filter_taxa|isContaminant|decontam|microDecon|metabaR|LULU"
-    r")\b|<\s*\d+\s+reads?",
+# Shared by in_situ_temp/in_situ_diss_oxygen/in_situ_salinity: their own
+# search terms ("temperature", "salinity", ...) are deliberately broad, so
+# this is the real gate that keeps a bare mention out -- confirmed live
+# against a real paper that reports the SAME three measurements twice,
+# once in situ at collection and once as later incubation-chamber daily
+# averages (see LLM_JUDGED_SEARCH_FIELDS's own comment above these three
+# fields).
+_SAMPLING_TIME_CONTEXT_RE = re.compile(
+    r"\bin[\s-]situ\b|at\s+the\s+time\s+of\s+(?:collection|sampling)|"
+    r"at\s+the\s+sampling\s+site|upon\s+collection|prior\s+to\s+sampling|"
+    r"at\s+collection|on\s+the\s+day\s+of\s+(?:collection|sampling)",
     re.IGNORECASE,
 )
 _OTU_CLUSTER_TOOL_CONTEXT_RE = re.compile(
@@ -2938,61 +2222,11 @@ _OTU_CLUSTER_TOOL_CONTEXT_RE = re.compile(
     r")\b|--cluster",
     re.IGNORECASE,
 )
-_OTU_CLUSTER_CUTOFF_CONTEXT_RE = re.compile(
-    r"\b(?:"
-    r"OTU\s+clustering\s+cutoff|OTU\s+similarity\s+threshold|clustering\s+threshold|"
-    r"\d+(?:\.\d+)?%\s+(?:similarity|identity|divergence)|"
-    r"sequence\s+identity\s+threshold|percent(?:age)?\s+identity|"
-    r"clustered\s+at\s+\d+|grouped\s+at\s+\d+|"
-    r"OTUs?\s+were\s+clustered|(?:de\s+novo|closed-reference|open-reference)\s+clustering|"
-    r"100%\s+identity|distance\s+cutoff|genetic\s+distance|"
-    r"0\.\d+\s+distance|\d+%\s+divergence|"
-    r"--p-perc-identity|--id|id=|cutoff=|similarity=|threshold=|-c\s+0\.\d+|d=1"
-    r")\b",
-    re.IGNORECASE,
-)
-_CHIMERA_REQUIRED_CONTEXT_RE = re.compile(
-    r"\b(?:"
-    r"chimeras?|chimeric|bimeras?|spurious\s+biological\s+variants?|"
-    r"fusion\s+transcripts?|gene\s+fusions?|hybrid\s+genes?|intergenic\s+splicing|"
-    r"PCR\s+artifacts?|hybrid\s+sequences?|hybrid\s+amplicons?|"
-    r"artificial\s+recombinants?|split\s+reads?|supplementary\s+alignments?"
-    r")\b",
-    re.IGNORECASE,
-)
-_TRIM_METHOD_CONTEXT_RE = re.compile(
-    r"\b(?:"
-    r"primer\s+trimming|primer\s+removal|primers\s+were\s+removed|"
-    r"primer\s+sequences\s+(?:were\s+)?(?:removed|trimmed)|trimmed\s+primers?|"
-    r"primer\s+clipping|adapter\s+trimming|adapter\s+removal|"
-    r"adapters\s+were\s+removed|adapter\s+sequences\s+(?:were\s+)?(?:removed|trimmed)|"
-    r"trimmed\s+adapters?|adapter\s+clipping|adaptor\s+trimming|adaptor\s+removal|"
-    r"sequencing\s+adapter\s+removal|sequencing\s+adapters\s+removed|"
-    r"PCR\s+primer\s+removal|amplicon\s+primer\s+removal|"
-    r"technical\s+sequence\s+removal|technical\s+sequences\s+removed|"
-    r"fusion\s+primer\s+removal|primer\s+tail\s+removal|adapter\s+tail\s+removal|"
-    r"overhang\s+removal|sequencing\s+tail\s+removal|barcode\s+removal|"
-    r"barcodes\s+were\s+trimmed"
-    r")\b",
-    re.IGNORECASE,
-)
-_TRIM_PARAM_CONTEXT_RE = re.compile(
-    r"\b(?:"
-    r"primer\s+trimming|primer\s+removal|primer\s+sequences\s+(?:were\s+)?(?:removed|trimmed)|"
-    r"adapter\s+trimming|adapter\s+removal|adapter\s+sequences\s+(?:were\s+)?(?:removed|trimmed)|"
-    r"adaptor\s+trimming|adaptor\s+removal|sequencing\s+adapter\s+removal|"
-    r"PCR\s+primer\s+removal|amplicon\s+primer\s+removal|fusion\s+primer\s+removal|"
-    r"primer\s+tail\s+removal|adapter\s+tail\s+removal|overhang\s+removal|"
-    r"technical\s+sequence\s+removal|barcode\s+removal|"
-    r"Cutadapt\s+was\s+used\s+to\s+remove|q2-cutadapt\s+was\s+used\s+to\s+trim|"
-    r"ILLUMINACLIP|adapter_sequence|ktrim"
-    r")\b",
-    re.IGNORECASE,
-)
 _OTU_DB_CONTEXT_RE = re.compile(
     r"\b(?:"
     r"(?:reference|taxonomy|taxonomic|sequence|barcode)\s+(?:database|library)|"
-    r"SILVA|PR2|Protist\s+Ribosomal\s+Reference|GenBank|NCBI\s+(?:nucleotide|nt)|"
+    r"SILVA(?:[_\s.-]?\d+(?:\.\d+)?)?|FreshTrain|PR2|Protist\s+Ribosomal\s+Reference|GenBank|"
+    r"NCBI\s+(?:nucleotide|nt|nr|database)|non[-\s]?redundant\s+(?:\(?nr\)?\s+)?NCBI\s+database|"
     r"nt\s+database|BOLD|Barcode\s+of\s+Life|UNITE|Ribosomal\s+Database\s+Project|"
     r"Greengenes2?|MIDORI2?|MitoFish|MetaZooGene|Diat\.?Barcode|PhytoREF|"
     r"MaarjAM|GTDB|Genome\s+Taxonomy\s+Database|MitoZoa|EMBL|ENA\s+reference|"
@@ -3018,7 +2252,8 @@ _TAX_ASSIGNMENT_CONTEXT_RE = re.compile(
 )
 _OTU_DB_VALUE_RE = re.compile(
     r"\b(?:"
-    r"SILVA|PR2|Protist\s+Ribosomal\s+Reference|GenBank|NCBI\s+(?:nucleotide|nt)|"
+    r"SILVA(?:[_\s.-]?\d+(?:\.\d+)?)?|FreshTrain|PR2|Protist\s+Ribosomal\s+Reference|GenBank|"
+    r"NCBI\s+(?:nucleotide|nt|nr|database)|non[-\s]?redundant\s+(?:\(?nr\)?\s+)?NCBI\s+database|"
     r"nt\s+database|BOLD|Barcode\s+of\s+Life|UNITE|Ribosomal\s+Database\s+Project|"
     r"Greengenes2?|MIDORI2?|MitoFish|MetaZooGene|Diat\.?Barcode|PhytoREF|"
     r"MaarjAM|GTDB|Genome\s+Taxonomy\s+Database|MitoZoa|EMBL|ENA|"
@@ -3035,6 +2270,21 @@ _ASSAY_NAME_CONTEXT_RE = re.compile(
     r"515F|806R|926R|341F|785R|805R|1389F|EukB|mlCOIintF|jgHCO2198|"
     r"LCO1490|HCO2198|ITS1F|ITS2|fITS7|ITS4)"
     r")\b",
+    re.IGNORECASE,
+)
+_BARE_FUNCTIONAL_GENE_ASSAY_NAME_RE = re.compile(
+    r"^(?:hzs[ABC]?|hzo(?:F1|R1)?|narG|nir[SK]|amoA|nxr[AB]|nosZ|nifH|dsr[AB]|mcrA)$",
+    re.IGNORECASE,
+)
+# A real audit found the model answering assay_target_taxa with the
+# amplified marker gene itself ("16S rRNA gene") when a quote named the
+# gene without stating which organism(s)/taxonomic group it targets -- a
+# gene/marker name is never a valid taxon on its own, so a bare marker
+# name (optionally suffixed with "gene"/"marker"/"locus"/"region") is
+# rejected outright rather than accepted as the assay's target taxon.
+_BARE_MARKER_GENE_TARGET_TAXA_RE = re.compile(
+    r"^(?:1[268]S(?:\s*rRNA)?|28S(?:\s*rRNA)?|COI|cytochrome\s*b|rbcL|ITS1?|ITS2)"
+    r"(?:\s+(?:gene|marker|locus|region))?$",
     re.IGNORECASE,
 )
 _TARGET_TAXONOMIC_ASSAY_CONTEXT_RE = re.compile(
@@ -3060,18 +2310,10 @@ _TARGET_TAXONOMIC_SCOPE_CONTEXT_RE = re.compile(
 def _llm_judged_field_matches_snippet(field: LLMJudgedSearchField, snippet: str) -> bool:
     if not any(_term_pattern(term).search(snippet) for term in field.search_terms):
         return False
-    if field.term_name == "min_reads_tool":
-        return bool(_MIN_READS_CONTEXT_RE.search(snippet))
+    if field.term_name in ("in_situ_temp", "in_situ_diss_oxygen", "in_situ_salinity"):
+        return bool(_SAMPLING_TIME_CONTEXT_RE.search(snippet))
     if field.term_name == "otu_clust_tool":
         return bool(_OTU_CLUSTER_TOOL_CONTEXT_RE.search(snippet))
-    if field.term_name == "otu_clust_cutoff":
-        return bool(_OTU_CLUSTER_CUTOFF_CONTEXT_RE.search(snippet))
-    if field.term_name == "chimera_check_method":
-        return bool(_CHIMERA_REQUIRED_CONTEXT_RE.search(snippet))
-    if field.term_name == "trim_method":
-        return bool(_TRIM_METHOD_CONTEXT_RE.search(snippet))
-    if field.term_name == "trim_param":
-        return bool(_TRIM_PARAM_CONTEXT_RE.search(snippet))
     if field.term_name == "otu_db":
         return bool(_OTU_DB_CONTEXT_RE.search(snippet))
     if field.term_name == "tax_assign_cat":
@@ -3168,6 +2410,12 @@ def _valid_llm_judged_value(field: LLMJudgedSearchField, value: str) -> bool:
     stripped = value.strip()
     if not stripped:
         return False
+    if field.term_name == "assay_name":
+        return bool(_clean_assay_name_parts(stripped))
+    if field.term_name == "assay_target_taxa":
+        return not _BARE_MARKER_GENE_TARGET_TAXA_RE.fullmatch(stripped)
+    if field.term_name == "otu_db":
+        return bool(_OTU_DB_VALUE_RE.search(stripped))
     if not field.allowed_values:
         return True
     parts = [part.strip() for part in stripped.split("|")]
@@ -3176,6 +2424,45 @@ def _valid_llm_judged_value(field: LLMJudgedSearchField, value: str) -> bool:
         or ("other:" in field.allowed_values and part.casefold().startswith("other:"))
         for part in parts
     )
+
+
+def _clean_assay_name_parts(value: str) -> list[str]:
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for part in (p.strip() for p in value.split("|")):
+        if not part:
+            continue
+        part = _normalize_assay_name_part(part)
+        if "/" in part:
+            continue
+        if _BARE_FUNCTIONAL_GENE_ASSAY_NAME_RE.fullmatch(part):
+            continue
+        key = part.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(part)
+    return cleaned
+
+
+_MOJIBAKE_DASH_RE = re.compile(r"(?:\u7ab6\u5929|\u7ab6\u96fb|\u7ab6\u642d|\u7ab6\u7763|\u7ab6\u6d9b)")
+_ASSAY_DASH_NORMALIZE_RE = re.compile(r"[‐-―]")
+_RRNA_REGION_ASSAY_NAME_RE = re.compile(
+    r"^(?P<gene>1[68]\s*S)(?:\s*rRNA)?\s*[- ]\s*(?P<region>V\d(?:-V\d)?)$",
+    re.IGNORECASE,
+)
+
+
+def _normalize_assay_name_part(value: str) -> str:
+    part = _MOJIBAKE_DASH_RE.sub("-", value.strip())
+    part = _ASSAY_DASH_NORMALIZE_RE.sub("-", part)
+    part = re.sub(r"\s*-\s*", "-", part)
+    part = re.sub(r"\s+", " ", part)
+    marker_region = _RRNA_REGION_ASSAY_NAME_RE.fullmatch(part)
+    if marker_region:
+        gene = re.sub(r"\s+", "", marker_region.group("gene")).upper()
+        return f"{gene}-{marker_region.group('region').upper()}"
+    return part
 
 
 def _llm_judged_value_priority(field: LLMJudgedSearchField, value: str, quote: str) -> int:
@@ -3196,6 +2483,20 @@ def _llm_judged_value_priority(field: LLMJudgedSearchField, value: str, quote: s
         if pattern.search(quote):
             return index
     return len(field.search_terms)
+
+
+# Fields whose own output_instructions explicitly promise a verbatim copy
+# from the quote (as opposed to a composed/summarized/classified answer,
+# which several sibling fields in this same mechanism deliberately are --
+# see _facts_from_llm_judgement's own comment at its call site).
+_VERBATIM_REQUIRED_FIELDS = frozenset(
+    {
+        "informationWithheld",
+        "in_situ_temp",
+        "in_situ_diss_oxygen",
+        "in_situ_salinity",
+    }
+)
 
 
 def _facts_from_llm_judgement(
@@ -3219,6 +2520,28 @@ def _facts_from_llm_judgement(
         candidate = candidates_by_id.get(quote_id)
         if field is None or candidate is None or not _valid_llm_judged_value(field, value):
             continue
+        # Mirrors the same fix in section_category_extraction.py's Stage 3
+        # guard: the verbatim check alone doesn't stop the model from
+        # attaching a value to a field this quote was never even offered
+        # for, as long as the text happens to also appear in that quote.
+        if field_name not in candidate.field_names:
+            continue
+        # A real live audit (10.1093/ismejo/wrae013) caught the model
+        # returning a silently typo'd version of a quote's own tool name
+        # -- the prompt's own "copy verbatim" instruction never actually
+        # enforced it. Deliberately scoped to only the fields whose own
+        # output_instructions promise a verbatim copy (_VERBATIM_REQUIRED_
+        # FIELDS) -- several other free-text fields in this same mechanism
+        # (assay_name's composed short name, inhibition_check's own
+        # summary) are legitimately NOT verbatim by design, confirmed by
+        # their own existing tests breaking when this check was first
+        # tried unscoped against every field.
+        if field_name in _VERBATIM_REQUIRED_FIELDS and value.casefold() not in candidate.text.casefold():
+            continue
+        if field_name == "assay_name":
+            value = " | ".join(_clean_assay_name_parts(value))
+            if not value:
+                continue
         group = grouped.setdefault(
             field_name,
             {"entries": [], "quotes": [], "seen_values": set()},
@@ -3409,35 +2732,6 @@ def _barcoding_one_step_fallback_fact(
     )
 
 
-def _chimera_not_recorded_fallback_fact(
-    *,
-    candidates: tuple[QuoteCandidate, ...],
-    locator_prefix: str,
-    existing_fact_types: frozenset[str],
-    exclude_field_names: frozenset[str],
-) -> RawFactCandidate | None:
-    if "chimera_check_method" in exclude_field_names or "chimera_check_method" in existing_fact_types:
-        return None
-    if any("chimera_check_method" in candidate.field_names for candidate in candidates):
-        return None
-    return RawFactCandidate(
-        entity_level=EntityLevel.STUDY,
-        fact_type_candidate="chimera_check_method",
-        raw_field_name="chimera_check_method",
-        raw_value="no chimeric recorded.",
-        source_locator=f"{locator_prefix}:llm_judged_search:chimera_check_method:not_recorded_fallback",
-        support_type=SupportType.DETERMINISTICALLY_DERIVED,
-        evidence_quote=None,
-        confidence_metadata={
-            "detector": "chimera_required_context_default",
-            "description": (
-                "No sentence matched the required chimera/artifact/fusion context terms for "
-                "chimera_check_method."
-            ),
-        },
-    )
-
-
 def _not_found_fallback_facts(
     *,
     field_names: tuple[str, ...],
@@ -3470,12 +2764,81 @@ def _not_found_fallback_facts(
     return facts
 
 
+# A real, common notation: a paper reports its whole fusion-primer
+# oligo ("adapter-tailed primer") as one sequence, e.g. "5'-
+# TCGTCGGCAGCGTCAGATGTGTATAAGAGACAG-CTCCTACGGGAGGCAGCAG-3'" -- the
+# Illumina/Nextera sequencing-adapter overhang fused to the real PCR
+# primer. adapter_forward/adapter_reverse correctly capture the whole
+# thing verbatim, but the primer portion was never separately captured
+# as pcr_primer_forward/pcr_primer_reverse at all -- confirmed live
+# (10.1371/journal.pone.0303937): "5´–TCGTCGGCAGCGTCAGATGTGTAT
+# AAGAGACAG-CTCCTACGGGAGGCAGCAG–3´" is a real Nextera forward overhang
+# fused to the real 341F 16S primer, joined by one plain ASCII hyphen
+# ("-", U+002D) -- distinct from the en-dash ("–", U+2013) the paper
+# uses for the outer 5'/3' boundary markers, a reliable way to tell the
+# fusion join apart from decorative punctuation.
+_ADAPTER_TO_FUSED_PRIMER_FIELD = {"adapter_forward": "pcr_primer_forward", "adapter_reverse": "pcr_primer_reverse"}
+# The digit/prime-mark order varies even within one paper's own notation
+# (confirmed live: the same sentence uses "5´–" -- digit, then prime mark,
+# then dash -- for the leading boundary, but "–3´" -- dash, then digit,
+# then prime mark -- for the trailing one), so both orders are accepted on
+# each end rather than assuming a fixed order.
+_LEADING_PRIME_MARKER_RE = re.compile(
+    r"^\s*(?:[53]\s*['’´]|['’´]\s*[53])\s*[-–—]?\s*", re.IGNORECASE
+)
+_TRAILING_PRIME_MARKER_RE = re.compile(
+    r"\s*[-–—]?\s*(?:[53]\s*['’´]|['’´]\s*[53])\s*$", re.IGNORECASE
+)
+_NUCLEOTIDE_SEQUENCE_ONLY_RE = re.compile(r"^[ACGTURYSWKMBDHVN]{6,}$", re.IGNORECASE)
+
+
+def _clean_fused_sequence_part(value: str) -> str:
+    cleaned = _LEADING_PRIME_MARKER_RE.sub("", value)
+    cleaned = _TRAILING_PRIME_MARKER_RE.sub("", cleaned)
+    return re.sub(r"\s+", "", cleaned)  # real sequences never contain whitespace
+
+
+def _split_fused_adapter_primer_facts(facts: list[RawFactCandidate]) -> list[RawFactCandidate]:
+    result: list[RawFactCandidate] = []
+    for fact in facts:
+        primer_field = _ADAPTER_TO_FUSED_PRIMER_FIELD.get(fact.fact_type_candidate)
+        if primer_field is None or "-" not in fact.raw_value:
+            result.append(fact)
+            continue
+        adapter_part, _, primer_part = fact.raw_value.rpartition("-")
+        adapter_part = _clean_fused_sequence_part(adapter_part)
+        primer_part = _clean_fused_sequence_part(primer_part)
+        if not _NUCLEOTIDE_SEQUENCE_ONLY_RE.match(adapter_part) or not _NUCLEOTIDE_SEQUENCE_ONLY_RE.match(primer_part):
+            # Doesn't look like a genuine fusion-primer split (either side
+            # isn't a clean nucleotide sequence) -- leave the fact as-is
+            # rather than risk mangling something this pattern wasn't
+            # meant for.
+            result.append(fact)
+            continue
+        result.append(fact.model_copy(update={"raw_value": adapter_part}))
+        result.append(
+            fact.model_copy(
+                update={
+                    "fact_type_candidate": primer_field,
+                    "raw_field_name": primer_field,
+                    "raw_value": primer_part,
+                }
+            )
+        )
+    return result
+
+
 def detect_llm_judged_search_facts(
     backend: LLMBackend,
     texts: Iterable[tuple[str, str]],
     *,
     locator_prefix: str,
-    max_output_tokens: int | None = 512,
+    # A real live audit (10.1371/journal.pone.0303937) caught a dense,
+    # candidate-rich paper's response getting cut off mid-object at 512
+    # tokens (finish_reason "length"), silently dropping an already-in-
+    # progress field's answer along with it -- confirmed via the raw API
+    # response, not model non-determinism.
+    max_output_tokens: int | None = MIN_LLM_MAX_OUTPUT_TOKENS,
     active_flags: frozenset[str] = frozenset(),
     exclude_field_names: frozenset[str] = frozenset(),
 ) -> list[RawFactCandidate]:
@@ -3486,8 +2849,6 @@ def detect_llm_judged_search_facts(
         facts.extend(
             _not_found_fallback_facts(
                 field_names=(
-                    "trim_method",
-                    "trim_param",
                     "tax_assign_cat",
                     "assay_target_taxa",
                 ),
@@ -3497,14 +2858,6 @@ def detect_llm_judged_search_facts(
                 exclude_field_names=exclude_field_names,
             )
         )
-        chimera_fallback = _chimera_not_recorded_fallback_fact(
-            candidates=candidates,
-            locator_prefix=locator_prefix,
-            existing_fact_types=frozenset(),
-            exclude_field_names=exclude_field_names,
-        )
-        if chimera_fallback:
-            facts.append(chimera_fallback)
         barcoding_fallback = _barcoding_one_step_fallback_fact(
             texts=reusable_texts,
             locator_prefix=locator_prefix,
@@ -3534,11 +2887,10 @@ def detect_llm_judged_search_facts(
         )
     facts = _facts_from_llm_judgement(parsed, candidates, locator_prefix=locator_prefix)
     facts = _mirror_not_a_control_to_sibling_field(facts)
+    facts = _split_fused_adapter_primer_facts(facts)
     existing_fact_types = frozenset(fact.fact_type_candidate for fact in facts)
     not_found_fallbacks = _not_found_fallback_facts(
         field_names=(
-            "trim_method",
-            "trim_param",
             "tax_assign_cat",
             "assay_target_taxa",
         ),
@@ -3549,15 +2901,6 @@ def detect_llm_judged_search_facts(
     )
     if not_found_fallbacks:
         facts.extend(not_found_fallbacks)
-        existing_fact_types = frozenset(fact.fact_type_candidate for fact in facts)
-    chimera_fallback = _chimera_not_recorded_fallback_fact(
-        candidates=candidates,
-        locator_prefix=locator_prefix,
-        existing_fact_types=existing_fact_types,
-        exclude_field_names=exclude_field_names,
-    )
-    if chimera_fallback:
-        facts.append(chimera_fallback)
         existing_fact_types = frozenset(fact.fact_type_candidate for fact in facts)
     barcoding_fallback = _barcoding_one_step_fallback_fact(
         texts=reusable_texts,
@@ -3577,6 +2920,50 @@ def detect_llm_judged_search_facts(
         )
     )
     return facts
+
+
+# phix_perc: a percentage number and the word "PhiX" essentially always
+# co-occurring in the same sentence is an unambiguous, purely mechanical
+# signal ("15% PhiX", "PhiX (15%)", "spiked with 15% PhiX control") -- no
+# LLM judgment call is needed for this one, per an explicit user request
+# for "a quick search ... for PhiX or its variations". Deliberately a
+# separate, self-contained deterministic pass (not a TEXT_SEARCH_FLAGS
+# boolean, which can't carry a numeric value; not a CONTROLLED_SEARCH_
+# FIELDS/LLMJudgedSearchField entry, which would spend an LLM call on
+# something a regex already resolves outright).
+_PHIX_MENTION_RE = re.compile(r"\bphix\b", re.IGNORECASE)
+_PHIX_PERCENTAGE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%")
+
+
+def detect_phix_percentage_facts(
+    texts: Iterable[tuple[str, str]],
+    *,
+    locator_prefix: str,
+) -> list[RawFactCandidate]:
+    """First sentence (across every supplied text, main paper or
+    supplement) mentioning both PhiX and a percentage number wins -- same
+    "first supporting sentence, one clear fact" convention as
+    detect_text_search_flags below."""
+    for title, text in texts:
+        for index, snippet in _snippets(text):
+            if not _PHIX_MENTION_RE.search(snippet):
+                continue
+            match = _PHIX_PERCENTAGE_RE.search(snippet)
+            if not match:
+                continue
+            return [
+                RawFactCandidate(
+                    entity_level=EntityLevel.STUDY,
+                    fact_type_candidate="phix_perc",
+                    raw_field_name="phix_perc",
+                    raw_value=match.group(1),
+                    source_locator=f"{locator_prefix}:{title}:sentence[{index}]",
+                    support_type=SupportType.DETERMINISTICALLY_DERIVED,
+                    evidence_quote=snippet,
+                    confidence_metadata={"detector": "phix_percentage_regex"},
+                )
+            ]
+    return []
 
 
 def detect_text_search_flags(
@@ -3664,3 +3051,79 @@ def detect_controlled_search_facts(
             )
         )
     return facts
+
+
+# A real live audit (10.1093/ismejo/wrae013, STUDY-295abf4a8f43) found a
+# BioSample-submitted "elevation = 34 m" attribute for a benthic sediment
+# sample, while the paper's own text says "at a site with 34 m water
+# depth". FAIRe's own elev definition is "height above ... mean sea
+# level ... i.e. 0m for seawater sample" -- a nonzero elev on a seafloor
+# sample is itself a strong signal of exactly this kind of real-world
+# BioSample submitter error (entering water/sample depth under the
+# "elevation" field). Per an explicit user request, this is verified with
+# a genuine LLM judgement call (not a blanket regex substitution) and
+# ONLY invoked by the caller when the sample is soil/sediment AND elev is
+# populated AND depth is not -- see extraction/api_verification.py, the
+# only caller.
+def confirm_value_described_as_depth(
+    backend: LLMBackend,
+    numeric_value: str,
+    section_texts: Iterable[tuple[str, str]],
+    *,
+    max_candidates: int = 10,
+) -> str | None:
+    """Returns the confirming quote (verbatim, from the source text) if
+    the paper's own text explicitly ties `numeric_value` to a water/sample
+    depth concept, or None if no candidate sentence supports that."""
+    value_pattern = re.compile(rf"(?<!\d){re.escape(numeric_value)}(?!\d)")
+    depth_phrase_pattern = re.compile(
+        r"\b(?:water\s+depth|depth\s+of|m\s+depth|meters?\s+depth|deep\s+water|"
+        r"water\s+column\s+depth|sampling\s+depth|site\s+depth)\b",
+        re.IGNORECASE,
+    )
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for _title, text in section_texts:
+        for _index, sentence in _snippets(text):
+            if sentence in seen:
+                continue
+            if value_pattern.search(sentence) and depth_phrase_pattern.search(sentence):
+                seen.add(sentence)
+                candidates.append(sentence)
+            if len(candidates) >= max_candidates:
+                break
+        if len(candidates) >= max_candidates:
+            break
+    if not candidates:
+        return None
+
+    numbered = "\n".join(f"Q{index + 1:03d}: {quote}" for index, quote in enumerate(candidates))
+    prompt = f"""A structured database record for a sediment/soil sample reports its "elevation" as {numeric_value} m. \
+This is very likely a data-entry error -- elevation is a site's height above sea level (almost always 0m for an \
+underwater site), so a real "{numeric_value} m" value under "elevation" for a seafloor sample usually means a \
+submitter actually recorded WATER DEPTH or SAMPLE DEPTH there instead.
+
+Below are candidate sentences from the paper's own text that mention the number {numeric_value}. Determine whether \
+any sentence explicitly confirms this number as the site's water depth, sampling depth, or a similar "how deep \
+below the surface" measurement -- NOT elevation, altitude, or height above sea level.
+
+Return ONLY a JSON object: {{"confirmed": true or false, "quote_id": "<id of the confirming quote, or empty string>"}}
+
+Candidate quotes:
+{numbered}
+"""
+    parsed, _response = backend.generate_json(
+        prompt,
+        system="You verify whether a specific number in a paper's own text confirms a suspected data-labeling error.",
+        temperature=0,
+        max_tokens=128,
+    )
+    if not isinstance(parsed, dict) or not parsed.get("confirmed"):
+        return None
+    match = re.match(r"Q0*(\d+)$", str(parsed.get("quote_id") or "").strip())
+    if not match:
+        return None
+    index = int(match.group(1)) - 1
+    if 0 <= index < len(candidates):
+        return candidates[index]
+    return None

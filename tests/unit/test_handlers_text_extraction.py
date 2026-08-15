@@ -6,11 +6,12 @@ import json
 
 import pytest
 
-from fair_ocean_agent.database.enums import EntityLevel, IdentifierType, ReviewStatus, TaskStatus, TaskType
+from fair_ocean_agent.database.enums import EntityLevel, IdentifierType, ReviewStatus, SupportType, TaskStatus, TaskType
 from fair_ocean_agent.database.models import Entity, ExternalIdentifier, RawFact, Source, Study
 from fair_ocean_agent.llm.base import LLMBackendError
 from fair_ocean_agent.llm.disabled import DisabledLLMBackend
 from fair_ocean_agent.llm.mock import MockLLMBackend
+from fair_ocean_agent.sources.base import RawFactCandidate
 from fair_ocean_agent.sources.base import SourceRecordNotFoundError
 from fair_ocean_agent.workflow import handlers
 from fair_ocean_agent.workflow.task_queue import enqueue_task
@@ -116,6 +117,65 @@ def test_handler_extracts_and_persists_verified_facts(db_session, monkeypatch):
     assert facts[0].evidence_quote == "Sampling Water samples were collected on 4 January 2022 at a depth of 5 meters."
     assert facts[0].confidence_metadata == {"evidence_ids": ["SAMPLING.P001"]}
     assert facts[0].model_name == "mock-model"
+
+
+def test_handler_can_force_local_pdf_fulltext_source(db_session, monkeypatch, tmp_path):
+    study = _seeded_study_with_pmcid(db_session)
+    task = _task_for(db_session, study)
+    pdf_path = tmp_path / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n%%EOF")
+    monkeypatch.setenv(handlers.LOCAL_PDF_PATH_ENV, str(pdf_path))
+    monkeypatch.setattr(
+        handlers,
+        "_build_enabled_adapters",
+        lambda: pytest.fail("Europe PMC should not be called when local PDF override is set"),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "extract_pdf_sections",
+        lambda path: [{"title": "Sampling", "text": "Water samples were collected on 4 January 2022."}],
+    )
+    monkeypatch.setattr(handlers, "extract_pdf_text", lambda path: "Abstract\n\nMethods")
+    monkeypatch.setattr(handlers, "detect_and_correct_elev_depth_mislabeling", lambda *args, **kwargs: None)
+    monkeypatch.setattr(handlers, "detect_text_search_flags", lambda *args, **kwargs: [])
+    monkeypatch.setattr(handlers, "detect_phix_percentage_facts", lambda *args, **kwargs: [])
+    monkeypatch.setattr(handlers, "detect_controlled_search_facts", lambda *args, **kwargs: [])
+    monkeypatch.setattr(handlers, "detect_section_categories_present", lambda *args, **kwargs: [])
+    monkeypatch.setattr(handlers, "generate_study_factor", lambda *args, **kwargs: [])
+    monkeypatch.setattr(handlers, "generate_study_target_taxonomic_scope", lambda *args, **kwargs: [])
+    monkeypatch.setattr(handlers, "generate_rights_holder", lambda *args, **kwargs: [])
+    monkeypatch.setattr(handlers, "generate_funding_source", lambda *args, **kwargs: [])
+    monkeypatch.setattr(handlers, "generate_information_withheld_llm_guess", lambda *args, **kwargs: [])
+    monkeypatch.setattr(handlers, "extract_section_category_facts", lambda *args, **kwargs: [])
+    monkeypatch.setattr(handlers, "detect_llm_judged_search_facts", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        handlers,
+        "extract_facts_from_section",
+        lambda *args, **kwargs: (
+            [
+                RawFactCandidate(
+                    entity_level=EntityLevel.STUDY,
+                    fact_type_candidate="collection_date",
+                    raw_field_name="collection_date",
+                    raw_value="2022-01-04",
+                    source_locator="pdf:Sampling",
+                    support_type=SupportType.EXPLICIT,
+                    evidence_quote="Water samples were collected on 4 January 2022.",
+                )
+            ],
+            None,
+        ),
+    )
+    handlers._llm_backend_cache = MockLLMBackend(label="mock-model", responses=[])
+
+    handlers.handle_extract_text_facts(db_session, task)
+    db_session.commit()
+
+    source = db_session.query(Source).filter_by(study_id=study.study_id, source_name="local_pdf_fulltext").one()
+    assert source.external_identifier == str(pdf_path.resolve())
+    facts = db_session.query(RawFact).filter_by(study_id=study.study_id, extraction_method="llm_text_extraction").all()
+    assert len(facts) == 1
+    assert facts[0].raw_value == "2022-01-04"
 
 
 def test_handler_persists_deterministic_text_search_flags(db_session, monkeypatch):
@@ -334,9 +394,6 @@ def test_handler_reprocesses_fulltext_with_new_prompt_version_or_model(db_sessio
     new_model_facts = db_session.query(RawFact).filter_by(study_id=study.study_id, model_name="new-model").all()
     assert {fact.fact_type_candidate for fact in new_model_facts} == {
         "collection_date",
-        "chimera_check_method",
-        "trim_method",
-        "trim_param",
         "tax_assign_cat",
         "assay_target_taxa",
         # neg_cont_0_1/pos_cont_0_1 now confidently default to "0" rather

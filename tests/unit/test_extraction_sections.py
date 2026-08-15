@@ -30,6 +30,59 @@ NESTED_JATS_XML = """<article>
 """
 
 
+CITATION_XREF_JATS_XML = """<article>
+  <body>
+    <sec>
+      <title>Taxonomic assignment</title>
+      <p>The taxonomic classification of OTUs was performed using the lowest common ancestor
+algorithm implemented in the Python version of CREST<sup><xref rid="CR70" ref-type="bibr">70</xref></sup>
+against the SILVA 138.1 Release<sup><xref rid="CR71" ref-type="bibr">71</xref></sup>.
+See <xref rid="F2" ref-type="fig">Fig. 2</xref> for the phylogenetic tree.</p>
+    </sec>
+  </body>
+</article>
+"""
+
+
+EMPTY_PARENTHETICAL_XML = """<article>
+  <body>
+    <sec>
+      <title>Methods</title>
+      <p>Sediment traps (<xref rid="CR5" ref-type="bibr">5</xref>) based on decantation and
+homogenization phases, and retrieved benthic macroinvertebrates were stored in ethanol.</p>
+    </sec>
+  </body>
+</article>
+"""
+
+
+def test_strips_dangling_empty_parenthetical_left_by_a_removed_citation_number():
+    """Regression guard for a real gap found live (10.1002/ece3.6071):
+    when a citation number sits inside literal parentheses that are the
+    paragraph's own text (not part of the stripped xref), removing just
+    the number leaves a dangling "( )" behind."""
+    sections = select_relevant_sections(EMPTY_PARENTHETICAL_XML)
+    text = sections[0]["text"]
+    assert "( )" not in text
+    assert "Sediment traps based on decantation" in text
+
+
+def test_strips_bibliography_citation_reference_numbers_from_section_text():
+    """Regression guard for a real bug found live (10.1038/s42003-024-06136-2's
+    real JATS XML): a naive itertext() call flattens a superscript
+    bibliography xref's own number into plain sibling text with no visual
+    distinction from real content, corrupting "SILVA 138.1 Release" into
+    "SILVA 138.1 Release 71" (71 being a citation/reference number, not
+    part of the database name). Other xref ref-types (e.g. fig) are left
+    alone since their inline text is real sentence content."""
+    sections = select_relevant_sections(CITATION_XREF_JATS_XML)
+    text = sections[0]["text"]
+    assert "SILVA 138.1 Release ." in text or "SILVA 138.1 Release." in text
+    assert "71" not in text
+    assert "70" not in text
+    assert "Fig. 2" in text
+
+
 def test_selects_only_relevant_leaf_sections():
     sections = select_relevant_sections(NESTED_JATS_XML)
     titles = {s["title"] for s in sections}
@@ -157,6 +210,70 @@ def test_default_max_chars_is_raised_for_the_expanded_taxonomy():
 
     default_max_chars = inspect.signature(select_relevant_sections).parameters["max_chars"].default
     assert default_max_chars > 20000
+
+
+# --- fn-group back-matter declarations (real live audit) --------------------
+# PeerJ's real JATS XML (10.7717/peerj.333) wraps "Additional Information and
+# Declarations" content in a <sec> whose own children are <fn-group>
+# elements, not further <sec>s -- Competing Interests, Author Contributions,
+# Field Study Permissions, and (the one that matters for extraction) DNA
+# Deposition, which states the paper's own GenBank/SRA accession numbers.
+# Confirmed live: this content was structurally invisible to every consumer
+# of select_relevant_sections before the fn-group-aware fix below, causing
+# real false "no accession number" claims elsewhere in the pipeline even
+# though the paper states one.
+PEERJ_DECLARATIONS_JATS_XML = """<article>
+  <body>
+    <sec>
+      <title>Materials and Methods</title>
+      <sec><title>Sampling</title><p>Water samples were collected at each station.</p></sec>
+    </sec>
+  </body>
+  <back>
+    <sec>
+      <title>Additional Information and Declarations</title>
+      <fn-group content-type="competing-interests">
+        <title>Competing Interests</title>
+        <fn><p>The authors declare no competing interests.</p></fn>
+      </fn-group>
+      <fn-group content-type="author-contributions">
+        <title>Author Contributions</title>
+        <fn><p>All authors contributed equally.</p></fn>
+      </fn-group>
+      <fn-group content-type="other">
+        <title>Field Study Permissions</title>
+        <fn><p>Flower Garden Banks National Marine Sanctuary: FGBNMS-2009-005-A2.</p></fn>
+      </fn-group>
+      <fn-group content-type="other">
+        <title>DNA Deposition</title>
+        <fn><p>Accession numbers KJ609521-KJ609532 have been deposited on GenBank.</p></fn>
+      </fn-group>
+    </sec>
+  </back>
+</article>
+"""
+
+
+def test_includes_relevantly_titled_fn_group_declarations():
+    sections = select_relevant_sections(PEERJ_DECLARATIONS_JATS_XML)
+    titles = {s["title"] for s in sections}
+    assert "DNA Deposition" in titles
+    dna_deposition = next(s for s in sections if s["title"] == "DNA Deposition")
+    assert "KJ609521-KJ609532" in dna_deposition["text"]
+
+
+def test_excludes_irrelevantly_titled_fn_group_declarations():
+    sections = select_relevant_sections(PEERJ_DECLARATIONS_JATS_XML)
+    titles = {s["title"] for s in sections}
+    assert "Competing Interests" not in titles
+    assert "Author Contributions" not in titles
+    assert "Field Study Permissions" not in titles
+
+
+def test_does_not_yield_the_declarations_wrapper_sec_itself():
+    sections = select_relevant_sections(PEERJ_DECLARATIONS_JATS_XML)
+    titles = {s["title"] for s in sections}
+    assert "Additional Information and Declarations" not in titles
 
 
 def test_skips_a_fragment_too_small_to_be_worth_an_extraction_call():

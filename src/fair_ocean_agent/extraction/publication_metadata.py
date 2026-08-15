@@ -1,12 +1,11 @@
-"""Deterministic (no-LLM) extraction of project-level metadata directly
-from a publication's own structured sources -- never the LLM checklist.
+"""Publication-level project metadata directly from a paper's own
+structured sources and tightly scoped paper sections.
 
-Per an explicit user review of a NOAA/SEUS-MBON FAIRe checklist, every
-field this module produces was marked "No LLM": structured sources first,
-falling back to deterministic parsing of the paper's own text, since these
-are all more reliably sourced this way than by asking a model to read
-prose. Two distinct techniques, kept in separate functions rather than one
-grab-bag extractor:
+Most fields in this module remain deterministic structured-source
+extractions. Narrow exceptions (`rightsHolder`, `funding_source`) use the
+LLM only after JATS has already isolated the relevant rights/funding text;
+the model's job there is selection/cleanup from a short paragraph, not a
+paper-wide search.
 
 - **JATS full-text XML tree structure** (`extract_from_jats_permissions`,
   `extract_from_jats_authors`) -- parsed with `xml.etree.ElementTree`
@@ -29,12 +28,8 @@ piece of a citation (title/authors/year/journal/DOI) already exists as a
 structured Crossref fact (`sources/crossref.py`) by the time this runs.
 
 Every fact_type_candidate here is the literal FAIRe field spelling
-(`license`, `rightsHolder`, ...), matching this codebase's structured-
-adapter convention ("fact_type_candidate is literally whatever attribute
-name a real record carries", per `mapping/rules.py`'s own docstring) --
-not the LLM taxonomy's standard-agnostic native-name indirection
-(`extraction/faire_fields.py`), since none of this is LLM output that
-needs protecting from vocabulary coupling.
+(`license`, `rightsHolder`, ...), matching this codebase's project-
+metadata convention for facts that are already scoped to one FAIRe field.
 """
 from __future__ import annotations
 
@@ -53,6 +48,7 @@ from fair_ocean_agent.extraction.sections import (
     RESULT_DISCUSSION_SECTION_TITLE_PATTERNS,
 )
 from fair_ocean_agent.identity.identifiers import IdentifierError, normalize_doi
+from fair_ocean_agent.llm.base import LLMBackend, LLMBackendError
 from fair_ocean_agent.sources.base import RawFactCandidate
 
 _XLINK_HREF = "{http://www.w3.org/1999/xlink}href"
@@ -62,6 +58,9 @@ _CODE_REPO_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _URL_PATTERN = re.compile(r"https?://[^\s<>()\[\]{}\"']+", re.IGNORECASE)
+_DOI_IN_TEXT_RE = re.compile(
+    r"(?i)\b(?:doi\s*:\s*|https?://(?:dx\.)?doi\.org/)?(10\.\d{4,9}/[^\s<>()\[\]{}\"']+)"
+)
 
 # Fallback for a paper whose analysis code isn't in a public repository at
 # all (schemas/faire/schema.yaml's own code_repo description is "Link to
@@ -88,38 +87,86 @@ _CODE_AVAILABILITY_KEYWORDS_RE = re.compile(
 )
 _CITATION_MARKER_RE = re.compile(r"\[__CITE:([^_\]]+)__\]")
 
-# Cleans a JATS <copyright-statement>'s free text down to (an approximation
-# of) just the holder's own name -- see extract_from_jats_permissions's
-# rightsHolder fallback. Confirmed against ~40 real cached articles that
-# real copyright-statement text comes in two structurally different
-# shapes, both needing the year token treated as the boundary, but on
-# opposite sides of the holder name:
-#   "(c) 2013 Jessen et al"                       (year BEFORE the name)
-#   "(c) The Author(s) 2024"                        (year AFTER the name)
-#   "(c) The Author(s) 2020. Published by Oxford..." (year, then an
-#                                                    unrelated trailing
-#                                                    publisher-attribution
-#                                                    clause)
-_COPYRIGHT_SYMBOL_RE = re.compile(r"^(?:copyright\s*)?©?\s*", re.IGNORECASE)
-_LEADING_YEAR_RE = re.compile(r"^(?:19|20)\d{2}\b[.,]?\s*")
-_YEAR_ONWARD_RE = re.compile(r"\s*\b(?:19|20)\d{2}\b.*$")
+_FUNDING_TITLE_RE = re.compile(r"\b(?:funding|funding information|financial disclosure|grant support)\b", re.IGNORECASE)
+_FUNDING_TEXT_RE = re.compile(
+    r"\b(?:funded|funding|financial support|supported by|grant(?:s)?|award(?:s)?|"
+    r"fellowship|scholarship)\b",
+    re.IGNORECASE,
+)
+_RIGHTS_TITLE_RE = re.compile(
+    r"\b(?:rights|rights and permissions|permissions|copyright|license|open access)\b",
+    re.IGNORECASE,
+)
+_ABSENT_FUNDING_RE = re.compile(
+    r"^\s*(?:none|not found|no funding(?: source)?|no external funding|"
+    r"no specific funding|not applicable|n/a)\s*\.?\s*$",
+    re.IGNORECASE,
+)
+_PLAIN_HEADING_RE = re.compile(r"(?m)^\s*([A-Z][A-Za-z0-9 /&,\-()]{2,90})\s*$")
+_PLAIN_SECTION_END_TITLE_RE = re.compile(
+    r"\b(?:abstract|introduction|background|materials?\s+and\s+methods?|methods?|results?|"
+    r"discussion|conclusions?|references|bibliography|author contributions?|competing interests?|"
+    r"conflicts? of interest|data availability|supplementary material)\b",
+    re.IGNORECASE,
+)
+_PLAIN_METADATA_HEADING_TITLE_RE = re.compile(
+    r"^(?:abstract|introduction|background|materials?\s+and\s+methods?|methods?|results?|"
+    r"discussion|conclusions?|references|bibliography|funding|funding information|"
+    r"financial disclosure|grant support|rights|rights and permissions|permissions|"
+    r"copyright|license|open access|author contributions?|competing interests?|"
+    r"conflicts? of interest|data availability|supplementary material)$",
+    re.IGNORECASE,
+)
+_RIGHTS_SENTENCE_RE = re.compile(
+    r"\b(?:copyright|©|\(c\)|all rights reserved|creative commons|open access|"
+    r"under exclusive licence|distributed under|licensed under)\b",
+    re.IGNORECASE,
+)
 
-# A stripped copyright-statement can bottom out at a generic, non-
-# identifying phrase ("The Author(s)") rather than a real named holder --
-# confirmed against a real paper (10.1038/s42003-024-06136-2) whose only
-# <copyright-statement> is literally "(c) The Author(s) 2024", unlike a
-# sibling paper with a real <copyright-holder> naming its authors. Per an
-# explicit user complaint that "The Author(s)" isn't a satisfactory
-# rightsHolder value, this falls back further to the paper's own author
-# surnames when the copyright statement itself names no one.
-_GENERIC_RIGHTS_HOLDER_RE = re.compile(r"^\s*the\s+author\(?s\)?\.?\s*$", re.IGNORECASE)
+
+def _is_author_contrib(contrib: ET.Element, contrib_group: ET.Element) -> bool:
+    """A JATS <contrib> is an author either via its OWN contrib-type="author"
+    attribute, or -- confirmed live, a real gap (10.1038/s42003-024-06136-2's
+    Europe PMC fullTextXML) -- via its PARENT <contrib-group
+    content-type="author">, when the contrib itself carries no contrib-type
+    at all. Only the group-level signal is trusted as a fallback (never
+    overrides an explicit non-author contrib-type like "editor")."""
+    contrib_type = contrib.get("contrib-type")
+    if contrib_type is not None:
+        return contrib_type == "author"
+    return contrib_group.get("content-type") == "author"
+
+
+def _corresponding_author_fn_ids(root: ET.Element) -> set[str]:
+    """<author-notes><fn id="X"><p>Corresponding author.</p></fn></author-notes>
+    -- the real convention when a document marks its corresponding author
+    via a footnote reference rather than a per-contrib corresp="yes"
+    attribute (confirmed live: 10.1038/s42003-024-06136-2's Europe PMC
+    fullTextXML uses this shape, with no corresp attribute or <email>
+    element on the <contrib> itself anywhere)."""
+    ids: set[str] = set()
+    for fn in root.iter("fn"):
+        text = _clean_text("".join(fn.itertext())).casefold()
+        fn_id = fn.get("id")
+        if fn_id and "correspond" in text:
+            ids.add(fn_id)
+    return ids
+
+
+def _is_corresponding_contrib(contrib: ET.Element, corresponding_fn_ids: set[str]) -> bool:
+    if contrib.get("corresp") == "yes":
+        return True
+    return any(
+        _local_name(xref.tag) == "xref" and xref.get("ref-type") == "author-notes" and xref.get("rid") in corresponding_fn_ids
+        for xref in contrib.iter("xref")
+    )
 
 
 def _author_names_full(root: ET.Element) -> str:
     names: list[str] = []
     for contrib_group in root.iter("contrib-group"):
         for contrib in contrib_group.findall("contrib"):
-            if contrib.get("contrib-type") != "author":
+            if not _is_author_contrib(contrib, contrib_group):
                 continue
             name_el = contrib.find("name")
             if name_el is None:
@@ -136,20 +183,16 @@ def _author_names_full(root: ET.Element) -> str:
     return ", ".join(names[:-1]) + " and " + names[-1]
 
 
-def _strip_copyright_statement_noise(text: str) -> str:
-    text = _COPYRIGHT_SYMBOL_RE.sub("", text, count=1)
-    without_leading_year = _LEADING_YEAR_RE.sub("", text, count=1)
-    if without_leading_year != text:
-        return without_leading_year.strip()
-    return _YEAR_ONWARD_RE.sub("", text, count=1).strip()
-
-
 def _local_name(tag: str) -> str:
     return tag.rsplit("}", 1)[-1] if "}" in tag else tag
 
 
 def _clean_text(text: str) -> str:
     return " ".join(text.split())
+
+
+def _element_text(element: ET.Element) -> str:
+    return _clean_text("".join(element.itertext()))
 
 
 def _first_child_text(element: ET.Element, child_name: str) -> str:
@@ -195,6 +238,14 @@ def _is_method_leaf(titles: list[str]) -> bool:
     return any(_matches_any(title, RELEVANT_SECTION_TITLE_PATTERNS) for title in titles)
 
 
+def _doi_resource(raw_doi: str) -> str | None:
+    raw_doi = raw_doi.strip().rstrip(".,;:")
+    try:
+        return f"doi: {normalize_doi(raw_doi)}"
+    except IdentifierError:
+        return None
+
+
 def _ref_doi_url(ref: ET.Element) -> str | None:
     for node in ref.iter():
         if _local_name(node.tag) != "pub-id":
@@ -204,10 +255,14 @@ def _ref_doi_url(ref: ET.Element) -> str | None:
         raw_doi = _clean_text("".join(node.itertext()))
         if not raw_doi:
             continue
-        try:
-            return f"https://doi.org/{normalize_doi(raw_doi)}"
-        except IdentifierError:
-            continue
+        resource = _doi_resource(raw_doi)
+        if resource:
+            return resource
+    text = _clean_text("".join(ref.itertext()))
+    for match in _DOI_IN_TEXT_RE.finditer(text):
+        resource = _doi_resource(match.group(1))
+        if resource:
+            return resource
     return None
 
 
@@ -300,8 +355,337 @@ def _candidate(
     )
 
 
+def _iter_elements(root: ET.Element, local_name: str) -> list[ET.Element]:
+    return [element for element in root.iter() if _local_name(element.tag) == local_name]
+
+
+def _paragraphs_under(element: ET.Element) -> list[str]:
+    paragraphs = [_element_text(child) for child in element.iter() if _local_name(child.tag) == "p"]
+    paragraphs = [paragraph for paragraph in paragraphs if paragraph]
+    return paragraphs or ([_element_text(element)] if _element_text(element) else [])
+
+
+def _funding_paragraphs_from_jats(fulltext_xml: str | None) -> list[str]:
+    if not fulltext_xml:
+        return []
+    try:
+        root = ET.fromstring(fulltext_xml)
+    except ET.ParseError:
+        return []
+
+    paragraphs: list[str] = []
+
+    for funding_group in _iter_elements(root, "funding-group"):
+        paragraphs.extend(_paragraphs_under(funding_group))
+
+    for sec in _iter_elements(root, "sec"):
+        title = _section_title(sec)
+        sec_type = sec.get("sec-type", "")
+        if _FUNDING_TITLE_RE.search(title) or _FUNDING_TITLE_RE.search(sec_type):
+            paragraphs.extend(_paragraphs_under(sec))
+
+    for fn in _iter_elements(root, "fn"):
+        fn_type = fn.get("fn-type", "")
+        text = _element_text(fn)
+        if _FUNDING_TITLE_RE.search(fn_type) or _FUNDING_TITLE_RE.search(text[:160]):
+            paragraphs.extend(_paragraphs_under(fn))
+
+    for ack in _iter_elements(root, "ack"):
+        for paragraph in _paragraphs_under(ack):
+            if _FUNDING_TEXT_RE.search(paragraph):
+                paragraphs.append(paragraph)
+
+    unique: list[str] = []
+    seen: set[str] = set()
+    for paragraph in paragraphs:
+        cleaned = _clean_text(paragraph)
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        unique.append(cleaned)
+    return unique
+
+
+def _plain_text_sections(text: str | None) -> list[tuple[str, str]]:
+    if not text:
+        return []
+    matches = list(_PLAIN_HEADING_RE.finditer(text))
+    sections: list[tuple[str, str]] = []
+    for index, match in enumerate(matches):
+        title = _clean_text(match.group(1))
+        if not _PLAIN_METADATA_HEADING_TITLE_RE.match(title):
+            continue
+        start = match.end()
+        end = len(text)
+        for next_match in matches[index + 1 :]:
+            next_title = _clean_text(next_match.group(1))
+            if _PLAIN_METADATA_HEADING_TITLE_RE.match(next_title):
+                end = next_match.start()
+                break
+        body = _clean_text(text[start:end])
+        if title and body:
+            sections.append((title, body))
+    return sections
+
+
+def _sentences(text: str) -> list[str]:
+    return [sentence.strip() for sentence in _SENTENCE_SPLIT_RE.split(_clean_text(text)) if sentence.strip()]
+
+
+def _funding_paragraphs_from_plain_text(text: str | None) -> list[str]:
+    if not text:
+        return []
+    paragraphs: list[str] = []
+    for title, body in _plain_text_sections(text):
+        if _FUNDING_TITLE_RE.search(title):
+            paragraphs.append(body)
+            continue
+        if _PLAIN_SECTION_END_TITLE_RE.search(title) and not _FUNDING_TITLE_RE.search(title):
+            continue
+        paragraphs.extend(sentence for sentence in _sentences(body) if _FUNDING_TEXT_RE.search(sentence))
+
+    if not paragraphs:
+        paragraphs = [sentence for sentence in _sentences(text) if _FUNDING_TEXT_RE.search(sentence)]
+
+    unique: list[str] = []
+    seen: set[str] = set()
+    for paragraph in paragraphs:
+        cleaned = _clean_text(paragraph)
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        unique.append(cleaned)
+    return unique
+
+
+def _normalize_funding_source_value(value: object) -> str:
+    if isinstance(value, list):
+        pieces = [str(piece).strip() for piece in value]
+    else:
+        pieces = [piece.strip() for piece in str(value or "").split("|")]
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for piece in pieces:
+        piece = piece.strip(" ;,.")
+        if not piece or _ABSENT_FUNDING_RE.match(piece):
+            continue
+        key = piece.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(piece)
+    return " | ".join(normalized)
+
+
+def _rights_paragraphs_from_jats(fulltext_xml: str | None) -> list[str]:
+    if not fulltext_xml:
+        return []
+    try:
+        root = ET.fromstring(fulltext_xml)
+    except ET.ParseError:
+        return []
+
+    paragraphs: list[str] = []
+    for permissions in _iter_elements(root, "permissions"):
+        text = _element_text(permissions)
+        if text:
+            paragraphs.append(text)
+
+    for sec in _iter_elements(root, "sec"):
+        title = _section_title(sec)
+        sec_type = sec.get("sec-type", "")
+        if _RIGHTS_TITLE_RE.search(title) or _RIGHTS_TITLE_RE.search(sec_type):
+            paragraphs.extend(_paragraphs_under(sec))
+
+    for fn in _iter_elements(root, "fn"):
+        fn_type = fn.get("fn-type", "")
+        text = _element_text(fn)
+        if _RIGHTS_TITLE_RE.search(fn_type) or _RIGHTS_TITLE_RE.search(text[:200]):
+            paragraphs.extend(_paragraphs_under(fn))
+
+    unique: list[str] = []
+    seen: set[str] = set()
+    for paragraph in paragraphs:
+        cleaned = _clean_text(paragraph)
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        unique.append(cleaned)
+    return unique
+
+
+def _rights_paragraphs_from_plain_text(text: str | None) -> list[str]:
+    if not text:
+        return []
+    paragraphs: list[str] = []
+    for title, body in _plain_text_sections(text):
+        if _RIGHTS_TITLE_RE.search(title):
+            paragraphs.append(body)
+            continue
+        if _PLAIN_SECTION_END_TITLE_RE.search(title) and not _RIGHTS_TITLE_RE.search(title):
+            continue
+        paragraphs.extend(sentence for sentence in _sentences(body) if _RIGHTS_SENTENCE_RE.search(sentence))
+
+    if not paragraphs:
+        paragraphs = [sentence for sentence in _sentences(text) if _RIGHTS_SENTENCE_RE.search(sentence)]
+
+    unique: list[str] = []
+    seen: set[str] = set()
+    for paragraph in paragraphs:
+        cleaned = _clean_text(paragraph)
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        unique.append(cleaned)
+    return unique
+
+
+def _normalize_rights_holder_value(value: object) -> str:
+    holder = str(value or "").strip()
+    holder = re.sub(r"^\s*(?:copyright\s*)?(?:©|\(c\))\s*", "", holder, flags=re.IGNORECASE).strip()
+    holder = holder.strip(" ;,.")
+    if holder.casefold() in {"", "none", "not found", "unknown", "n/a", "not applicable"}:
+        return ""
+    return holder
+
+
+def generate_rights_holder(
+    backend: LLMBackend,
+    fulltext_xml: str | None,
+    *,
+    locator_prefix: str,
+    max_output_tokens: int | None = 256,
+    max_input_chars: int = 8000,
+) -> list[RawFactCandidate]:
+    """Extract `rightsHolder` from explicit rights/permissions text.
+
+    Real articles vary: the holder may be named authors, "The Author(s)",
+    a publisher, the journal, a society, or another organization. The year
+    is often part of the rights statement and should be preserved rather
+    than stripped or replaced with the paper's author list.
+    """
+    paragraphs = _rights_paragraphs_from_jats(fulltext_xml)
+    if not paragraphs:
+        paragraphs = _rights_paragraphs_from_plain_text(fulltext_xml)
+    if not paragraphs:
+        return []
+
+    rights_text = "\n\n".join(paragraphs)
+    if len(rights_text) > max_input_chars:
+        rights_text = rights_text[:max_input_chars].rsplit(" ", 1)[0]
+
+    prompt = f"""Read the rights, copyright, license, or permissions text below.
+
+Extract the rights holder for the paper. The rights holder may be named authors, "The Author(s)", the journal,
+publisher, society, or another organization. Preserve the year when the rights statement includes it as part of
+the holder expression, for example "2024 The Author(s)" or "2013 Davies et al." Do not replace "The Author(s)"
+with the actual author list. Do not return the license URL, license name, usage permissions, or open-access
+boilerplate unless no rights holder is stated. Remove only leading copyright symbols like © or (c).
+
+Rights text:
+{rights_text}
+
+Return ONLY a JSON object: {{"rightsHolder": "<rights holder>"}}
+"""
+    parsed, _response = backend.generate_json(
+        prompt,
+        system="You extract the rights holder from a paper rights or permissions section.",
+        temperature=0,
+        max_tokens=max_output_tokens,
+    )
+    if parsed is None:
+        raise LLMBackendError(f"{backend.label}: rightsHolder generation returned invalid JSON after retries")
+    value = _normalize_rights_holder_value(parsed.get("rightsHolder") if isinstance(parsed, dict) else "")
+    if not value:
+        return []
+
+    return [
+        RawFactCandidate(
+            entity_level=EntityLevel.STUDY,
+            fact_type_candidate="rightsHolder",
+            raw_field_name="rightsHolder",
+            raw_value=value,
+            source_locator=f"{locator_prefix}:rightsHolder:llm_extracted_from_rights_text",
+            support_type=SupportType.EXPLICIT,
+            evidence_quote=rights_text,
+            confidence_metadata={"detector": "llm_generated_rights_holder", "rights_paragraph_count": len(paragraphs)},
+        )
+    ]
+
+
+def generate_funding_source(
+    backend: LLMBackend,
+    fulltext_xml: str | None,
+    *,
+    locator_prefix: str,
+    max_output_tokens: int | None = 256,
+    max_input_chars: int = 8000,
+) -> list[RawFactCandidate]:
+    """Extract project-level `funding_source` from explicit funding text.
+
+    JATS already identifies funding/financial-disclosure paragraphs much
+    more reliably than a broad paper-wide search. The LLM's job is only to
+    reduce those paragraphs to funder/source names and drop grant numbers,
+    author initials, and "funder had no role" boilerplate.
+    """
+    paragraphs = _funding_paragraphs_from_jats(fulltext_xml)
+    if not paragraphs:
+        paragraphs = _funding_paragraphs_from_plain_text(fulltext_xml)
+    if not paragraphs:
+        return []
+
+    funding_text = "\n\n".join(paragraphs)
+    if len(funding_text) > max_input_chars:
+        funding_text = funding_text[:max_input_chars].rsplit(" ", 1)[0]
+
+    prompt = f"""Read the funding or financial-disclosure text below.
+
+Extract only the names of funding sources/funders: agencies, foundations, institutions, grant programs,
+consortia, or other organizations that financially supported the study. Do not include grant numbers, award
+numbers, author initials, ordinary conflict-of-interest statements, or "the funders had no role" boilerplate.
+Use the names as written when possible. If there is more than one funding source, join the names with " | ".
+If no funding source name is present, return an empty string.
+
+Funding text:
+{funding_text}
+
+Return ONLY a JSON object: {{"funding_source": "<pipe-delimited funder names>"}}
+"""
+    parsed, _response = backend.generate_json(
+        prompt,
+        system="You extract funder names from a paper funding paragraph.",
+        temperature=0,
+        max_tokens=max_output_tokens,
+    )
+    if parsed is None:
+        raise LLMBackendError(f"{backend.label}: funding_source generation returned invalid JSON after retries")
+    value = _normalize_funding_source_value(parsed.get("funding_source") if isinstance(parsed, dict) else "")
+    if not value:
+        return []
+
+    return [
+        RawFactCandidate(
+            entity_level=EntityLevel.STUDY,
+            fact_type_candidate="funding_source",
+            raw_field_name="funding_source",
+            raw_value=value,
+            source_locator=f"{locator_prefix}:funding_source:llm_extracted_from_funding_paragraph",
+            support_type=SupportType.EXPLICIT,
+            evidence_quote=funding_text,
+            confidence_metadata={"detector": "llm_generated_funding_source", "funding_paragraph_count": len(paragraphs)},
+        )
+    ]
+
+
 def extract_from_jats_permissions(xml: str, *, locator_prefix: str) -> list[RawFactCandidate]:
-    """`license`/`accessRights`/`rightsHolder` from JATS `<permissions>`."""
+    """`license`/`accessRights` from JATS `<permissions>`.
+
+    `rightsHolder` is extracted by generate_rights_holder(), because the
+    paper-facing rights wording can name authors, "The Author(s)", a
+    publisher, journal, or society, and deterministic cleanup was too
+    eager to rewrite those real holder statements.
+    """
     try:
         root = ET.fromstring(xml)
     except ET.ParseError:
@@ -321,35 +705,6 @@ def extract_from_jats_permissions(xml: str, *, locator_prefix: str) -> list[RawF
             access = "open access" if license_type == "open-access" else license_type
             facts.append(_candidate("accessRights", access, f"{locator_prefix}:permissions/license/@license-type"))
 
-    holder_el = permissions.find("copyright-holder")
-    holder = _first_child_text(permissions, "copyright-holder") if holder_el is not None else ""
-    holder_locator = f"{locator_prefix}:permissions/copyright-holder"
-    if not holder:
-        # <copyright-holder> is real but inconsistently populated across
-        # publishers -- confirmed against this repo's own cached fulltext
-        # (Nature/Macmillan, MDPI, and a third 2013 article all carry a
-        # real <copyright-statement> with no separate <copyright-holder>
-        # element at all). <copyright-statement> is free prose ("(c) 2016,
-        # Macmillan Publishers Limited", "(c) 2023 by the authors."), so
-        # the leading copyright-symbol/year noise is stripped
-        # deterministically, leaving the holder's own wording intact
-        # rather than dropping the field entirely for the majority of
-        # real articles that only carry this tag.
-        statement_el = permissions.find("copyright-statement")
-        if statement_el is not None:
-            statement_text = _clean_text("".join(statement_el.itertext()))
-            holder = _strip_copyright_statement_noise(statement_text)
-            holder_locator = f"{locator_prefix}:permissions/copyright-statement"
-    if holder and _GENERIC_RIGHTS_HOLDER_RE.match(holder):
-        author_names = _author_names_full(root)
-        if author_names:
-            holder = author_names
-            holder_locator = (
-                f"{locator_prefix}:contrib-group/contrib[@contrib-type='author']:"
-                "author_name_fallback_for_generic_rights_holder"
-            )
-    if holder:
-        facts.append(_candidate("rightsHolder", holder, holder_locator))
     return facts
 
 
@@ -379,9 +734,10 @@ def extract_from_jats_authors(xml: str, *, locator_prefix: str) -> list[RawFactC
 
     names: list[str] = []
     contact_value: str | None = None
+    corresponding_fn_ids = _corresponding_author_fn_ids(root)
     for contrib_group in root.iter("contrib-group"):
         for contrib in contrib_group.findall("contrib"):
-            if contrib.get("contrib-type") != "author":
+            if not _is_author_contrib(contrib, contrib_group):
                 continue
             full_name = ""
             name_el = contrib.find("name")
@@ -391,7 +747,7 @@ def extract_from_jats_authors(xml: str, *, locator_prefix: str) -> list[RawFactC
                 full_name = " ".join(part for part in (given, surname) if part)
                 if full_name:
                     names.append(full_name)
-            if contact_value is None and contrib.get("corresp") == "yes":
+            if contact_value is None and _is_corresponding_contrib(contrib, corresponding_fn_ids):
                 email_el = contrib.find("email")
                 email = (email_el.text or "").strip() if email_el is not None else ""
                 if full_name and email:

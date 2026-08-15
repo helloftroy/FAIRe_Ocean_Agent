@@ -109,6 +109,42 @@ def parse_depth_meters(value: str) -> float | None:
     return number * factor
 
 
+# A genuine depth range ("0-20 m", "0–20 m" with an en-dash, "0 to 20 m") --
+# confirmed live, a real gap (10.1371/journal.pone.0303937's own
+# "epilimnion (0-20 m)"): parse_depth_meters above only ever returns the
+# FIRST number in the string, so mapping/rules.py's minimumDepthInMeters
+# and maximumDepthInMeters rules -- which both call it on the exact same
+# raw fact -- silently produced the identical value for both ends of a
+# real range instead of splitting it.
+_DEPTH_RANGE_PATTERN = re.compile(
+    r"(?P<low>-?\d+(?:\.\d+)?)\s*(?:-|–|—|to)\s*(?P<high>-?\d+(?:\.\d+)?)"
+)
+
+
+def parse_depth_range_meters(value: str) -> tuple[float, float] | None:
+    """Returns (min, max) in meters. A genuine range splits into two
+    distinct numbers; a single depth value returns the same number twice,
+    matching FAIRe's own stated convention for minimumDepthInMeters/
+    maximumDepthInMeters ("If there is only one single point of depth (no
+    range), the values ... are the same"). Returns None if `value` isn't a
+    parseable depth at all."""
+    cleaned = value.replace(",", "")
+    unit_match = _DEPTH_UNIT_PATTERN.search(cleaned)
+    unit = unit_match.group().lower() if unit_match else None
+    factor = _DEPTH_UNIT_TO_METERS.get(unit, 1.0 if unit is None else None)
+    if factor is None:
+        return None
+    range_match = _DEPTH_RANGE_PATTERN.search(cleaned)
+    if range_match:
+        low = float(range_match.group("low")) * factor
+        high = float(range_match.group("high")) * factor
+        return (min(low, high), max(low, high))
+    single = parse_depth_meters(value)
+    if single is None:
+        return None
+    return (single, single)
+
+
 def validate_depth(value: str) -> ValidationOutcome:
     depth_m = parse_depth_meters(value)
     if depth_m is None:

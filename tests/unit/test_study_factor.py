@@ -36,6 +36,27 @@ def test_generate_study_factor_returns_generated_sentence_from_abstract():
     assert "habitat types" in fact.evidence_quote
 
 
+def test_generate_study_factor_accepts_pdf_plain_text_abstract():
+    summary = "Habitat type and season as predictors of microbial community structure."
+    backend = MockLLMBackend(responses=[json.dumps({"study_factor": summary})])
+    pdf_text = """Title
+
+Abstract
+We compared microbial community composition across three habitat types (reef, sand, seagrass)
+at two time points to test whether habitat type or season better predicts community structure.
+
+Introduction
+This part should not be included in the abstract evidence.
+"""
+
+    facts = generate_study_factor(backend, pdf_text, locator_prefix="pdf")
+
+    assert len(facts) == 1
+    assert facts[0].raw_value == summary
+    assert "habitat types" in facts[0].evidence_quote
+    assert "This part should not be included" not in facts[0].evidence_quote
+
+
 def test_generate_study_target_taxonomic_scope_returns_pipe_values_from_abstract():
     response = json.dumps(
         {"study_target_taxonomic_scope": "prokaryotic microorganisms | bacteria | archaea"}
@@ -51,6 +72,26 @@ def test_generate_study_target_taxonomic_scope_returns_pipe_values_from_abstract
     assert fact.support_type.value == "inferred"
     assert "microbial community composition" in fact.evidence_quote
     assert "Extract the organisms or broad biological/taxonomic group" in backend.calls[0]["prompt"]
+
+
+def test_generate_study_target_taxonomic_scope_accepts_pdf_plain_text_abstract():
+    backend = MockLLMBackend(
+        responses=[json.dumps({"study_target_taxonomic_scope": "corals | microbial communities"})]
+    )
+    pdf_text = """Abstract
+Settlement cues in reef-building corals were compared across oceans, with microbial communities
+characterized from cue samples.
+
+Materials and Methods
+DNA extraction details follow.
+"""
+
+    facts = generate_study_target_taxonomic_scope(backend, pdf_text, locator_prefix="pdf")
+
+    assert len(facts) == 1
+    assert facts[0].raw_value == "corals | microbial communities"
+    assert "Settlement cues" in facts[0].evidence_quote
+    assert "DNA extraction" not in facts[0].evidence_quote
 
 
 def test_generate_study_factor_no_abstract_makes_no_llm_call():

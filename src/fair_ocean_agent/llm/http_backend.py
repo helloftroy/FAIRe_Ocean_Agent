@@ -24,6 +24,7 @@ import time
 
 import httpx
 
+from fair_ocean_agent import diag_timing
 from fair_ocean_agent.clock import utcnow
 from fair_ocean_agent.llm.base import LLMBackend, LLMBackendError, LLMResponse
 
@@ -83,7 +84,8 @@ class OpenAICompatibleHTTPBackend(LLMBackend):
 
         requested_at = utcnow()
         start = time.monotonic()
-        with self._semaphore:
+        caller_label = diag_timing.caller_label()
+        with diag_timing.record("llm", caller_label), self._semaphore:
             try:
                 response = self._client.post("/chat/completions", json=payload)
                 response.raise_for_status()

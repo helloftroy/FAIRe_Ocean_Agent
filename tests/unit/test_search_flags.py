@@ -1,8 +1,11 @@
 import json
 
+from fair_ocean_agent.config import MIN_LLM_MAX_OUTPUT_TOKENS
 from fair_ocean_agent.extraction.search_flags import (
+    confirm_value_described_as_depth,
     detect_controlled_search_facts,
     detect_llm_judged_search_facts,
+    detect_phix_percentage_facts,
     detect_text_search_flags,
     quote_candidates_for_llm_judged_search,
 )
@@ -11,6 +14,83 @@ from fair_ocean_agent.extraction.section_categories import (
     detect_section_categories_present,
 )
 from fair_ocean_agent.llm.mock import MockLLMBackend
+
+
+def test_detect_phix_percentage_facts_matches_common_real_phrasings():
+    """A percentage number co-occurring with "PhiX" in the same sentence
+    is unambiguous enough for a plain deterministic regex -- per an
+    explicit user request to replace the old LLM-askable phix_percentage
+    taxonomy field with "a quick search ... for PhiX or its variations"."""
+    for text in (
+        "A 15% PhiX spike-in was added to offset low sequence diversity.",
+        "PhiX control was included at 1% to improve base calling.",
+        "The library was spiked with PhiX (10%) prior to sequencing.",
+    ):
+        facts = detect_phix_percentage_facts((("Methods", text),), locator_prefix="paper:PMC1")
+        assert len(facts) == 1
+        assert facts[0].fact_type_candidate == "phix_perc"
+        assert facts[0].support_type.value == "deterministically_derived"
+
+
+def test_detect_phix_percentage_facts_requires_both_signals_in_one_sentence():
+    """A percentage elsewhere in the paper with no PhiX mention nearby
+    (or vice versa) must not be misattributed as the PhiX percentage."""
+    facts = detect_phix_percentage_facts(
+        (
+            (
+                "Methods",
+                "Approximately 15% of reads failed quality control. "
+                "PhiX was used as a sequencing control.",
+            ),
+        ),
+        locator_prefix="paper:PMC1",
+    )
+    assert facts == []
+
+
+def test_detect_phix_percentage_facts_first_match_wins_across_texts():
+    facts = detect_phix_percentage_facts(
+        (
+            ("Methods", "A 15% PhiX spike-in was used."),
+            ("Supplement", "PhiX was added at 20%."),
+        ),
+        locator_prefix="paper:PMC1",
+    )
+    assert len(facts) == 1
+    assert facts[0].raw_value == "15"
+
+
+def test_confirm_value_described_as_depth_finds_real_water_depth_sentence():
+    """Real audit (10.1093/ismejo/wrae013, STUDY-295abf4a8f43): BioSample's
+    own elev=34m for a sediment sample is confirmed by the paper's own
+    text as the site's water depth, not elevation."""
+    backend = MockLLMBackend(responses=[json.dumps({"confirmed": True, "quote_id": "Q001"})])
+    text = (
+        "Cores were subsampled from a box corer at a site with 34 m water depth "
+        "(Lat 59.8559, Long: 23.26695) previously shown to have high methanotrophic activity."
+    )
+    quote = confirm_value_described_as_depth(backend, "34", [("Methods", text)])
+    assert quote == (
+        "Cores were subsampled from a box corer at a site with 34 m water depth "
+        "(Lat 59.8559, Long: 23.26695) previously shown to have high methanotrophic activity."
+    )
+
+
+def test_confirm_value_described_as_depth_returns_none_when_llm_does_not_confirm():
+    backend = MockLLMBackend(responses=[json.dumps({"confirmed": False, "quote_id": ""})])
+    text = "Samples were incubated at 34 degrees C with a depth of 5 mm agar."
+    quote = confirm_value_described_as_depth(backend, "34", [("Methods", text)])
+    assert quote is None
+
+
+def test_confirm_value_described_as_depth_never_calls_llm_without_a_candidate_sentence():
+    def fail_if_called(prompt: str) -> str:
+        raise AssertionError("LLM should never be called with no candidate sentences")
+
+    backend = MockLLMBackend(responses=fail_if_called)
+    text = "The site was visited on 34 separate occasions during the survey period."
+    quote = confirm_value_described_as_depth(backend, "34", [("Methods", text)])
+    assert quote is None
 
 
 def test_detect_text_search_flags_records_probe_flag_only_pcr_0_1_moved_to_category_detection():
@@ -255,47 +335,6 @@ def test_detect_controlled_search_facts_skips_conditional_fields_without_flag():
     assert {fact.fact_type_candidate for fact in controlled} == set()
 
 
-def test_detect_controlled_search_facts_extracts_sterilise_method_as_direct_quotes():
-    text = (
-        "Sampling bottles were rinsed with 10% bleach and DI water. "
-        "Single-use equipment was used during filtration. "
-        "Sterile technique was used by all staff."
-    )
-    controlled = detect_controlled_search_facts(
-        (("Methods", text),),
-        locator_prefix="paper:PMC1",
-        active_flags=frozenset(),
-    )
-
-    by_type = {fact.fact_type_candidate: fact for fact in controlled}
-    assert by_type["sterilise_method"].raw_value == (
-        "Sampling bottles were rinsed with 10% bleach and DI water. | "
-        "Single-use equipment was used during filtration."
-    )
-    assert "Sterile technique was used" not in by_type["sterilise_method"].raw_value
-    assert by_type["sterilise_method"].evidence_quote == by_type["sterilise_method"].raw_value
-
-
-def test_detect_controlled_search_facts_extracts_sterile_containers_and_tools():
-    text = (
-        "Each sub-section was put into sterile bags and stored onboard at -20C. "
-        "The dried samples were transferred to sterile tubes until further use. "
-        "Subsampling of microbiology samples used sterile 10 mL cutoff syringes."
-    )
-    controlled = detect_controlled_search_facts(
-        (("Sampling", text),),
-        locator_prefix="paper:PMC1",
-        active_flags=frozenset(),
-    )
-
-    by_type = {fact.fact_type_candidate: fact for fact in controlled}
-    assert by_type["sterilise_method"].raw_value == (
-        "Each sub-section was put into sterile bags and stored onboard at -20C. | "
-        "The dried samples were transferred to sterile tubes until further use. | "
-        "Subsampling of microbiology samples used sterile 10 mL cutoff syringes."
-    )
-
-
 def test_detect_controlled_search_facts_keeps_full_method_phrases():
     text = (
         "PCR was conducted in a DNA Engine Tetrad2 Thermal Cycler. "
@@ -467,24 +506,6 @@ def test_detect_controlled_search_facts_keeps_rrna_when_no_ssu_target_gene_name(
     assert by_type["target_gene"].raw_value == "16S rRNA"
 
 
-def test_detect_controlled_search_facts_extracts_biological_rep_integer_not_pcr_reps():
-    text = (
-        "At each station, three independent samples were collected. "
-        "PCR reactions were performed in triplicate."
-    )
-    controlled = detect_controlled_search_facts(
-        (("Methods", text),),
-        locator_prefix="paper:PMC1",
-        active_flags=frozenset(),
-    )
-
-    by_type = {fact.fact_type_candidate: fact for fact in controlled}
-    assert by_type["biological_rep"].raw_value == "3"
-    assert by_type["biological_rep"].evidence_quote == (
-        "At each station, three independent samples were collected."
-    )
-
-
 def test_detect_controlled_search_facts_does_not_treat_ecological_species_specific_as_targeted_assay():
     """Regression guard for a real gold-data false positive
     (PeerJ 10.7717/peerj.333): "species-specific"/"taxon-specific" alone
@@ -512,15 +533,21 @@ def test_detect_controlled_search_facts_classifies_custom_pcr_mixture_not_commer
     mixture (ExTaq buffer/polymerase, Pfu polymerase) amplified on a
     "DNA Engine Tetrad2 Thermal Cycler (Bio-Rad, Hercules, CA, USA)" --
     commercial_mm previously matched the bare "Bio-Rad" thermocycler-brand
-    mention as if it were a commercial master-mix product. Now the whole
-    PCR-mixture sentence is captured, classified as custom_mm (no
-    master-mix product/brand named) rather than commercial_mm."""
+    mention as if it were a commercial master-mix product. The mixture
+    sentence is classified as custom_mm (no master-mix product/brand named),
+    but the stored value stops before thermocycler/cycling-program details."""
     text = (
         "Each 30 ul polymerase chain reaction (PCR) mixture contained 10 ng of DNA template, 0.1 uM "
         "forward primer, 0.2 mM dNTP, 3 ul 10X ExTaq buffer, 0.025 U ExTaq "
         "Polymerase (Takara Biotechnology) and 0.0125 U Pfu Polymerase "
         "(Agilent Technologies), and was amplified using a DNA Engine "
         "Tetrad2 Thermal Cycler (Bio-Rad, Hercules, CA, USA)."
+    )
+    expected = (
+        "Each 30 ul polymerase chain reaction (PCR) mixture contained 10 ng of DNA template, 0.1 uM "
+        "forward primer, 0.2 mM dNTP, 3 ul 10X ExTaq buffer, 0.025 U ExTaq "
+        "Polymerase (Takara Biotechnology) and 0.0125 U Pfu Polymerase "
+        "(Agilent Technologies)"
     )
     controlled = detect_controlled_search_facts(
         (("Methods", text),),
@@ -530,7 +557,7 @@ def test_detect_controlled_search_facts_classifies_custom_pcr_mixture_not_commer
 
     by_type = {fact.fact_type_candidate: fact for fact in controlled}
     assert "commercial_mm" not in by_type
-    assert by_type["custom_mm"].raw_value == text
+    assert by_type["custom_mm"].raw_value == expected
     assert by_type["custom_mm"].evidence_quote == text
 
 
@@ -578,56 +605,6 @@ def test_detect_controlled_search_facts_pcr_mixture_phrase_requires_pcr_0_1_flag
     assert {fact.fact_type_candidate for fact in controlled} == set()
 
 
-def test_detect_controlled_search_facts_does_not_match_well_or_cycle_counts_as_biological_rep():
-    """Regression guard for a real gold-data false positive
-    (PeerJ 10.7717/peerj.333): a bare "n = <number>"/"N = <number>" pattern
-    previously matched both "(n = 4 well replicates per cue...)" (a
-    technical well count) and "...with N = 17-24 depending on the sample"
-    (a PCR cycle count), producing a nonsensical joined biological_rep
-    value ("4 | 17") from two numbers that have nothing to do with
-    biological replication."""
-    text = (
-        "Cue samples were finely ground with a mortar and pestle shortly "
-        "before the settlement trials and a single drop of the resulting "
-        "uniform slurry was added to each well (n = 4 well replicates per "
-        "cue, randomly assigning cues to wells). The PCR mixture was "
-        "amplified with a cycling profile of 94 C 5 min-(94 C 40 s-55 C 2 "
-        "min-72 C 60 s) x N-72 C 10 min, with N = 17-24 depending on the "
-        "sample."
-    )
-    controlled = detect_controlled_search_facts(
-        (("Methods", text),),
-        locator_prefix="paper:PMC1",
-        active_flags=frozenset(),
-    )
-
-    assert not any(fact.fact_type_candidate == "biological_rep" for fact in controlled)
-
-
-def test_detect_controlled_search_facts_extracts_explicit_biological_rep_negative():
-    text = "All sediment depths were analyzed without replicates because sample material was limited."
-    controlled = detect_controlled_search_facts(
-        (("Methods", text),),
-        locator_prefix="paper:PMC1",
-        active_flags=frozenset(),
-    )
-
-    by_type = {fact.fact_type_candidate: fact for fact in controlled}
-    assert by_type["biological_rep_presence"].raw_value == "FALSE"
-    assert by_type["biological_rep_presence"].evidence_quote == text
-
-
-def test_detect_controlled_search_facts_does_not_treat_technical_rep_negative_as_biological_rep():
-    text = "PCR was performed without technical replicates."
-    controlled = detect_controlled_search_facts(
-        (("Methods", text),),
-        locator_prefix="paper:PMC1",
-        active_flags=frozenset(),
-    )
-
-    assert "biological_rep_presence" not in {fact.fact_type_candidate for fact in controlled}
-
-
 def test_detect_controlled_search_facts_classifies_assay_type_and_keeps_evidence():
     text = (
         "We used qPCR with a hydrolysis probe for species-specific detection. "
@@ -663,32 +640,6 @@ def test_detect_controlled_search_facts_extracts_trimmomatic_minlen_parameter():
     assert by_type["length_filtering_tool"].raw_value == "Trimmomatic"
     assert by_type["minimum_read_length"].raw_value == "80 bp"
     assert by_type["minimum_read_length"].evidence_quote == text
-
-
-def test_detect_controlled_search_facts_extracts_paired_end_library_layout():
-    text = "The raw paired-end reads were subjected to quality check using FastQC."
-    controlled = detect_controlled_search_facts(
-        (("Bioinformatics", text),),
-        locator_prefix="paper:PMC1",
-        active_flags=frozenset(),
-    )
-
-    by_type = {fact.fact_type_candidate: fact for fact in controlled}
-    assert by_type["library_layout"].raw_value == "paired end"
-    assert by_type["library_layout"].evidence_quote == text
-
-
-def test_detect_controlled_search_facts_extracts_two_by_300_as_paired_end_library_layout():
-    text = "Sequencing was performed on an Illumina MiSeq platform using 2 x 300 bp chemistry."
-    controlled = detect_controlled_search_facts(
-        (("Sequencing", text),),
-        locator_prefix="paper:PMC1",
-        active_flags=frozenset(),
-    )
-
-    by_type = {fact.fact_type_candidate: fact for fact in controlled}
-    assert by_type["library_layout"].raw_value == "paired end"
-    assert by_type["library_layout"].confidence_metadata["matches"][0]["matched_terms"] == ["2 x 300"]
 
 
 def test_detect_controlled_search_facts_extracts_checksum_methods_directly():
@@ -740,6 +691,18 @@ def test_detect_controlled_search_facts_extracts_usearch_trimmed_to_length_phras
     by_type = {fact.fact_type_candidate: fact for fact in controlled}
     assert by_type["length_filtering_tool"].raw_value == "USEARCH v11.0.667"
     assert by_type["minimum_read_length"].raw_value == "220 bp"
+
+
+def test_detect_controlled_search_facts_extracts_reads_became_shorter_than_discarded_phrase():
+    text = "Reads that became shorter than 250 bp after this trimming step were discarded."
+    controlled = detect_controlled_search_facts(
+        (("Bioinformatics", text),),
+        locator_prefix="paper:PMC1",
+        active_flags=frozenset(),
+    )
+
+    by_type = {fact.fact_type_candidate: fact for fact in controlled}
+    assert by_type["minimum_read_length"].raw_value == "250 bp"
 
 
 def test_detect_controlled_search_facts_distinguishes_seqprep_adapter_removal_from_trimmomatic_length_filtering():
@@ -799,11 +762,9 @@ def test_quote_candidates_for_llm_judged_library_prep_search_are_narrow():
         )
     )
 
-    assert [candidate.quote_id for candidate in candidates] == ["Q001", "Q002"]
+    assert [candidate.quote_id for candidate in candidates] == ["Q001"]
     assert candidates[0].field_names == ("barcoding_pcr_appr",)
     assert candidates[0].text == "A two-step PCR was used for library construction."
-    assert candidates[1].field_names == ("lib_screen",)
-    assert candidates[1].text == "Libraries were cleaned with AMPure beads and quantified with Qubit."
 
 
 def test_quote_candidates_for_llm_judged_barcoding_maps_two_round_pcr():
@@ -818,73 +779,6 @@ def test_quote_candidates_for_llm_judged_barcoding_maps_two_round_pcr():
 
     assert len(candidates) == 1
     assert candidates[0].field_names == ("barcoding_pcr_appr",)
-
-
-def test_detect_llm_judged_lib_screen_keeps_best_priority_value():
-    backend = MockLLMBackend(
-        responses=[
-            json.dumps(
-                [
-                    {"field": "lib_screen", "raw_value": "Qubit quantification", "quote_id": "Q001"},
-                    {
-                        "field": "lib_screen",
-                        "raw_value": "libraries were size-selected using BluePippin and quantified with Qubit",
-                        "quote_id": "Q001",
-                    },
-                ]
-            )
-        ]
-    )
-
-    facts = detect_llm_judged_search_facts(
-        backend,
-        (
-            (
-                "Library preparation",
-                "The libraries were size-selected using BluePippin and quantified with Qubit before pooling.",
-            ),
-        ),
-        locator_prefix="paper:PMC1",
-    )
-
-    by_type = {fact.fact_type_candidate: fact for fact in facts}
-    assert by_type["lib_screen"].raw_value == (
-        "libraries were size-selected using BluePippin and quantified with Qubit"
-    )
-
-
-def test_quote_candidates_for_llm_judged_error_rate_searches_are_targeted():
-    candidates = quote_candidates_for_llm_judged_search(
-        (
-            (
-                "Bioinformatics",
-                "Reads were denoised using DADA2 filterAndTrim with maxEE=2. "
-                "Unrelated quality language without a configured threshold follows.",
-            ),
-        )
-    )
-
-    assert len(candidates) == 1
-    assert candidates[0].field_names == ("error_rate_tool", "error_rate_type", "otu_clust_tool")
-    assert candidates[0].text == "Reads were denoised using DADA2 filterAndTrim with maxEE=2."
-
-
-def test_quote_candidates_for_llm_judged_chimera_search_is_targeted():
-    candidates = quote_candidates_for_llm_judged_search(
-        (("Bioinformatics", "Chimeras were removed with VSEARCH --uchime_denovo in de novo mode."),)
-    )
-
-    assert len(candidates) == 1
-    assert candidates[0].field_names == ("demux_tool", "error_rate_tool", "chimera_check_method")
-
-
-def test_quote_candidates_for_llm_judged_demux_search_is_targeted():
-    candidates = quote_candidates_for_llm_judged_search(
-        (("Bioinformatics", "Reads were demultiplexed using QIIME 2 demux emp-paired with no barcode mismatches."),)
-    )
-
-    assert len(candidates) == 1
-    assert candidates[0].field_names == ("demux_tool", "error_rate_tool")
 
 
 def test_quote_candidates_for_llm_judged_inhibition_search_is_targeted():
@@ -905,47 +799,39 @@ def test_quote_candidates_for_llm_judged_inhibition_search_is_targeted():
     assert candidates[0].field_names == ("inhibition_check_0_1", "inhibition_check", "neg_cont_0_1", "pos_cont_0_1")
 
 
-def test_quote_candidates_for_llm_judged_chimera_requires_explicit_context():
-    candidates = quote_candidates_for_llm_judged_search(
-        (
-            (
-                "Bioinformatics",
-                "Reads were denoised using DADA2 filterAndTrim with maxEE=2. "
-                "Hybrid amplicons were removed with VSEARCH --uchime_ref.",
-            ),
-        )
+def test_quote_candidates_split_semicolon_joined_enumerated_steps_into_separate_quotes():
+    """Real bug found live (10.1093/ismejo/wrae013): a methods sentence
+    bundling two DIFFERENT tools for two DIFFERENT purposes into one
+    semicolon-joined enumerated list previously had only ONE terminal
+    period, so the whole blob became a single candidate quote tagged for
+    every field named in it at once, regardless of which clause actually
+    supported which field."""
+    text = (
+        "Bioinformatic processing was performed as follows: (i) OTUs were clustered using VSEARCH "
+        "--cluster_fast [12]; (ii) taxonomy was assigned using BLASTn against GenBank with a 97 "
+        "percent identity threshold [13]."
     )
-
+    candidates = quote_candidates_for_llm_judged_search([("Bioinformatics", text)])
     assert len(candidates) == 2
-    assert "chimera_check_method" not in candidates[0].field_names
-    assert "chimera_check_method" in candidates[1].field_names
+    assert "VSEARCH" in candidates[0].text
+    assert "BLASTn" in candidates[1].text
+    # otu_clust_tool must only be offered for the clustering clause, not
+    # the taxonomic-assignment one.
+    assert "otu_clust_tool" in candidates[0].field_names
+    assert "otu_clust_tool" not in candidates[1].field_names
+    assert "tax_assign_cat" in candidates[1].field_names
 
 
-def test_quote_candidates_for_llm_judged_trim_search_requires_specific_context():
-    candidates = quote_candidates_for_llm_judged_search(
-        (
-            (
-                "Bioinformatics",
-                "Reads were filtered with Trimmomatic SLIDINGWINDOW:4:20. "
-                "PCR primer sequences were trimmed using Cutadapt v4.2 with -e 0.1 and -O 5.",
-            ),
-        )
+def test_quote_candidates_keeps_et_al_citation_intact_in_one_snippet():
+    """'et al.' is mistaken for a sentence boundary just like 'vol.' was --
+    real bug found live while building primer-reference extraction, where
+    a tool/primer name got permanently separated from its own citation."""
+    text = (
+        "Taxonomy was assigned using the CREST classifier, as described by Lanzen et al. (2012). "
+        "Chimeras were removed using UCHIME."
     )
-
-    assert len(candidates) == 2
-    assert "trim_method" not in candidates[0].field_names
-    assert "trim_param" not in candidates[0].field_names
-    assert "trim_method" in candidates[1].field_names
-    assert "trim_param" in candidates[1].field_names
-
-
-def test_quote_candidates_for_llm_judged_min_reads_search_is_targeted():
-    candidates = quote_candidates_for_llm_judged_search(
-        (("Bioinformatics", "Low abundance ASVs with fewer than 10 reads were removed using phyloseq prune_taxa."),)
-    )
-
-    assert len(candidates) == 1
-    assert candidates[0].field_names == ("min_reads_tool",)
+    candidates = quote_candidates_for_llm_judged_search([("Bioinformatics", text)])
+    assert any("Lanzen et al. (2012)" in c.text and "CREST" in c.text for c in candidates)
 
 
 def test_quote_candidates_for_llm_judged_otu_clustering_search_is_targeted():
@@ -960,7 +846,6 @@ def test_quote_candidates_for_llm_judged_otu_clustering_search_is_targeted():
 
     assert len(candidates) == 1
     assert "otu_clust_tool" in candidates[0].field_names
-    assert "otu_clust_cutoff" in candidates[0].field_names
 
 
 def test_quote_candidates_for_llm_judged_otu_db_search_is_targeted():
@@ -976,6 +861,36 @@ def test_quote_candidates_for_llm_judged_otu_db_search_is_targeted():
 
     assert len(candidates) == 1
     assert candidates[0].field_names == ("otu_db", "tax_assign_cat")
+
+
+def test_quote_candidates_for_llm_judged_otu_db_search_includes_freshtrain():
+    candidates = quote_candidates_for_llm_judged_search(
+        (
+            (
+                "Bioinformatics",
+                "Taxonomy was assigned against the SILVA_132 and FreshTrain reference databases.",
+            ),
+        )
+    )
+
+    assert len(candidates) == 1
+    assert "otu_db" in candidates[0].field_names
+
+
+def test_quote_candidates_for_llm_judged_otu_db_search_includes_ncbi_nr_database():
+    candidates = quote_candidates_for_llm_judged_search(
+        (
+            (
+                "Bioinformatics",
+                "All OTUs accounting for >= 1% mapped reads were assigned to their most likely "
+                "taxonomic order based on BLAST matches against nonredundant (nr) NCBI database.",
+            ),
+        )
+    )
+
+    assert len(candidates) == 1
+    assert "otu_db" in candidates[0].field_names
+    assert "tax_assign_cat" in candidates[0].field_names
 
 
 def test_quote_candidates_for_llm_judged_tax_assignment_requires_context():
@@ -1057,27 +972,119 @@ def test_quote_candidates_for_adapter_fields_accept_overhang_and_tailed_primer_t
     assert "adapter_reverse" in candidates[0].field_names
 
 
+def test_clean_fused_sequence_part_strips_prime_markers_in_either_digit_quote_order():
+    """A real paper's own fusion-primer notation used "5´–" (digit,
+    prime mark, dash) for the leading boundary but "–3´" (dash, digit,
+    prime mark) for the trailing one, in the same sentence -- both orders
+    must be stripped so the remaining nucleotide sequence is clean."""
+    from fair_ocean_agent.extraction.search_flags import _clean_fused_sequence_part
+
+    assert _clean_fused_sequence_part("5´–TCGTCGGCAGCGTCAGATGTGTAT AAGAGACAG") == (
+        "TCGTCGGCAGCGTCAGATGTGTATAAGAGACAG"
+    )
+    assert _clean_fused_sequence_part("CTCCTACGGGAGGCAGCAG–3´") == "CTCCTACGGGAGGCAGCAG"
+
+
+def test_split_fused_adapter_primer_facts_splits_real_forward_and_reverse_sequences():
+    """Real, live-verified fusion-primer sequences from a PLOS ONE paper
+    (10.1371/journal.pone.0303937): Illumina Nextera overhang adapters
+    fused via a plain ASCII hyphen to the 341F forward primer and a
+    degenerate-base reverse primer, with en-dash 5'/3' boundary markers
+    on the outside. The two concepts must be split into separate facts,
+    not left duplicated/concatenated in one field."""
+    from fair_ocean_agent.extraction.search_flags import RawFactCandidate, _split_fused_adapter_primer_facts
+    from fair_ocean_agent.database.enums import EntityLevel, SupportType
+
+    forward = RawFactCandidate(
+        fact_type_candidate="adapter_forward",
+        raw_field_name="adapter_forward",
+        raw_value="5´–TCGTCGGCAGCGTCAGATGTGTAT AAGAGACAG-CTCCTACGGGAGGCAGCAG–3´",
+        evidence_quote="quote",
+        source_locator="paper:PMC1#p1",
+        support_type=SupportType.EXPLICIT,
+        entity_level=EntityLevel.STUDY,
+    )
+    reverse = RawFactCandidate(
+        fact_type_candidate="adapter_reverse",
+        raw_field_name="adapter_reverse",
+        raw_value="5´–GTCTCGTGGGCTC GGAGATGTGTATAAGAGACAG-CCGYCAATTYMTTTRAGTTT–3´",
+        evidence_quote="quote",
+        source_locator="paper:PMC1#p2",
+        support_type=SupportType.EXPLICIT,
+        entity_level=EntityLevel.STUDY,
+    )
+
+    facts = _split_fused_adapter_primer_facts([forward, reverse])
+
+    by_type: dict[str, list[str]] = {}
+    for fact in facts:
+        by_type.setdefault(fact.fact_type_candidate, []).append(fact.raw_value)
+
+    assert by_type["adapter_forward"] == ["TCGTCGGCAGCGTCAGATGTGTATAAGAGACAG"]
+    assert by_type["pcr_primer_forward"] == ["CTCCTACGGGAGGCAGCAG"]
+    assert by_type["adapter_reverse"] == ["GTCTCGTGGGCTCGGAGATGTGTATAAGAGACAG"]
+    assert by_type["pcr_primer_reverse"] == ["CCGYCAATTYMTTTRAGTTT"]
+
+
+def test_split_fused_adapter_primer_facts_leaves_non_fused_values_untouched():
+    """A field with no hyphen (nothing to split) or a value that isn't a
+    clean adapter-primer fusion (e.g. free text, not two nucleotide runs)
+    must be passed through unchanged rather than mangled."""
+    from fair_ocean_agent.extraction.search_flags import RawFactCandidate, _split_fused_adapter_primer_facts
+    from fair_ocean_agent.database.enums import EntityLevel, SupportType
+
+    plain = RawFactCandidate(
+        fact_type_candidate="adapter_forward",
+        raw_field_name="adapter_forward",
+        raw_value="AATGATACGGCGACCACCGAGATCTACACGCT",
+        evidence_quote="quote",
+        source_locator="paper:PMC1#p1",
+        support_type=SupportType.EXPLICIT,
+        entity_level=EntityLevel.STUDY,
+    )
+    prose = RawFactCandidate(
+        fact_type_candidate="adapter_reverse",
+        raw_field_name="adapter_reverse",
+        raw_value="a custom Illumina-compatible overhang adapter",
+        evidence_quote="quote",
+        source_locator="paper:PMC1#p2",
+        support_type=SupportType.EXPLICIT,
+        entity_level=EntityLevel.STUDY,
+    )
+    other_field = RawFactCandidate(
+        fact_type_candidate="assay_name",
+        raw_field_name="assay_name",
+        raw_value="MiFish-U",
+        evidence_quote="quote",
+        source_locator="paper:PMC1#p3",
+        support_type=SupportType.EXPLICIT,
+        entity_level=EntityLevel.STUDY,
+    )
+
+    facts = _split_fused_adapter_primer_facts([plain, prose, other_field])
+
+    assert [fact.raw_value for fact in facts] == [
+        "AATGATACGGCGACCACCGAGATCTACACGCT",
+        "a custom Illumina-compatible overhang adapter",
+        "MiFish-U",
+    ]
+    assert [fact.fact_type_candidate for fact in facts] == ["adapter_forward", "adapter_reverse", "assay_name"]
+
+
 def test_detect_llm_judged_search_facts_accepts_quote_id_and_stores_literal_quote():
     def respond(prompt: str) -> str:
         assert "Q001 [barcoding_pcr_appr]" in prompt
-        assert "Q002 [lib_screen]" in prompt
-        assert "Q003 [adapter_forward" in prompt
+        assert "Q002 [assay_name]" in prompt
         return json.dumps(
             [
                 {"field": "barcoding_pcr_appr", "raw_value": "two-step PCR", "quote_id": "Q001"},
-                {"field": "lib_screen", "raw_value": "cleaned with AMPure beads", "quote_id": "Q002"},
-                {
-                    "field": "adapter_forward",
-                    "raw_value": "AATGATACGGCGACCACCGAGATCTACACGCT",
-                    "quote_id": "Q003",
-                },
+                {"field": "assay_name", "raw_value": "MiFish-U", "quote_id": "Q002"},
             ]
         )
 
     text = (
         "A two-step PCR was used for library construction. "
-        "Libraries were cleaned with AMPure beads before sequencing. "
-        "The forward adapter sequence was AATGATACGGCGACCACCGAGATCTACACGCT."
+        "The MiFish-U assay amplified the 12S marker before sequencing."
     )
     backend = MockLLMBackend(label="judge", responses=respond)
     facts = detect_llm_judged_search_facts(
@@ -1091,14 +1098,61 @@ def test_detect_llm_judged_search_facts_accepts_quote_id_and_stores_literal_quot
     assert by_type["barcoding_pcr_appr"].evidence_quote == (
         "A two-step PCR was used for library construction."
     )
-    assert by_type["lib_screen"].raw_value == "cleaned with AMPure beads"
-    assert by_type["lib_screen"].evidence_quote == "Libraries were cleaned with AMPure beads before sequencing."
-    assert by_type["adapter_forward"].raw_value == "AATGATACGGCGACCACCGAGATCTACACGCT"
-    assert by_type["adapter_forward"].evidence_quote == (
-        "The forward adapter sequence was AATGATACGGCGACCACCGAGATCTACACGCT."
+    assert by_type["assay_name"].raw_value == "MiFish-U"
+    assert by_type["assay_name"].evidence_quote == (
+        "The MiFish-U assay amplified the 12S marker before sequencing."
     )
-    assert by_type["lib_screen"].confidence_metadata["matches"][0]["quote_id"] == "Q002"
-    assert backend.calls[0]["max_tokens"] == 512
+    assert by_type["assay_name"].confidence_metadata["matches"][0]["quote_id"] == "Q002"
+    assert backend.calls[0]["max_tokens"] == MIN_LLM_MAX_OUTPUT_TOKENS
+
+
+def test_detect_llm_judged_search_facts_rejects_value_for_field_the_quote_was_never_offered_for():
+    """Mirrors the same real bug fixed in section_category_extraction.py's
+    Stage 3 guard: the verbatim check alone doesn't stop the model from
+    attaching a value to a field a quote was never candidate-tagged for,
+    as long as the text also happens to appear in that quote."""
+
+    def respond(prompt: str) -> str:
+        assert "Q001 [barcoding_pcr_appr]" in prompt
+        return json.dumps(
+            [{"field": "lib_screen", "raw_value": "two-step PCR", "quote_id": "Q001"}]
+        )
+
+    backend = MockLLMBackend(label="judge", responses=respond)
+    facts = detect_llm_judged_search_facts(
+        backend,
+        (("Library construction", "A two-step PCR was used for library construction."),),
+        locator_prefix="paper:PMC1",
+    )
+
+    by_type = {fact.fact_type_candidate: fact for fact in facts}
+    assert "lib_screen" not in by_type
+
+
+def test_detect_llm_judged_search_facts_accepts_exact_verbatim_value_for_a_verbatim_required_field():
+    backend = MockLLMBackend(
+        responses=[json.dumps([{"field": "in_situ_temp", "raw_value": "14.2 C", "quote_id": "Q001"}])]
+    )
+
+    facts = detect_llm_judged_search_facts(
+        backend,
+        (("Methods", "In situ water temperature at the time of sampling was 14.2 C."),),
+        locator_prefix="paper:PMC1",
+    )
+
+    by_type = {fact.fact_type_candidate: fact for fact in facts}
+    assert by_type["in_situ_temp"].raw_value == "14.2 C"
+
+
+def test_detect_llm_judged_search_facts_does_not_require_verbatim_for_a_composed_field():
+    """assay_name is deliberately a COMPOSED/normalized field (e.g. mojibake
+    dash cleanup), not verbatim-required -- confirmed by its own existing
+    test (test_detect_llm_judged_search_facts_normalizes_assay_name_marker_
+    region) needing a non-verbatim value to pass. This just double-checks
+    assay_name was never added to _VERBATIM_REQUIRED_FIELDS."""
+    from fair_ocean_agent.extraction.search_flags import _VERBATIM_REQUIRED_FIELDS
+
+    assert "assay_name" not in _VERBATIM_REQUIRED_FIELDS
 
 
 def test_detect_llm_judged_search_facts_extracts_assay_name_from_quote():
@@ -1120,7 +1174,46 @@ def test_detect_llm_judged_search_facts_extracts_assay_name_from_quote():
 
     by_type = {fact.fact_type_candidate: fact for fact in facts}
     assert by_type["assay_name"].raw_value == "MiFish-U"
-    assert by_type["chimera_check_method"].raw_value == "no chimeric recorded."
+
+
+def test_detect_llm_judged_search_facts_filters_primer_pairs_from_assay_name():
+    facts = detect_llm_judged_search_facts(
+        MockLLMBackend(responses=[]),
+        (
+            (
+                "PCR",
+                "Amplicon libraries of the 16S rRNA gene were prepared using primers 515F/806r, "
+                "and qPCR was performed for the hzsA gene using primer set hzsA_1597A/hzsA_1857R.",
+            ),
+        ),
+        locator_prefix="paper:PMC1",
+        exclude_field_names=frozenset({"chimera_check_method"}),
+    )
+
+    by_type = {fact.fact_type_candidate: fact for fact in facts}
+    assert "assay_name" not in by_type
+
+
+def test_detect_llm_judged_search_facts_normalizes_assay_name_marker_region():
+    backend = MockLLMBackend(
+        responses=[
+            json.dumps(
+                [
+                    {"field": "assay_name", "raw_value": "16S rRNA-V3\u7ab6\u5929V4", "quote_id": "Q001"},
+                ]
+            )
+        ]
+    )
+
+    facts = detect_llm_judged_search_facts(
+        backend,
+        (("PCR", "Amplicon sequencing targeted the V3-V4 region of 16S rRNA."),),
+        locator_prefix="paper:PMC1",
+        exclude_field_names=frozenset({"chimera_check_method"}),
+    )
+
+    by_type = {fact.fact_type_candidate: fact for fact in facts}
+    assert by_type["assay_name"].raw_value == "16S-V3-V4"
 
 
 def test_detect_llm_judged_search_facts_extracts_multi_value_assay_target_taxa_pipe_joined():
@@ -1152,6 +1245,40 @@ def test_detect_llm_judged_search_facts_extracts_multi_value_assay_target_taxa_p
     assert by_type["assay_target_taxa"].raw_value == "vertebrates | Atlantic salmon (Salmo salar)"
     assert by_type["assay_target_taxa"].support_type.value == "explicit"
     assert "study_target_taxonomic_scope" not in by_type
+
+
+def test_detect_llm_judged_search_facts_rejects_bare_marker_gene_as_target_taxon():
+    """A real audit (STUDY-0481bc457aa6, 10.1371/journal.pone.0303937) found
+    the model answering assay_target_taxa with "16S rRNA gene" for the
+    quote "Amplification of the V3-V5 hypervariable regions ... of the 16S
+    rRNA gene was performed with ..." -- the quote only names the
+    amplified gene, never an organism/taxonomic group, so the gene name is
+    not a valid taxon and must be rejected rather than accepted as-is. A
+    candidate sentence was still offered to the model here, so this is a rejected-answer
+    case (silently no fact), not the separate "no qualifying candidate at all" -> "not found"
+    fallback path."""
+    backend = MockLLMBackend(
+        responses=[
+            json.dumps(
+                [{"field": "assay_target_taxa", "raw_value": "16S rRNA gene", "quote_id": "Q001"}]
+            )
+        ]
+    )
+
+    facts = detect_llm_judged_search_facts(
+        backend,
+        (
+            (
+                "PCR",
+                "Amplification of the V3-V5 hypervariable regions of the 16S rRNA gene was performed "
+                "with 0.02 U/μl of Phusion High Fidelity DNA polymerase.",
+            ),
+        ),
+        locator_prefix="paper:PMC1",
+    )
+
+    by_type = {fact.fact_type_candidate: fact for fact in facts}
+    assert "assay_target_taxa" not in by_type
 
 
 def test_detect_llm_judged_search_facts_defaults_target_taxa_fields_to_not_found_without_context():
@@ -1246,7 +1373,6 @@ def test_detect_llm_judged_search_facts_defaults_barcoding_to_one_step_when_pcr_
     by_type = {fact.fact_type_candidate: fact for fact in facts}
     assert by_type["barcoding_pcr_appr"].raw_value == "one-step PCR"
     assert by_type["barcoding_pcr_appr"].support_type.value == "deterministically_derived"
-    assert by_type["chimera_check_method"].raw_value == "no chimeric recorded."
 
 
 def test_detect_llm_judged_search_facts_does_not_default_barcoding_when_resolved():
@@ -1255,159 +1381,10 @@ def test_detect_llm_judged_search_facts_does_not_default_barcoding_when_resolved
         (("PCR", "PCR amplification was performed with primers 515F and 806R."),),
         locator_prefix="paper:PMC1",
         active_flags=frozenset({"pcr_0_1"}),
-        exclude_field_names=frozenset(
-            {
-                "barcoding_pcr_appr", "trim_method", "trim_param", "tax_assign_cat", "tax_class_other",
-                "assay_target_taxa", "study_target_taxonomic_scope", "neg_cont_0_1", "pos_cont_0_1",
-            }
-        ),
+        exclude_field_names=frozenset({"barcoding_pcr_appr"}),
     )
 
-    assert [fact.fact_type_candidate for fact in facts] == ["chimera_check_method"]
-
-
-def test_detect_llm_judged_search_facts_defaults_chimera_to_not_recorded_without_context():
-    facts = detect_llm_judged_search_facts(
-        MockLLMBackend(responses=[]),
-        (("Bioinformatics", "Reads were processed using DADA2 filterAndTrim with maxEE=2."),),
-        locator_prefix="paper:PMC1",
-    )
-
-    by_type = {fact.fact_type_candidate: fact for fact in facts}
-    assert by_type["chimera_check_method"].raw_value == "no chimeric recorded."
-    assert by_type["chimera_check_method"].support_type.value == "deterministically_derived"
-
-
-def test_detect_llm_judged_search_facts_defaults_trim_fields_to_not_found_without_context():
-    facts = detect_llm_judged_search_facts(
-        MockLLMBackend(responses=[]),
-        (("Bioinformatics", "Reads were denoised using DADA2 filterAndTrim with maxEE=2."),),
-        locator_prefix="paper:PMC1",
-        exclude_field_names=frozenset({"chimera_check_method"}),
-    )
-
-    by_type = {fact.fact_type_candidate: fact for fact in facts}
-    assert by_type["trim_method"].raw_value == "not found"
-    assert by_type["trim_param"].raw_value == "not found"
-    assert by_type["trim_method"].support_type.value == "deterministically_derived"
-    assert by_type["tax_assign_cat"].raw_value == "not found"
-    assert "tax_class_other" not in by_type
-
-
-def test_detect_llm_judged_trim_fields_extract_method_and_pipe_parameters():
-    def respond(prompt: str) -> str:
-        assert "trim_method" in prompt
-        assert "trim_param" in prompt
-        return json.dumps(
-            [
-                {"field": "trim_method", "raw_value": "Cutadapt v4.2", "quote_id": "Q001"},
-                {"field": "trim_param", "raw_value": "-e 0.1", "quote_id": "Q001"},
-                {"field": "trim_param", "raw_value": "-O 5", "quote_id": "Q001"},
-                {"field": "trim_method", "raw_value": "primer sequences were trimmed", "quote_id": "Q001"},
-            ]
-        )
-
-    facts = detect_llm_judged_search_facts(
-        MockLLMBackend(label="judge", responses=respond),
-        (
-            (
-                "Bioinformatics",
-                "PCR primer sequences were trimmed using Cutadapt v4.2 with -e 0.1 and -O 5.",
-            ),
-        ),
-        locator_prefix="paper:PMC1",
-        exclude_field_names=frozenset({"chimera_check_method"}),
-    )
-
-    by_type = {fact.fact_type_candidate: fact for fact in facts}
-    assert by_type["trim_method"].raw_value == "Cutadapt v4.2"
-    assert by_type["trim_param"].raw_value == "-e 0.1 | -O 5"
-
-
-def test_detect_llm_judged_error_rate_facts_order_values_by_configured_terms():
-    def respond(prompt: str) -> str:
-        assert "Q001 [error_rate_tool, error_rate_type]" in prompt
-        return json.dumps(
-            [
-                {"field": "error_rate_tool", "raw_value": "Trimmomatic", "quote_id": "Q001"},
-                {"field": "error_rate_tool", "raw_value": "DADA2", "quote_id": "Q001"},
-                {"field": "error_rate_type", "raw_value": "Phred score", "quote_id": "Q001"},
-                {"field": "error_rate_type", "raw_value": "expected error rate", "quote_id": "Q001"},
-            ]
-        )
-
-    backend = MockLLMBackend(label="judge", responses=respond)
-    facts = detect_llm_judged_search_facts(
-        backend,
-        (
-            (
-                "Bioinformatics",
-                "Reads were filtered with DADA2 filterAndTrim maxEE=2 and then trimmed with Trimmomatic SLIDINGWINDOW:4:20.",
-            ),
-        ),
-        locator_prefix="paper:PMC1",
-    )
-
-    by_type = {fact.fact_type_candidate: fact for fact in facts}
-    assert by_type["error_rate_tool"].raw_value == "DADA2"
-    assert by_type["error_rate_type"].raw_value == "expected error rate | Phred score"
-
-
-def test_detect_llm_judged_error_rate_type_accepts_generic_quality_filtered_phrase():
-    backend = MockLLMBackend(
-        responses=[
-            json.dumps(
-                [
-                    {"field": "error_rate_tool", "raw_value": "USEARCH v11.0.667", "quote_id": "Q001"},
-                    {"field": "error_rate_type", "raw_value": "quality filtered", "quote_id": "Q001"},
-                ]
-            )
-        ]
-    )
-
-    facts = detect_llm_judged_search_facts(
-        backend,
-        (
-            (
-                "Bioinformatics",
-                "The raw sequencing reads were quality filtered and trimmed to 220 bp using the USEARCH v11.0.667 pipeline.",
-            ),
-        ),
-        locator_prefix="paper:PMC1",
-        exclude_field_names=frozenset(
-            {"chimera_check_method", "trim_method", "trim_param", "tax_assign_cat", "tax_class_other"}
-        ),
-    )
-
-    by_type = {fact.fact_type_candidate: fact for fact in facts}
-    assert by_type["error_rate_tool"].raw_value == "USEARCH v11.0.667"
-    assert by_type["error_rate_type"].raw_value == "quality filtered"
-
-
-def test_detect_llm_judged_demux_tool_keeps_best_priority_value():
-    def respond(prompt: str) -> str:
-        assert "Q001 [demux_tool, error_rate_tool]" in prompt
-        return json.dumps(
-            [
-                {"field": "demux_tool", "raw_value": "bcl2fastq", "quote_id": "Q001"},
-                {"field": "demux_tool", "raw_value": "QIIME 2 demux emp-paired with no barcode mismatches", "quote_id": "Q001"},
-            ]
-        )
-
-    backend = MockLLMBackend(label="judge", responses=respond)
-    facts = detect_llm_judged_search_facts(
-        backend,
-        (
-            (
-                "Bioinformatics",
-                "Reads were demultiplexed using QIIME 2 demux emp-paired with no barcode mismatches after bcl2fastq conversion.",
-            ),
-        ),
-        locator_prefix="paper:PMC1",
-    )
-
-    by_type = {fact.fact_type_candidate: fact for fact in facts}
-    assert by_type["demux_tool"].raw_value == "QIIME 2 demux emp-paired with no barcode mismatches"
+    assert "barcoding_pcr_appr" not in {fact.fact_type_candidate for fact in facts}
 
 
 def test_detect_llm_judged_inhibition_fields_extract_status_and_method():
@@ -1492,44 +1469,13 @@ def test_detect_llm_judged_inhibition_bsa_only_can_be_rejected_by_llm():
     assert facts == []
 
 
-def test_detect_llm_judged_min_reads_tool_pipes_multiple_values():
-    backend = MockLLMBackend(
-        responses=[
-            json.dumps(
-                [
-                    {"field": "min_reads_tool", "raw_value": "phyloseq prune_taxa", "quote_id": "Q001"},
-                    {"field": "min_reads_tool", "raw_value": "decontam isContaminant", "quote_id": "Q002"},
-                ]
-            )
-        ]
-    )
-
-    facts = detect_llm_judged_search_facts(
-        backend,
-        (
-            (
-                "Bioinformatics",
-                "Low abundance ASVs with fewer than 10 reads were removed using phyloseq prune_taxa. "
-                "Contaminants were removed with decontam isContaminant using blank thresholds.",
-            ),
-        ),
-        locator_prefix="paper:PMC1",
-    )
-
-    by_type = {fact.fact_type_candidate: fact for fact in facts}
-    assert by_type["min_reads_tool"].raw_value == "phyloseq prune_taxa | decontam isContaminant"
-
-
 def test_detect_llm_judged_otu_clustering_fields_keep_best_values():
     def respond(prompt: str) -> str:
         assert "otu_clust_tool" in prompt
-        assert "otu_clust_cutoff" in prompt
         return json.dumps(
             [
                 {"field": "otu_clust_tool", "raw_value": "VSEARCH --cluster_fast", "quote_id": "Q001"},
                 {"field": "otu_clust_tool", "raw_value": "mothur cluster", "quote_id": "Q001"},
-                {"field": "otu_clust_cutoff", "raw_value": "97", "quote_id": "Q001"},
-                {"field": "otu_clust_cutoff", "raw_value": "99", "quote_id": "Q001"},
             ]
         )
 
@@ -1541,7 +1487,6 @@ def test_detect_llm_judged_otu_clustering_fields_keep_best_values():
 
     by_type = {fact.fact_type_candidate: fact for fact in facts}
     assert by_type["otu_clust_tool"].raw_value == "VSEARCH --cluster_fast"
-    assert by_type["otu_clust_cutoff"].raw_value == "97"
 
 
 def test_detect_llm_judged_otu_db_keeps_best_database_value():
@@ -1569,6 +1514,60 @@ def test_detect_llm_judged_otu_db_keeps_best_database_value():
 
     by_type = {fact.fact_type_candidate: fact for fact in facts}
     assert by_type["otu_db"].raw_value == "SILVA release 138"
+
+
+def test_detect_llm_judged_otu_db_keeps_multiple_databases():
+    backend = MockLLMBackend(
+        responses=[
+            json.dumps(
+                [
+                    {"field": "otu_db", "raw_value": "SILVA_132", "quote_id": "Q001"},
+                    {"field": "otu_db", "raw_value": "FreshTrain", "quote_id": "Q001"},
+                ]
+            )
+        ]
+    )
+
+    facts = detect_llm_judged_search_facts(
+        backend,
+        (
+            (
+                "Bioinformatics",
+                "Taxonomy was assigned against the SILVA_132 and FreshTrain reference databases.",
+            ),
+        ),
+        locator_prefix="paper:PMC1",
+    )
+
+    by_type = {fact.fact_type_candidate: fact for fact in facts}
+    assert by_type["otu_db"].raw_value == "SILVA_132 | FreshTrain"
+
+
+def test_detect_llm_judged_otu_db_keeps_ncbi_nr_database_value():
+    backend = MockLLMBackend(
+        responses=[
+            json.dumps(
+                [
+                    {"field": "otu_db", "raw_value": "nonredundant (nr) NCBI database", "quote_id": "Q001"},
+                ]
+            )
+        ]
+    )
+
+    facts = detect_llm_judged_search_facts(
+        backend,
+        (
+            (
+                "Bioinformatics",
+                "All OTUs accounting for >= 1% mapped reads were assigned to their most likely "
+                "taxonomic order based on BLAST matches against nonredundant (nr) NCBI database.",
+            ),
+        ),
+        locator_prefix="paper:PMC1",
+    )
+
+    by_type = {fact.fact_type_candidate: fact for fact in facts}
+    assert by_type["otu_db"].raw_value == "nonredundant (nr) NCBI database"
 
 
 def test_detect_llm_judged_tax_assignment_fields_keep_best_values():
@@ -1612,63 +1611,6 @@ def test_detect_llm_judged_tax_assignment_fields_keep_best_values():
     assert by_type["tax_assign_cat"].support_type.value == "inferred"
 
 
-def test_detect_llm_judged_error_rate_type_accepts_other_prefix():
-    backend = MockLLMBackend(
-        responses=[
-            json.dumps(
-                [
-                    {
-                        "field": "error_rate_type",
-                        "raw_value": "other: nanopore read quality model",
-                        "quote_id": "Q001",
-                    }
-                ]
-            )
-        ]
-    )
-
-    facts = detect_llm_judged_search_facts(
-        backend,
-        (("Bioinformatics", "Reads were filtered with Dorado using a nanopore read quality model."),),
-        locator_prefix="paper:PMC1",
-        exclude_field_names=frozenset(
-            {"chimera_check_method", "trim_method", "trim_param", "tax_assign_cat", "tax_class_other", "assay_target_taxa", "study_target_taxonomic_scope", "neg_cont_0_1", "pos_cont_0_1"}
-        ),
-    )
-
-    assert len(facts) == 1
-    assert facts[0].raw_value == "other: nanopore read quality model"
-
-
-def test_detect_llm_judged_chimera_method_extracts_supported_phrase():
-    backend = MockLLMBackend(
-        responses=[
-            json.dumps(
-                [
-                    {
-                        "field": "chimera_check_method",
-                        "raw_value": "VSEARCH --uchime_denovo de novo",
-                        "quote_id": "Q001",
-                    }
-                ]
-            )
-        ]
-    )
-
-    facts = detect_llm_judged_search_facts(
-        backend,
-        (("Bioinformatics", "Chimeras were removed with VSEARCH --uchime_denovo in de novo mode."),),
-        locator_prefix="paper:PMC1",
-        exclude_field_names=frozenset(
-            {"trim_method", "trim_param", "tax_assign_cat", "tax_class_other", "assay_target_taxa", "study_target_taxonomic_scope", "neg_cont_0_1", "pos_cont_0_1"}
-        ),
-    )
-
-    assert len(facts) == 1
-    assert facts[0].fact_type_candidate == "chimera_check_method"
-    assert facts[0].raw_value == "VSEARCH --uchime_denovo de novo"
-
-
 def test_detect_llm_judged_search_facts_rejects_bad_quote_ids_and_vocab_values():
     backend = MockLLMBackend(
         responses=[
@@ -1692,3 +1634,74 @@ def test_detect_llm_judged_search_facts_rejects_bad_quote_ids_and_vocab_values()
     )
 
     assert facts == []
+
+
+def test_detect_llm_judged_search_facts_extracts_in_situ_temp_oxygen_salinity_verbatim():
+    """Real audit (10.1093/ismejo/wrae013, STUDY-295abf4a8f43): "In situ
+    bottom water temperature (6.5C), dissolved O2 (11.9 mg L-1), and
+    salinity (6.4 PSU) were measured with a ProODO probe..." -- the first
+    text-based mechanism for these three fields (previously structured-
+    source-only)."""
+    backend = MockLLMBackend(
+        responses=[
+            json.dumps(
+                [
+                    {"field": "in_situ_temp", "raw_value": "6.5C", "quote_id": "Q001"},
+                    {"field": "in_situ_diss_oxygen", "raw_value": "11.9 mg L-1", "quote_id": "Q001"},
+                    {"field": "in_situ_salinity", "raw_value": "6.4 PSU", "quote_id": "Q001"},
+                ]
+            )
+        ]
+    )
+
+    facts = detect_llm_judged_search_facts(
+        backend,
+        (
+            (
+                "Methods",
+                "In situ bottom water temperature (6.5C), dissolved O2 (11.9 mg L-1), and salinity "
+                "(6.4 PSU) were measured with a ProODO probe (YSI, USA) and CTD CastAway CTD (SonTek, "
+                "USA).",
+            ),
+        ),
+        locator_prefix="paper:PMC1",
+    )
+
+    by_type = {fact.fact_type_candidate: fact for fact in facts}
+    assert by_type["in_situ_temp"].raw_value == "6.5C"
+    assert by_type["in_situ_diss_oxygen"].raw_value == "11.9 mg L-1"
+    assert by_type["in_situ_salinity"].raw_value == "6.4 PSU"
+
+
+def test_quote_candidates_for_in_situ_measurements_exclude_later_incubation_readings():
+    """Same real paper separately reports post-collection INCUBATION-
+    chamber daily-average temperature/oxygen/salinity -- a genuinely
+    different concept (not "at the time of sampling", per temp's own
+    FAIRe definition) that must never become a candidate for these
+    fields, even though it uses the exact same measurement words."""
+    candidates = quote_candidates_for_llm_judged_search(
+        (
+            (
+                "Methods",
+                "Throughout the acclimation phase oxygen, temperature, and salinity were measured "
+                "daily inside the two incubation chambers and had an average temperature of 5.9C.",
+            ),
+        )
+    )
+    assert not any(
+        field in candidate.field_names
+        for candidate in candidates
+        for field in ("in_situ_temp", "in_situ_diss_oxygen", "in_situ_salinity")
+    )
+
+
+def test_quote_candidates_for_in_situ_temp_are_targeted_to_collection_time_context():
+    candidates = quote_candidates_for_llm_judged_search(
+        (
+            (
+                "Methods",
+                "In situ bottom water temperature (6.5C) was measured at the time of collection.",
+            ),
+        )
+    )
+    assert any("in_situ_temp" in c.field_names for c in candidates)

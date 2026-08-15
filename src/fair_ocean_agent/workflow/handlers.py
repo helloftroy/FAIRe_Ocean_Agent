@@ -8,13 +8,15 @@ imported once from cli.py before the worker runs.
 """
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Callable
 
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from fair_ocean_agent.clock import utcnow
-from fair_ocean_agent.config import load_config, load_sources_config
+from fair_ocean_agent.config import MIN_LLM_MAX_OUTPUT_TOKENS, load_config, load_sources_config
 from fair_ocean_agent.database.enums import (
     AccessStatus,
     CanonicalStatus,
@@ -43,11 +45,18 @@ from fair_ocean_agent.discovery.text_identifiers import (
     xml_to_text,
 )
 from fair_ocean_agent.extraction.sections import select_relevant_sections
+from fair_ocean_agent.extraction.api_verification import detect_and_correct_elev_depth_mislabeling
 from fair_ocean_agent.extraction.faire_fields import suppress_resolved_faire_hints_for_text
-from fair_ocean_agent.extraction.publication_metadata import extract_publication_metadata_facts
+from fair_ocean_agent.extraction.pdf import extract_pdf_sections, extract_pdf_text
+from fair_ocean_agent.extraction.publication_metadata import (
+    extract_publication_metadata_facts,
+    generate_funding_source,
+    generate_rights_holder,
+)
 from fair_ocean_agent.extraction.search_flags import (
     detect_controlled_search_facts,
     detect_llm_judged_search_facts,
+    detect_phix_percentage_facts,
     detect_text_search_flags,
 )
 from fair_ocean_agent.extraction.section_categories import (
@@ -106,6 +115,8 @@ from fair_ocean_agent.sources.pangaea import PangaeaAdapter
 from fair_ocean_agent.workflow.worker import TASK_HANDLERS
 
 logger = get_logger(__name__)
+
+LOCAL_PDF_PATH_ENV = "FAIR_OCEAN_LOCAL_PDF_PATH"
 
 # Publication-oriented (DOI-keyed, populate `sources`' bibliographic
 # columns) vs repository-oriented (BioProject/ENA-accession-keyed,
@@ -574,14 +585,13 @@ def _discover_publication_metadata_from_sources(
     (extraction/publication_metadata.py) from the same open full text used
     for identifier/supplement mining above, plus a disk-cached re-fetch of
     the Crossref record, so a DOI-driven DISCOVER_IDENTIFIERS pass also
-    resolves license/rightsHolder/accessRights/recordedBy/recordedByID/
-    project_contact/bibliographicCitation/code_repo for free.
+    resolves license/accessRights/recordedBy/project_contact/
+    bibliographicCitation/code_repo for free.
 
-    Every field this produces was explicitly marked "No LLM" in a user
-    review of a NOAA/SEUS-MBON FAIRe checklist -- structured sources first
-    (Crossref, ENA's center_name for institution, ...), falling back to
-    deterministic JATS-structure/regex parsing of the paper's own text,
-    never the LLM checklist.
+    `rightsHolder` now lives in the full-text LLM stage because real
+    rights sections vary between authors, "The Author(s)", journals,
+    societies, and publishers, often with the year as part of the holder
+    phrase.
 
     Deliberately mirrors _discover_supplements_from_fulltext's shape: pure
     parsing of already-fetched/disk-cached text, no new network cost, no
@@ -914,10 +924,11 @@ def handle_discover_identifiers(session: Session, task: Task) -> None:
             gbif_key=gbif_key,
         )
 
-    # Node-adding discovery hook: for every BioProject accession this study
-    # now has (however it got resolved above), enqueue a citation-discovery
-    # pass. idempotency_key is the accession alone -- two different studies
-    # resolving the same BioProject only trigger this once for free, no new
+    # Node-adding discovery hook: for every BioProject and BioSample
+    # accession this study now has (however it got resolved above), enqueue
+    # a PubMed citation/reuse-discovery pass. idempotency_key is the
+    # accession plus NCBI database -- two different studies resolving the
+    # same BioProject or BioSample only trigger this once for free, no new
     # dedup table needed (see handle_discover_citing_studies).
     from fair_ocean_agent.workflow.task_queue import enqueue_task
 
@@ -928,6 +939,14 @@ def handle_discover_identifiers(session: Session, task: Task) -> None:
             study_id=study.study_id,
             payload={"bioproject_accession": bioproject_accession},
             idempotency_key=f"DISCOVER_CITING_STUDIES:bioproject:{bioproject_accession}",
+        )
+    for biosample_accession in _identifier_values(session, study.study_id, IdentifierType.BIOSAMPLE_ACCESSION):
+        enqueue_task(
+            session,
+            TaskType.DISCOVER_CITING_STUDIES,
+            study_id=study.study_id,
+            payload={"biosample_accession": biosample_accession},
+            idempotency_key=f"DISCOVER_CITING_STUDIES:biosample:{biosample_accession}",
         )
 
     # Two-phase discovery/mapping: for a study with any shareable-level
@@ -950,7 +969,13 @@ def _pubmed_doi_from_esummary(record: dict) -> str | None:
 
 
 def _record_citation_expansion_capped_fact(
-    session: Session, study: Study, bioproject_accession: str, *, reason: str, extra: dict | None = None
+    session: Session,
+    study: Study,
+    accession: str,
+    *,
+    accession_db: str,
+    reason: str,
+    extra: dict | None = None,
 ) -> None:
     """Records a review-flagged PROJECT-level RawFact instead of silently
     dropping citing papers that exceeded a safety-valve cap
@@ -964,13 +989,13 @@ def _record_citation_expansion_capped_fact(
         RawFact(
             study_id=study.study_id,
             source_id=None,
-            source_locator=f"ncbi_bioproject_pubmed_citation.{bioproject_accession}",
+            source_locator=f"ncbi_{accession_db}_pubmed_citation.{accession}",
             raw_field_name="citation_expansion_capped",
             raw_value=reason,
             fact_type_candidate="citing_pmid_not_expanded",
             entity_level=EntityLevel.PROJECT.value,
             support_type=SupportType.STRUCTURED_SOURCE.value,
-            extraction_method="ncbi_bioproject_pubmed_citation",
+            extraction_method=f"ncbi_{accession_db}_pubmed_citation",
             review_status=ReviewStatus.NEEDS_REVIEW.value,
             confidence_metadata=extra,
         )
@@ -978,14 +1003,12 @@ def _record_citation_expansion_capped_fact(
 
 
 def handle_discover_citing_studies(session: Session, task: Task) -> None:
-    """Forward citation-discovery: given a BioProject accession this study
-    already resolved, finds NEW papers that cite/reuse this exact
-    BioProject's data via one bioproject->pubmed elink call (returns every
-    citing PMID at once -- cheap by construction, no per-sample fan-out).
-    This is the "node-adding" half of discovery the user asked for
-    (new research is linking to old samples if they use the data) --
-    independent of sources/ncbi.py's biosample->bioproject reverse-elink,
-    which verifies a single resolution rather than discovering new studies.
+    """Forward citation/reuse discovery: given a BioProject or BioSample
+    accession this study already resolved, finds NEW papers that cite/reuse
+    that exact NCBI record via an accession-db->pubmed elink call. This is
+    the "node-adding" half of discovery the user asked for: new research
+    linking to old projects or samples gets its own Study and re-enters the
+    normal discovery pipeline.
 
     Auto-expansion is deliberately aggressive per an explicit user scoping
     decision: a newly-discovered citing paper not already in the database
@@ -1003,22 +1026,27 @@ def handle_discover_citing_studies(session: Session, task: Task) -> None:
     if parent is None:
         raise ValueError(f"Study {task.study_id} not found")
 
-    bioproject_accession = (task.payload or {}).get("bioproject_accession")
-    if not bioproject_accession:
-        raise ValueError("DISCOVER_CITING_STUDIES task requires a bioproject_accession in its payload")
+    payload = task.payload or {}
+    accession_db = "bioproject" if payload.get("bioproject_accession") else "biosample"
+    accession = payload.get(f"{accession_db}_accession")
+    if not accession:
+        raise ValueError(
+            "DISCOVER_CITING_STUDIES task requires a bioproject_accession or biosample_accession in its payload"
+        )
 
     adapters = _build_enabled_adapters()
-    bioproject_adapter = adapters.get("ncbi_bioproject")
-    if bioproject_adapter is None:
+    adapter_name = f"ncbi_{accession_db}"
+    ncbi_adapter = adapters.get(adapter_name)
+    if ncbi_adapter is None:
         logger.info(
-            "ncbi_bioproject adapter disabled; skipping citation discovery for %s", bioproject_accession
+            "%s adapter disabled; skipping citation discovery for %s", adapter_name, accession
         )
         return
 
     discovery_config = load_config().discovery
     if parent.discovery_depth >= discovery_config.citation_expansion_max_depth:
         _record_citation_expansion_capped_fact(
-            session, parent, bioproject_accession,
+            session, parent, accession, accession_db=accession_db,
             reason=(
                 f"discovery_depth {parent.discovery_depth} >= "
                 f"citation_expansion_max_depth {discovery_config.citation_expansion_max_depth}: "
@@ -1033,17 +1061,15 @@ def handle_discover_citing_studies(session: Session, task: Task) -> None:
     # limit is per-IP across all eutils calls combined (see that function's
     # own comment); a separate client here would silently double the real
     # request rate.
-    http = bioproject_adapter.http
-    base_url = bioproject_adapter.config.base_url
+    http = ncbi_adapter.http
+    base_url = ncbi_adapter.config.base_url
 
-    resolution = _esearch_verified_uid(
-        http, base_url, "bioproject", bioproject_accession, expected_accession=bioproject_accession
-    )
+    resolution = _esearch_verified_uid(http, base_url, accession_db, accession, expected_accession=accession)
     if resolution is None:
-        logger.info("no BioProject UID found for %s during citation discovery", bioproject_accession)
+        logger.info("no %s UID found for %s during citation discovery", accession_db, accession)
         return
 
-    citing_pmids = _elink_ids(http, base_url, "bioproject", "pubmed", resolution.uid)
+    citing_pmids = _elink_ids(http, base_url, accession_db, "pubmed", resolution.uid)
     if not citing_pmids:
         return
 
@@ -1070,7 +1096,7 @@ def handle_discover_citing_studies(session: Session, task: Task) -> None:
             discovery_depth=parent.discovery_depth + 1,
             discovery_parent_study_id=parent.study_id,
             discovery_root_study_id=root_study_id,
-            discovery_trigger="bioproject_pubmed_citation",
+            discovery_trigger=f"{accession_db}_pubmed_citation",
         )
         session.add(citing_study)
         session.flush()
@@ -1079,7 +1105,7 @@ def handle_discover_citing_studies(session: Session, task: Task) -> None:
                 study_id=citing_study.study_id,
                 identifier_type=IdentifierType.DOI.value,
                 identifier_value=normalized_doi,
-                source="ncbi_bioproject_pubmed_citation",
+                source=f"ncbi_{accession_db}_pubmed_citation",
                 verified=True,
             )
         )
@@ -1092,7 +1118,7 @@ def handle_discover_citing_studies(session: Session, task: Task) -> None:
 
     if over_cap:
         _record_citation_expansion_capped_fact(
-            session, parent, bioproject_accession,
+            session, parent, accession, accession_db=accession_db,
             reason=(
                 f"{len(over_cap)} of {len(citing_pmids)} citing PMIDs exceeded "
                 f"max_citing_papers_per_bioproject ({max_citing})"
@@ -1113,8 +1139,8 @@ def handle_discover_citing_studies(session: Session, task: Task) -> None:
 
     session.flush()
     logger.info(
-        "citation discovery for %s: %d citing PMIDs, %d new studies created, %d capped",
-        bioproject_accession, len(citing_pmids), new_study_count, len(over_cap),
+        "citation discovery for %s %s: %d citing PMIDs, %d new studies created, %d capped",
+        accession_db, accession, len(citing_pmids), new_study_count, len(over_cap),
     )
 
 
@@ -1144,18 +1170,17 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
         )
     pmcid = pmcid_identifier.identifier_value
 
-    europe_pmc = _build_enabled_adapters().get("europe_pmc")
-    if europe_pmc is None:
-        raise RuntimeError("europe_pmc adapter is not enabled in config/sources.yaml")
-
     backend = _build_llm_backend_cached()
     extraction_version = f"{PROMPT_VERSION}:{backend.label}"
+    local_pdf_path = os.environ.get(LOCAL_PDF_PATH_ENV)
+    source_name = "local_pdf_fulltext" if local_pdf_path else "europe_pmc_fulltext"
+    external_identifier = str(Path(local_pdf_path).resolve()) if local_pdf_path else pmcid
     already_recorded = (
         session.query(Source)
         .filter_by(
             study_id=study.study_id,
-            source_name="europe_pmc_fulltext",
-            external_identifier=pmcid,
+            source_name=source_name,
+            external_identifier=external_identifier,
             source_version=extraction_version,
         )
         .first()
@@ -1164,21 +1189,39 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
     if already_recorded:
         logger.info(
             "full text for %s already processed for study %s with %s",
-            pmcid,
+            external_identifier,
             study.study_id,
             extraction_version,
         )
         return
 
-    try:
-        fulltext_xml = europe_pmc.fetch_fulltext_xml(pmcid)
-    except SourceRecordNotFoundError:
-        logger.info("no open-access full text available for %s", pmcid)
-        return
-
-    sections = select_relevant_sections(fulltext_xml)
+    fulltext_xml: str | None = None
+    source_text_for_metadata: str | None = None
+    if local_pdf_path:
+        pdf_path = Path(local_pdf_path)
+        if not pdf_path.exists():
+            raise SourceRecordNotFoundError(f"local PDF does not exist: {pdf_path}")
+        sections = extract_pdf_sections(pdf_path)
+        source_text_for_metadata = extract_pdf_text(pdf_path)
+        logger.info(
+            "using local PDF full text for study %s: %s (%d relevant section(s))",
+            study.study_id,
+            pdf_path,
+            len(sections),
+        )
+    else:
+        europe_pmc = _build_enabled_adapters().get("europe_pmc")
+        if europe_pmc is None:
+            raise RuntimeError("europe_pmc adapter is not enabled in config/sources.yaml")
+        try:
+            fulltext_xml = europe_pmc.fetch_fulltext_xml(pmcid)
+        except SourceRecordNotFoundError:
+            logger.info("no open-access full text available for %s", pmcid)
+            return
+        source_text_for_metadata = fulltext_xml
+        sections = select_relevant_sections(fulltext_xml)
     if not sections:
-        logger.info("no relevant sections found in full text for %s", pmcid)
+        logger.info("no relevant sections found in full text for %s", external_identifier)
         return
 
     source = create_source(
@@ -1186,11 +1229,17 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
         Source(
             study_id=study.study_id,
             source_type=SourceType.ARTICLE_FULLTEXT.value,
-            source_name="europe_pmc_fulltext",
-            external_identifier=pmcid,
+            source_name=source_name,
+            external_identifier=external_identifier,
             access_status=AccessStatus.OPEN.value,
             retrieved_at=utcnow(),
-            content_hash=hash_payload({"pmcid": pmcid, "section_titles": [s["title"] for s in sections]}),
+            content_hash=hash_payload(
+                {
+                    "source_name": source_name,
+                    "external_identifier": external_identifier,
+                    "section_titles": [s["title"] for s in sections],
+                }
+            ),
             source_version=extraction_version,
             inspection_status=InspectionStatus.INSPECTED.value,
             inspection_level=InspectionLevel.FULL.value,
@@ -1201,8 +1250,8 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
         for (source_id,) in session.execute(
             select(Source.source_id).where(
                 Source.study_id == study.study_id,
-                Source.source_name == "europe_pmc_fulltext",
-                Source.external_identifier == pmcid,
+                Source.source_name == source_name,
+                Source.external_identifier == external_identifier,
                 Source.source_version != extraction_version,
             )
         )
@@ -1216,6 +1265,9 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
                 RawFact.extraction_method.in_(
                     (
                         "deterministic_text_search_flagging",
+                        "llm_generated_funding_source",
+                        "llm_generated_rights_holder",
+                        "llm_generated_study_factor",
                         "llm_generated_study_target_taxonomic_scope",
                         "llm_judged_quote_search",
                         "llm_text_extraction",
@@ -1239,11 +1291,26 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
     llm_config = load_config().llm
 
     section_texts = tuple((section["title"], section["text"]) for section in sections)
-    locator_prefix = f"europe_pmc_fulltext:{pmcid}"
+    locator_prefix = f"{source_name}:{external_identifier}"
+    # Narrowly-scoped structured-value verification (per an explicit user
+    # request): only ever checks elev-vs-depth mislabeling on a soil/
+    # sediment sample whose depth is otherwise blank -- see
+    # extraction/api_verification.py's own docstring for the real audit
+    # that motivated this. Corrects the mismatch and logs it to
+    # api_paper_corrections when confirmed; a no-op for every other study.
+    detect_and_correct_elev_depth_mislabeling(
+        backend,
+        session,
+        study.study_id,
+        list(section_texts),
+        source_id=source.source_id,
+        locator_prefix=locator_prefix,
+    )
     section_category_facts = detect_section_categories_present(
         list(section_texts), locator_prefix=locator_prefix
     )
     flag_facts = detect_text_search_flags(section_texts, locator_prefix=locator_prefix)
+    flag_facts = [*flag_facts, *detect_phix_percentage_facts(section_texts, locator_prefix=locator_prefix)]
     pcr_0_1_fact = derive_pcr_0_1_from_category_detection(section_category_facts)
     if pcr_0_1_fact is not None:
         flag_facts = [*flag_facts, pcr_0_1_fact]
@@ -1262,7 +1329,7 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
         prompt_version=PROMPT_VERSION,
         review_status=ReviewStatus.ACCEPTED.value,
     )
-    study_factor_facts = generate_study_factor(backend, fulltext_xml, locator_prefix=locator_prefix)
+    study_factor_facts = generate_study_factor(backend, source_text_for_metadata, locator_prefix=locator_prefix)
     _persist_candidate_facts(
         session,
         study.study_id,
@@ -1274,7 +1341,7 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
         review_status=ReviewStatus.ACCEPTED.value,
     )
     study_target_scope_facts = generate_study_target_taxonomic_scope(
-        backend, fulltext_xml, locator_prefix=locator_prefix
+        backend, source_text_for_metadata, locator_prefix=locator_prefix
     )
     _persist_candidate_facts(
         session,
@@ -1282,6 +1349,36 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
         source.source_id,
         study_target_scope_facts,
         extraction_method="llm_generated_study_target_taxonomic_scope",
+        model_name=backend.label,
+        prompt_version=PROMPT_VERSION,
+        review_status=ReviewStatus.ACCEPTED.value,
+    )
+    rights_holder_facts = generate_rights_holder(
+        backend,
+        source_text_for_metadata,
+        locator_prefix=locator_prefix,
+    )
+    _persist_candidate_facts(
+        session,
+        study.study_id,
+        source.source_id,
+        rights_holder_facts,
+        extraction_method="llm_generated_rights_holder",
+        model_name=backend.label,
+        prompt_version=PROMPT_VERSION,
+        review_status=ReviewStatus.ACCEPTED.value,
+    )
+    funding_source_facts = generate_funding_source(
+        backend,
+        source_text_for_metadata,
+        locator_prefix=locator_prefix,
+    )
+    _persist_candidate_facts(
+        session,
+        study.study_id,
+        source.source_id,
+        funding_source_facts,
+        extraction_method="llm_generated_funding_source",
         model_name=backend.label,
         prompt_version=PROMPT_VERSION,
         review_status=ReviewStatus.ACCEPTED.value,
@@ -1333,7 +1430,7 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
         backend,
         section_texts,
         locator_prefix=locator_prefix,
-        max_output_tokens=512,
+        max_output_tokens=MIN_LLM_MAX_OUTPUT_TOKENS,
         active_flags=active_flags,
         exclude_field_names=already_resolved
         | frozenset(fact.fact_type_candidate for fact in section_category_term_facts),

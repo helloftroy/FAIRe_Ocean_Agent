@@ -64,17 +64,42 @@ def test_hallucinated_pcr_volume_not_present_in_quote_is_dropped():
     assert facts == []
 
 
-def test_pcr_volume_present_in_quote_survives_literal_guard_with_unit_variants():
-    text = "PCR amplification was performed in a total reaction volume of 25 µL."
+def test_primer_name_substituted_for_sequence_is_dropped():
+    """Regression guard for a real bug found live (10.1002/ece3.6071):
+    when a paper only states a primer's NAME in the main text (its real
+    sequence lives in a supplementary table this pass never sees), the
+    model substituted the name for the sequence field instead of omitting
+    it -- both "1389F" and "mlCOIintF" are literally present in real
+    quotes, so a plain verbatim check alone wouldn't catch this; the value
+    itself must actually look like a nucleotide sequence."""
+    text = "The 18S rRNA gene was amplified using the universal primer 1389F."
     response = json.dumps(
-        [{"fact_type_candidate": "pcr_reaction_volume", "raw_value": "25 uL", "evidence_id": "METHODS.P001"}]
+        [{"fact_type_candidate": "forward_primer_sequence", "raw_value": "1389F", "evidence_id": "METHODS.P001"}]
+    )
+    backend = MockLLMBackend(responses=[response])
+
+    facts, _ = extract_facts_from_section(backend, "Methods", text, active_flags=frozenset({"pcr_0_1"}))
+
+    assert facts == []
+
+
+def test_real_primer_sequence_survives_the_nucleotide_shape_check():
+    text = "The forward primer sequence used was GGWACWGGWTGAACWGTWTAYCCYCC."
+    response = json.dumps(
+        [
+            {
+                "fact_type_candidate": "forward_primer_sequence",
+                "raw_value": "GGWACWGGWTGAACWGTWTAYCCYCC",
+                "evidence_id": "METHODS.P001",
+            }
+        ]
     )
     backend = MockLLMBackend(responses=[response])
 
     facts, _ = extract_facts_from_section(backend, "Methods", text, active_flags=frozenset({"pcr_0_1"}))
 
     assert len(facts) == 1
-    assert facts[0].raw_value == "25 uL"
+    assert facts[0].raw_value == "GGWACWGGWTGAACWGTWTAYCCYCC"
 
 
 def test_filter_name_can_be_extracted_from_sampling_text():
@@ -227,6 +252,8 @@ def test_absent_raw_value_predicate_covers_common_model_placeholders():
         "not resolved",
         "not resolved.",
         "unresolved",
+        "see below",
+        "see above.",
     ):
         assert is_absent_raw_value(value)
     assert not is_absent_raw_value("none detected in the negative control")
@@ -292,7 +319,7 @@ def test_extract_facts_from_section_chunks_long_text_and_merges_facts():
 
 
 def test_prompt_version_is_stable_constant():
-    assert PROMPT_VERSION == "text-extraction-v19-library-layout-search"
+    assert PROMPT_VERSION == "text-extraction-v21-expedition-id"
 
 
 def test_recall_second_pass_does_not_fire_when_first_pass_finds_any_facts():
@@ -409,16 +436,33 @@ def test_prompt_embeds_the_native_name_checklist():
     prompt = build_prompt("PCR", SECTION_TEXT, active_flags=frozenset({"pcr_0_1"}))
     # Spot-check one native_name from each group actually appears in the
     # prompt the model sees, not just in extraction/faire_fields.py.
-    # sequencing_kit is deliberately not checked here -- it's fully
-    # excluded (search_flags.CONTROLLED_SEARCH_FIELDS covers it
-    # deterministically instead), so phix_percentage stands in as this
-    # group's still-LLM-askable representative.
+    # "Sequencing / library prep" has no representative here at all
+    # anymore: every one of its fields (platform/instrument/seq_kit/
+    # lib_layout/adapter_forward/adapter_reverse) was already excluded via
+    # LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS, and phix_percentage -- the one
+    # remaining askable field in that group -- was removed from the
+    # taxonomy entirely per an explicit user request (phix_perc is now
+    # handled by a deterministic regex pass instead, search_flags.py's
+    # detect_phix_percentage_facts), so this whole group is now 100%
+    # excluded from LLM-askability. "Controls & replicates"'s own
+    # representative used to be negative_control_type, then biological_
+    # replicate_count; negative_control_type (and its positive_control_type
+    # sibling) were removed from the taxonomy entirely per an explicit,
+    # repeated user request, and biological_replicate_count was removed
+    # per a later explicit user request (a live audit of a real 5-paper
+    # run found it never actually fired), leaving pcr_replicate_count as
+    # this group's only remaining concept.
+    # "Bioinformatics workflow"'s own representative used to be read_
+    # merge_minimum_overlap; that field's own FAIRe target
+    # (merge_min_overlap) was removed entirely per an explicit, repeated
+    # user request, and every remaining field in this group (clustering_
+    # tool/reference_database/taxonomic_assignment_method) was already
+    # excluded via LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS, so this whole group
+    # is now 100% excluded from LLM-askability too.
     for native_name in (
         "annealing_temperature",
-        "negative_control_type",
+        "pcr_replicate_count",
         "standard_curve_slope",
-        "phix_percentage",
-        "read_merge_minimum_overlap",
         "scientific_name",
     ):
         assert native_name in prompt
@@ -650,15 +694,14 @@ def test_resolved_faire_fields_for_study_ignores_other_studies_and_schemas(db_se
 
 
 def test_build_prompt_excludes_resolved_faire_hint_fields():
-    # "read_merge_minimum_overlap" (unlike "annealing_temperature") never
-    # appears in the instructions' own static illustrative text, so its
-    # absence here unambiguously means the checklist entry was actually
-    # filtered out.
+    # "scientific_name" (unlike "annealing_temperature") never appears in
+    # the instructions' own static illustrative text, so its absence here
+    # unambiguously means the checklist entry was actually filtered out.
     prompt_full = build_prompt("PCR", SECTION_TEXT)
-    prompt_filtered = build_prompt("PCR", SECTION_TEXT, exclude_faire_hints=frozenset({"merge_min_overlap"}))
+    prompt_filtered = build_prompt("PCR", SECTION_TEXT, exclude_faire_hints=frozenset({"scientificName"}))
 
-    assert "read_merge_minimum_overlap" in prompt_full
-    assert "read_merge_minimum_overlap" not in prompt_filtered
+    assert "scientific_name" in prompt_full
+    assert "scientific_name" not in prompt_filtered
     assert len(prompt_filtered) < len(prompt_full)
 
 
@@ -684,7 +727,7 @@ def test_build_prompt_hides_pcr_checklist_with_no_active_flags():
     assert "pcr_cycle_count" not in prompt
     assert "probe_sequence" not in prompt
     # An ungated concept from another group must still be present.
-    assert "read_merge_minimum_overlap" in prompt
+    assert "scientific_name" in prompt
 
 
 def test_build_prompt_shows_pcr_checklist_when_pcr_0_1_active():

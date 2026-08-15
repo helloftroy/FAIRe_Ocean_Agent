@@ -22,7 +22,7 @@ BIOPROJECT_XML = """<?xml version="1.0" ?>
 </DocumentSummary></RecordSet>"""
 
 BIOSAMPLE_XML = """<?xml version="1.0" ?>
-<BioSampleSet><BioSample accession="SAMN1">
+<BioSampleSet><BioSample accession="SAMN1" submission_date="2024-02-03">
     <Description><Title>Sample one</Title></Description>
     <Owner><Name abbreviation="UKN">University of Konstanz, Corentin Fournier</Name></Owner>
     <Attributes>
@@ -99,12 +99,70 @@ def test_biosample_fetch_record_discovers_and_parses_linked_samples(retrieval_co
     accessions = {s["accession"] for s in record.raw["samples"]}
     assert accessions == {"SAMN1", "SAMN2"}
     sample_one = next(s for s in record.raw["samples"] if s["accession"] == "SAMN1")
+    assert sample_one["submitted"] == "2024-02-03"
     assert sample_one["attributes"]["collection_date"] == "2023-12-06"
     assert sample_one["attributes"]["depth"] == "1"
     assert sample_one["owner"] == {
         "name": "University of Konstanz, Corentin Fournier",
         "abbreviation": "UKN",
     }
+    adapter.close()
+
+
+BIOSAMPLE_WITH_IDS_XML = """<?xml version="1.0" ?>
+<BioSampleSet><BioSample accession="SAMN29179945">
+    <Ids>
+        <Id db="BioSample" is_primary="1">SAMN29179945</Id>
+        <Id db_label="Sample name">GS16_GC05_55cm</Id>
+        <Id db="SRA">SRS13480207</Id>
+    </Ids>
+    <Description><Title>MIMS Environmental/Metagenome sample from marine sediment metagenome</Title></Description>
+    <Attributes>
+        <Attribute attribute_name="collection_date">2016-07-16</Attribute>
+    </Attributes>
+</BioSample><BioSample accession="SAMN2">
+    <Ids>
+        <Id db="BioSample" is_primary="1">SAMN2</Id>
+        <Id db_label="Sample name">explicit-sample-name</Id>
+    </Ids>
+    <Description><Title>Sample two</Title></Description>
+    <Attributes>
+        <Attribute attribute_name="collection_date">2023-12-07</Attribute>
+        <Attribute attribute_name="sample_name">already-declared-attribute</Attribute>
+    </Attributes>
+</BioSample></BioSampleSet>"""
+
+
+def test_biosample_fetch_record_parses_sample_name_from_ids_element(retrieval_config):
+    """Real gap found live (SAMN29179945): the <Ids> element's own "Sample
+    name" (e.g. "GS16_GC05_55cm") was never parsed at all -- every real
+    BioSample carries this, but it lives outside <Attributes> entirely.
+    A record that also happens to declare a real sample_name Attribute
+    (SAMN2, contrived but defensive) keeps that value, not the <Ids> one."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        params = dict(request.url.params)
+        if path.endswith("esearch.fcgi") and params.get("db") == "bioproject":
+            return httpx.Response(200, json={"esearchresult": {"idlist": ["1425045"]}})
+        if path.endswith("elink.fcgi"):
+            return httpx.Response(
+                200,
+                json={"linksets": [{"linksetdbs": [{"linkname": "bioproject_biosample", "links": ["111", "222"]}]}]},
+            )
+        if path.endswith("efetch.fcgi") and params.get("db") == "biosample":
+            return httpx.Response(200, text=BIOSAMPLE_WITH_IDS_XML)
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    adapter = NcbiBioSampleAdapter(
+        SourceConfig(name="ncbi_biosample", enabled=True, base_url="https://eutils.ncbi.nlm.nih.gov/entrez/eutils", rate_limit_per_second=1000),
+        retrieval_config,
+        transport=httpx.MockTransport(handler),
+    )
+    record = adapter.fetch_record("PRJNA1425045")
+
+    samples_by_accession = {s["accession"]: s for s in record.raw["samples"]}
+    assert samples_by_accession["SAMN29179945"]["attributes"]["sample_name"] == "GS16_GC05_55cm"
+    assert samples_by_accession["SAMN2"]["attributes"]["sample_name"] == "already-declared-attribute"
     adapter.close()
 
 
@@ -259,6 +317,8 @@ def test_biosample_fetch_record_no_review_flag_when_signals_agree(retrieval_conf
 
 def _ena_transport():
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "HEAD" and request.url.host == "ftp.sra.ebi.ac.uk":
+            return httpx.Response(200)
         params = dict(request.url.params)
         if params.get("result") == "study":
             return httpx.Response(
@@ -305,6 +365,51 @@ def test_ena_fetch_record_resolves_study_and_runs(retrieval_config):
     assert record.raw["study"]["secondary_study_accession"] == "SRP677779"
     assert len(record.raw["runs"]) == 1
     assert record.raw["runs"][0]["run_accession"] == "SRR1"
+    assert record.raw["runs"][0]["fastq_access_status"] == "accessible"
+    assert record.raw["runs"][0]["fastq_access_checked_urls"] == "https://ftp.sra.ebi.ac.uk/vol1/fastq/SRR001/SRR1.fastq.gz"
+    adapter.close()
+
+
+def test_ena_fetch_record_marks_inaccessible_fastq(retrieval_config):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "HEAD" and request.url.host == "ftp.sra.ebi.ac.uk":
+            return httpx.Response(404)
+        params = dict(request.url.params)
+        if params.get("result") == "study":
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "study_accession": "PRJNA1425045",
+                        "secondary_study_accession": "SRP677779",
+                        "study_title": "SF Bay 18S Metabarcoding Monitoring",
+                        "study_description": "desc",
+                        "center_name": "SFEI",
+                        "first_public": "2026-02-19",
+                    }
+                ],
+            )
+        if params.get("result") == "read_run":
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "run_accession": "SRR1",
+                        "sample_accession": "SAMN1",
+                        "fastq_ftp": "ftp.sra.ebi.ac.uk/vol1/fastq/SRR001/SRR1.fastq.gz",
+                    }
+                ],
+            )
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    adapter = EnaAdapter(
+        SourceConfig(name="ena", enabled=True, base_url="https://www.ebi.ac.uk/ena/portal/api", rate_limit_per_second=1000),
+        retrieval_config,
+        transport=httpx.MockTransport(handler),
+    )
+    record = adapter.fetch_record("PRJNA1425045")
+
+    assert record.raw["runs"][0]["fastq_access_status"] == "not_accessible"
     adapter.close()
 
 

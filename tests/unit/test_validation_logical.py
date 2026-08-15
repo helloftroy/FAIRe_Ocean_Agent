@@ -3,6 +3,7 @@ import pytest
 from fair_ocean_agent.database.enums import IdentifierType, ValidationStatus
 from fair_ocean_agent.validation.logical import (
     parse_depth_meters,
+    parse_depth_range_meters,
     parse_lat_lon,
     validate_accession_format,
     validate_collection_before_publication,
@@ -64,6 +65,28 @@ def test_parse_depth_meters_real_formats(value, expected_meters):
 
 def test_parse_depth_unparseable_returns_none():
     assert parse_depth_meters("surface") is None
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("Integrated samples of the epilimnion (0–20 m) were taken", (0.0, 20.0)),
+        ("0-5 cm", (0.0, 0.05)),
+        ("5 to 10 m", (5.0, 10.0)),
+        ("5 m", (5.0, 5.0)),  # no range -- both ends the same, per FAIRe's own convention
+    ],
+)
+def test_parse_depth_range_meters_real_formats(value, expected):
+    """Regression guard for a real bug found live (10.1371/journal.pone.0303937):
+    parse_depth_meters alone only ever returns the FIRST number in a range
+    like "0-20 m", so minimumDepthInMeters and maximumDepthInMeters (which
+    both used to call it on the same raw fact) silently got the identical
+    value instead of the range's own two distinct ends."""
+    assert parse_depth_range_meters(value) == pytest.approx(expected)
+
+
+def test_parse_depth_range_meters_unparseable_returns_none():
+    assert parse_depth_range_meters("surface") is None
 
 
 def test_validate_depth_plausible():

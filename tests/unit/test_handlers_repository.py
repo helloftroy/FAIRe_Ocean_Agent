@@ -179,6 +179,39 @@ def test_bioproject_resolution_enqueues_citation_discovery_once_per_accession(db
     assert len(citing_tasks_after) == 1, "same accession must not enqueue a second citation-discovery task"
 
 
+def test_biosample_related_identifiers_enqueue_citation_discovery(db_session, monkeypatch):
+    """BioSamples are graph expansion points too: once a repository adapter
+    surfaces a BioSample accession, queue a biosample->pubmed pass so
+    papers tied to that physical sample can be discovered, not just papers
+    tied to the parent BioProject."""
+    from fair_ocean_agent.database.models import Task
+
+    study = _seeded_study(db_session, bioproject_accession="PRJNA1425045")
+    task = _task_for(db_session, study)
+    biosample_adapter = FakeAdapter(
+        "ncbi_biosample",
+        record=_make_record("ncbi_biosample"),
+        related=[
+            RelatedIdentifier(
+                identifier_type=IdentifierType.BIOSAMPLE_ACCESSION,
+                value="SAMN11268033",
+                relationship_type=RelationshipType.CONTAINS_SAMPLES_FROM,
+                source="ncbi_biosample",
+            )
+        ],
+    )
+    monkeypatch.setattr(handlers, "_build_enabled_adapters", lambda: {"ncbi_biosample": biosample_adapter})
+
+    handlers.handle_discover_identifiers(db_session, task)
+    db_session.commit()
+
+    citing_tasks = db_session.query(Task).filter_by(task_type=TaskType.DISCOVER_CITING_STUDIES.value).all()
+    assert {t.idempotency_key for t in citing_tasks} == {
+        "DISCOVER_CITING_STUDIES:bioproject:PRJNA1425045",
+        "DISCOVER_CITING_STUDIES:biosample:SAMN11268033",
+    }
+
+
 def test_second_study_resolving_same_biosample_links_not_duplicates_entity(db_session, monkeypatch):
     """Two different studies (two different papers) independently resolving
     the SAME real BioSample accession -- the core case this whole multi-

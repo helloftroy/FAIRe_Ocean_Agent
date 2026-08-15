@@ -1,12 +1,12 @@
 {
   "case_id": "bioinformatics-taxonomy-001",
   "curated_by": "claude",
-  "notes": "Fictional example -- exercises the bioinformatics + taxonomic-assignment field groups using v3's standard-agnostic native names: demultiplexing_tool, adapter_trimming_method, read_merging_tool, read_merge_minimum_overlap, minimum_read_length, chimera_detection_method, taxonomic_assignment_method, reference_database, scientific_name, percent_sequence_identity, percent_query_coverage.",
+  "notes": "Fictional example -- exercises the bioinformatics + taxonomic-assignment field groups using v3's standard-agnostic native names: demux_tool, adapter_trimming_method, read_merging_tool, read_merge_minimum_overlap, minimum_read_length, chimera_detection_method, taxonomic_assignment_method, reference_database, scientific_name, percent_sequence_identity, percent_query_coverage.",
   "section_title": "Bioinformatics analysis",
   "source_text": "Raw reads were demultiplexed using bcl2fastq v2.20 and primers were trimmed using Cutadapt v3.5. Paired-end reads were merged using DADA2 with a minimum overlap of 12 bp, and reads shorter than 100 bp were discarded. Chimeric sequences were removed using the DADA2 consensus method. ASVs were assigned taxonomy using a naive Bayesian classifier against the SILVA 138 reference database. The most abundant ASV was assigned to Thunnus albacares with 99% sequence identity and 100% query coverage.",
   "expected_facts": [
     {
-      "fact_type_candidate": "demultiplexing_tool",
+      "fact_type_candidate": "demux_tool",
       "raw_value": "bcl2fastq v2.20",
       "evidence_quote": "demultiplexed using bcl2fastq v2.20"
     },

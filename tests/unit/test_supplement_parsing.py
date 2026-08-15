@@ -39,7 +39,7 @@ def test_parse_delimited_table_only_recognizes_aliased_columns():
     assert sorted(result.recognized_columns) == ["collection_date", "temp"]
     assert result.unrecognized_columns == ["notes"]
     fact_types = {f.fact_type_candidate for f in result.facts}
-    assert fact_types == {"collection_date", "temp"}
+    assert fact_types == {"collection_date", "temp", "spreadsheet_headers"}
     assert "notes" not in fact_types
 
 
@@ -92,14 +92,17 @@ def test_parse_delimited_table_emits_biological_rep_relation_even_with_no_other_
     result = parse_delimited_table(csv_content, "t.csv")
 
     assert result.unrecognized_columns == ["notes"]
-    assert {f.fact_type_candidate for f in result.facts} == {"biological_rep_relation"}
+    assert {f.fact_type_candidate for f in result.facts} == {"biological_rep_relation", "spreadsheet_headers"}
 
 
 def test_parse_delimited_table_binds_library_columns_to_experiment_entity():
+    # lib_conc/lib_conc_unit/lib_conc_meth columns were dropped from this
+    # case (mid_forward/mid_reverse never had supplement-table coverage to
+    # begin with) per an explicit, repeated user request -- both fields
+    # were removed from the codebase entirely as a low-priority scope cut.
     csv_content = (
-        b"sample_id,run_accession,lib_id,library concentration,library concentration unit,"
-        b"library concentration method,PhiX percentage,R1,read count,pcr well position\n"
-        b"SAMN1,SRR1,LIB1,4.2,ng/uL,Qubit,15,SRR1_1.fastq.gz,1000,A01\n"
+        b"sample_id,run_accession,lib_id,PhiX percentage,R1,read count,pcr well position\n"
+        b"SAMN1,SRR1,LIB1,15,SRR1_1.fastq.gz,1000,A01\n"
     )
     result = parse_delimited_table(csv_content, "run_metadata.csv")
 
@@ -108,20 +111,17 @@ def test_parse_delimited_table_binds_library_columns_to_experiment_entity():
         "samp_name",
         "lib_id",
         "seq_run_id",
-        "lib_conc",
-        "lib_conc_unit",
-        "lib_conc_meth",
         "phix_perc",
         "filename",
         "input_read_count",
     }.issubset(values)
+    assert "lib_conc" not in values
+    assert "lib_conc_unit" not in values
+    assert "lib_conc_meth" not in values
     for fact_type in (
         "samp_name",
         "lib_id",
         "seq_run_id",
-        "lib_conc",
-        "lib_conc_unit",
-        "lib_conc_meth",
         "phix_perc",
         "filename",
         "input_read_count",
@@ -159,7 +159,7 @@ def test_parse_delimited_table_skips_a_leading_caption_row():
     csv_content = b"Supplementary Table S5. Accession Number.,,\nsample_id,temp\nS1,18.2\n"
     result = parse_delimited_table(csv_content, "t.csv")
     assert result.row_count == 1
-    assert {f.fact_type_candidate for f in result.facts} == {"temp"}
+    assert {f.fact_type_candidate for f in result.facts} == {"temp", "spreadsheet_headers"}
     assert result.facts[0].entity_external_id == "S1"
     assert result.facts[0].source_locator == "supplement.t.csv!B3"
 
@@ -173,15 +173,15 @@ def test_parse_delimited_table_recognizes_real_supplement_environment_headers():
     result = parse_delimited_table(csv_content, "gcb_sites.csv")
     fact_types = {f.fact_type_candidate for f in result.facts}
 
-    assert fact_types == {"geo_loc_name", "latitude", "longitude", "depth", "target_gene"}
-    assert all(f.entity_external_id == "MC751" for f in result.facts)
+    assert fact_types == {"geo_loc_name", "latitude", "longitude", "depth", "target_gene", "spreadsheet_headers"}
+    assert all(f.entity_external_id == "MC751" for f in result.facts if f.fact_type_candidate != "spreadsheet_headers")
 
 
 def test_parse_delimited_table_skips_blank_cells():
     csv_content = b"sample_id,temp,ph\nS1,,8.1\n"
     result = parse_delimited_table(csv_content, "t.csv")
     fact_types = {f.fact_type_candidate for f in result.facts}
-    assert fact_types == {"ph"}
+    assert fact_types == {"ph", "spreadsheet_headers"}
 
 
 def test_parse_delimited_table_handles_tsv_delimiter():
@@ -217,7 +217,7 @@ def test_parse_xlsx_table_uses_native_not_faire_names_for_coordinates():
     results = parse_xlsx_table(content, "Supplementary_Table_2.xlsx")
     assert len(results) == 1
     fact_types = {f.fact_type_candidate for f in results[0].facts}
-    assert fact_types == {"latitude", "longitude"}
+    assert fact_types == {"latitude", "longitude", "spreadsheet_headers"}
     assert "decimalLatitude" not in fact_types
 
 
@@ -242,8 +242,8 @@ def test_parse_xlsx_table_one_result_per_sheet():
 
     results = parse_xlsx_table(buf.getvalue(), "t.xlsx")
     assert len(results) == 2
-    assert {f.fact_type_candidate for f in results[0].facts} == {"temp"}
-    assert {f.fact_type_candidate for f in results[1].facts} == {"salinity"}
+    assert {f.fact_type_candidate for f in results[0].facts} == {"temp", "spreadsheet_headers"}
+    assert {f.fact_type_candidate for f in results[1].facts} == {"salinity", "spreadsheet_headers"}
 
 
 def test_parse_xls_table_via_fake_xlrd_workbook(monkeypatch):
@@ -313,8 +313,8 @@ def test_parse_zip_supplement_parses_supported_inner_tables_only():
     results = parse_zip_supplement(buf.getvalue(), "supplement.zip", max_member_bytes=10_000)
     facts = [fact for result in results for fact in result.facts]
 
-    assert {fact.fact_type_candidate for fact in facts} == {"latitude", "longitude"}
-    assert all(fact.entity_external_id == "S1" for fact in facts)
+    assert {fact.fact_type_candidate for fact in facts} == {"latitude", "longitude", "spreadsheet_headers"}
+    assert all(fact.entity_external_id == "S1" for fact in facts if fact.fact_type_candidate != "spreadsheet_headers")
     assert facts[0].source_locator.startswith("supplement.supplement.zip!metadata/samples.csv!")
 
 

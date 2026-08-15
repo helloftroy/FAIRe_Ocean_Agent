@@ -18,11 +18,17 @@ concept genuinely has to be synthesized, not found.
 """
 from __future__ import annotations
 
+import re
 import xml.etree.ElementTree as ET
 
 from fair_ocean_agent.database.enums import EntityLevel, SupportType
 from fair_ocean_agent.llm.base import LLMBackend, LLMBackendError
 from fair_ocean_agent.sources.base import RawFactCandidate
+
+_ABSTRACT_HEADING_RE = re.compile(r"(?im)^\s*(?:abstract|summary)\s*$")
+_ABSTRACT_END_HEADING_RE = re.compile(
+    r"(?im)^\s*(?:keywords?|introduction|background|materials?\s+and\s+methods?|methods?|results?)\b"
+)
 
 
 def _abstract_from_jats(fulltext_xml: str | None) -> str | None:
@@ -39,6 +45,32 @@ def _abstract_from_jats(fulltext_xml: str | None) -> str | None:
     return text or None
 
 
+def _abstract_from_plain_text(text: str | None, *, max_chars: int = 4000) -> str | None:
+    """Best-effort abstract extraction from local PDF text.
+
+    PDF text has no durable article tree, but most journal PDFs expose an
+    "Abstract" or "Summary" heading. Keep the extraction bounded to the
+    text before the next major heading so abstract-only LLM fields do not
+    accidentally read the whole article.
+    """
+    if not text:
+        return None
+    match = _ABSTRACT_HEADING_RE.search(text)
+    if not match:
+        return None
+    start = match.end()
+    end_match = _ABSTRACT_END_HEADING_RE.search(text, start)
+    end = end_match.start() if end_match else min(len(text), start + max_chars)
+    abstract = " ".join(text[start:end].split())
+    if len(abstract) > max_chars:
+        abstract = abstract[:max_chars].rsplit(" ", 1)[0]
+    return abstract or None
+
+
+def _abstract_from_article_text(article_text: str | None) -> str | None:
+    return _abstract_from_jats(article_text) or _abstract_from_plain_text(article_text)
+
+
 def generate_study_factor(
     backend: LLMBackend,
     fulltext_xml: str | None,
@@ -46,7 +78,7 @@ def generate_study_factor(
     locator_prefix: str,
     max_output_tokens: int | None = 256,
 ) -> list[RawFactCandidate]:
-    abstract = _abstract_from_jats(fulltext_xml)
+    abstract = _abstract_from_article_text(fulltext_xml)
     if not abstract:
         return []
 
@@ -99,7 +131,7 @@ def generate_study_target_taxonomic_scope(
     locator_prefix: str,
     max_output_tokens: int | None = 256,
 ) -> list[RawFactCandidate]:
-    abstract = _abstract_from_jats(fulltext_xml)
+    abstract = _abstract_from_article_text(fulltext_xml)
     if not abstract:
         return []
 
@@ -183,13 +215,20 @@ is described but not deposited anywhere, no explicit description of negative/pos
 count, no reference database version, or similar gaps. This is your own assessment of likely gaps based on
 what's normally expected in this kind of methods section, not a quote from the text.
 
-Return a short pipe-delimited list of the specific gaps you notice (e.g. "no code repository provided | no
-replicate count reported"). If you don't notice any notable gaps, return an empty string.
+Before listing a gap, double-check the ENTIRE text above for it first (e.g. accession numbers and code/script
+links are often stated in a separate Data Availability paragraph near the end, not in the main Methods) --
+only list a gap you are highly confident is genuinely absent from the whole text, not just the section you
+read first.
+
+Return AT MOST THE 3-5 MOST IMPORTANT gaps, most significant first, as a short pipe-delimited list (e.g. "no
+code repository provided | no replicate count reported"). Do not pad the list with minor or speculative items
+just to reach 5 -- fewer, high-confidence items are better than more, uncertain ones. If you don't notice any
+notable gaps, return an empty string.
 
 Methods text:
 {combined}
 
-Return ONLY a JSON object: {{"information_withheld_llm_guess": "<pipe-delimited list of gaps, or empty>"}}
+Return ONLY a JSON object: {{"information_withheld_llm_guess": "<pipe-delimited list of at most 5 gaps, or empty>"}}
 """
     parsed, _response = backend.generate_json(
         prompt,
