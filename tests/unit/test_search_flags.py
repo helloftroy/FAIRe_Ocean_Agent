@@ -9,10 +9,7 @@ from fair_ocean_agent.extraction.search_flags import (
     detect_text_search_flags,
     quote_candidates_for_llm_judged_search,
 )
-from fair_ocean_agent.extraction.section_categories import (
-    derive_pcr_0_1_from_category_detection,
-    detect_section_categories_present,
-)
+from fair_ocean_agent.extraction.section_categories import derive_pcr_0_1_from_category_detection
 from fair_ocean_agent.llm.mock import MockLLMBackend
 
 
@@ -94,11 +91,9 @@ def test_confirm_value_described_as_depth_never_calls_llm_without_a_candidate_se
 
 
 def test_detect_text_search_flags_records_probe_flag_only_pcr_0_1_moved_to_category_detection():
-    """pcr_0_1 is no longer detect_text_search_flags's own concern -- see
-    derive_pcr_0_1_from_category_detection, which now derives it from
-    extraction/section_categories.py's pcr1_primary_amplification_0_1 /
-    targeted_qpcr_ddpcr_detection_0_1 detection instead (an explicit user
-    instruction to stop computing it via an independent regex scan)."""
+    """pcr_0_1 is not detect_text_search_flags's own concern -- see
+    extraction/section_categories.py::derive_pcr_0_1_from_category_detection,
+    its own independent PCR/qPCR/ddPCR-mention regex scan."""
     facts = detect_text_search_flags(
         (
             (
@@ -128,15 +123,11 @@ def test_pcr_0_1_derivation_matches_amplified_verb_forms_not_just_amplification(
     that describes explicit PCR content ("...was amplified using primers...
     in a 25 uL reaction volume with an annealing temperature of 57C for 35
     cycles...") but never uses the word "PCR" or the noun "amplification" --
-    only the verb "amplified". pcr_0_1 must still activate (now via
-    category detection, not its own regex), or every downstream
-    flag-gated PCR checklist field silently becomes unreachable for a
-    real paper phrased this way."""
+    only the verb "amplified". pcr_0_1 must still activate, or every
+    downstream flag-gated PCR checklist field silently becomes
+    unreachable for a real paper phrased this way."""
     texts = (("Methods", "The target region was amplified using primers X and Y."),)
-    section_category_facts = detect_section_categories_present(list(texts), locator_prefix="paper:PMC1")
-    assert "pcr1_primary_amplification_0_1" in {f.fact_type_candidate for f in section_category_facts}
-
-    pcr_0_1_fact = derive_pcr_0_1_from_category_detection(section_category_facts)
+    pcr_0_1_fact = derive_pcr_0_1_from_category_detection(list(texts))
     assert pcr_0_1_fact is not None
     assert pcr_0_1_fact.raw_value == "1"
 
@@ -819,7 +810,6 @@ def test_quote_candidates_split_semicolon_joined_enumerated_steps_into_separate_
     # the taxonomic-assignment one.
     assert "otu_clust_tool" in candidates[0].field_names
     assert "otu_clust_tool" not in candidates[1].field_names
-    assert "tax_assign_cat" in candidates[1].field_names
 
 
 def test_quote_candidates_keeps_et_al_citation_intact_in_one_snippet():
@@ -827,11 +817,11 @@ def test_quote_candidates_keeps_et_al_citation_intact_in_one_snippet():
     real bug found live while building primer-reference extraction, where
     a tool/primer name got permanently separated from its own citation."""
     text = (
-        "Taxonomy was assigned using the CREST classifier, as described by Lanzen et al. (2012). "
+        "Taxonomy was assigned using the SILVA reference database, as described by Lanzen et al. (2012). "
         "Chimeras were removed using UCHIME."
     )
     candidates = quote_candidates_for_llm_judged_search([("Bioinformatics", text)])
-    assert any("Lanzen et al. (2012)" in c.text and "CREST" in c.text for c in candidates)
+    assert any("Lanzen et al. (2012)" in c.text and "SILVA" in c.text for c in candidates)
 
 
 def test_quote_candidates_for_llm_judged_otu_clustering_search_is_targeted():
@@ -860,7 +850,7 @@ def test_quote_candidates_for_llm_judged_otu_db_search_is_targeted():
     )
 
     assert len(candidates) == 1
-    assert candidates[0].field_names == ("otu_db", "tax_assign_cat")
+    assert candidates[0].field_names == ("otu_db",)
 
 
 def test_quote_candidates_for_llm_judged_otu_db_search_includes_freshtrain():
@@ -890,25 +880,6 @@ def test_quote_candidates_for_llm_judged_otu_db_search_includes_ncbi_nr_database
 
     assert len(candidates) == 1
     assert "otu_db" in candidates[0].field_names
-    assert "tax_assign_cat" in candidates[0].field_names
-
-
-def test_quote_candidates_for_llm_judged_tax_assignment_requires_context():
-    candidates = quote_candidates_for_llm_judged_search(
-        (
-            (
-                "Software",
-                "The analysis used BLASTn and MegaBLAST in separate utility scripts.",
-            ),
-            (
-                "Bioinformatics",
-                "ASVs were classified taxonomically using BLASTn against GenBank with a 97% sequence identity threshold.",
-            ),
-        )
-    )
-
-    assert len(candidates) == 1
-    assert "tax_assign_cat" in candidates[0].field_names
 
 
 def test_quote_candidates_for_llm_judged_assay_name_search_is_targeted():
@@ -1570,45 +1541,6 @@ def test_detect_llm_judged_otu_db_keeps_ncbi_nr_database_value():
     assert by_type["otu_db"].raw_value == "nonredundant (nr) NCBI database"
 
 
-def test_detect_llm_judged_tax_assignment_fields_keep_best_values():
-    """tax_assign_cat is a controlled-enum classification (allowed_values):
-    a hallucinated full-sentence "value" must be rejected by
-    _valid_llm_judged_value even though a genuine quote does support it,
-    while the real enum classification for the very same quote survives."""
-    def respond(prompt: str) -> str:
-        assert "tax_assign_cat" in prompt
-        return json.dumps(
-            [
-                {
-                    "field": "tax_assign_cat",
-                    "raw_value": "ASVs were classified taxonomically using BLASTn against GenBank",
-                    "quote_id": "Q001",
-                },
-                {
-                    "field": "tax_assign_cat",
-                    "raw_value": "sequence similarity",
-                    "quote_id": "Q001",
-                },
-            ]
-        )
-
-    facts = detect_llm_judged_search_facts(
-        MockLLMBackend(label="judge", responses=respond),
-        (
-            (
-                "Bioinformatics",
-                "ASVs were classified taxonomically using BLASTn against GenBank with a 97% sequence identity threshold.",
-            ),
-        ),
-        locator_prefix="paper:PMC1",
-        exclude_field_names=frozenset(
-            {"chimera_check_method", "trim_method", "trim_param", "assay_target_taxa", "study_target_taxonomic_scope", "neg_cont_0_1", "pos_cont_0_1"}
-        ),
-    )
-
-    by_type = {fact.fact_type_candidate: fact for fact in facts}
-    assert by_type["tax_assign_cat"].raw_value == "sequence similarity"
-    assert by_type["tax_assign_cat"].support_type.value == "inferred"
 
 
 def test_detect_llm_judged_search_facts_rejects_bad_quote_ids_and_vocab_values():
@@ -1636,18 +1568,16 @@ def test_detect_llm_judged_search_facts_rejects_bad_quote_ids_and_vocab_values()
     assert facts == []
 
 
-def test_detect_llm_judged_search_facts_extracts_in_situ_temp_oxygen_salinity_verbatim():
+def test_detect_llm_judged_search_facts_extracts_in_situ_temp_salinity_verbatim():
     """Real audit (10.1093/ismejo/wrae013, STUDY-295abf4a8f43): "In situ
-    bottom water temperature (6.5C), dissolved O2 (11.9 mg L-1), and
-    salinity (6.4 PSU) were measured with a ProODO probe..." -- the first
-    text-based mechanism for these three fields (previously structured-
-    source-only)."""
+    bottom water temperature (6.5C) and salinity (6.4 PSU) were measured
+    with a ProODO probe..." -- a text-based mechanism for these fields
+    (previously structured-source-only)."""
     backend = MockLLMBackend(
         responses=[
             json.dumps(
                 [
                     {"field": "in_situ_temp", "raw_value": "6.5C", "quote_id": "Q001"},
-                    {"field": "in_situ_diss_oxygen", "raw_value": "11.9 mg L-1", "quote_id": "Q001"},
                     {"field": "in_situ_salinity", "raw_value": "6.4 PSU", "quote_id": "Q001"},
                 ]
             )
@@ -1669,7 +1599,6 @@ def test_detect_llm_judged_search_facts_extracts_in_situ_temp_oxygen_salinity_ve
 
     by_type = {fact.fact_type_candidate: fact for fact in facts}
     assert by_type["in_situ_temp"].raw_value == "6.5C"
-    assert by_type["in_situ_diss_oxygen"].raw_value == "11.9 mg L-1"
     assert by_type["in_situ_salinity"].raw_value == "6.4 PSU"
 
 
@@ -1691,7 +1620,7 @@ def test_quote_candidates_for_in_situ_measurements_exclude_later_incubation_read
     assert not any(
         field in candidate.field_names
         for candidate in candidates
-        for field in ("in_situ_temp", "in_situ_diss_oxygen", "in_situ_salinity")
+        for field in ("in_situ_temp", "in_situ_salinity")
     )
 
 

@@ -103,6 +103,97 @@ def test_maps_sample_level_structured_facts(db_session):
     assert created == len(values) + 3
 
 
+def test_normalized_sample_prep_fact_wins_over_sentence_fact(db_session):
+    study = _study(db_session, title="Normalized sample-prep mapping")
+    _fact(
+        db_session,
+        study,
+        field="nucl_acid_ext_lysis",
+        value="treated in an ultrasonic water bath",
+        entity_level=EntityLevel.STUDY.value,
+        support=SupportType.EXPLICIT,
+    )
+    _fact(
+        db_session,
+        study,
+        field="nucl_acid_ext_lysis_normalized",
+        value="sonication | treated in an ultrasonic water bath",
+        entity_level=EntityLevel.STUDY.value,
+        support=SupportType.EXPLICIT,
+    )
+    _fact(
+        db_session,
+        study,
+        field="nucl_acid_ext_sep",
+        value="DNA was purified by phenol-chloroform extraction",
+        entity_level=EntityLevel.STUDY.value,
+        support=SupportType.EXPLICIT,
+    )
+    _fact(
+        db_session,
+        study,
+        field="nucl_acid_ext_sep_normalized",
+        value="phenol-chloroform | DNA was purified by phenol-chloroform extraction",
+        entity_level=EntityLevel.STUDY.value,
+        support=SupportType.EXPLICIT,
+    )
+    _fact(
+        db_session,
+        study,
+        field="samp_collect_method",
+        value="Integrated water samples were collected from the upper 50 m",
+        entity_level=EntityLevel.STUDY.value,
+        support=SupportType.EXPLICIT,
+    )
+    _fact(
+        db_session,
+        study,
+        field="samp_collect_method_normalized",
+        value="integrated-depth sampling | Integrated water samples were collected from the upper 50 m",
+        entity_level=EntityLevel.STUDY.value,
+        support=SupportType.EXPLICIT,
+    )
+    _fact(
+        db_session,
+        study,
+        field="samp_mat_process",
+        value="Samples were filtered, freeze-dried, and ground before DNA extraction",
+        entity_level=EntityLevel.STUDY.value,
+        support=SupportType.EXPLICIT,
+    )
+    _fact(
+        db_session,
+        study,
+        field="samp_mat_process_normalized",
+        value="filtration | freeze-drying | grinding | Samples were filtered, freeze-dried, and ground before DNA extraction",
+        entity_level=EntityLevel.STUDY.value,
+        support=SupportType.EXPLICIT,
+    )
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    values = {
+        row.target_field: row
+        for row in db_session.query(StandardizedValue).filter_by(study_id=study.study_id)
+    }
+    assert values["nucl_acid_ext_lysis"].standardized_value == "sonication | treated in an ultrasonic water bath"
+    assert values["nucl_acid_ext_sep"].standardized_value == (
+        "phenol-chloroform | DNA was purified by phenol-chloroform extraction"
+    )
+    assert values["samp_collect_method"].standardized_value == (
+        "integrated-depth sampling | Integrated water samples were collected from the upper 50 m"
+    )
+    assert values["samp_mat_process"].standardized_value == (
+        "filtration | freeze-drying | grinding | Samples were filtered, freeze-dried, and ground before DNA extraction"
+    )
+    assert values["nucl_acid_ext_lysis"].review_required is True
+    assert values["nucl_acid_ext_sep"].review_required is True
+    assert values["samp_collect_method"].review_required is True
+    assert values["samp_mat_process"].review_required is True
+
+
 def test_maps_concentration_with_legacy_unit_fact_collapsed_into_value(db_session):
     study = _study(db_session, title="Concentration unit collapse")
     _fact(
@@ -318,8 +409,8 @@ def test_maps_structured_control_type_facts_to_project_control_flags(db_session)
 
 
 def test_maps_sample_level_biosample_attributes_not_previously_covered(db_session):
-    """elev/samp_collect_device/samp_size/samp_size_unit/temp/salinity/ph/
-    diss_oxygen all arrive through the exact same NCBI BioSample
+    """elev/samp_collect_device/samp_size/samp_size_unit/temp/salinity/ph
+    all arrive through the exact same NCBI BioSample
     Attributes/Attribute passthrough as collection_date/depth/geo_loc_name
     above (sources/ncbi.py) -- these rules just hadn't been added yet."""
     study = _study(db_session, title="More BioSample attributes")
@@ -333,7 +424,6 @@ def test_maps_sample_level_biosample_attributes_not_previously_covered(db_sessio
     _fact(db_session, study, entity=sample, field="temp", value="18.5", entity_level="sample")
     _fact(db_session, study, entity=sample, field="salinity", value="35", entity_level="sample")
     _fact(db_session, study, entity=sample, field="ph", value="8.1", entity_level="sample")
-    _fact(db_session, study, entity=sample, field="diss_oxygen", value="6.2", entity_level="sample")
     db_session.commit()
 
     map_study_to_faire(db_session, study.study_id)
@@ -350,19 +440,17 @@ def test_maps_sample_level_biosample_attributes_not_previously_covered(db_sessio
     assert values["temp"] == "18.5"
     assert values["salinity"] == "35"
     assert values["ph"] == "8.1"
-    assert values["diss_oxygen"] == "6.2"
 
 
-def test_maps_in_situ_temp_oxygen_salinity_to_sample_metadata_fields_at_study_level(db_session):
+def test_maps_in_situ_temp_salinity_to_sample_metadata_fields_at_study_level(db_session):
     """Real audit (10.1093/ismejo/wrae013, STUDY-295abf4a8f43): the paper's
-    own text reports temp/diss_oxygen/salinity measured at the time of
-    sample collection -- the first TEXT-based source for these fields
-    (previously structured-BioSample-only). STUDY-level since one
-    collection event's in-situ reading is typically reported once for the
-    whole site, not per sample."""
+    own text reports temperature/salinity measured at the time of sample
+    collection -- the first TEXT-based source for these fields (previously
+    structured-BioSample-only). STUDY-level since one collection event's
+    in-situ reading is typically reported once for the whole site, not per
+    sample."""
     study = _study(db_session, title="In-situ measurements from text")
     _fact(db_session, study, field="in_situ_temp", value="6.5C", entity_level="study", support=SupportType.EXPLICIT)
-    _fact(db_session, study, field="in_situ_diss_oxygen", value="11.9 mg L-1", entity_level="study", support=SupportType.EXPLICIT)
     _fact(db_session, study, field="in_situ_salinity", value="6.4 PSU", entity_level="study", support=SupportType.EXPLICIT)
     db_session.commit()
 
@@ -374,7 +462,6 @@ def test_maps_in_situ_temp_oxygen_salinity_to_sample_metadata_fields_at_study_le
         for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id, entity_id=None)
     }
     assert values["temp"] == "6.5C"
-    assert values["diss_oxygen"] == "11.9 mg L-1"
     assert values["salinity"] == "6.4 PSU"
 
 
@@ -390,7 +477,8 @@ def test_maps_in_situ_temp_oxygen_salinity_to_sample_metadata_fields_at_study_le
 # see extraction/api_verification.py.
 _DELIBERATELY_UNMAPPED_ENVIRONMENT_FIELDS = frozenset(
     {
-        "nitro", "org_carb", "org_nitro", "tot_nitro_cont_meth", "tot_nitro_content", "tot_org_c_meth",
+        "diss_oxygen", "nitro", "nitro_unit", "org_carb", "org_nitro",
+        "tot_inorg_nitro", "tot_nitro_cont_meth", "tot_nitro_content", "tot_org_c_meth",
         # Removed entirely per an explicit user request ("negligible...
         # don't want to waste compute on them or clutter the code with
         # them").
@@ -404,7 +492,7 @@ def test_every_faire_environment_field_has_a_sample_level_rule():
     the vendored schema (70 total) must be reachable *as a target_field* by
     some SAMPLE-level rule -- either an explicit rule above
     (minimumDepthInMeters/maximumDepthInMeters via "depth", elev/temp/
-    salinity/ph/diss_oxygen via their own name) or the generated
+    salinity/ph via their own name) or the generated
     _ADDITIONAL_ENVIRONMENTAL_SAMPLE_ATTRIBUTES batch, except the handful
     deliberately dropped entirely (_DELIBERATELY_UNMAPPED_ENVIRONMENT_
     FIELDS). Catches a future schema update silently adding a new

@@ -78,15 +78,7 @@ LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS = frozenset(
     {
         "informationWithheld",
         "dataGeneralizations",
-        "pcr_analysis_software",
-        "pcr_method_additional",
-        "pcr2_analysis_software",
-        "pcr2_method_additional",
-        "seq_method_additional",
         "woce_sect",
-        "block_seq",
-        "block_ref",
-        "block_taxa",
         "inhibition_check_0_1",
         "inhibition_check",
         "samp_collect_method",
@@ -125,11 +117,6 @@ LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS = frozenset(
         # otu_db is a targeted quote-judged field: it must avoid
         # classifier/software-only mentions.
         "otu_db",
-        # tax_assign_cat is a controlled-enum classification
-        # (search_flags.py's own LLMJudgedSearchField, allowed_values-
-        # constrained) -- the broad checklist's freeform prompt has no
-        # equivalent enum constraint.
-        "tax_assign_cat",
         # targetTaxonomicAssay/targetTaxonomicScope (native names
         # assay_target_taxa/study_target_taxonomic_scope) are targeted
         # quote-judged fields: an ordered, priority-ranked search-term list
@@ -267,10 +254,10 @@ FIELD_GROUPS: dict[str, tuple[FaireExtractionField, ...]] = {
         # rest of this group rather than a dedicated two-step-only flag,
         # since a one-step-PCR paper simply won't have any second-PCR text
         # for the model to (correctly) find nothing in.
-        # pcr2_analysis_software/pcr2_method_additional are deliberately
-        # excluded (see LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS above), matching
-        # the first PCR's own pcr_analysis_software/pcr_method_additional
-        # exclusion.
+        # pcr2_analysis_software and the first PCR's own
+        # pcr_analysis_software are deliberately excluded per an explicit
+        # user request; software/method details that matter for this
+        # pipeline are captured in the targeted method-specific fields.
         #
         # No example values below (unlike their first-PCR counterparts):
         # confirmed live against a real paper's second-PCR text (PeerJ
@@ -325,7 +312,6 @@ FIELD_GROUPS: dict[str, tuple[FaireExtractionField, ...]] = {
     "qPCR / standard curve": (
         FaireExtractionField("quantification_cycle_threshold", "the fluorescence threshold value used for Cq/Ct", "thresholdQuantificationCycle"),
         FaireExtractionField("quantification_cycle", "a reported quantification cycle (Cq/Ct) value", "quantificationCycle"),
-        FaireExtractionField("qpcr_standard_type", "type of qPCR standard used (e.g. gBlock, plasmid, synthetic gene fragment)", "std_type"),
         FaireExtractionField("qpcr_standard_concentration", "input quantity of the qPCR standard", "std_conc"),
         FaireExtractionField("qpcr_standard_concentration_unit", "unit for qpcr_standard_concentration", "std_conc_unit", "copies/uL"),
         FaireExtractionField("qpcr_standard_source", "source/supplier of the qPCR standard", "std_source"),
@@ -359,7 +345,6 @@ FIELD_GROUPS: dict[str, tuple[FaireExtractionField, ...]] = {
     "Bioinformatics workflow": (
         FaireExtractionField("clustering_tool", "software (with version) used for OTU/ASV clustering", "otu_clust_tool"),
         FaireExtractionField("reference_database", "reference database(s) used for taxonomic assignment, with version", "otu_db", "SILVA 138"),
-        FaireExtractionField("taxonomic_assignment_method", "taxonomic assignment approach (e.g. BLAST, naive Bayesian classifier)", "tax_assign_cat"),
         # bioinformatics_sop_reference (-> sop_bioinformatics) deliberately
         # removed: an explicit user instruction to never populate it at all
         # (exports/faire.py's PROJECT_METADATA_SUPPRESSED_FIELDS also drops

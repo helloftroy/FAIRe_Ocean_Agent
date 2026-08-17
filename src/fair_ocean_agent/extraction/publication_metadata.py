@@ -89,8 +89,11 @@ _CITATION_MARKER_RE = re.compile(r"\[__CITE:([^_\]]+)__\]")
 
 _FUNDING_TITLE_RE = re.compile(r"\b(?:funding|funding information|financial disclosure|grant support)\b", re.IGNORECASE)
 _FUNDING_TEXT_RE = re.compile(
-    r"\b(?:funded|funding|financial support|supported by|grant(?:s)?|award(?:s)?|"
-    r"fellowship|scholarship)\b",
+    r"\b(?:funded|funding|financial support|grant(?:s)?|award(?:s)?|"
+    r"fellowship|scholarship|start-?up\s+grant)\b"
+    r"|"
+    r"\bsupported by\b.{0,140}\b(?:foundation|fund|grant|award|council|ministry|agency|"
+    r"fellowship|scholarship|commission|program(?:me)?)\b",
     re.IGNORECASE,
 )
 _RIGHTS_TITLE_RE = re.compile(
@@ -100,6 +103,16 @@ _RIGHTS_TITLE_RE = re.compile(
 _ABSENT_FUNDING_RE = re.compile(
     r"^\s*(?:none|not found|no funding(?: source)?|no external funding|"
     r"no specific funding|not applicable|n/a)\s*\.?\s*$",
+    re.IGNORECASE,
+)
+_FUNDING_INSTITUTIONAL_UNIT_RE = re.compile(
+    r"\b(?:university|department|section|faculty|school|institute|centre|center|"
+    r"laborator(?:y|ies)|facility|facilities|infrastructure)\b",
+    re.IGNORECASE,
+)
+_FUNDING_KEEP_UNIT_RE = re.compile(
+    r"\b(?:foundation|fund|council|ministry|agency|commission|trust|society|association|"
+    r"fellowship|scholarship|award|grant|program(?:me)?)\b",
     re.IGNORECASE,
 )
 _PLAIN_HEADING_RE = re.compile(r"(?m)^\s*([A-Z][A-Za-z0-9 /&,\-()]{2,90})\s*$")
@@ -365,6 +378,16 @@ def _paragraphs_under(element: ET.Element) -> list[str]:
     return paragraphs or ([_element_text(element)] if _element_text(element) else [])
 
 
+def _direct_paragraphs_under(element: ET.Element) -> list[str]:
+    paragraphs = [_element_text(child) for child in list(element) if _local_name(child.tag) == "p"]
+    paragraphs = [paragraph for paragraph in paragraphs if paragraph]
+    return paragraphs or ([_element_text(element)] if _element_text(element) else [])
+
+
+def _funding_sentences(text: str) -> list[str]:
+    return [sentence for sentence in _sentences(text) if _FUNDING_TEXT_RE.search(sentence)]
+
+
 def _funding_paragraphs_from_jats(fulltext_xml: str | None) -> list[str]:
     if not fulltext_xml:
         return []
@@ -382,18 +405,17 @@ def _funding_paragraphs_from_jats(fulltext_xml: str | None) -> list[str]:
         title = _section_title(sec)
         sec_type = sec.get("sec-type", "")
         if _FUNDING_TITLE_RE.search(title) or _FUNDING_TITLE_RE.search(sec_type):
-            paragraphs.extend(_paragraphs_under(sec))
+            paragraphs.extend(_direct_paragraphs_under(sec))
 
     for fn in _iter_elements(root, "fn"):
         fn_type = fn.get("fn-type", "")
         text = _element_text(fn)
         if _FUNDING_TITLE_RE.search(fn_type) or _FUNDING_TITLE_RE.search(text[:160]):
-            paragraphs.extend(_paragraphs_under(fn))
+            paragraphs.extend(_direct_paragraphs_under(fn))
 
     for ack in _iter_elements(root, "ack"):
-        for paragraph in _paragraphs_under(ack):
-            if _FUNDING_TEXT_RE.search(paragraph):
-                paragraphs.append(paragraph)
+        for paragraph in _direct_paragraphs_under(ack):
+            paragraphs.extend(_funding_sentences(paragraph))
 
     unique: list[str] = []
     seen: set[str] = set()
@@ -442,10 +464,10 @@ def _funding_paragraphs_from_plain_text(text: str | None) -> list[str]:
             continue
         if _PLAIN_SECTION_END_TITLE_RE.search(title) and not _FUNDING_TITLE_RE.search(title):
             continue
-        paragraphs.extend(sentence for sentence in _sentences(body) if _FUNDING_TEXT_RE.search(sentence))
+        paragraphs.extend(_funding_sentences(body))
 
     if not paragraphs:
-        paragraphs = [sentence for sentence in _sentences(text) if _FUNDING_TEXT_RE.search(sentence)]
+        paragraphs = _funding_sentences(text)
 
     unique: list[str] = []
     seen: set[str] = set()
@@ -459,6 +481,10 @@ def _funding_paragraphs_from_plain_text(text: str | None) -> list[str]:
 
 
 def _normalize_funding_source_value(value: object) -> str:
+    return _filter_funding_source_value(value)
+
+
+def _filter_funding_source_value(value: object) -> str:
     if isinstance(value, list):
         pieces = [str(piece).strip() for piece in value]
     else:
@@ -469,6 +495,10 @@ def _normalize_funding_source_value(value: object) -> str:
     for piece in pieces:
         piece = piece.strip(" ;,.")
         if not piece or _ABSENT_FUNDING_RE.match(piece):
+            continue
+        if len(piece) <= 2 or not re.search(r"[A-Za-z]", piece):
+            continue
+        if _FUNDING_INSTITUTIONAL_UNIT_RE.search(piece) and not _FUNDING_KEEP_UNIT_RE.search(piece):
             continue
         key = piece.casefold()
         if key in seen:
@@ -641,11 +671,14 @@ def generate_funding_source(
 
     prompt = f"""Read the funding or financial-disclosure text below.
 
-Extract only the names of funding sources/funders: agencies, foundations, institutions, grant programs,
-consortia, or other organizations that financially supported the study. Do not include grant numbers, award
-numbers, author initials, ordinary conflict-of-interest statements, or "the funders had no role" boilerplate.
-Use the names as written when possible. If there is more than one funding source, join the names with " | ".
-If no funding source name is present, return an empty string.
+Extract only funding sources that financially supported the study: funding agencies, foundations, councils,
+ministries, named grant programs, named fellowships, named scholarships, or named awards. Do not include grant
+numbers, award numbers, author initials, ordinary conflict-of-interest statements, or "the funders had no role"
+boilerplate. Do not include universities, departments, sections, institutes, laboratories, facilities, centers,
+field stations, or consortia unless the text explicitly names them as a grant/fellowship/award/scholarship
+program. Do not include acknowledgements, collaborators, sequencing facilities, host institutions, affiliations,
+or partial/truncated fragments. Use the names as written when possible. If there is more than one funding source,
+join the names with " | ". If no funding source name is present, return an empty string.
 
 Funding text:
 {funding_text}
@@ -904,6 +937,108 @@ def extract_method_section_citations(xml: str, *, locator_prefix: str) -> list[R
 
 def extract_method_protocol_citations(xml: str, *, locator_prefix: str) -> list[RawFactCandidate]:
     return extract_method_section_citations(xml, locator_prefix=locator_prefix)
+
+
+# pcr_primer_name_forward/reverse -> pcr_primer_reference_forward/reverse:
+# when a primer's own sequence isn't given but the paper names it (e.g.
+# "515F") and cites where it came from, that citation is the paper's own
+# pointer to whoever DOES have the sequence -- per an explicit user
+# request to chase that reference (and, when the referenced paper itself
+# only cites further back, chase that too) so the sequence eventually
+# becomes known for every paper that reuses this same primer name, not
+# just this one. Reuses the exact same real citation-linking machinery as
+# extract_method_section_citations above (_text_with_citation_markers's
+# JATS <xref ref-type="bibr"> markers + _bibliography_resources' <ref-list>
+# DOI lookup) rather than a guessed parenthetical-citation-shape regex --
+# an exact, structured link to which reference the paper itself cites.
+_PRIMER_NAME_TO_REFERENCE_FIELD = {
+    "pcr_primer_name_forward": "pcr_primer_reference_forward",
+    "pcr_primer_name_reverse": "pcr_primer_reference_reverse",
+}
+
+
+def _first_primer_reference_fact(
+    root: ET.Element,
+    bibliography: dict[str, dict[str, str]],
+    primer_name: str,
+    reference_field: str,
+    locator_prefix: str,
+) -> RawFactCandidate | None:
+    name_pattern = re.compile(r"\b" + re.escape(primer_name) + r"\b", re.IGNORECASE)
+    for section, titles in _iter_leaf_sections(root):
+        if not _is_method_leaf(titles):
+            continue
+        for node in _paragraph_like_nodes(section):
+            marked_text = _text_with_citation_markers(node)
+            name_match = name_pattern.search(marked_text)
+            if name_match is None:
+                continue
+            # A real Methods paragraph routinely cites more than one thing
+            # (e.g. "Similar to Zhao et al. [28] ... primers of Uni519F/806r,
+            # as described in Zhao et al. [38]" -- confirmed live,
+            # 10.1038/s42003-024-06136-2/PMC11009272): the FIRST citation
+            # marker in the whole paragraph is not necessarily the one that
+            # actually attributes the primer. The nearest marker to the
+            # primer name's own position is the real one.
+            markers = list(_CITATION_MARKER_RE.finditer(marked_text))
+            if not markers:
+                continue
+            name_pos = name_match.start()
+            markers.sort(key=lambda m: abs(m.start() - name_pos))
+            clean_snippet = _clean_text(_CITATION_MARKER_RE.sub("", marked_text))
+            for marker in markers:
+                ref_id = marker.group(1)
+                resource = bibliography.get(ref_id)
+                if resource is None:
+                    continue
+                return RawFactCandidate(
+                    entity_level=EntityLevel.STUDY,
+                    fact_type_candidate=reference_field,
+                    raw_field_name=reference_field,
+                    raw_value=resource["resource"],
+                    source_locator=f"{locator_prefix}:primer_reference_citation:{reference_field}",
+                    support_type=SupportType.DETERMINISTICALLY_DERIVED,
+                    evidence_quote=clean_snippet,
+                    confidence_metadata={
+                        "detector": "primer_reference_citation",
+                        "primer_name": primer_name,
+                        "ref_id": ref_id,
+                        "citation_text": resource["citation_text"],
+                    },
+                )
+    return None
+
+
+def extract_primer_reference_citations(
+    xml: str, primer_names: dict[str, str], *, locator_prefix: str
+) -> list[RawFactCandidate]:
+    """`primer_names` maps {"pcr_primer_name_forward": <name found for this
+    paper, if any>, "pcr_primer_name_reverse": <...>} -- only names this
+    paper's own broad-checklist extraction actually found are searched
+    for, never guessed. Returns at most one pcr_primer_reference_forward
+    and one pcr_primer_reference_reverse fact (the first real citation
+    found sitting alongside that primer's own name in a Methods-like
+    paragraph)."""
+    if not primer_names:
+        return []
+    try:
+        root = ET.fromstring(xml)
+    except ET.ParseError:
+        return []
+
+    bibliography = _bibliography_resources(root)
+    if not bibliography:
+        return []
+
+    facts: list[RawFactCandidate] = []
+    for name_field, reference_field in _PRIMER_NAME_TO_REFERENCE_FIELD.items():
+        primer_name = (primer_names.get(name_field) or "").strip()
+        if not primer_name:
+            continue
+        fact = _first_primer_reference_fact(root, bibliography, primer_name, reference_field, locator_prefix)
+        if fact is not None:
+            facts.append(fact)
+    return facts
 
 
 def _crossref_authors_short(crossref_raw: dict) -> str:

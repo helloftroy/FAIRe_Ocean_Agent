@@ -394,7 +394,6 @@ def test_handler_reprocesses_fulltext_with_new_prompt_version_or_model(db_sessio
     new_model_facts = db_session.query(RawFact).filter_by(study_id=study.study_id, model_name="new-model").all()
     assert {fact.fact_type_candidate for fact in new_model_facts} == {
         "collection_date",
-        "tax_assign_cat",
         "assay_target_taxa",
         # neg_cont_0_1/pos_cont_0_1 now confidently default to "0" rather
         # than staying unresolved when no control/blank mention is found.

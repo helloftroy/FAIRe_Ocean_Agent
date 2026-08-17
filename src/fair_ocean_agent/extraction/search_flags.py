@@ -613,89 +613,109 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
             "downloaded on",
         ),
     ),
+    # otu_seq_comp_appr's only other mechanism was extraction/
+    # section_categories.py's CategoryTerm (taxonomic_assignment category,
+    # Stage 3) -- added here as a companion per an explicit user request,
+    # after a live 6-study audit found it's the one category-pipeline-
+    # exclusive term (outside sample_prep) with no fallback anywhere else,
+    # unlike its close sibling otu_db (also broad-checklist + this same
+    # mechanism). Same search_terms as that CategoryTerm.
     LLMJudgedSearchField(
-        term_name="tax_assign_cat",
+        term_name="otu_seq_comp_appr",
         section="Bioinformatics",
         description=(
-            "High-level computational approach used to assign taxonomy to sequences, OTUs, or ASVs. "
-            "This is a CLASSIFICATION into one of a fixed set of categories, not a quote -- the real "
-            "FAIRe field is a controlled enum, and a paper virtually never states the category name "
-            "itself (it names a tool like CREST4/BLAST/VSEARCH instead)."
+            "The software, algorithm, or sequence-comparison tool used to compare OTU/ASV/feature "
+            "sequences against reference sequences for taxonomic assignment, including version when "
+            "reported. This includes alignment, similarity-search, or taxonomic sequence-comparison "
+            "tools -- not software used only for OTU/ASV generation, read trimming, or assembly."
         ),
-        # allowed_values are the real tax_assign_cat_enum members
-        # (schemas/faire/enums.yaml), including the literal trailing colon
-        # on 'other:' that field expects.
-        allowed_values=("sequence similarity", "sequence composition", "phylogeny", "probabilistic", "other:"),
         output_instructions=(
-            "Classify the method used to assign taxonomy to OTUs/ASVs/features into one FAIRe category: "
-            "sequence similarity, sequence composition, phylogeny, probabilistic, or other. Base the "
-            "classification on the actual taxonomic-assignment algorithm or software, not on the reference "
-            "database. A method that compares query sequences directly with reference sequences based on "
-            "alignment or sequence identity is sequence similarity; a classifier based on sequence "
-            "composition or k-mer features is sequence composition; placement into a reference phylogeny "
-            "is phylogeny; explicitly probabilistic taxonomic inference is probabilistic. Return ONLY one "
-            "of: sequence similarity, sequence composition, phylogeny, probabilistic, other: <description> "
-            "-- never a quoted sentence."
+            "Return the tool/algorithm name and version, if given. Only return it when the text shows "
+            "it was used to assign or identify taxonomy, not for an unrelated sequence-comparison step."
         ),
         search_terms=(
-            "BLAST",
-            "BLASTn",
-            "MegaBLAST",
-            "megablast",
-            "VSEARCH",
-            "USEARCH",
-            "CREST",
-            "CREST4",
+            "sequences aligned using",
+            "sequence comparison performed using",
+            "alignment performed with",
+            "queries aligned against",
+            "reference sequences searched using",
+            "sequence similarity search performed with",
+            "alignment software",
+            "query sequences compared using",
+            "reference matching performed using",
+            "taxonomic alignment performed with",
             "taxonomic classification",
             "taxonomic assignment",
             "taxonomy assigned",
             "assigned taxonomy",
             "taxonomic identification",
             "classified taxonomically",
-            "global alignment",
-            "sequence similarity",
-            "naive Bayes",
-            "Naive Bayesian",
-            "naive Bayes classifier",
-            "QIIME 2 feature-classifier",
-            "classify-sklearn",
-            "q2-feature-classifier",
-            "RDP Classifier",
-            "Ribosomal Database Project classifier",
-            "SINTAX",
+            "sequences classified",
+            "OTUs classified",
+            "ASVs classified",
+            "representative sequences classified",
+            "compared against reference",
+            "compared with reference sequences",
+            "searched against",
+            "aligned against",
+            "matched against",
+            "sequence similarity search",
+            "best hit",
+            "reference database",
+            "reference sequences",
+            "BLAST",
+            "BLASTn",
+            "MegaBLAST",
+            "USEARCH",
+            "VSEARCH",
+            "CREST",
+            "CREST4",
             "Kraken",
             "Kraken2",
-            "CLARK",
-            "CLARK-S",
-            "SEPP",
-            "fragment-insertion",
-            "q2-fragment-insertion",
-            "EPA-ng",
-            "EPA",
-            "evolutionary placement",
-            "pplacer",
-            "PROTAX",
-            "TIPP",
-            "IDTAXA",
-            "DECIPHER IdTaxa",
-            "lowest common ancestor",
-            "LCA",
-            "nearest neighbor",
-            "nearest-neighbour",
-            "best hit",
-            "top hit",
-            "sequence identity",
-            "percent identity",
-            "percentage identity",
-            "k-mer",
-            "kmer",
-            "k-mer classifier",
-            "sequence composition",
-            "phylogenetic placement",
-            "phylogenetic assignment",
-            "reference tree",
-            "probabilistic taxonomic assignment",
-            "posterior probability",
+            "Kraken 2",
+        ),
+    ),
+    # screen_contam_method's only other mechanism was extraction/
+    # section_categories.py's CategoryTerm (otu_asv_generation_filtering
+    # category, Stage 3) -- added here as a companion per an explicit
+    # user request, since that whole category is being retired alongside
+    # every other non-sample_prep category, but the user separately
+    # confirmed this specific field ("this is in the bioinformatics
+    # pipeline, used to remove taxa found in control samples") must stay
+    # working. Same cues/definition as that CategoryTerm.
+    LLMJudgedSearchField(
+        term_name="screen_contam_method",
+        section="Bioinformatics",
+        description=(
+            "The method or rule used after sequencing to identify, flag, or remove sequences/OTUs/"
+            "ASVs/taxa considered contaminants. This may include comparison with negative controls, "
+            "prevalence- or frequency-based contaminant detection, removal of taxa enriched in blanks, "
+            "or use of dedicated contamination-screening software."
+        ),
+        output_instructions=(
+            "Include the software, threshold, or decision rule when stated."
+        ),
+        search_terms=(
+            "contaminants screened using",
+            "contaminant removal",
+            "contamination filtering",
+            "negative-control filtering",
+            "blank-based filtering",
+            "control-based contaminant removal",
+            "features detected in blanks",
+            "background contamination threshold",
+            "contaminant sequences removed",
+            "contamination screening method",
+            "contaminant",
+            "contamination",
+            "blank",
+            "negative control",
+            "extraction blank",
+            "PCR blank",
+            "decontam",
+            "prevalence",
+            "frequency",
+            "removed if present in controls",
         ),
     ),
     LLMJudgedSearchField(
@@ -787,18 +807,18 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
         search_terms=("control", "controls", "blank", "blanks"),
     ),
     # A real audit (10.1093/ismejo/wrae013, STUDY-295abf4a8f43) found rich
-    # in-situ temperature/dissolved-oxygen/salinity measurements in the
+    # in-situ temperature/salinity measurements in the
     # paper's own text -- "In situ bottom water temperature (6.5C),
     # dissolved O2 (11.9 mg/L), and salinity (6.4 PSU) were measured with
     # a ProODO probe..." -- that never made it into sampleMetadata at all,
-    # since temp/diss_oxygen/salinity previously only ever came from a
+    # since temp/salinity previously only ever came from a
     # structured BioSample attribute (mapping/rules.py's SAMPLE-level
-    # "temp"/"diss_oxygen"/"salinity" rules), never from text. The SAME
+    # "temp"/"salinity" rules), never from text. The SAME
     # real paper also separately reports post-collection INCUBATION-
     # chamber daily-average temperature/oxygen/salinity ("Throughout the
     # acclimation phase oxygen, temperature, and salinity were measured
     # daily inside the two incubation chambers...") -- a genuinely
-    # different concept FAIRe's temp/diss_oxygen/salinity fields don't
+    # different concept FAIRe's temp/salinity fields don't
     # want (per temp's own definition: "Temperature of the sample AT THE
     # TIME OF SAMPLING"), so _SAMPLING_TIME_CONTEXT_RE below requires an
     # explicit collection-time/in-situ signal, not just the bare
@@ -827,28 +847,6 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
         ),
     ),
     LLMJudgedSearchField(
-        term_name="in_situ_diss_oxygen",
-        section="Sample collection",
-        description=(
-            "The dissolved-oxygen concentration measured in situ, at the time and site of sample "
-            "collection -- not a later experimental, incubation, or laboratory-condition measurement."
-        ),
-        output_instructions=(
-            "Return the numeric dissolved-oxygen value with its unit, verbatim from the quote (e.g. "
-            "'11.9 mg/L'). Only accept a value explicitly described as measured in situ, at the time "
-            "of sampling/collection, or at the sampling site -- never a later incubation, acclimation, "
-            "or experimental-condition measurement. If multiple distinct in-situ values are "
-            "explicitly supported, return one object per value; final merged output is pipe-delimited."
-        ),
-        search_terms=(
-            "dissolved oxygen",
-            "dissolved O2",
-            "dissolved O 2",
-            "oxygen concentration",
-            "O2 concentration",
-        ),
-    ),
-    LLMJudgedSearchField(
         term_name="in_situ_salinity",
         section="Sample collection",
         description=(
@@ -871,7 +869,6 @@ SINGLE_BEST_LLM_JUDGED_FIELDS = frozenset(
         "inhibition_check_0_1",
         "inhibition_check",
         "otu_clust_tool",
-        "tax_assign_cat",
         "neg_cont_0_1",
         "pos_cont_0_1",
     }
@@ -2200,7 +2197,7 @@ def _match_controlled_field(
     return _match_controlled_terms(field, texts, locator_prefix)
 
 
-# Shared by in_situ_temp/in_situ_diss_oxygen/in_situ_salinity: their own
+# Shared by in_situ_temp/in_situ_salinity: their own
 # search terms ("temperature", "salinity", ...) are deliberately broad, so
 # this is the real gate that keeps a bare mention out -- confirmed live
 # against a real paper that reports the SAME three measurements twice,
@@ -2233,20 +2230,6 @@ _OTU_DB_CONTEXT_RE = re.compile(
     r"(?:custom|curated|in-house|local)\s+(?:reference\s+)?database|"
     r"(?:reference|sequence|barcode)\s+library|classifier\s+trained\s+on|"
     r"(?:trained|pretrained)\s+classifier"
-    r")\b",
-    re.IGNORECASE,
-)
-_TAX_ASSIGNMENT_CONTEXT_RE = re.compile(
-    r"\b(?:"
-    r"taxonomy|taxonomic|taxon(?:\s+assignment)?|taxonomic\s+assignment|"
-    r"assigned\s+taxonomy|taxonomy\s+was\s+assigned|assign\s+taxonomy|"
-    r"taxonomy\s+assignment|taxonomic\s+classification|classified\s+taxonomically|"
-    r"taxonomic\s+identification|identified\s+taxonomically|sequence\s+identification|"
-    r"species\s+identification|taxonomic\s+annotation|annotated\s+against|"
-    r"classified\s+against|matched\s+against\s+a\s+reference\s+database|"
-    r"(?:OTUs?|ASVs?)\s+were\s+(?:assigned|classified)|"
-    r"sequences\s+were\s+(?:classified|identified|assigned)|"
-    r"classified\s+sequences|reference\s+taxonomy|reference\s+database|classifier"
     r")\b",
     re.IGNORECASE,
 )
@@ -2310,14 +2293,12 @@ _TARGET_TAXONOMIC_SCOPE_CONTEXT_RE = re.compile(
 def _llm_judged_field_matches_snippet(field: LLMJudgedSearchField, snippet: str) -> bool:
     if not any(_term_pattern(term).search(snippet) for term in field.search_terms):
         return False
-    if field.term_name in ("in_situ_temp", "in_situ_diss_oxygen", "in_situ_salinity"):
+    if field.term_name in ("in_situ_temp", "in_situ_salinity"):
         return bool(_SAMPLING_TIME_CONTEXT_RE.search(snippet))
     if field.term_name == "otu_clust_tool":
         return bool(_OTU_CLUSTER_TOOL_CONTEXT_RE.search(snippet))
     if field.term_name == "otu_db":
         return bool(_OTU_DB_CONTEXT_RE.search(snippet))
-    if field.term_name == "tax_assign_cat":
-        return bool(_TAX_ASSIGNMENT_CONTEXT_RE.search(snippet))
     if field.term_name == "assay_name":
         return bool(_ASSAY_NAME_CONTEXT_RE.search(snippet))
     if field.term_name == "assay_target_taxa":
@@ -2406,6 +2387,24 @@ def _allowed_field_lookup() -> dict[str, LLMJudgedSearchField]:
     return {field.term_name: field for field in LLM_JUDGED_SEARCH_FIELDS}
 
 
+# adapter_forward/adapter_reverse's own verbatim-quote guard only checks
+# that the value literally appears somewhere in its cited quote -- a real
+# live bug (10.1093/ismejo/wrae013, "...targeting the adapter sequences
+# [ ];") passed that guard while returning the literal citation-bracket
+# placeholder "[ ]" as if it were a real adapter sequence, since "[ ]"
+# does appear verbatim in the quote. IUPAC nucleotide alphabet only
+# (ACGTU plus ambiguity codes), letters-only after stripping whitespace/
+# dashes (real reported sequences sometimes have either, e.g. a dash
+# joining a primer and its adapter overhang), at least 4 real bases so a
+# stray single letter can't pass either.
+_NUCLEOTIDE_SEQUENCE_RE = re.compile(r"^[ACGTURYSWKMBDHVN]{4,}$", re.IGNORECASE)
+
+
+def _looks_like_nucleotide_sequence(value: str) -> bool:
+    compact = re.sub(r"[\s-]", "", value)
+    return bool(_NUCLEOTIDE_SEQUENCE_RE.fullmatch(compact))
+
+
 def _valid_llm_judged_value(field: LLMJudgedSearchField, value: str) -> bool:
     stripped = value.strip()
     if not stripped:
@@ -2416,6 +2415,8 @@ def _valid_llm_judged_value(field: LLMJudgedSearchField, value: str) -> bool:
         return not _BARE_MARKER_GENE_TARGET_TAXA_RE.fullmatch(stripped)
     if field.term_name == "otu_db":
         return bool(_OTU_DB_VALUE_RE.search(stripped))
+    if field.term_name in ("adapter_forward", "adapter_reverse"):
+        return _looks_like_nucleotide_sequence(stripped)
     if not field.allowed_values:
         return True
     parts = [part.strip() for part in stripped.split("|")]
@@ -2493,7 +2494,6 @@ _VERBATIM_REQUIRED_FIELDS = frozenset(
     {
         "informationWithheld",
         "in_situ_temp",
-        "in_situ_diss_oxygen",
         "in_situ_salinity",
     }
 )
@@ -2574,12 +2574,7 @@ def _facts_from_llm_judgement(
                 raw_field_name=field_name,
                 raw_value=" | ".join(entry["raw_value"] for entry in entries),
                 source_locator=f"{locator_prefix}:llm_judged_search:{field_name}",
-                # tax_assign_cat is the one field in this mechanism that's
-                # a genuine classification, not a quote -- honestly tagged
-                # INFERRED rather than EXPLICIT, per an explicit user
-                # confirmation that the category label itself is never
-                # actually stated in the source text.
-                support_type=SupportType.INFERRED if field_name == "tax_assign_cat" else SupportType.EXPLICIT,
+                support_type=SupportType.EXPLICIT,
                 evidence_quote=" | ".join(group["quotes"]),
                 confidence_metadata={
                     "detector": "llm_judged_quote_search",
@@ -2849,7 +2844,6 @@ def detect_llm_judged_search_facts(
         facts.extend(
             _not_found_fallback_facts(
                 field_names=(
-                    "tax_assign_cat",
                     "assay_target_taxa",
                 ),
                 candidates=candidates,
@@ -2891,7 +2885,6 @@ def detect_llm_judged_search_facts(
     existing_fact_types = frozenset(fact.fact_type_candidate for fact in facts)
     not_found_fallbacks = _not_found_fallback_facts(
         field_names=(
-            "tax_assign_cat",
             "assay_target_taxa",
         ),
         candidates=candidates,

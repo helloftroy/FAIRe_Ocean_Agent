@@ -36,11 +36,6 @@
       "evidence_quote": "using the Silva release 132 reference database"
     },
     {
-      "fact_type_candidate": "taxonomic_assignment_method",
-      "raw_value": "BLASTn+",
-      "evidence_quote": "taxonomically assigned by BLASTn"
-    },
-    {
       "fact_type_candidate": "adapter_trimming_method",
       "raw_value": "q25 trimming of the ends",
       "evidence_quote": "Prokaryotic 16S rRNA paired-end reads were merged using USEARCH ( Edgar and Flyvbjerg, 2015 ) after q25 trimming of the ends."

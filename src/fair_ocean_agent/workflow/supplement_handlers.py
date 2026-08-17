@@ -72,7 +72,10 @@ from fair_ocean_agent.extraction.section_categories import (
     derive_pcr_0_1_from_category_detection,
     detect_section_categories_present,
 )
-from fair_ocean_agent.extraction.section_category_extraction import extract_section_category_facts
+from fair_ocean_agent.extraction.section_category_extraction import (
+    extract_pulled_env_var_facts,
+    extract_section_category_facts,
+)
 from fair_ocean_agent.extraction.text import (
     PROMPT_VERSION,
     extract_facts_from_section,
@@ -653,7 +656,7 @@ def handle_extract_supplement_text_facts(session: Session, task: Task) -> None:
         )
         flag_facts = detect_text_search_flags(prepared_texts, locator_prefix=locator_prefix)
         flag_facts = [*flag_facts, *detect_phix_percentage_facts(prepared_texts, locator_prefix=locator_prefix)]
-        pcr_0_1_fact = derive_pcr_0_1_from_category_detection(section_category_facts)
+        pcr_0_1_fact = derive_pcr_0_1_from_category_detection(list(prepared_texts))
         if pcr_0_1_fact is not None:
             flag_facts = [*flag_facts, pcr_0_1_fact]
         active_flags = frozenset(fact.fact_type_candidate for fact in flag_facts)
@@ -737,6 +740,20 @@ def handle_extract_supplement_text_facts(session: Session, task: Task) -> None:
             source,
             section_category_term_facts,
             extraction_method="supplement_section_category_term_extraction",
+            model_name=backend.label,
+            prompt_version=PROMPT_VERSION,
+        )
+        # Second pass over x_env_var_block's own quotes only -- same
+        # mechanism as workflow/handlers.py's own call site.
+        pulled_env_var_facts = extract_pulled_env_var_facts(
+            backend, section_category_term_facts, locator_prefix=locator_prefix
+        )
+        _persist_supplement_facts(
+            session,
+            study,
+            source,
+            pulled_env_var_facts,
+            extraction_method="supplement_x_pulled_env_var_refinement",
             model_name=backend.label,
             prompt_version=PROMPT_VERSION,
         )

@@ -60,6 +60,7 @@ from fair_ocean_agent.extraction.publication_metadata import sync_recorded_by_fr
 from fair_ocean_agent.extraction.taxonomic_assay import sync_assay_target_taxa_from_biosample_organisms
 from fair_ocean_agent.identity.sample_alias_reconciliation import reconcile_sample_aliases
 from fair_ocean_agent.mapping import vocabularies
+from fair_ocean_agent.mapping.primer_library import resolve_primer_sequences_from_corpus
 from fair_ocean_agent.mapping.rules import MappingRule, rules_for
 
 TARGET_SCHEMA = "faire"
@@ -161,13 +162,21 @@ _PIPE_UNION_TARGET_FIELDS = frozenset(
 _PIPE_UNION_REVIEW_ON_MULTIPLE_FIELDS = frozenset({"platform", "instrument"})
 _API_SUPPORT_TYPES = frozenset({SupportType.STRUCTURED_SOURCE.value, SupportType.DETERMINISTICALLY_DERIVED.value})
 _NOT_FOUND_VALUE = "not found"
+_NORMALIZED_FACT_SOURCE_FIELDS = {
+    "nucl_acid_ext_lysis_normalized": "nucl_acid_ext_lysis",
+    "nucl_acid_ext_sep_normalized": "nucl_acid_ext_sep",
+    "prep_method_additional_normalized": "prep_method_additional",
+    "nucl_acid_ext_method_additional_normalized": "nucl_acid_ext_method_additional",
+    "samp_collect_device_normalized": "samp_collect_device",
+    "samp_collect_method_normalized": "samp_collect_method",
+    "samp_mat_process_normalized": "samp_mat_process",
+}
 _COLLAPSED_SAMPLE_UNIT_FIELDS = {
     "concentration": "concentration_unit",
     "diss_inorg_carb": "diss_inorg_carb_unit",
     "diss_inorg_nitro": "diss_inorg_nitro_unit",
     "diss_org_carb": "diss_org_carb_unit",
     "diss_org_nitro": "diss_org_nitro_unit",
-    "diss_oxygen": "diss_oxygen_unit",
     "nitrate": "nitrate_unit",
     "nitrite": "nitrite_unit",
     "org_matter": "org_matter_unit",
@@ -175,7 +184,6 @@ _COLLAPSED_SAMPLE_UNIT_FIELDS = {
     "part_org_nitro": "part_org_nitro_unit",
     "tot_carb": "tot_carb_unit",
     "tot_diss_nitro": "tot_diss_nitro_unit",
-    "tot_inorg_nitro": "tot_inorg_nitro_unit",
     "tot_nitro": "tot_nitro_unit",
     "tot_org_carb": "tot_org_carb_unit",
     "tot_part_carb": "tot_part_carb_unit",
@@ -896,6 +904,7 @@ def map_study_to_faire(session: Session, study_id: str) -> int:
     to call again after new raw_facts arrive or after a rules.py change."""
     materialize_legacy_experiment_runs(session, study_id)
     reconcile_sample_aliases(session, study_id)
+    resolve_primer_sequences_from_corpus(session, study_id)
     sync_assay_target_taxa_from_biosample_organisms(session, study_id)
     sync_recorded_by_from_biosample_or_first_author(session, study_id)
     _sync_checklist_version(session, study_id)
@@ -921,6 +930,13 @@ def map_study_to_faire(session: Session, study_id: str) -> int:
             .order_by(RawFact.created_at)
         )
     )
+    normalized_source_fields = {
+        _NORMALIZED_FACT_SOURCE_FIELDS[fact.fact_type_candidate]
+        for fact in facts
+        if fact.fact_type_candidate in _NORMALIZED_FACT_SOURCE_FIELDS
+        and fact.raw_value is not None
+        and fact.review_status != ReviewStatus.REJECTED.value
+    }
     collapsed_unit_lookup = _collapsed_unit_lookup(facts)
     created = 0
     seen: dict[tuple[str, str, str | None], StandardizedValue] = {}
@@ -928,6 +944,8 @@ def map_study_to_faire(session: Session, study_id: str) -> int:
 
     for fact in facts:
         if fact.fact_type_candidate is None or fact.raw_value is None:
+            continue
+        if fact.fact_type_candidate in normalized_source_fields:
             continue
         if fact.fact_type_candidate in routed_facts_by_field:
             continue  # handled by _apply_sample_type_routed_facts below instead

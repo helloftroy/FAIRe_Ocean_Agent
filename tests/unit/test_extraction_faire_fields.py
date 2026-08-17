@@ -314,15 +314,7 @@ def test_low_value_optional_fields_are_excluded_from_llm_only():
         {
             "informationWithheld",
             "dataGeneralizations",
-            "pcr_analysis_software",
-            "pcr_method_additional",
-            "pcr2_analysis_software",
-            "pcr2_method_additional",
-            "seq_method_additional",
             "woce_sect",
-            "block_seq",
-            "block_ref",
-            "block_taxa",
             "inhibition_check_0_1",
             "inhibition_check",
             "samp_collect_method",
@@ -336,7 +328,6 @@ def test_low_value_optional_fields_are_excluded_from_llm_only():
             "adapter_reverse",
             "otu_clust_tool",
             "otu_db",
-            "tax_assign_cat",
             "targetTaxonomicAssay",
             "targetTaxonomicScope",
         }

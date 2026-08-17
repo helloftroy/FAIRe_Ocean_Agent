@@ -610,7 +610,11 @@ def test_export_refuses_ambiguous_library_to_run_relationship(db_session, tmp_pa
 
 
 def test_export_faire_column_order_matches_classes_yaml(db_session, tmp_path):
-    from fair_ocean_agent.exports.faire import CUSTOM_ENV_VAR_BLOCK_FIELD, SAMPLE_METADATA_SUPPRESSED_FIELDS
+    from fair_ocean_agent.exports.faire import (
+        CUSTOM_ENV_VAR_BLOCK_FIELD,
+        CUSTOM_PULLED_ENV_VAR_FIELD,
+        SAMPLE_METADATA_SUPPRESSED_FIELDS,
+    )
 
     export_faire(db_session, tmp_path)
     with (tmp_path / "sampleMetadata.csv").open() as f:
@@ -619,13 +623,17 @@ def test_export_faire_column_order_matches_classes_yaml(db_session, tmp_path):
     # traceability columns, prepended ahead of the real FAIRe columns --
     # neither is itself part of classes.yaml. Columns still follow
     # classes.yaml's own order, just with the suppressed ones dropped out.
-    # x_env_var_block (also not in classes.yaml -- a custom, non-schema
-    # column) is appended at the very end.
+    # x_env_var_block/x_pulled_env_var (also not in classes.yaml -- custom,
+    # non-schema columns) are appended at the very end.
     expected_columns = [
         field for field in class_columns("sampleMetadata") if field not in SAMPLE_METADATA_SUPPRESSED_FIELDS
     ]
     assert header == [
-        INTERNAL_STUDY_ID_FIELD, INTERNAL_ALIAS_SAMPLE_IDS_FIELD, *expected_columns, CUSTOM_ENV_VAR_BLOCK_FIELD,
+        INTERNAL_STUDY_ID_FIELD,
+        INTERNAL_ALIAS_SAMPLE_IDS_FIELD,
+        *expected_columns,
+        CUSTOM_ENV_VAR_BLOCK_FIELD,
+        CUSTOM_PULLED_ENV_VAR_FIELD,
     ]
     assert not {
         "verbatimCoordinateSystem",
@@ -853,8 +861,8 @@ def test_project_metadata_section_detection_columns_default_zero_and_flip_to_one
     db_session.add(ExternalIdentifier(study_id=study.study_id, identifier_type=IdentifierType.BIOPROJECT_ACCESSION.value, identifier_value="PRJNA9"))
     db_session.add(
         RawFact(
-            study_id=study.study_id, entity_id=None, raw_field_name="pcr1_primary_amplification_0_1",
-            raw_value="1", fact_type_candidate="pcr1_primary_amplification_0_1", entity_level="study",
+            study_id=study.study_id, entity_id=None, raw_field_name="sample_prep_0_1",
+            raw_value="1", fact_type_candidate="sample_prep_0_1", entity_level="study",
             support_type=SupportType.DETERMINISTICALLY_DERIVED.value,
         )
     )
@@ -866,9 +874,9 @@ def test_project_metadata_section_detection_columns_default_zero_and_flip_to_one
         rows = list(csv.DictReader(f))
     assert len(rows) == 1
     row = rows[0]
-    assert row["pcr1_primary_amplification_0_1"] == "1"
+    assert row["sample_prep_0_1"] == "1"
     for field in INTERNAL_SECTION_DETECTION_FIELDS:
-        if field != "pcr1_primary_amplification_0_1":
+        if field != "sample_prep_0_1":
             assert row[field] == "0"
 
     with (tmp_path / "field_reference.csv").open() as f:
@@ -877,21 +885,20 @@ def test_project_metadata_section_detection_columns_default_zero_and_flip_to_one
         assert field not in field_names
 
 
-def test_project_metadata_primer_traceability_columns_default_zero_and_flip_to_one(db_session, tmp_path):
-    """Internal-only diagnostic columns, per an explicit user request to
-    flag a primer whose name was found but whose sequence AND reference/DOI
-    could not be pinned down, as a future targeted-supplement-crawl
-    candidate -- never a real FAIRe checklist term, same precedent as
-    INTERNAL_SECTION_DETECTION_FIELDS."""
-    study = Study(title="Primer traceability export test")
+def test_primer_traceability_flags_when_name_known_but_sequence_unknown_anywhere(db_session, tmp_path):
+    """A primer whose name is known but whose sequence isn't known either
+    from this paper's own extraction OR from any other paper in the corpus
+    (mapping/primer_library.py) is flagged unresolved -- per an explicit
+    user request to track these as future reference-crawl candidates."""
+    study = Study(title="Primer traceability, still unresolved")
     db_session.add(study)
     db_session.flush()
-    db_session.add(ExternalIdentifier(study_id=study.study_id, identifier_type=IdentifierType.BIOPROJECT_ACCESSION.value, identifier_value="PRJNA10"))
+    db_session.add(ExternalIdentifier(study_id=study.study_id, identifier_type=IdentifierType.BIOPROJECT_ACCESSION.value, identifier_value="PRJNA_PRIMER1"))
     db_session.add(
         RawFact(
-            study_id=study.study_id, entity_id=None, raw_field_name="primer_forward_source_unresolved",
-            raw_value="1", fact_type_candidate="primer_forward_source_unresolved", entity_level="study",
-            support_type=SupportType.DETERMINISTICALLY_DERIVED.value,
+            study_id=study.study_id, entity_id=None, raw_field_name="pcr_primer_name_forward",
+            raw_value="515F", fact_type_candidate="pcr_primer_name_forward", entity_level="study",
+            support_type=SupportType.EXPLICIT.value,
         )
     )
     db_session.commit()
@@ -901,14 +908,90 @@ def test_project_metadata_primer_traceability_columns_default_zero_and_flip_to_o
     with (tmp_path / "projectMetadata.csv").open() as f:
         rows = list(csv.DictReader(f))
     assert len(rows) == 1
-    row = rows[0]
-    assert row["primer_forward_source_unresolved"] == "1"
-    assert row["primer_reverse_source_unresolved"] == "0"
+    assert rows[0]["primer_forward_source_unresolved"] == "1"
+    assert rows[0]["primer_reverse_source_unresolved"] == "0"
+
+
+def test_primer_traceability_clears_once_this_paper_has_its_own_sequence(db_session, tmp_path):
+    study = Study(title="Primer traceability, resolved by this paper")
+    db_session.add(study)
+    db_session.flush()
+    db_session.add(ExternalIdentifier(study_id=study.study_id, identifier_type=IdentifierType.BIOPROJECT_ACCESSION.value, identifier_value="PRJNA_PRIMER2"))
+    db_session.add(
+        RawFact(
+            study_id=study.study_id, entity_id=None, raw_field_name="pcr_primer_name_forward",
+            raw_value="515F", fact_type_candidate="pcr_primer_name_forward", entity_level="study",
+            support_type=SupportType.EXPLICIT.value,
+        )
+    )
+    db_session.add(
+        RawFact(
+            study_id=study.study_id, entity_id=None, raw_field_name="pcr_primer_forward",
+            raw_value="GTGYCAGCMGCCGCGGTAA", fact_type_candidate="pcr_primer_forward", entity_level="study",
+            support_type=SupportType.EXPLICIT.value,
+        )
+    )
+    db_session.commit()
+
+    export_faire(db_session, tmp_path)
+
+    with (tmp_path / "projectMetadata.csv").open() as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["primer_forward_source_unresolved"] == "0"
 
     with (tmp_path / "field_reference.csv").open() as f:
         field_names = {r["faire_field"] for r in csv.DictReader(f)}
     for field in INTERNAL_PRIMER_TRACEABILITY_FIELDS:
         assert field not in field_names
+
+
+def test_primer_traceability_clears_via_corpus_lookup_from_a_different_study(db_session, tmp_path):
+    """mapping/faire.py's map_study_to_faire calls resolve_primer_
+    sequences_from_corpus as a pre-mapping step, so by export time a study
+    that only names a primer should already have inherited the sequence
+    from a different study that also names it, if one exists."""
+    source_study = Study(title="Paper that gives the real sequence")
+    db_session.add(source_study)
+    db_session.flush()
+    db_session.add(ExternalIdentifier(study_id=source_study.study_id, identifier_type=IdentifierType.BIOPROJECT_ACCESSION.value, identifier_value="PRJNA_PRIMER3"))
+    db_session.add(
+        RawFact(
+            study_id=source_study.study_id, entity_id=None, raw_field_name="pcr_primer_name_forward",
+            raw_value="515F", fact_type_candidate="pcr_primer_name_forward", entity_level="study",
+            support_type=SupportType.EXPLICIT.value,
+        )
+    )
+    db_session.add(
+        RawFact(
+            study_id=source_study.study_id, entity_id=None, raw_field_name="pcr_primer_forward",
+            raw_value="GTGYCAGCMGCCGCGGTAA", fact_type_candidate="pcr_primer_forward", entity_level="study",
+            support_type=SupportType.EXPLICIT.value,
+        )
+    )
+
+    needs_it_study = Study(title="Paper that only names the primer")
+    db_session.add(needs_it_study)
+    db_session.flush()
+    db_session.add(ExternalIdentifier(study_id=needs_it_study.study_id, identifier_type=IdentifierType.BIOPROJECT_ACCESSION.value, identifier_value="PRJNA_PRIMER4"))
+    db_session.add(
+        RawFact(
+            study_id=needs_it_study.study_id, entity_id=None, raw_field_name="pcr_primer_name_forward",
+            raw_value="515F", fact_type_candidate="pcr_primer_name_forward", entity_level="study",
+            support_type=SupportType.EXPLICIT.value,
+        )
+    )
+    db_session.commit()
+    map_study_to_faire(db_session, source_study.study_id)
+    map_study_to_faire(db_session, needs_it_study.study_id)
+    db_session.commit()
+
+    export_faire(db_session, tmp_path)
+
+    with (tmp_path / "projectMetadata.csv").open() as f:
+        rows = {r[INTERNAL_STUDY_ID_FIELD]: r for r in csv.DictReader(f)}
+    needs_it_row = rows[needs_it_study.study_id]
+    assert needs_it_row["primer_forward_source_unresolved"] == "0"
+    assert needs_it_row["pcr_primer_forward"] == "GTGYCAGCMGCCGCGGTAA"
 
 
 def test_project_metadata_information_withheld_llm_guess_column(db_session, tmp_path):
@@ -1116,15 +1199,13 @@ def test_checkls_ver_always_synced_as_the_pipelines_own_schema_version(db_sessio
     assert rows[0]["checkls_ver"] == "1.0.2"
 
 
-def test_in_situ_temp_oxygen_salinity_broadcast_into_every_sample_row(db_session, tmp_path):
+def test_in_situ_temp_salinity_export_suppresses_removed_env_columns(db_session, tmp_path):
     """Real audit (10.1093/ismejo/wrae013, STUDY-295abf4a8f43): a single
     STUDY-level in-situ reading (one collection event/site) must appear on
     every sample's own sampleMetadata row, exactly like other STUDY-level
-    broadcast defaults. Only checks diss_oxygen -- temp/salinity's own
-    mapping still runs identically (in_situ_temp/in_situ_salinity still
-    map through to temp/salinity StandardizedValue rows), but those two
-    columns are now suppressed from export entirely, replaced by
-    x_env_var_block, per an explicit user request."""
+    broadcast defaults. These legacy standalone environmental columns are
+    now suppressed from export entirely, replaced by x_env_var_block, per
+    explicit user requests."""
     study = Study(title="In-situ broadcast test")
     db_session.add(study)
     db_session.flush()
@@ -1141,12 +1222,6 @@ def test_in_situ_temp_oxygen_salinity_broadcast_into_every_sample_row(db_session
     )
     db_session.add(
         RawFact(
-            study_id=study.study_id, entity_id=None, raw_field_name="in_situ_diss_oxygen", raw_value="11.9 mg L-1",
-            fact_type_candidate="in_situ_diss_oxygen", entity_level="study", support_type=SupportType.EXPLICIT.value,
-        )
-    )
-    db_session.add(
-        RawFact(
             study_id=study.study_id, entity_id=None, raw_field_name="in_situ_salinity", raw_value="6.4 PSU",
             fact_type_candidate="in_situ_salinity", entity_level="study", support_type=SupportType.EXPLICIT.value,
         )
@@ -1159,10 +1234,50 @@ def test_in_situ_temp_oxygen_salinity_broadcast_into_every_sample_row(db_session
 
     with (tmp_path / "sampleMetadata.csv").open() as f:
         rows = {row["samp_name"]: row for row in csv.DictReader(f)}
-    assert rows["SAMN1"]["diss_oxygen"] == "11.9 mg L-1"
-    assert rows["SAMN2"]["diss_oxygen"] == "11.9 mg L-1"
     assert "temp" not in rows["SAMN1"]
     assert "salinity" not in rows["SAMN1"]
+    assert "diss_oxygen" not in rows["SAMN1"]
+    assert "nitro_unit" not in rows["SAMN1"]
+    assert "tot_inorg_nitro" not in rows["SAMN1"]
+
+
+def test_x_pulled_env_var_broadcasts_into_every_sample_row_alongside_x_env_var_block(db_session, tmp_path):
+    """x_pulled_env_var is a dedicated second pass over x_env_var_block's
+    own quotes (extraction/section_category_extraction.py::
+    extract_pulled_env_var_facts) -- per an explicit user request, it must
+    land in its own separate column, broadcast to every sample row the
+    same STUDY-level way x_env_var_block already does, without replacing
+    or altering x_env_var_block itself."""
+    study = Study(title="x_pulled_env_var export test")
+    db_session.add(study)
+    db_session.flush()
+    sample = Entity(study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN_ENV")
+    db_session.add(sample)
+    db_session.flush()
+    db_session.add(_home_entity_study(sample))
+    db_session.add(
+        RawFact(
+            study_id=study.study_id, entity_id=None, raw_field_name="x_env_var_block", raw_value="raw broadcast text",
+            fact_type_candidate="x_env_var_block", entity_level="study", support_type=SupportType.EXPLICIT.value,
+        )
+    )
+    db_session.add(
+        RawFact(
+            study_id=study.study_id, entity_id=None, raw_field_name="x_pulled_env_var",
+            raw_value="temperature = 6.5°C | salinity = 6.4 PSU",
+            fact_type_candidate="x_pulled_env_var", entity_level="study", support_type=SupportType.EXPLICIT.value,
+        )
+    )
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+    export_faire(db_session, tmp_path)
+
+    with (tmp_path / "sampleMetadata.csv").open() as f:
+        rows = {row["samp_name"]: row for row in csv.DictReader(f)}
+    assert rows["SAMN_ENV"]["x_env_var_block"] == "raw broadcast text"
+    assert rows["SAMN_ENV"]["x_pulled_env_var"] == "temperature = 6.5°C | salinity = 6.4 PSU"
 
 
 def test_api_paper_corrections_csv_includes_paper_reference_and_correction_details(db_session, tmp_path):

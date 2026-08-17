@@ -13,8 +13,7 @@ and count) for a caller to log/inventory, never turned into facts.
 
 Column-header aliases target this pipeline's own existing native names
 that already have `mapping/rules.py` SAMPLE-level coverage (collection_date,
-depth, lat_lon, temp, salinity, ph, diss_oxygen, samp_collect_device,
-samp_size, ...) -- a recognized column slots a supplement-derived fact into
+depth, lat_lon, temp, salinity, ph, samp_collect_device, samp_size, ...) -- a recognized column slots a supplement-derived fact into
 the exact same downstream mapping path as any other structured source,
 with no new mapping rules required for the common case.
 """
@@ -59,7 +58,6 @@ SUPPLEMENT_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     "temp": ("temp", "temperature", "water_temp", "water_temperature", "temp_c", "temperature (c)", "temperature (°c)"),
     "salinity": ("salinity", "sal", "salinity_psu", "salinity (psu)"),
     "ph": ("ph", "ph_value"),
-    "diss_oxygen": ("diss_oxygen", "dissolved_oxygen", "do", "do_mg_l", "dissolved oxygen"),
     "chlorophyll": ("chlorophyll", "chl", "chl_a", "chlorophyll_a"),
     "env_broad_scale": ("env_broad_scale", "biome"),
     "env_local_scale": ("env_local_scale", "environmental_feature"),

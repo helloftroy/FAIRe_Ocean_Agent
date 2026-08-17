@@ -124,6 +124,15 @@ class DiscoveryConfig(BaseModel):
     # in this domain) exploding a discovery batch. The rest are recorded as
     # review-flagged RawFacts, never silently dropped.
     max_citing_papers_per_bioproject: int = 25
+    # Caps how many hops workflow/handlers.py's handle_discover_primer_
+    # reference_study will chase a primer's own citation chain (paper A
+    # cites paper B for a primer's origin, B cites C, ...) before stopping
+    # and flagging the remainder for review instead of continuing to seed
+    # new Studies. A separate, smaller cap than citation_expansion_max_depth
+    # above -- a different discovery vector (backward references, not
+    # forward citations) that's expected to bottom out in a handful of
+    # hops per an explicit user observation ("sometimes it takes 5 papers").
+    primer_reference_expansion_max_depth: int = 10
     keyword_search_enabled: bool = False
     # workflow/settle_handlers.py's self-rescheduling CHECK_COMPONENT_SETTLED
     # poll: how long to wait before re-checking whether a connected

@@ -50,7 +50,7 @@ RELEVANT_SECTION_TITLE_PATTERNS = [
                          # ASV/OTU inference, read mapping, and databases are
                          # often reported without "bioinformatics" in the title.
         r"bioinformatic",
-        r"taxonom",  # "Taxonomic assignment"/"Taxonomy" -- where otu_db/tax_assign_cat/
+        r"taxonom",  # "Taxonomic assignment"/"Taxonomy" -- where otu_db/
                      # scientificName-level facts are reported, distinct from the
                      # broader "bioinformatic" pattern (e.g. "Taxonomy" alone, with no
                      # "bioinformatic" in the title at all).

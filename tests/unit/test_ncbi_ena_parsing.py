@@ -302,7 +302,8 @@ def test_biosample_extract_structured_facts_derives_filter_facts_from_samp_mat_p
     prokaryote audit): samp_mat_process's free text carries a pore size
     ("0.22 um") that must land in size_frac, NEVER filter_diameter (a
     different concept and unit -- physical filter disc diameter in mm,
-    per the real FAIRe schema)."""
+    per the real FAIRe schema). Cartridge filtration alone is filter
+    evidence, not proof of active pressure/pump-driven filtration."""
     raw = {
         "bioproject_accession": "PRJNA1425045",
         "total_linked_samples": 1,
@@ -319,7 +320,7 @@ def test_biosample_extract_structured_facts_derives_filter_facts_from_samp_mat_p
 
     by_type = {f.fact_type_candidate: f for f in facts}
     assert by_type["size_frac"].raw_value == "0.22 um"
-    assert by_type["filter_passive_active_0_1"].raw_value == "1"
+    assert by_type["filter_passive_active_0_1"].raw_value == "0"
     assert "filter_diameter" not in by_type
     assert by_type["size_frac"].support_type == SupportType.DETERMINISTICALLY_DERIVED
     assert by_type["size_frac"].raw_field_name == "samp_mat_process"

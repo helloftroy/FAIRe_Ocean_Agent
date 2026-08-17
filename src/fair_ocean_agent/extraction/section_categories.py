@@ -7,13 +7,23 @@ written up).
 Three deterministic pieces live here, all directly testable without an
 LLM:
 
-1. `SECTION_CATEGORIES` -- the keyword taxonomy itself, one entry per
-   methods-text category (PCR1, targeted qPCR/ddPCR, PCR2/indexing,
-   assay definition, library prep + sequencing, raw read preprocessing,
-   OTU/ASV generation + filtering, taxonomic assignment). More categories
-   (data availability, copyright, ...) get appended here as they're
-   defined -- nothing else in this module needs to change shape when
-   that happens.
+1. `SECTION_CATEGORIES` -- the keyword taxonomy itself. Scoped down to
+   just `sample_prep` per an explicit user request: a live 6-study audit
+   found this one category accounted for ~72% of everything the whole
+   pipeline ever produced, while several others (targeted qPCR/ddPCR,
+   PCR2/indexing) produced zero real facts, and Stage 2 (categorize_
+   paragraphs) was the single most expensive step in the entire
+   extraction pipeline. The other 8 categories (PCR1, targeted qPCR/
+   ddPCR, PCR2/indexing, assay definition, library prep + sequencing, raw
+   read preprocessing, OTU/ASV generation + filtering, taxonomic
+   assignment) were removed entirely, not merely disabled -- "for now",
+   per the user's own framing; every term that had a real fallback
+   elsewhere (broad-checklist, quote-judged, deterministic-regex,
+   structured-API) keeps working through that mechanism, and the two
+   that didn't (otu_seq_comp_appr, screen_contam_method) got a new
+   quote-judged companion in extraction/search_flags.py so they weren't
+   lost. More categories get appended here as they're defined -- nothing
+   else in this module needs to change shape when that happens.
 2. `split_into_paragraphs` -- paragraph-level splitting with a structural
    pre-filter that drops reference-list and figure/table-caption
    paragraphs *before* any keyword matching runs. Confirmed necessary
@@ -243,21 +253,19 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
                 "voyage", "campaign", "sampling mission", "sampling campaign", "aboard R/V",
                 "aboard the R/V", "research vessel", "station", "station ID", "station_id",
             ), definition='Extract the explicit name or identifier of the research expedition, campaign, ship cruise/voyage, broader sampling mission, or named sampling station/station series. Examples: Tara Oceans, MOSAiC, Malaspina 2010. Look for phrases such as cruise, expedition, voyage, station, campaign, or aboard R/V ... during .... Preserve the source identifier exactly.'),
-            # Bundles ~18 real but individually low-yield physicochemical
+            # Bundles real but individually low-yield physicochemical
             # FAIRe sampleMetadata fields (diss_inorg_carb, diss_inorg_nitro,
             # diss_org_carb, diss_org_nitro, nitrate, nitrite, org_matter,
             # part_org_carb, part_org_nitro, ph, suspend_part_matter,
             # tot_carb, tot_diss_nitro, tot_nitro, tot_org_carb,
-            # tot_part_carb, chlorophyll, temp, salinity) into ONE term, per
-            # an explicit user request -- deliberately excludes diss_oxygen,
-            # which already has its own working LLMJudgedSearchField entry
-            # (search_flags.py). Per a follow-up explicit user request, the
-            # raw pipe-joined value is exported as its own single column
+            # tot_part_carb, chlorophyll, temp, salinity, dissolved oxygen,
+            # etc.) into ONE term, per explicit user requests. The raw
+            # pipe-joined value is exported as its own single column
             # (mapping/rules.py's own MappingRule, exports/faire.py's
-            # CUSTOM_ENV_VAR_BLOCK_FIELD) and all 18 individual fields it
+            # CUSTOM_ENV_VAR_BLOCK_FIELD) and the individual fields it
             # replaces are suppressed from export entirely (exports/
             # faire.py's SAMPLE_METADATA_SUPPRESSED_FIELDS) -- deliberately
-            # NOT decomposed back into those 18 real columns.
+            # NOT decomposed back into those real columns.
             CategoryTerm("x_env_var_block", (
                 "temperature", "water temperature", "Temp", "salinity", "Sal", "dissolved oxygen", "pH",
                 "chlorophyll", "chlorophyll a", "Chl a", "Chl-a", "chloro", "suspended particulate matter",
@@ -333,7 +341,7 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
             ), definition='Total surface area of the filter membrane, usually in mm².'),
             CategoryTerm("size_frac", (
                 "pore size", "filtering pore size", "filter pore size", "µm filter", "um filter",
-                "0.22 µm", "0.2 µm", "0.45 µm",
+                "0.22 µm", "0.22 um", "0.2 µm", "0.2 um", "0.45 µm", "0.45 um",
             ), definition='Pore size of the main filter used to collect/sample material, in µm.'),
             CategoryTerm("prefilter_material", (
                 "pre-filter material", "prefilter material", "pre-sort material",
@@ -350,8 +358,11 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
                 "compressed air", "overpressure", "pressure vessel", "pressure barrel",
                 "vacuum pump", "vacuum filtration", "peristaltic pump", "syringe pressure",
                 "under pressure", "pressurized", "forced through the filter", "flowmeter",
-                "flow rate", "flowrate",
-            ), definition='Whether the filtration/collection of water or air was active or passive. Return exactly 1 for active filtration and 0 for passive filtration. Active = 1: water or air is actively forced or moved through a filter using a pump, compressed air, vacuum, fan, syringe pressure, peristaltic pump, pressure vessel, or another mechanical driving force. Passive = 0: the filter/material is simply exposed, submerged, suspended, or stationed in the environment and material accumulates without mechanically forcing water or air through it. Do not interpret 0 as "no filtration" or 1 as "filtration present" -- this field distinguishes active versus passive filtration only.'),
+                "flow rate", "flowrate", "filtered through", "filtered onto", "filtered on",
+                "filtration through", "filtration onto", "filter membrane", "membrane filter",
+                "filter cartridge", "cartridge filter", "Sterivex", "pore size", "µm filter",
+                "um filter", "0.22 µm", "0.22 um", "0.2 µm", "0.2 um", "0.45 µm", "0.45 um",
+            ), definition='Whether the filtration/collection of water or air was active or passive. Return exactly 1 for active filtration and 0 for passive filtration. Active = 1: water or air is explicitly forced or moved through a filter using a pump, compressed air, vacuum, fan, syringe pressure, peristaltic pump, pressure vessel, or another mechanical driving force. Passive = 0: filtration is described but no active forcing mechanism is stated, or the filter/material is simply exposed, submerged, suspended, or stationed in the environment and material accumulates without mechanically forcing water or air through it. Do not interpret 0 as "no filtration" or 1 as "filtration present" -- this field distinguishes active versus passive filtration only.'),
             CategoryTerm("pump_flow_rate", (
                 "pump flow rate", "flow rate of", "pumped at a rate", "L/min", "flow rate was",
             ), definition='Flow rate of the pump used during filtration.'),
@@ -362,12 +373,31 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
             CategoryTerm("samp_store_temp", (
                 "stored at", "storage temperature", "-20°C", "-80°C", "4°C", "on ice",
                 "dry ice", "liquid nitrogen", "ambient temperature", "stored frozen", "stored cold",
+                "-20C", "-20 C", "-20 degrees C", "-80C", "-80 C", "-80 degrees C",
+                "4C", "4 C", "4 degrees C",
+                # "stored at" is a literal, gap-free 2-word cue -- a real gap
+                # confirmed live (10.7717/peerj.9857): "Samples were stored
+                # in seawater at 80 °C" never matched it, since "in seawater"
+                # sits between "stored" and "at". "stored in" catches this
+                # common "stored in <medium> at <temp>" construction too.
+                "stored in",
             ), definition='Temperature at which the original environmental sample was stored.'),
             CategoryTerm("samp_store_dur", (
                 "stored for", "storage duration", "prior to extraction for", "stored until",
+                "kept until", "preserved until", "until extraction", "until DNA extraction",
+                "until RNA extraction", "until processing", "until further processing",
+                "until further use", "before extraction", "prior to extraction",
+                "overnight", "for 24 h", "for 24 hours", "for 48 h", "for 48 hours",
+                "for several days", "for several weeks", "for several months",
+                "for the rest of the ship cruise",
             ), definition='Duration the original environmental sample was stored before processing or DNA extraction.'),
             CategoryTerm("samp_store_loc", (
                 "stored in a freezer", "stored at the", "storage location", "stored in the lab",
+                "stored onboard", "stored on board", "stored aboard", "stored in the laboratory",
+                "stored at the laboratory", "stored in the field", "stored in the freezer",
+                "stored in a refrigerator", "stored in a cold room", "onboard", "on board",
+                "aboard", "in the laboratory", "to the laboratory", "transported to the laboratory",
+                "transported to the lab",
             ), definition='Physical location where the original sample was stored, such as a particular freezer or laboratory room.'),
             CategoryTerm("samp_store_sol", (
                 "stored in RNAlater", "stored in ethanol", "storage solution", "preservation buffer",
@@ -382,6 +412,12 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
             CategoryTerm("samp_store_method_additional", (
                 "transported frozen", "transported on ice", "shipped frozen", "storage conditions",
                 "shipped on dry ice", "shipped on ice",
+                "stored", "storage", "preserved", "kept", "frozen", "freeze", "transported",
+                "transported under frozen conditions", "under frozen conditions", "stored onboard",
+                "stored on board", "stored aboard", "stored until", "kept until",
+                "preserved until", "until further use", "until extraction", "until processing",
+                "stored at", "stored in", "stored on", "placed on ice", "kept on ice",
+                "flash frozen", "snap frozen", "liquid nitrogen", "dry ice",
             ), allows_multi_sentence=True, definition='Additional useful information about how the original environmental sample was stored or preserved.'),
 
             # precip_chem_prep/precip_force_prep/precip_temp_prep/
@@ -431,9 +467,13 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
                 "ethanol precipitation", "precipitated with isopropanol", "precipitated with ethanol",
             ), definition='Method or commercial kit used to clean/purify extracted DNA.'),
             CategoryTerm("pool_dna_num", (
-                "extracts were pooled", "pooled extracts", "number of extracts pooled",
-                "DNA extracts were combined",
-            ), definition='Number of separate DNA extracts pooled together into one sample before PCR.'),
+                "pool", "pooled", "pooling", "samples were pooled", "sample was pooled",
+                "pooled samples", "pooled sample", "DNA was pooled", "RNA was pooled",
+                "DNA samples were pooled", "RNA samples were pooled", "DNA extracts were pooled",
+                "RNA extracts were pooled", "extracts were pooled", "pooled extracts",
+                "number of extracts pooled", "DNA extracts were combined", "RNA extracts were combined",
+                "samples were combined", "combined samples",
+            ), definition='Sentence(s) describing how DNA, RNA, nucleic-acid extracts, or samples were pooled or combined before downstream analysis. Preserve the source sentence rather than reducing it to only a number.'),
             CategoryTerm("concentration", (
                 "DNA concentration was", "concentration of the extracted DNA", "concentration of DNA",
                 "concentration was measured", "final DNA concentration", "ng/µL", "ng/mL", "µg/mL",
@@ -476,711 +516,6 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
                 "the aqueous phase was transferred", "DNA was precipitated with",
                 "DNA bound to the column", "DNA was eluted from", "magnetic beads were used to purify",
             ), definition='Approach used to separate/purify DNA from the sample mixture, such as column-based separation, magnetic beads, centrifugation, precipitation, or phenol-chloroform.'),
-        ),
-    ),
-    SectionCategory(
-        name="assay_definition",
-        label="Assay definition / target",
-        keywords=(
-            # What assay/marker is used and what it targets -- not the PCR
-            # recipe itself.
-            "assay", "assay name", "target assay", "targeted assay", "metabarcoding assay",
-            "primer set", "primer pair", "marker", "genetic marker", "molecular marker",
-            "locus", "target gene", "target region", "target locus", "amplicon", "amplicon size",
-            "amplicon length", "12S", "16S", "18S", "23S", "28S", "COI", "CO1", "cox1", "CytB",
-            "cytochrome b", "rbcL", "ITS", "ITS1", "ITS2",
-            "SSU", "small-subunit", "small subunit", "5' portion", "5′ portion",
-            "V1", "V2", "V3", "V4", "V5", "V6", "V7", "V8", "V9",
-            "V3-V4", "V4-V5", "D1-D2", "D2-D3",
-            "MiFish", "Teleo", "Leray", "TAReuk", "universal primers", "species-specific primers",
-            "taxon-specific primers", "designed to amplify", "designed to detect", "designed to target",
-            "primers targeting", "assay targeting", "specific for", "probe targeting", "target taxa",
-            "target taxon", "target species", "taxonomic target", "metabarcoding", "targeted detection",
-        ),
-        terms=(
-            CategoryTerm("assay_name", (
-                "assay name", "assay designated", "assay referred to as", "primer set called",
-                "primer pair called", "marker assay", "assay identifier", "primer set designated",
-                "hereafter referred to as", "assay developed by",
-            ), definition='The short name or identifier used for a particular assay, primer set, marker assay, or amplified region. Extract an explicitly stated assay name when possible; do not invent one.'),
-            CategoryTerm("assay_type", (
-                "metabarcoding assay", "DNA metabarcoding", "community metabarcoding", "targeted assay",
-                "species-specific assay", "taxon-specific assay", "targeted detection",
-                "single-species detection", "broad community profiling", "multi-taxon detection",
-            ), definition='Whether the assay is designed for targeted detection of one/few taxa or metabarcoding of a broader biological community.'),
-            # assay_validation removed entirely per an explicit user
-            # request ("remove assay_validation from FAIRe list, i don't
-            # want to see it on the table print outs") -- suppressed from
-            # export in exports/faire.py's PROJECT_METADATA_SUPPRESSED_
-            # FIELDS and no longer extracted anywhere.
-            CategoryTerm("targetTaxonomicAssay", (
-                "primers targeting", "primers designed to amplify", "assay designed to detect",
-                "assay targeting", "probe targeting", "specific for", "species-specific primers for",
-                "taxon-specific primers for", "universal primers for", "designed for detection of",
-            ), definition='The organism or taxonomic group that the assay, primers, or probe were designed to detect or amplify. This is assay capability, not necessarily the narrower taxonomic focus of the study.'),
-            # "plus remaining controlled gene names" per the user -- this
-            # list is deliberately non-exhaustive; a controlled gene-name
-            # vocabulary lives elsewhere (not duplicated here).
-            CategoryTerm("target_gene", (
-                "target gene", "marker gene", "target locus", "marker locus", "12S rRNA", "16S rRNA",
-                "18S rRNA", "COI", "cytochrome b", "rbcL",
-            ), definition='The gene or genetic marker targeted for amplification, such as 12S, 16S, 18S, COI, CytB, ITS, or rbcL.'),
-            # Deliberate distinction from assay_name: "V4 region" here,
-            # but "V4 assay"/"V4 primer set" cues assay_name instead.
-            CategoryTerm("target_subfragment", (
-                "target subfragment", "hypervariable region", "variable region", "V4 region",
-                "V9 region", "V3-V4 region", "ITS1 region", "ITS2 region", "D1-D2 region", "P6 loop",
-                "conserved 5' portion", "conserved 5′ portion", "5' portion", "5′ portion",
-                "5' end", "5′ end", "small-subunit ribosomal RNA", "small subunit ribosomal RNA",
-            ), definition="A smaller named region or portion within the target gene/locus, such as V4, V9, V3-V4, ITS1, ITS2, D1-D2, the trnL P6 loop, or a described 5' portion/end of an SSU/rRNA gene."),
-            CategoryTerm("ampliconSize", (
-                "amplicon size", "amplicon length", "expected amplicon", "expected product size",
-                "PCR product size", "amplicon of approximately", "bp amplicon", "base-pair amplicon",
-                "target fragment length", "product length", "bp band", "bp bands", "base-pair band",
-                "base-pair bands", "successful amplicons", "amplicons were successfully obtained",
-            ), definition='The expected length of the amplified target DNA fragment in base pairs, excluding primers, adapters, and indexes.'),
-            # nucl_acid_amp removed entirely per an explicit user request
-            # ("remove nucl_acid_amp from the search, and from the list --
-            # i don't ever want to see it again") -- suppressed from
-            # export in exports/faire.py's PROJECT_METADATA_SUPPRESSED_
-            # FIELDS and no longer extracted anywhere.
-        ),
-    ),
-    SectionCategory(
-        name="pcr1_primary_amplification",
-        label="PCR1 / primary amplification",
-        keywords=(
-            "PCR", "PCR amplification", "amplification", "amplified", "amplicon",
-            "polymerase chain reaction", "PCR reaction", "PCR reactions", "reaction mixture",
-            "PCR mixture", "master mix", "mastermix", "template DNA", "DNA template", "primer",
-            "primers", "forward primer", "reverse primer", "primer concentration",
-            "reaction volume", "thermal cycling", "cycling conditions", "PCR conditions",
-            "initial denaturation", "denaturation", "annealing", "annealing temperature", "extension",
-            "elongation", "final extension", "final elongation", "PCR cycles", "cycles of amplification",
-            "thermocycler", "thermal cycler", "technical replicates", "PCR replicates", "replicate PCRs",
-            "blocking primer", "blocking oligonucleotide", "PNA clamp", "LNA clamp", "PCR inhibition",
-            "inhibition test", "inhibition check", "internal amplification control",
-        ),
-        terms=(
-            CategoryTerm("annealingTemp", (
-                "annealing temperature", "annealed at", "annealing at", "annealing step",
-                "annealing phase", "primer annealing", "C annealing", "touchdown annealing",
-                "annealing gradient", "anneal for",
-            ), definition='The temperature used specifically during the primer-annealing stage of PCR. Do not return denaturation or extension temperatures.'),
-            CategoryTerm("commercial_mm", (
-                "commercial master mix", "PCR master mix", "premixed master mix", "pre-made master mix",
-                "2x master mix", "ready-to-use mix", "manufacturer's master mix", "commercial PCR mix",
-                "master mix supplied by", "PCR reaction mix kit",
-            ), definition='The name, manufacturer, and ideally version/product information of a commercially prepared PCR master mix.'),
-            CategoryTerm("custom_mm", (
-                "reaction mixture consisted of", "reaction contained", "custom master mix",
-                "master mix was prepared", "buffer and dNTPs", "MgCl2 and dNTPs",
-                "polymerase and buffer", "BSA was added", "reaction components were",
-                "components per reaction",
-            ), definition='The explicitly reported composition of a PCR reaction mixture assembled from individual components rather than a commercial pre-made master mix. Extract only the reagent/component composition; do not include thermocycler, cycling-profile, denaturation, annealing, extension, cycle-count, or temperature/time program details.'),
-            CategoryTerm("inhibition_check_0_1", (
-                "tested for PCR inhibition", "inhibition was checked", "inhibition testing",
-                "PCR inhibition assessment", "inhibition control included",
-                "internal amplification control", "internal positive control",
-                "spike-in inhibition test", "serial dilution inhibition test", "evaluated for inhibitors",
-            ), definition='Whether the study explicitly tested DNA extracts or samples for PCR inhibition.'),
-            CategoryTerm("inhibition_check", (
-                "inhibition assessed by", "inhibition evaluated using", "tested for inhibition using",
-                "internal amplification control", "spiked with control DNA",
-                "serial dilution to assess inhibition", "Cq shift", "Ct shift", "inhibition assay",
-                "inhibition mitigation",
-            ), definition='How PCR inhibition was tested, assessed, or mitigated, including dilution tests, internal controls, spike-ins, purification, or other procedures.'),
-            CategoryTerm("pcr_analysis_software", (
-                "PCR data analyzed using", "PCR data analysed using", "amplification data analyzed using",
-                "amplification curves analyzed with", "Cq values calculated using",
-                "Ct values calculated using", "PCR run analyzed with", "fluorescence data analyzed using",
-                "PCR analysis software", "instrument data analysis software",
-            ), definition='Software used to analyze PCR/qPCR amplification-run data, such as amplification curves, Ct/Cq values, or instrument output. Do not return general sequence-analysis software.'),
-            CategoryTerm("pcr_cycles", (
-                "PCR cycles", "amplification cycles", "cycles of amplification", "cycled for",
-                "number of cycles", "35 cycles", "40 cycles", "x 35 cycles", "35-cycle amplification",
-                "repeated for 35 cycles",
-            ), definition='The number of amplification cycles performed during the primary PCR.'),
-            CategoryTerm("pcr_method_additional", fallback_only=True, definition='Other explicitly reported information about the primary PCR method that is useful but does not belong in another specific PCR field.'),
-            CategoryTerm("pcr_primer_forward", (
-                "forward primer sequence", "forward oligonucleotide sequence", "forward primer 5'-3'",
-                "F primer sequence", "forward sequence", "forward primer:", "sense primer sequence",
-                "Fwd primer sequence", "forward oligo 5'",
-            ), definition="The nucleotide sequence of the forward PCR primer, reported in the 5'->3' direction."),
-            CategoryTerm("pcr_primer_reverse", (
-                "reverse primer sequence", "reverse oligonucleotide sequence", "reverse primer 5'-3'",
-                "R primer sequence", "reverse sequence", "reverse primer:", "antisense primer sequence",
-                "Rev primer sequence", "reverse oligo 5'",
-            ), definition="The nucleotide sequence of the reverse PCR primer, reported in the 5'->3' direction."),
-            # Real papers overwhelmingly just name the primer pair directly
-            # ("universal primers of Uni519F/806r", "using primers 515F/806R")
-            # rather than using any of the meta-descriptive phrasing
-            # ("primer designated", "primer ID", "primer abbreviation") the
-            # cues below originally assumed -- confirmed live, a real gap
-            # (10.1038/s42003-024-06136-2's own primer sentence matched none
-            # of the original cues, so this term was never even shown as a
-            # candidate to the LLM). Broadened with cues for the actual
-            # common surrounding language instead of the primer name itself
-            # (which varies without limit and can't be enumerated).
-            CategoryTerm("pcr_primer_name_forward", (
-                "forward primer name", "forward primer designated", "forward primer called",
-                "forward primer identifier", "forward primer ID", "F primer name",
-                "forward oligo name", "forward primer label", "Fwd primer name",
-                "forward primer abbreviation", "primer pair", "primer names",
-                "primer set", "16S rRNA F", "universal primer", "universal primers",
-                "primers of", "using the primers", "using primers", "amplified using primers",
-                "PCR primers", "primer combination",
-            ), definition='The published or study-specific name/identifier of the forward primer, not its nucleotide sequence.'),
-            CategoryTerm("pcr_primer_name_reverse", (
-                "reverse primer name", "reverse primer designated", "reverse primer called",
-                "reverse primer identifier", "reverse primer ID", "R primer name",
-                "reverse oligo name", "reverse primer label", "Rev primer name",
-                "reverse primer abbreviation", "primer pair", "primer names",
-                "primer set", "16S rRNA R", "universal primer", "universal primers",
-                "primers of", "using the primers", "using primers", "amplified using primers",
-                "PCR primers", "primer combination",
-            ), definition='The published or study-specific name/identifier of the reverse primer, not its nucleotide sequence.'),
-            # Broadened with pcr_primer_name_forward/reverse's own cues
-            # (real papers overwhelmingly just name the primer pair and
-            # place a bare citation at the very end of the same sentence,
-            # e.g. "...forward primer SP-F-30 ... and the reverse primer
-            # SP-R-540 ... (Vidal, Meneses & Smith, 2002)" -- confirmed
-            # live, 10.7717/peerj.333 -- rather than explicit "described
-            # by"/"reference"/"published in" phrasing). Precision comes
-            # from section_category_extraction.py's dedicated citation-
-            # shape context check (_valid_primer_reference_context), not
-            # from the cue list, so broadening these cues doesn't risk
-            # firing on every plain primer-name sentence.
-            CategoryTerm("pcr_primer_reference_forward", (
-                "forward primer described by", "forward primer from", "forward primer reference",
-                "forward primer published in", "forward primer developed by",
-                "forward primer according to", "forward primer adapted from", "forward primer source",
-                "forward primer citation", "forward primer DOI",
-                "forward primer name", "forward primer designated", "forward primer called",
-                "forward primer identifier", "forward primer ID", "F primer name",
-                "forward oligo name", "forward primer label", "Fwd primer name",
-                "forward primer abbreviation", "primer pair", "primer names",
-                "primer set", "16S rRNA F", "universal primer", "universal primers",
-                "primers of", "using the primers", "using primers", "amplified using primers",
-                "PCR primers", "primer combination",
-            ), definition=(
-                'The citation, DOI, publication, or source describing the forward primer -- typically a bare '
-                '"(Author et al., Year)" citation placed right after the primer name/sequence at the end of '
-                'the sentence. Only extract when a real citation or DOI is present in the quote, never invent one.'
-            )),
-            CategoryTerm("pcr_primer_reference_reverse", (
-                "reverse primer described by", "reverse primer from", "reverse primer reference",
-                "reverse primer published in", "reverse primer developed by",
-                "reverse primer according to", "reverse primer adapted from", "reverse primer source",
-                "reverse primer citation", "reverse primer DOI",
-                "reverse primer name", "reverse primer designated", "reverse primer called",
-                "reverse primer identifier", "reverse primer ID", "R primer name",
-                "reverse oligo name", "reverse primer label", "Rev primer name",
-                "reverse primer abbreviation", "primer pair", "primer names",
-                "primer set", "16S rRNA R", "universal primer", "universal primers",
-                "primers of", "using the primers", "using primers", "amplified using primers",
-                "PCR primers", "primer combination",
-            ), definition=(
-                'The citation, DOI, publication, or source describing the reverse primer -- typically a bare '
-                '"(Author et al., Year)" citation placed right after the primer name/sequence at the end of '
-                'the sentence. Only extract when a real citation or DOI is present in the quote, never invent one.'
-            )),
-            CategoryTerm("pcr_rep", (
-                "PCR technical replicates", "technical PCR replicates", "replicate PCR reactions",
-                "replicate PCRs", "PCRs performed in duplicate", "PCRs performed in triplicate",
-                "duplicate PCR reactions", "triplicate PCR reactions", "independent PCR reactions",
-                "PCR replicates per sample",
-            ), definition='The number of technical PCR replicate reactions performed per biological sample. Do not count biological, field, or extraction replicates.'),
-            CategoryTerm("block_ref", (
-                "blocking primer described by", "blocking primer reference",
-                "blocking oligonucleotide reference", "blocker developed by", "blocker published in",
-                "blocking primer adapted from", "blocking primer according to",
-                "blocking primer citation", "blocking primer DOI", "blocker source",
-            ), definition='The citation, DOI, publication, or other source describing the blocking primer/oligonucleotide.'),
-            CategoryTerm("block_seq", (
-                "blocking primer sequence", "blocking oligonucleotide sequence", "blocker sequence",
-                "PNA sequence", "LNA sequence", "blocking oligo 5'", "host-blocking sequence",
-                "blocking sequence 5'-3'", "block sequence", "blocking primer nucleotide sequence",
-            ), definition='The nucleotide sequence of the blocking primer, blocking oligonucleotide, PNA/LNA clamp, or equivalent blocker.'),
-            CategoryTerm("block_taxa", (
-                "blocking primer targeting", "blocker designed against", "blocked taxon",
-                "host DNA blocked", "suppress amplification of", "prevent amplification of",
-                "blocking primer specific for", "host-blocking primer for", "blocker targeting",
-                "exclude amplification of",
-            ), definition='The taxon whose amplification the blocking primer or blocker was intended to suppress.'),
-        ),
-    ),
-    SectionCategory(
-        name="targeted_qpcr_ddpcr_detection",
-        label="Targeted qPCR / ddPCR detection",
-        keywords=(
-            "qPCR", "quantitative PCR", "quantitative real-time PCR", "real-time PCR", "real time PCR",
-            "RT-qPCR", "ddPCR", "droplet digital PCR", "digital PCR", "dPCR", "targeted assay",
-            "species-specific assay", "species-specific qPCR", "taxon-specific assay", "TaqMan",
-            "TaqMan assay", "hydrolysis probe", "probe-based assay", "probe-based qPCR", "probe",
-            "reporter", "quencher", "FAM", "HEX", "VIC", "BHQ", "ZEN", "MGB", "Cq", "Ct",
-            "quantification cycle", "threshold cycle", "fluorescence threshold", "baseline",
-            "automatic threshold", "standard curve", "calibration curve", "DNA standard",
-            "synthetic standard", "gBlock", "plasmid standard", "copy number", "copies per reaction",
-            "copies/reaction", "limit of detection", "LOD", "limit of quantification", "LOQ",
-            "detection limit", "quantification limit", "detection criteria", "positive detection",
-            "considered positive", "PCR efficiency", "amplification efficiency", "droplets",
-            "positive droplets", "negative droplets", "QuantaSoft",
-        ),
-        terms=(
-            CategoryTerm("amp_vis_method", (
-                "amplicon visualisation", "amplicon visualization", "target detected by",
-                "detection by qPCR", "detection by digital PCR", "detection by gel electrophoresis",
-                "capillary electrophoresis detection", "real-time fluorescence detection",
-                "amplicons visualized on", "presence determined by",
-            ), definition='The experimental method used to determine or visualize whether the target amplicon was detected, such as qPCR fluorescence, ddPCR, gel electrophoresis, or another detection approach.'),
-            CategoryTerm("automaticBaselineValue", (
-                "baseline set automatically", "automatic baseline", "baseline determined automatically",
-                "instrument-defined baseline", "software-defined baseline", "default baseline setting",
-                "baseline manually set", "manual baseline", "baseline adjusted manually",
-                "automatic baseline setting disabled",
-            ), definition='Whether/how the qPCR fluorescence baseline was automatically determined rather than manually specified.'),
-            CategoryTerm("automaticThresholdQuantificationCycle", (
-                "threshold set automatically", "automatic fluorescence threshold",
-                "automatic threshold setting", "instrument-defined threshold",
-                "software-defined threshold", "default threshold setting", "threshold manually set",
-                "manual threshold", "threshold adjusted manually", "automatic threshold disabled",
-            ), definition='Whether/how the fluorescence threshold used for Cq/Ct determination was automatically set rather than manually specified.'),
-            CategoryTerm("baselineValue", (
-                "baseline cycles", "baseline range", "baseline interval", "baseline window",
-                "baseline from cycle", "baseline through cycle", "baseline start cycle",
-                "baseline end cycle", "cycles used for baseline", "background fluorescence cycles",
-            ), definition='The explicitly reported baseline setting or baseline cycle range used for qPCR fluorescence analysis.'),
-            CategoryTerm("detection_criteria", (
-                "criteria for positive detection", "considered positive when",
-                "positive detection required", "sample considered detected",
-                "positive amplifications per sample", "at least two positive replicates",
-                "detected in two of three", "detection criterion", "confirmed by Sanger sequencing",
-                "positive call required",
-            ), definition='The rule used to decide whether a sample was considered positive/detected, such as a required number of positive technical replicates or confirmatory analysis.'),
-            CategoryTerm("lod_method", (
-                "LOD determined by", "LOD calculated using", "LOD estimated using",
-                "method for determining LOD", "limit of detection method", "LOD methodology",
-                "LOD calculated according to", "95% detection probability", "probit analysis for LOD",
-                "LOD model",
-            ), definition="The statistical or experimental procedure used to calculate or determine the assay's limit of detection. Do not return the LOD value itself."),
-            CategoryTerm("loq_method", (
-                "LOQ determined by", "LOQ calculated using", "LOQ estimated using",
-                "method for determining LOQ", "limit of quantification method", "LOQ methodology",
-                "LOQ calculated according to", "quantification precision criterion",
-                "CV threshold for LOQ", "LOQ model",
-            ), definition="The statistical or experimental procedure used to calculate or determine the assay's limit of quantification. Do not return the LOQ value itself."),
-            CategoryTerm("pcr_assay_lod", (
-                "limit of detection", "LOD was", "LOD =", "detection limit", "95% LOD",
-                "minimum detectable concentration", "minimum detectable copies",
-                "lowest detectable concentration", "analytical detection limit",
-                "copies detectable per reaction",
-            ), definition='The reported limit of detection: the lowest target amount/concentration that the assay can reliably detect.'),
-            CategoryTerm("pcr_assay_lod_LL", (
-                "LOD lower 95% confidence limit", "LOD lower confidence bound", "LOD lower CI",
-                "lower confidence limit for LOD", "lower bound of LOD", "95% CI lower limit",
-                "LOD confidence interval lower", "LOD LL", "lower 95% CI for detection limit",
-                "LOD lower endpoint",
-            ), definition='The lower confidence bound or lower confidence limit associated with the reported LOD.'),
-            CategoryTerm("pcr_assay_lod_UL", (
-                "LOD upper 95% confidence limit", "LOD upper confidence bound", "LOD upper CI",
-                "upper confidence limit for LOD", "upper bound of LOD", "95% CI upper limit",
-                "LOD confidence interval upper", "LOD UL", "upper 95% CI for detection limit",
-                "LOD upper endpoint",
-            ), definition='The upper confidence bound or upper confidence limit associated with the reported LOD.'),
-            CategoryTerm("pcr_assay_lod_techreps", (
-                "LOD technical replicates", "replicates used for LOD", "LOD based on replicates",
-                "replicate reactions at LOD", "number of replicates for LOD",
-                "technical replicates per concentration", "replicates per dilution for LOD",
-                "LOD replicate number", "LOD applied to three replicates", "replicate wells for LOD",
-            ), definition='The number of technical replicate reactions used when establishing or applying the LOD.'),
-            CategoryTerm("pcr_assay_lod_unit", (
-                "LOD unit", "copies/reaction", "copies per reaction", "copies/uL", "copies per uL",
-                "ng/uL", "ng per reaction", "fg per reaction", "genome equivalents",
-                "molecules per reaction",
-            ), definition='The measurement unit associated with the LOD, such as copies/reaction or copies/uL.'),
-            CategoryTerm("pcr_assay_loq", (
-                "limit of quantification", "LOQ was", "LOQ =", "quantification limit",
-                "lowest quantifiable concentration", "minimum quantifiable copies",
-                "analytical quantification limit", "lowest concentration quantified",
-                "quantifiable copies per reaction", "lower limit of quantification",
-            ), definition='The reported limit of quantification: the lowest target amount/concentration that can be quantitatively measured with acceptable performance.'),
-            CategoryTerm("pcr_assay_loq_LL", (
-                "LOQ lower 95% confidence limit", "LOQ lower confidence bound", "LOQ lower CI",
-                "lower confidence limit for LOQ", "lower bound of LOQ",
-                "95% CI lower limit for LOQ", "LOQ confidence interval lower", "LOQ LL",
-                "lower 95% CI for quantification limit", "LOQ lower endpoint",
-            ), definition='The lower confidence bound or lower confidence limit associated with the LOQ.'),
-            CategoryTerm("pcr_assay_loq_UL", (
-                "LOQ upper 95% confidence limit", "LOQ upper confidence bound", "LOQ upper CI",
-                "upper confidence limit for LOQ", "upper bound of LOQ",
-                "95% CI upper limit for LOQ", "LOQ confidence interval upper", "LOQ UL",
-                "upper 95% CI for quantification limit", "LOQ upper endpoint",
-            ), definition='The upper confidence bound or upper confidence limit associated with the LOQ.'),
-            CategoryTerm("pcr_assay_loq_techreps", (
-                "LOQ technical replicates", "replicates used for LOQ", "LOQ based on replicates",
-                "replicate reactions at LOQ", "number of replicates for LOQ",
-                "technical replicates per concentration", "replicates per dilution for LOQ",
-                "LOQ replicate number", "LOQ applied to three replicates", "replicate wells for LOQ",
-            ), definition='The number of technical replicate reactions used when establishing or applying the LOQ.'),
-            CategoryTerm("pcr_assay_loq_unit", (
-                "LOQ unit", "copies/reaction", "copies per reaction", "copies/uL", "copies per uL",
-                "ng/uL", "ng per reaction", "fg per reaction", "genome equivalents",
-                "molecules per reaction",
-            ), definition='The measurement unit associated with the LOQ.'),
-            CategoryTerm("probeQuencher", (
-                "probe quencher", "quencher dye", "3' quencher", "dark quencher",
-                "double-quenched probe", "quenched with", "quencher at 3' end", "internal quencher",
-                "3' quenching group",
-            ), definition='The quencher molecule attached to a fluorescent probe, such as BHQ, ZEN, Iowa Black, TAMRA, or MGB-associated quenching chemistry.'),
-            CategoryTerm("probeReporter", (
-                "reporter dye", "reporter fluorophore", "fluorescent reporter", "5' reporter",
-                "probe labeled with", "probe labelled with", "fluorescent label", "5' fluorophore",
-                "reporter at 5' end",
-            ), definition='The fluorescent reporter/fluorophore attached to the probe, such as FAM, HEX, VIC, or Cy5.'),
-            CategoryTerm("probe_conc", (
-                "probe concentration", "final probe concentration", "probe at", "nM probe", "uM probe",
-                "probe stock concentration", "hydrolysis probe concentration",
-                "probe concentration per reaction", "final concentration of probe", "probe diluted to",
-            ), definition='The reported concentration of the assay probe, preserving whether it is stock or final reaction concentration when stated.'),
-            CategoryTerm("probe_ref", (
-                "probe described by", "probe reference", "probe developed by", "probe published in",
-                "probe adapted from", "probe according to", "previously described probe",
-                "probe citation", "probe DOI", "probe source",
-            ), definition='The publication, citation, DOI, or other source describing the probe.'),
-            CategoryTerm("probe_seq", (
-                "probe sequence", "hydrolysis probe sequence", "probe 5'-3'",
-                "oligonucleotide probe sequence", "internal probe sequence",
-                "probe nucleotide sequence", "probe oligo", "probe sequence was", "probe:",
-            ), definition="The nucleotide sequence of the probe in the 5'->3' direction."),
-            CategoryTerm("std_seq", (
-                "standard DNA sequence", "standard sequence", "sequence of the standard",
-                "synthetic standard sequence", "plasmid insert sequence", "standard template sequence",
-                "control DNA sequence", "calibration standard sequence", "DNA standard sequence",
-                "standard oligonucleotide sequence",
-            ), definition='The nucleotide sequence of the DNA standard or calibration template used for targeted quantification.'),
-            CategoryTerm("std_source", (
-                "standard purchased from", "standard obtained from", "standard supplied by",
-                "source of standard", "standard DNA provided by", "synthetic standard purchased",
-                "commercial standard obtained", "standard manufactured by", "standard synthesized by",
-                "standard provider",
-            ), definition='Where the DNA/calibration standard came from, such as a commercial supplier, synthesis provider, organism, or laboratory source.'),
-            CategoryTerm("std_type", (
-                "type of standard", "plasmid standard", "genomic DNA standard", "gDNA standard",
-                "amplicon standard", "synthetic double-stranded DNA", "synthetic DNA standard",
-                "PCR product standard", "standard template type", "calibration DNA type",
-            ), definition='The physical/type category of standard used, such as plasmid DNA, genomic DNA, synthetic double-stranded DNA, or PCR amplicon.'),
-            CategoryTerm("targeted_detection_method_additional", fallback_only=True, definition='Other useful information describing targeted qPCR/ddPCR detection that does not fit one of the more specific detection fields.'),
-            CategoryTerm("thresholdQuantificationCycle", (
-                "fluorescence threshold", "threshold value", "threshold line",
-                "fluorescence signal threshold", "delta Rn threshold", "RFU threshold",
-                "threshold set to", "amplification threshold", "fluorescence cutoff", "threshold level",
-            ), definition='The explicit fluorescence threshold level used to determine the qPCR quantification cycle. This is the signal threshold, not the resulting Ct/Cq cycle number.'),
-        ),
-    ),
-    SectionCategory(
-        name="pcr2_indexing",
-        label="PCR2 / indexing PCR",
-        keywords=(
-            "second PCR", "second-round PCR", "second round PCR", "second-step PCR", "second step PCR",
-            "second amplification", "second amplification step", "PCR2", "PCR 2",
-            "second PCR amplification", "indexing PCR", "index PCR", "indexing reaction",
-            "index amplification", "barcode PCR", "barcoding PCR", "barcode amplification", "adapter PCR",
-            "adapter amplification", "adapter-tagging PCR", "index adapter PCR", "dual-index PCR",
-            "dual indexing PCR", "Nextera index PCR", "Nextera indexing PCR", "limited-cycle PCR",
-            "limited cycle PCR", "additional PCR", "subsequent PCR", "subsequent amplification",
-            "followed by a second PCR", "followed by indexing PCR", "followed by index amplification",
-            "indices were added by PCR", "barcodes were added by PCR", "adapters were added by PCR",
-        ),
-        # Every PCR2 term is deliberately scoped to text already gated
-        # into this category (Stage 1 keywords above already require
-        # second/indexing-PCR context) so none of these need to
-        # independently re-require that context themselves -- an
-        # explicit user instruction: "I'd make every PCR2 matcher require
-        # second/indexing-PCR context, because otherwise it will steal
-        # PCR1 values." Category-scoping (Stage 3 will only ever search
-        # within this category's own run-text) satisfies this
-        # structurally, without duplicating the requirement per term.
-        terms=(
-            CategoryTerm("pcr2_analysis_software", (
-                "second PCR data analyzed using", "PCR2 data analyzed using",
-                "indexing PCR analysis software", "second amplification analyzed with",
-                "PCR2 run analyzed", "index PCR data analysis", "PCR2 amplification curves",
-                "second PCR instrument software", "index PCR software analysis",
-                "PCR2 data processing software",
-            ), definition='Software used to analyze the second/indexing-PCR run or amplification data.'),
-            CategoryTerm("pcr2_annealingTemp", (
-                "second PCR annealing", "PCR2 annealing", "indexing PCR annealing",
-                "index PCR annealing", "second amplification annealed at", "PCR2 annealed at",
-                "annealing temperature for second PCR", "indexing annealing temperature",
-                "second-step annealing", "PCR2 annealing temperature",
-            ), definition='The primer-annealing temperature used specifically during the second/indexing PCR.'),
-            CategoryTerm("pcr2_cycles", (
-                "second PCR cycles", "PCR2 cycles", "indexing PCR cycles", "index PCR cycles",
-                "second amplification cycles", "limited-cycle PCR", "8 indexing cycles",
-                "cycled for eight cycles", "number of PCR2 cycles", "second-step cycle number",
-            ), definition='The number of amplification cycles performed in PCR2/indexing PCR.'),
-            CategoryTerm("pcr2_method_additional", fallback_only=True, definition='Additional useful PCR2/indexing-PCR methodological information not captured in another PCR2 field.'),
-        ),
-    ),
-    SectionCategory(
-        name="library_prep_sequencing",
-        label="Library preparation + sequencing",
-        keywords=(
-            "library preparation", "library prep", "library construction", "sequencing library",
-            "libraries were prepared", "libraries were constructed", "library preparation kit",
-            "one-step PCR", "two-step PCR", "ligation-based", "adapter ligation", "adapter", "adapters",
-            "sequencing adapter", "adapter sequence", "P5", "P7", "Nextera", "index", "indices",
-            "indexing", "barcode", "barcodes", "barcoding", "MID", "dual index", "dual indexing", "i5",
-            "i7", "fusion primer", "tailed primer", "library purification", "library cleanup",
-            "size selection", "size-selected", "AMPure", "AMPure XP", "SPRI", "SPRIselect",
-            "Pippin Prep", "BluePippin", "gel purification", "library QC", "library quality control",
-            "library quantified", "library quantification", "Qubit", "Bioanalyzer", "TapeStation",
-            "Fragment Analyzer", "library concentration", "library molarity", "equimolar", "pooled",
-            "pooling", "library pool", "normalized libraries", "sequenced", "sequencing", "sequenced on",
-            "sequencing platform", "sequencing instrument", "sequencer", "Illumina", "MiSeq", "MiniSeq",
-            "NextSeq", "HiSeq", "NovaSeq", "Ion Torrent", "Ion PGM", "DNBSEQ", "BGISEQ", "MGISEQ",
-            "PacBio", "Sequel", "Revio", "Oxford Nanopore", "MinION", "GridION", "PromethION", "454",
-            "GS FLX", "sequencing kit", "reagent kit", "sequencing chemistry", "MiSeq Reagent Kit",
-            "flow cell", "paired-end", "paired end", "single-end", "single end", "2 x 250", "2x250",
-            "2 x 150", "PE250", "PE150", "read length", "sequencing facility", "sequencing center",
-            "sequencing centre", "sequenced at",
-        ),
-        terms=(
-            CategoryTerm("adapter_forward", (
-                "forward sequencing adapter", "forward adapter sequence", "Read 1 adapter",
-                "R1 adapter sequence", "5' sequencing adapter", "forward adapter 5'-3'",
-                "P5-side adapter", "forward overhang sequence", "adapter on forward primer",
-                "forward library adapter", "forward overhang", "Illumina overhang",
-                "primer overhang", "primer tail", "5′ tail", "sequencing tail",
-                "fusion primer sequence", "adapter-tailed primer", "adapter-tagged primer",
-                "adapter-linked primer",
-            ), definition='The nucleotide sequence of the forward/Read-1 sequencing adapter or adapter overhang. Do not return the locus-specific PCR primer unless it is explicitly part of the adapter sequence requested.'),
-            CategoryTerm("adapter_reverse", (
-                "reverse sequencing adapter", "reverse adapter sequence", "Read 2 adapter",
-                "R2 adapter sequence", "3' sequencing adapter", "reverse adapter 5'-3'",
-                "P7-side adapter", "reverse overhang sequence", "adapter on reverse primer",
-                "reverse library adapter", "reverse overhang", "Illumina overhang",
-                "primer overhang", "primer tail", "5′ tail", "sequencing tail",
-                "fusion primer sequence", "adapter-tailed primer", "adapter-tagged primer",
-                "adapter-linked primer",
-            ), definition='The nucleotide sequence of the reverse/Read-2 sequencing adapter or adapter overhang.'),
-            CategoryTerm("barcoding_pcr_appr", (
-                "one-step PCR", "single-step PCR", "two-step PCR", "two-stage PCR",
-                "second PCR indexing", "fusion-primer approach", "tailed-primer approach",
-                "indices incorporated during PCR", "adapter ligation", "ligation-based library",
-            ), definition='How adapters/indexes/barcodes were incorporated into metabarcoding libraries: one-step PCR, two-step PCR, or ligation-based preparation.'),
-            CategoryTerm("instrument", (
-                "sequencing instrument", "sequencer model", "instrument model",
-                "sequenced using a", "sequenced on a", "sequencing performed on", "sequencer used",
-                "manufacturer and model", "sequencing system model", "instrument used for sequencing",
-            ), definition='The specific manufacturer/model of the sequencing instrument used.'),
-            CategoryTerm("platform", (
-                "sequencing platform", "sequencing technology", "platform used for sequencing",
-                "sequencing platform was", "high-throughput sequencing platform",
-                "next-generation sequencing platform", "NGS platform", "platform manufacturer",
-                "sequencing technology used", "sequenced using the platform",
-            ), definition='The broad sequencing technology/platform family, such as Illumina, Ion Torrent, PacBio SMRT, Oxford Nanopore, or DNBSEQ.'),
-            CategoryTerm("seq_kit", (
-                "sequencing kit", "sequencing reagent kit", "reagent kit", "sequencing chemistry",
-                "flow-cell kit", "sequencing cartridge", "cycle kit", "sequencing reagents",
-                "chemistry version", "sequencing kit version",
-            ), definition='The name/version of the sequencing reagent kit, sequencing chemistry, flow-cell kit, or cartridge used to generate sequence reads.'),
-            CategoryTerm("seq_method_additional", fallback_only=True, definition='Other useful library-preparation or sequencing methodological information not represented by a more specific field.'),
-        ),
-    ),
-    SectionCategory(
-        name="raw_read_preprocessing",
-        label="Raw read preprocessing",
-        keywords=(
-            # General
-            "raw reads", "raw sequences", "FASTQ", "read preprocessing", "sequence preprocessing",
-            "pre-processing", "processed reads", "quality control", "quality filtering",
-            "quality filtered", "read filtering", "filtered reads",
-            # Demultiplexing
-            "demultiplexed", "demultiplexing", "demux", "assigned to samples", "barcode splitting",
-            "index matching", "barcode mismatch", "index mismatch", "bcl2fastq", "BCL Convert",
-            "qiime demux", "ngsfilter",
-            # Primer / adapter trimming
-            "primer removal", "primer trimming", "primers removed", "adapter removal",
-            "adapter trimming", "adapters removed", "trimmed", "trimming", "Cutadapt", "q2-cutadapt",
-            "Trimmomatic", "fastp", "BBDuk", "AdapterRemoval", "Trim Galore",
-            # Quality/error filtering
-            "Phred", "quality score", "Q score", "Q20", "Q30", "expected error", "expected errors",
-            "maxEE", "quality threshold", "quality cutoff", "low-quality reads", "filterAndTrim",
-            "fastq_maxee", "truncQ",
-            # Length filtering
-            "minimum length", "maximum length", "read length cutoff", "length filtering",
-            "short reads removed", "reads shorter than", "reads longer than", "MINLEN", "min_len",
-            # Paired-end merging
-            "paired reads merged", "paired-end merging", "merge pairs", "merged reads", "joined reads",
-            "forward and reverse reads", "minimum overlap", "overlap", "mergePairs",
-            "fastq_mergepairs", "FLASH", "PEAR",
-        ),
-        # trim_method/trim_param, demux_tool/demux_max_mismatch,
-        # error_rate_tool/error_rate_type, merge_tool/merge_min_overlap,
-        # and min_len_cutoff/min_len_tool all removed entirely per an
-        # explicit user request ("negligible... don't want to waste
-        # compute on them") -- suppressed from export in exports/faire.py's
-        # PROJECT_METADATA_SUPPRESSED_FIELDS and no longer extracted.
-        # screen_nontarget_method removed entirely per an explicit user
-        # request -- no longer extracted, mapped, or exported anywhere
-        # (its own MappingRule and target column are gone too).
-        terms=(),
-    ),
-    SectionCategory(
-        name="otu_asv_generation_filtering",
-        label="OTU/ASV generation + filtering & curation",
-        keywords=(
-            # General
-            "ASV", "ASVs", "amplicon sequence variant", "amplicon sequence variants", "sequence variant",
-            "exact sequence variant", "ESV", "OTU", "OTUs", "operational taxonomic unit",
-            "operational taxonomic units", "feature", "features", "feature table", "ASV table",
-            "OTU table", "abundance table", "sequence table",
-            # Denoising / ASV generation
-            "denoised", "denoising", "ASVs were inferred", "sequence variants were inferred", "DADA2",
-            "Deblur", "UNOISE", "UNOISE2", "UNOISE3", "learnErrors", "error model", "dereplication",
-            "dereplicated", "unique sequences",
-            # OTU clustering
-            "OTU clustering", "clustered into OTUs", "sequences were clustered", "clustering threshold",
-            "similarity threshold", "97% similarity", "99% similarity", "sequence identity", "UPARSE",
-            "UCLUST", "USEARCH", "VSEARCH", "SWARM", "SUMACLUST", "CD-HIT",
-            # Chimera removal
-            "chimera", "chimeras", "chimeric", "bimera", "bimeras", "chimera removal",
-            "chimera detection", "removeBimeraDenovo", "UCHIME", "uchime_denovo", "uchime_ref",
-            # Low-abundance filtering
-            "low abundance", "low-abundance", "rare ASVs", "rare OTUs", "minimum reads",
-            "minimum read count", "read-count threshold", "relative abundance threshold", "singletons",
-            "doubletons", "minsize", "fewer than reads",
-            # Contaminant / control filtering
-            "contaminant", "contamination filtering", "decontam", "microDecon",
-            "negative control filtering", "blank filtering", "blank threshold", "background reads",
-            "control threshold", "PhiX", "PhiX control", "PhiX genome", "PhiX reads",
-            "PhiX sequences", "leftover PhiX",
-            # Final feature curation
-            "non-target taxa removed", "non-target sequences removed", "host sequences removed",
-            "chloroplast removed", "mitochondrial sequences removed", "unclassified removed",
-            "unassigned removed", "manual curation", "filtered ASV table", "filtered OTU table",
-            "feature table was filtered", "LULU", "replicates combined", "PCR replicates pooled",
-        ),
-        terms=(
-            CategoryTerm("otu_clust_tool", (
-                "OTUs clustered using", "OTU clustering performed with", "sequences clustered using",
-                "ASVs inferred using", "ASV inference performed with",
-                "sequence variants inferred using", "denoising performed with",
-                "feature inference using", "OTU generation software", "ASV generation software",
-            ), definition='The software/method used to generate OTUs or infer ASVs/sequence variants from cleaned reads.'),
-            # otu_raw_description, otu_final_description, min_reads_cutoff/
-            # min_reads_tool/min_reads_cutoff_unit, and otu_clust_cutoff
-            # all removed entirely per an explicit user request
-            # ("negligible... don't want to waste compute on them") --
-            # suppressed from export in exports/faire.py's PROJECT_
-            # METADATA_SUPPRESSED_FIELDS and no longer extracted or
-            # generated anywhere.
-            # screen_geograph_method/screen_nontarget_method/screen_other
-            # removed entirely per an explicit user request -- no longer
-            # extracted, mapped, or exported anywhere. screen_contam_method
-            # stays (real bioinformatics-pipeline decontamination step) but
-            # its own cues/definition were replaced with a user-supplied
-            # prompt.
-            CategoryTerm("screen_contam_method", (
-                "contaminants screened using", "contaminant removal", "contamination filtering",
-                "negative-control filtering", "blank-based filtering",
-                "control-based contaminant removal", "features detected in blanks",
-                "background contamination threshold", "contaminant sequences removed",
-                "contamination screening method",
-                # User-supplied cues (verbatim).
-                "contaminant", "contamination", "blank", "negative control", "extraction blank",
-                "PCR blank", "decontam", "prevalence", "frequency", "removed if present in controls",
-            ), definition=(
-                'Extract the method or rule used after sequencing to identify, flag, or remove '
-                'sequences/OTUs/ASVs/taxa considered contaminants. This may include comparison with '
-                'negative controls, prevalence- or frequency-based contaminant detection, removal of taxa '
-                'enriched in blanks, or use of dedicated contamination-screening software. Include the '
-                'software, threshold, or decision rule when stated.'
-            )),
-        ),
-    ),
-    SectionCategory(
-        name="taxonomic_assignment",
-        label="Taxonomic assignment",
-        keywords=(
-            # General
-            "taxonomic assignment", "taxonomy assignment", "taxonomy was assigned", "assigned taxonomy",
-            "taxonomically assigned", "taxonomic classification", "taxonomic identification",
-            "taxonomic annotation", "taxonomy annotation", "classified taxonomically",
-            "species identification", "taxonomic identity", "assigned to taxa", "assigned to species",
-            "assigned to genus",
-            # Assignment software / approaches
-            "BLAST", "BLASTn", "MegaBLAST", "megablast", "QIIME 2 feature-classifier",
-            "q2-feature-classifier", "classify-sklearn", "naive Bayes", "Naive Bayesian",
-            "RDP Classifier", "SINTAX", "IDTAXA", "Kraken", "Kraken2", "PROTAX", "SEPP", "EPA-ng",
-            "pplacer", "lowest common ancestor", "LCA", "best hit", "top hit", "sequence similarity",
-            # Reference databases
-            "reference database", "reference library", "reference sequences", "SILVA", "PR2",
-            "GenBank", "NCBI nt", "NCBI nucleotide", "BOLD", "BOLD Systems", "UNITE", "RDP",
-            "NCBI nr", "NCBI database", "nonredundant NCBI database", "non-redundant NCBI database",
-            "nonredundant (nr) NCBI database", "nr database",
-            "Greengenes", "MIDORI", "MIDORI2", "MitoFish", "MetaZooGene", "Diat.barcode", "PhytoREF",
-            "FreshTrain", "custom database", "custom reference database", "in-house database",
-            # Assignment criteria
-            "percent identity", "percentage identity", "% identity", "sequence identity",
-            "similarity cutoff", "identity cutoff", "query coverage", "coverage threshold",
-            "confidence threshold", "confidence cutoff", "bootstrap", "E-value", "e-value", "best match",
-            "best hit", "top hit", "lowest common ancestor", "consensus taxonomy",
-            "species-level assignment", "genus-level assignment", "family-level assignment",
-            "ambiguous assignment", "multiple matches",
-        ),
-        terms=(
-            CategoryTerm("otu_db", (
-                "reference database", "taxonomic reference database", "taxonomy database",
-                "reference sequence database", "reference library", "matched against the database",
-                "searched against the database", "taxonomy assigned against",
-                "reference database version", "reference sequences from", "FreshTrain", "SILVA_132",
-                "NCBI nr", "NCBI database", "nonredundant NCBI database",
-                "non-redundant NCBI database", "nonredundant (nr) NCBI database", "nr database",
-                "custom reference database", "custom database", "in-house database",
-                "locally curated database", "custom reference library", "database constructed from",
-                "reference database was built", "database curated for this study",
-                "bespoke database", "study-specific reference database",
-            ), definition='The reference sequence/taxonomy database used to assign taxonomic identities to OTUs/ASVs/sequences, including version/release when reported. Include custom, locally built, curated, or study-specific databases here too.'),
-            CategoryTerm("otu_seq_comp_appr", (
-                "sequences aligned using", "sequence comparison performed using",
-                "alignment performed with", "queries aligned against",
-                "reference sequences searched using", "sequence similarity search performed with",
-                "alignment software", "query sequences compared using",
-                "reference matching performed using", "taxonomic alignment performed with",
-                # User-supplied cues (verbatim), grounded in a real paper
-                # (CREST4) that names its classification tool via
-                # "taxonomic classification ... was performed using <tool>"
-                # rather than describing an explicit "alignment" step.
-                "taxonomic classification", "taxonomic assignment", "taxonomy assigned",
-                "assigned taxonomy", "taxonomic identification", "classified taxonomically",
-                "sequences classified", "OTUs classified", "ASVs classified",
-                "representative sequences classified", "compared against reference",
-                "compared with reference sequences", "searched against", "aligned against",
-                "matched against", "sequence similarity search", "best hit", "reference database",
-                "reference sequences", "BLAST", "BLASTn", "MegaBLAST", "USEARCH", "VSEARCH",
-                "CREST", "CREST4", "Kraken", "Kraken2", "Kraken 2",
-            ), definition='Extract the name and version, if available, of the software, algorithm, or sequence-comparison tool used to compare OTU/ASV/feature sequences against reference sequences for taxonomic assignment. This includes alignment, similarity-search, or taxonomic sequence-comparison tools. Extract the tool only when the text shows that it was used to assign or identify taxonomy. Do not extract software used only for OTU/ASV generation, read trimming, assembly, or unrelated sequence comparisons.'),
-            # tax_assign_cat is deliberately NOT a CategoryTerm here -- the
-            # real FAIRe field is a controlled enum (sequence similarity /
-            # sequence composition / phylogeny / probabilistic / other),
-            # and per an explicit user confirmation ("this isn't in the
-            # text, so needs to be inferred unfortunately") the correct
-            # category is essentially never stated verbatim (a paper says
-            # "CREST4"/"LCA", never the literal words "sequence
-            # similarity"). Stage 3's own verbatim guard would reject any
-            # such classification outright, so this field is handled
-            # instead by extraction/search_flags.py's tax_assign_cat
-            # LLMJudgedSearchField, which has no such guard and is
-            # explicitly allowed to classify/infer into the fixed enum.
-            # tax_class_other/tax_class_collapse/tax_class_id_cutoff/
-            # tax_class_query_cutoff all removed entirely per an explicit
-            # user request ("negligible... don't want to waste compute on
-            # them") -- suppressed from export in exports/faire.py's
-            # PROJECT_METADATA_SUPPRESSED_FIELDS and no longer extracted or
-            # generated anywhere.
         ),
     ),
 )
@@ -1259,6 +594,44 @@ def _strip_leading_table_body(paragraph: str) -> str:
     return paragraph[method_start.start() :].strip()
 
 
+# A short subsection heading occasionally survives PDF/DOCX text
+# extraction glued directly onto the sentence that follows it, with no
+# blank line -- or even a period of its own -- separating them (confirmed
+# live, a real paper: "...stored in seawater at 80 C. Caribbean spawn I On
+# the evening of August 31, 2010..." -- "Caribbean spawn I" is the
+# heading; "Pacific spawn I In November 2010, at Orpheus Island Research
+# Station..." is another instance of the same paper's own pattern). Left
+# unsplit, the heading fragment either rides along as part of the
+# following sentence's own extracted content (a real bug: "Pacific spawn
+# I" was extracted verbatim as an internal_expedition_id value, since it
+# superficially looks like a short campaign identifier), or an entire
+# later, unrelated sample-collection event's narrative gets silently
+# absorbed into the same run as the first (a real bug: prep_method_
+# additional pulling in a second, later spawning event's full collection
+# narrative). Requires a trailing roman numeral or number (e.g. "spawn
+# I", "Station 2", "Site 3") -- the confirmed real-world shape of this
+# artifact -- so a real, unglued sentence that merely happens to end a
+# clause with a number doesn't accidentally get split (checked against 15
+# realistic negative-control sentences: kit/brand names, station
+# numbering, citation years, table references -- zero false positives).
+# Removed outright (not split into its own paragraph) -- an earlier
+# version split the paragraph at this point instead, but that fragmented
+# Stage 1's own paragraph-level keyword gate: a real, un-glued sentence
+# immediately after the heading (e.g. "gamete bundles were collected from
+# FGBNMS") can easily fail to independently contain any category keyword
+# even though the paragraph as a whole clearly does, so splitting risked
+# silently dropping real wanted content right after the heading -- caught
+# live, before this shipped, by re-running the fix against the paper that
+# motivated it. Removing just the glued substring keeps the paragraph
+# intact as one gating unit while still stopping the heading text itself
+# from ever being mistaken for a real extracted value.
+_INLINE_HEADING_RE = re.compile(
+    r"(?<=[.!?])\s+"
+    r"(?:[A-Za-z]{2,}\s+){1,3}(?:[IVXLC]{1,4}|\d{1,4})"
+    r"\s+(?=[A-Z][a-z])"
+)
+
+
 def split_into_paragraphs(text: str) -> list[str]:
     """Blank-line-delimited paragraphs, references section dropped
     (see `_drop_reference_section`) and bare figure/table captions
@@ -1266,7 +639,9 @@ def split_into_paragraphs(text: str) -> list[str]:
     end) -- both confirmed as real false-positive sources against a real
     PNAS supplementary-methods document (a cited paper's own title
     matching "amplicon"/"primer"; bare "Fig. S4. ..." caption lines
-    matching "amplicon")."""
+    matching "amplicon"). Also strips out any glued inline subsection
+    heading (see _INLINE_HEADING_RE) so it can't survive into a
+    downstream sentence and get mistaken for a real extracted value."""
     paragraphs = [p.strip() for p in _PARAGRAPH_SPLIT_RE.split(text) if p.strip()]
     paragraphs = _drop_reference_section(paragraphs)
     cleaned: list[str] = []
@@ -1275,7 +650,7 @@ def split_into_paragraphs(text: str) -> list[str]:
             continue
         stripped = _strip_leading_table_body(paragraph)
         if stripped:
-            cleaned.append(stripped)
+            cleaned.append(_INLINE_HEADING_RE.sub(" ", stripped))
     return cleaned
 
 
@@ -1290,39 +665,62 @@ def candidate_categories_for_paragraph(paragraph: str) -> frozenset[str]:
     )
 
 
-# Most categories are correctly present after a single real keyword hit
-# anywhere in the paper. targeted_qpcr_ddpcr_detection is the deliberate
-# exception, per a real live-paper finding: a paper can mention "qPCR"
-# exactly once, for a purpose that has nothing to do with a targeted qPCR/
-# ddPCR assay (e.g. "total cell numbers were taken as the sum of the
-# archaeal and bacterial 16S rRNA genes as determined by qPCR" -- a
-# quantification aside, not the paper's own assay). A genuine qPCR/ddPCR
-# paper reliably mentions this vocabulary more than once (assay setup,
-# standard curve, LOD/LOQ, controls, ...), so this category requires at
-# least 2 whole-document keyword mentions before being considered present
-# at all -- every other category keeps the original single-mention gate.
-_CATEGORY_MIN_DOCUMENT_MENTIONS: dict[str, int] = {"targeted_qpcr_ddpcr_detection": 2}
+# A short, standalone line with no terminal sentence punctuation -- the
+# common shape of a methods subsection heading ("Sample collection",
+# "2.2. DNA extraction and PCR amplification", "Library preparation and
+# sequencing") once flattened to plain text and split into its own
+# paragraph by split_into_paragraphs's blank-line rule. Deliberately
+# conservative on both bounds: real methods sentences overwhelmingly end
+# in a period and/or run well past 80 characters, so this rarely misfires
+# on genuine content -- it also means a heading glued onto the start of
+# its own following paragraph with no blank line between them (a real,
+# separate known gap -- see group_sentences_into_category_runs's own
+# bridging-limit comment) won't be recognized as a heading at all, since
+# the combined text is no longer short.
+_SECTION_HEADING_MAX_CHARS = 80
+_SECTION_HEADING_MAX_WORDS = 12
+_SENTENCE_TERMINAL_PUNCTUATION_RE = re.compile(r"[.!?]\s*$")
 
 
-def _category_mention_count(category_name: str, texts: list[tuple[str, str]]) -> int:
-    patterns = _CATEGORY_PATTERNS[category_name]
-    return sum(
-        len(pattern.findall(text)) for _title, text in texts for pattern in patterns
-    )
+def _looks_like_section_heading(paragraph: str) -> bool:
+    stripped = paragraph.strip()
+    if not stripped or len(stripped) > _SECTION_HEADING_MAX_CHARS:
+        return False
+    if _SENTENCE_TERMINAL_PUNCTUATION_RE.search(stripped):
+        return False
+    return len(stripped.split()) <= _SECTION_HEADING_MAX_WORDS
 
 
-def low_confidence_categories(texts: list[tuple[str, str]]) -> frozenset[str]:
-    """Categories in `_CATEGORY_MIN_DOCUMENT_MENTIONS` whose whole-document
-    keyword-mention count falls short of their configured minimum --
-    callers subtract this from any per-paragraph candidate set so a single
-    incidental mention never gates a whole category's worth of Stage 3
-    extraction (or the INTERNAL_SECTION_DETECTION_FIELDS diagnostic
-    column) on its own."""
-    return frozenset(
-        category_name
-        for category_name, minimum in _CATEGORY_MIN_DOCUMENT_MENTIONS.items()
-        if _category_mention_count(category_name, texts) < minimum
-    )
+def paragraphs_before_next_section_heading(text: str) -> list[str]:
+    """Stops yielding paragraphs the instant a heading-shaped paragraph
+    appears that ISN'T itself about a real category -- per an explicit
+    user instruction: "the majority of the time, sample collection and
+    prep are the first thing in methods, and then won't be mentioned
+    again. So, if the header/title of the section changes, the category
+    is over by default." Only starts watching for that boundary AFTER
+    the first paragraph that actually matches a real category's own
+    keywords, so an early, unrelated heading common before the relevant
+    one (e.g. "2.1 Study site" ahead of "2.2 Sample collection") can't
+    cut things off before any relevant content is even reached. A
+    heading that itself still matches a category's keywords (e.g. "2.2
+    Sample collection and DNA extraction") is real content, not a
+    boundary, and keeps the run going."""
+    kept: list[str] = []
+    seen_content = False
+    for paragraph in split_into_paragraphs(text):
+        candidates = candidate_categories_for_paragraph(paragraph)
+        if seen_content and not candidates and _looks_like_section_heading(paragraph):
+            break
+        kept.append(paragraph)
+        if candidates:
+            seen_content = True
+    return kept
+
+
+# low_confidence_categories/_CATEGORY_MIN_DOCUMENT_MENTIONS (a whole-
+# document minimum-mention-count gate) removed entirely: its only entry
+# was targeted_qpcr_ddpcr_detection, which no longer exists as a category
+# at all, per an explicit user request.
 
 
 def group_sentences_into_category_runs(
@@ -1408,46 +806,41 @@ def _runs_for_category(tagged_sentences: list[tuple[str, frozenset[str]]], categ
     return runs
 
 
-_PCR_0_1_SOURCE_CATEGORIES = ("pcr1_primary_amplification_0_1", "targeted_qpcr_ddpcr_detection_0_1")
+# A genuine PCR/qPCR/ddPCR mention -- bare "PCR" alone (word-boundary
+# matched, so it never matches inside "qPCR"/"ddPCR") plus the
+# qPCR/ddPCR/"polymerase chain reaction"/amplification vocabulary a
+# bare-"PCR" match alone would miss (e.g. "A TaqMan qPCR assay used a FAM
+# reporter dye" never says plain "PCR" anywhere).
+_PCR_MENTION_RE = re.compile(
+    r"\b(?:PCR|qPCR|ddPCR|digital\s+PCR|polymerase\s+chain\s+reaction|amplicon|amplified|amplification)\b",
+    re.IGNORECASE,
+)
 
 
-def derive_pcr_0_1_from_category_detection(
-    section_category_facts: list[RawFactCandidate],
-) -> RawFactCandidate | None:
+def derive_pcr_0_1_from_category_detection(texts: list[tuple[str, str]]) -> RawFactCandidate | None:
     """`pcr_0_1` gates a broad swath of the existing PCR/assay checklist
     (extraction/faire_fields.py's "PCR / assay setup" group, several
-    LLMJudgedSearchField entries) and used to be its own independent
-    regex scan (extraction/search_flags.py's former standalone `pcr_0_1`
-    TextSearchFlag entry, now removed) that explicitly matched
-    `qPCR`/`ddPCR` as well as plain `PCR` -- an explicit user instruction
-    ("this is essentially if category PCR1=True... worth rewiring so we
-    don't duplicate its process") asked to derive it from category
-    detection instead, so the two can never disagree.
-
-    Derived from PCR1 *or* targeted qPCR/ddPCR detection, not PCR1 alone:
-    a qPCR/ddPCR-only paper never uses the bare word "PCR"/"amplified" at
-    all (confirmed by a real, pre-existing test fixture -- "A TaqMan qPCR
-    assay used a FAM reporter dye and BHQ quencher" triggers
-    `targeted_qpcr_ddpcr_detection_0_1` but not
-    `pcr1_primary_amplification_0_1`, since word-boundary matching on
-    bare "PCR" never matches inside "qPCR"), and the old regex-based flag
-    already covered this case explicitly via its own separate `qPCR`/
-    `ddPCR` patterns. Deriving from PCR1 alone would silently narrow
-    `pcr_0_1`'s trigger conditions and stop unlocking the PCR checklist
-    group for exactly this kind of real paper."""
-    facts_by_type = {fact.fact_type_candidate: fact for fact in section_category_facts}
-    for category_fact_type in _PCR_0_1_SOURCE_CATEGORIES:
-        fact = facts_by_type.get(category_fact_type)
-        if fact is not None:
+    LLMJudgedSearchField entries). This used to derive from
+    pcr1_primary_amplification_0_1/targeted_qpcr_ddpcr_detection_0_1
+    category-presence detection instead of its own independent regex scan
+    (an explicit user instruction, to avoid the two ever disagreeing), but
+    both of those categories were removed entirely per a later explicit
+    user request (Stage 2 scoped down to sample_prep only) -- this reverts
+    to the original independent deterministic scan that mechanism had
+    replaced. Still no LLM call, still gates the identical checklist
+    swath as before."""
+    for title, text in texts:
+        match = _PCR_MENTION_RE.search(text)
+        if match:
             return RawFactCandidate(
                 entity_level=EntityLevel.STUDY,
                 fact_type_candidate="pcr_0_1",
                 raw_field_name="pcr_0_1",
                 raw_value="1",
-                source_locator=fact.source_locator,
+                source_locator=f"section:{title}",
                 support_type=SupportType.DETERMINISTICALLY_DERIVED,
-                evidence_quote=fact.evidence_quote,
-                confidence_metadata={"detector": f"derived_from_{category_fact_type}"},
+                evidence_quote=text[max(0, match.start() - 60) : match.end() + 60],
+                confidence_metadata={"detector": "pcr_mention_regex"},
             )
     return None
 
@@ -1466,14 +859,11 @@ def detect_section_categories_present(
     it."""
     found: dict[str, str] = {}
     for title, text in texts:
-        for paragraph in split_into_paragraphs(text):
+        for paragraph in paragraphs_before_next_section_heading(text):
             for category_name in candidate_categories_for_paragraph(paragraph):
                 found.setdefault(category_name, paragraph)
-    suppressed = low_confidence_categories(texts)
     facts: list[RawFactCandidate] = []
     for category in SECTION_CATEGORIES:
-        if category.name in suppressed:
-            continue
         evidence = found.get(category.name)
         if evidence is None:
             continue

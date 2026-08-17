@@ -49,6 +49,7 @@ from fair_ocean_agent.extraction.api_verification import detect_and_correct_elev
 from fair_ocean_agent.extraction.faire_fields import suppress_resolved_faire_hints_for_text
 from fair_ocean_agent.extraction.pdf import extract_pdf_sections, extract_pdf_text
 from fair_ocean_agent.extraction.publication_metadata import (
+    extract_primer_reference_citations,
     extract_publication_metadata_facts,
     generate_funding_source,
     generate_rights_holder,
@@ -63,7 +64,11 @@ from fair_ocean_agent.extraction.section_categories import (
     derive_pcr_0_1_from_category_detection,
     detect_section_categories_present,
 )
-from fair_ocean_agent.extraction.section_category_extraction import extract_section_category_facts
+from fair_ocean_agent.extraction.section_category_extraction import (
+    extract_pulled_env_var_facts,
+    extract_section_category_facts,
+    normalize_controlled_sample_prep_facts,
+)
 from fair_ocean_agent.extraction.study_factor import (
     generate_information_withheld_llm_guess,
     generate_study_factor,
@@ -86,6 +91,7 @@ from fair_ocean_agent.llm.base import LLMBackend, LLMBackendError, try_parse_jso
 from fair_ocean_agent.llm.factory import build_llm_backend
 from fair_ocean_agent.logging_setup import get_logger
 from fair_ocean_agent.mapping.faire import map_study_to_faire
+from fair_ocean_agent.mapping.primer_library import PRIMER_NAME_TO_SEQUENCE_FIELD, corpus_primer_sequence, study_primer_name
 from fair_ocean_agent.sources.base import (
     RateLimitedClient,
     RawFactCandidate,
@@ -335,6 +341,79 @@ def _persist_candidate_facts(
         if review_status is not None:
             kwargs["review_status"] = review_status
         session.add(RawFact(**kwargs))
+
+
+# pcr_primer_reference_forward/reverse -> the sequence field a corpus
+# lookup would need to already have before there's no point chasing the
+# citation further -- see corpus_primer_sequence.
+_PRIMER_REFERENCE_FIELD_TO_SEQUENCE_FIELD = {
+    "pcr_primer_reference_forward": "pcr_primer_forward",
+    "pcr_primer_reference_reverse": "pcr_primer_reverse",
+}
+
+
+def _resolve_and_seed_primer_references(
+    session: Session,
+    study: Study,
+    source: Source,
+    fulltext_xml: str | None,
+    *,
+    locator_prefix: str,
+) -> None:
+    """Resolves a primer's own bibliographic citation to a real DOI (see
+    extraction/publication_metadata.py::extract_primer_reference_citations)
+    when this paper names a primer without giving its own sequence, and
+    queues the referenced paper for the normal discovery pipeline to seed
+    (handle_discover_primer_reference_study below decides whether it's
+    actually worth chasing -- corpus already knowing the sequence, an
+    already-known Study for that DOI, and the depth cap are all checked
+    there, at task-processing time, not here, since the corpus can change
+    between now and whenever that task actually runs). Per an explicit
+    user request: "put it next in the queue of papers to seed... go all
+    levels deep." No-op for the local-PDF path (fulltext_xml is None there
+    -- no structured bibliography to resolve against)."""
+    if fulltext_xml is None:
+        return
+    primer_names = {
+        name_field: study_primer_name(session, study.study_id, name_field)
+        for name_field in PRIMER_NAME_TO_SEQUENCE_FIELD
+    }
+    if not any(primer_names.values()):
+        return
+    reference_facts = extract_primer_reference_citations(fulltext_xml, primer_names, locator_prefix=locator_prefix)
+    if not reference_facts:
+        return
+    _persist_candidate_facts(
+        session,
+        study.study_id,
+        source.source_id,
+        reference_facts,
+        extraction_method="primer_reference_citation",
+        review_status=ReviewStatus.ACCEPTED.value,
+    )
+    session.flush()
+
+    from fair_ocean_agent.workflow.task_queue import enqueue_task
+
+    for fact in reference_facts:
+        if not fact.raw_value.startswith("doi: "):
+            continue  # only a fallback reference title, nothing resolvable to chase
+        sequence_field = _PRIMER_REFERENCE_FIELD_TO_SEQUENCE_FIELD.get(fact.fact_type_candidate)
+        primer_name = (fact.confidence_metadata or {}).get("primer_name")
+        if sequence_field is None or not primer_name:
+            continue
+        doi = fact.raw_value[len("doi: ") :]
+        try:
+            normalized_doi = normalize_identifier(IdentifierType.DOI, doi)
+        except IdentifierError:
+            continue
+        enqueue_task(
+            session,
+            TaskType.DISCOVER_PRIMER_REFERENCE_STUDIES,
+            study_id=study.study_id,
+            payload={"doi": normalized_doi, "primer_name": primer_name, "sequence_field": sequence_field},
+            idempotency_key=f"DISCOVER_PRIMER_REFERENCE:{normalized_doi}",
+        )
 
 
 PersistFn = Callable[[Session, Study, SourceAdapter, SourceType, str, SourceRecord], tuple[bool, Source]]
@@ -1144,6 +1223,114 @@ def handle_discover_citing_studies(session: Session, task: Task) -> None:
     )
 
 
+def _record_primer_reference_expansion_capped_fact(
+    session: Session, study: Study, doi: str, *, reason: str
+) -> None:
+    """Same "flag, never silently drop" shape as
+    _record_citation_expansion_capped_fact above, for the backward
+    (reference-chasing) direction instead of the forward (citing-papers)
+    one."""
+    session.add(
+        RawFact(
+            study_id=study.study_id,
+            source_id=None,
+            source_locator=f"primer_reference_citation.{doi}",
+            raw_field_name="primer_reference_expansion_capped",
+            raw_value=reason,
+            fact_type_candidate="primer_reference_not_expanded",
+            entity_level=EntityLevel.PROJECT.value,
+            support_type=SupportType.DETERMINISTICALLY_DERIVED.value,
+            extraction_method="primer_reference_citation",
+            review_status=ReviewStatus.NEEDS_REVIEW.value,
+        )
+    )
+
+
+def handle_discover_primer_reference_study(session: Session, task: Task) -> None:
+    """Backward reference-chasing discovery: given a primer's own
+    bibliographic citation (a real DOI resolved from the paper's own JATS
+    <ref-list>, see extraction/publication_metadata.py::
+    extract_primer_reference_citations), seeds the referenced paper as its
+    own Study and re-enters the normal DISCOVER_IDENTIFIERS pipeline --
+    same task-queue-driven, non-in-process-recursive shape as
+    handle_discover_citing_studies above, mirrored for the opposite
+    direction (papers a primer's own citation points BACK to, not papers
+    that cite this one). If that paper's own methods text also just cites
+    the primer's origin instead of stating the sequence,
+    _resolve_and_seed_primer_references fires again on it once its own
+    EXTRACT_TEXT_FACTS runs, and this handler runs again -- ordinary task
+    processing is what makes "chase it all the way down" safe, capped by
+    DiscoveryConfig.primer_reference_expansion_max_depth (a separate,
+    smaller cap than citation_expansion_max_depth -- a different
+    discovery vector, expected to bottom out in a handful of hops per an
+    explicit user observation: "sometimes it takes 5 papers")."""
+    parent = session.get(Study, task.study_id)
+    if parent is None:
+        raise ValueError(f"Study {task.study_id} not found")
+
+    payload = task.payload or {}
+    doi = payload.get("doi")
+    primer_name = payload.get("primer_name")
+    sequence_field = payload.get("sequence_field")
+    if not doi or not primer_name or not sequence_field:
+        raise ValueError(
+            "DISCOVER_PRIMER_REFERENCE_STUDIES task requires doi, primer_name, and sequence_field in its payload"
+        )
+
+    # The corpus may already have this primer's sequence by the time this
+    # task actually runs (queues can lag well behind extraction), even if
+    # it didn't at enqueue time -- re-check now rather than trusting a
+    # possibly-stale decision.
+    if corpus_primer_sequence(session, primer_name, sequence_field) is not None:
+        return
+
+    discovery_config = load_config().discovery
+    if parent.discovery_depth >= discovery_config.primer_reference_expansion_max_depth:
+        _record_primer_reference_expansion_capped_fact(
+            session, parent, doi,
+            reason=(
+                f"discovery_depth {parent.discovery_depth} >= "
+                f"primer_reference_expansion_max_depth {discovery_config.primer_reference_expansion_max_depth}: "
+                "referenced paper not seeded"
+            ),
+        )
+        session.flush()
+        return
+
+    if find_existing_study_by_identifier(session, IdentifierType.DOI, doi) is not None:
+        return  # already known, whether via this same reference or independently
+
+    root_study_id = parent.discovery_root_study_id or parent.study_id
+    referenced_study = Study(
+        canonical_status=CanonicalStatus.CANDIDATE.value,
+        discovery_depth=parent.discovery_depth + 1,
+        discovery_parent_study_id=parent.study_id,
+        discovery_root_study_id=root_study_id,
+        discovery_trigger="primer_reference_citation",
+    )
+    session.add(referenced_study)
+    session.flush()
+    session.add(
+        ExternalIdentifier(
+            study_id=referenced_study.study_id,
+            identifier_type=IdentifierType.DOI.value,
+            identifier_value=doi,
+            source="primer_reference_citation",
+            verified=True,
+        )
+    )
+    session.flush()
+
+    from fair_ocean_agent.workflow.task_queue import enqueue_task
+
+    enqueue_task(session, TaskType.DISCOVER_IDENTIFIERS, study_id=referenced_study.study_id)
+    session.flush()
+    logger.info(
+        "primer reference discovery for %s (%s): seeded new study %s for DOI %s",
+        primer_name, sequence_field, referenced_study.study_id, doi,
+    )
+
+
 def handle_extract_text_facts(session: Session, task: Task) -> None:
     """Open-access full-text retrieval + deterministic section selection +
     LLM-based fact extraction (Milestone 4, section 10/12). Requires a
@@ -1271,6 +1458,8 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
                         "llm_generated_study_target_taxonomic_scope",
                         "llm_judged_quote_search",
                         "llm_text_extraction",
+                        "controlled_sample_prep_refinement",
+                        "nucl_acid_ext_lysis_refinement",
                     )
                 ),
             )
@@ -1311,7 +1500,7 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
     )
     flag_facts = detect_text_search_flags(section_texts, locator_prefix=locator_prefix)
     flag_facts = [*flag_facts, *detect_phix_percentage_facts(section_texts, locator_prefix=locator_prefix)]
-    pcr_0_1_fact = derive_pcr_0_1_from_category_detection(section_category_facts)
+    pcr_0_1_fact = derive_pcr_0_1_from_category_detection(list(section_texts))
     if pcr_0_1_fact is not None:
         flag_facts = [*flag_facts, pcr_0_1_fact]
     active_flags = frozenset(fact.fact_type_candidate for fact in flag_facts)
@@ -1426,6 +1615,22 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
         prompt_version=PROMPT_VERSION,
         review_status=ReviewStatus.ACCEPTED.value,
     )
+    # Second pass over x_env_var_block's own quotes only (never re-reads
+    # the paper) -- per an explicit user request to keep x_env_var_block
+    # exactly as-is while adding a filtered, structured companion field.
+    pulled_env_var_facts = extract_pulled_env_var_facts(
+        backend, section_category_term_facts, locator_prefix=locator_prefix
+    )
+    _persist_candidate_facts(
+        session,
+        study.study_id,
+        source.source_id,
+        pulled_env_var_facts,
+        extraction_method="x_pulled_env_var_refinement",
+        model_name=backend.label,
+        prompt_version=PROMPT_VERSION,
+        review_status=ReviewStatus.ACCEPTED.value,
+    )
     llm_judged_search_facts = detect_llm_judged_search_facts(
         backend,
         section_texts,
@@ -1446,6 +1651,7 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
         review_status=ReviewStatus.ACCEPTED.value,
     )
 
+    broad_text_facts: list[RawFactCandidate] = []
     for section in sections:
         try:
             facts, response = extract_facts_from_section(
@@ -1470,6 +1676,7 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
                 f"{backend.label}: text extraction returned invalid JSON after retries "
                 f"for study {study.study_id} section {section['title']!r}"
             )
+        broad_text_facts.extend(facts)
         _persist_candidate_facts(
             session,
             study.study_id,
@@ -1480,6 +1687,24 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
             prompt_version=PROMPT_VERSION,
             review_status=ReviewStatus.ACCEPTED.value,
         )
+
+    normalized_sample_prep_facts = normalize_controlled_sample_prep_facts(
+        backend,
+        [*section_category_term_facts, *broad_text_facts],
+        locator_prefix=locator_prefix,
+    )
+    _persist_candidate_facts(
+        session,
+        study.study_id,
+        source.source_id,
+        normalized_sample_prep_facts,
+        extraction_method="controlled_sample_prep_refinement",
+        model_name=backend.label,
+        prompt_version=PROMPT_VERSION,
+        review_status=ReviewStatus.ACCEPTED.value,
+    )
+
+    _resolve_and_seed_primer_references(session, study, source, fulltext_xml, locator_prefix=locator_prefix)
 
     session.flush()
 
@@ -1511,4 +1736,5 @@ def enqueue_text_extraction_backfill(session: Session) -> int:
 
 TASK_HANDLERS[TaskType.DISCOVER_IDENTIFIERS] = handle_discover_identifiers
 TASK_HANDLERS[TaskType.DISCOVER_CITING_STUDIES] = handle_discover_citing_studies
+TASK_HANDLERS[TaskType.DISCOVER_PRIMER_REFERENCE_STUDIES] = handle_discover_primer_reference_study
 TASK_HANDLERS[TaskType.EXTRACT_TEXT_FACTS] = handle_extract_text_facts

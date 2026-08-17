@@ -40,8 +40,7 @@ from fair_ocean_agent.extraction.section_categories import (
     _term_pattern,
     candidate_categories_for_paragraph,
     group_sentences_into_category_runs,
-    low_confidence_categories,
-    split_into_paragraphs,
+    paragraphs_before_next_section_heading,
 )
 from fair_ocean_agent.llm.base import LLMBackend, LLMBackendError
 from fair_ocean_agent.sources.base import RawFactCandidate
@@ -62,31 +61,124 @@ _SAMPLE_SIZE_CONTEXT_RE = re.compile(
     r"\b(?:L|mL|g|kg)\s+of\s+(?:water|sediment)\s+were\s+collected\b",
     re.IGNORECASE,
 )
+_POOLING_ACTION_RE = re.compile(r"\b(?:pool(?:ed|ing)?|combin(?:ed|ing))\b", re.IGNORECASE)
+_POOLING_SAMPLE_CONTEXT_RE = re.compile(
+    r"\b(?:DNA|RNA|nucleic\s+acids?|extracts?|samples?|subsamples?)\b",
+    re.IGNORECASE,
+)
+_FILTER_PASSIVE_ACTIVE_FIELD = "filter_passive_active_0_1"
+_FILTER_EVIDENCE_FIELDS = frozenset(
+    {
+        "filter_material",
+        "filter_name",
+        "filter_diameter",
+        "filter_surface_area",
+        "size_frac",
+        "prefilter_material",
+    }
+)
+_ACTIVE_FILTRATION_CONTEXT_RE = re.compile(
+    r"\b(?:active(?:ly)?\s+filter|pumped?|pumping|pump|vacuum|suction|peristaltic|"
+    r"pressure|overpressure|pressuri[sz]ed|compressed\s+air|syringe\s+pressure|"
+    r"forced\s+through|fan-driven|flowmeter|flow\s*rate|flowrate)\b",
+    re.IGNORECASE,
+)
+_NUCL_ACID_EXT_LYSIS_FIELD = "nucl_acid_ext_lysis"
 _UNIT_COMPANION_FIELDS = {
     "samp_vol_we_dna_ext_unit": "samp_vol_we_dna_ext",
     "samp_size_unit": "samp_size",
 }
-# A bare author-year citation, e.g. "(Vidal, Meneses & Smith, 2002)" or
-# "(Caporaso et al., 2011)" -- the shape real papers overwhelmingly use to
-# cite a primer's own source, right after naming/sequencing it, rather than
-# explicit "described by"/"reference"/"published in" phrasing. A DOI is
-# accepted too. Requires an uppercase-led author name before the year (not
-# re.IGNORECASE) to keep this from matching an unrelated parenthetical
-# aside that happens to contain a 4-digit number.
-_PRIMER_REFERENCE_CITATION_CONTEXT_RE = re.compile(
-    r"\([A-Z][^()0-9]{0,60}\d{4}[a-z]?\)|10\.\d{4,9}/\S+"
+
+
+@dataclass(frozen=True)
+class _NormalizationSpec:
+    field_name: str
+    prompt: str
+    system: str
+
+
+_NORMALIZATION_SUFFIX = "_normalized"
+_FIELD_NORMALIZATION_SPECS: tuple[_NormalizationSpec, ...] = (
+    _NormalizationSpec(
+        field_name="nucl_acid_ext_lysis",
+        system="You normalize nucleic-acid extraction lysis evidence to short controlled technique names.",
+        prompt=(
+            "From the supplied nucleic-acid extraction text, identify the techniques or reagents explicitly used "
+            "to lyse cells or disrupt biological material to release nucleic acids. Return only short standardized "
+            "technique names, separated by | when multiple methods were used.\n\n"
+            "Normalize equivalent wording to simple terms, for example:\n"
+            "bead beating, sonication, mechanical homogenization, freeze-thaw, heat lysis, SDS, CTAB, lysozyme, "
+            "proteinase K, enzymatic lysis, osmotic lysis, alkaline lysis, kit-proprietary."
+        ),
+    ),
+    _NormalizationSpec(
+        field_name="nucl_acid_ext_sep",
+        system="You normalize nucleic-acid extraction separation/purification evidence to short controlled technique names.",
+        prompt=(
+            "From the supplied nucleic-acid extraction text, identify the technique(s) used to separate or purify "
+            "nucleic acids from the lysed sample. Return only short standardized technique names, separated by | "
+            "when multiple methods were used. Normalize equivalent wording to terms such as silica/spin-column, "
+            "magnetic beads, phenol-chloroform, chloroform extraction, alcohol precipitation, solid-phase "
+            "extraction, or another clearly stated separation technique."
+        ),
+    ),
+    _NormalizationSpec(
+        field_name="prep_method_additional",
+        system="You normalize sample-preparation evidence to short controlled operation names.",
+        prompt=(
+            "From the supplied sample-preparation text, identify important preparation operations performed before "
+            "nucleic-acid extraction that are not already captured by specific filtration, storage, precipitation, "
+            "or extraction fields. Return short standardized technique names separated by |. Examples include "
+            "homogenization, grinding, cutting/slicing, subsampling, centrifugation, washing, pelleting, "
+            "resuspension, freeze-drying, drying, thawing, or mixing. Do not include sample collection, storage "
+            "conditions, filtration details already captured elsewhere, nucleic-acid extraction, PCR, or sequencing."
+        ),
+    ),
+    _NormalizationSpec(
+        field_name="nucl_acid_ext_method_additional",
+        system="You normalize additional nucleic-acid extraction evidence to short controlled procedure names.",
+        prompt=(
+            "From the supplied nucleic-acid extraction text, identify additional extraction procedures not already "
+            "represented by the extraction kit, lysis, or separation method. Return short standardized technique "
+            "names separated by |. Examples include RNase treatment, DNase treatment, inhibitor removal, repeated "
+            "extraction, carrier-assisted precipitation, desalting, or another explicitly stated "
+            "extraction-specific procedure."
+        ),
+    ),
+    _NormalizationSpec(
+        field_name="samp_collect_device",
+        system="You normalize sampling-device evidence to short controlled device names.",
+        prompt=(
+            "From the supplied sampling text, identify the physical device(s) used to obtain the environmental or "
+            "biological sample from its source. Return short standardized device names separated by | when multiple "
+            "devices were used. Examples include Niskin bottle, box corer, multicorer, Van Veen grab, sediment "
+            "corer, plankton net, syringe, swab, pump, or another explicitly stated collection device. Do not "
+            "include containers or equipment used only after collection for storage, processing, filtration, or "
+            "laboratory analysis."
+        ),
+    ),
+    _NormalizationSpec(
+        field_name="samp_collect_method",
+        system="You normalize sampling-method evidence to short controlled method names.",
+        prompt=(
+            "From the supplied sampling text, identify the method used to obtain the sample from its original "
+            "environment or source. Return short standardized method names separated by |. Examples include "
+            "water-column sampling, sediment coring, grab sampling, net sampling, swabbing, pumping, "
+            "integrated-depth sampling, surface-water sampling, or another explicitly stated collection method."
+        ),
+    ),
+    _NormalizationSpec(
+        field_name="samp_mat_process",
+        system="You normalize sample-processing evidence to short controlled technique names.",
+        prompt=(
+            "From the supplied sample-processing text, identify physical or chemical processing applied to the "
+            "collected sample before nucleic-acid extraction. Return short standardized technique names separated "
+            "by |. Examples include filtration, prefiltration, sieving, subsampling, homogenization, grinding, "
+            "cutting/slicing, centrifugation, pelleting, washing, resuspension, precipitation, freeze-drying, or "
+            "another explicitly stated processing step."
+        ),
+    ),
 )
-_PRIMER_SEQUENCE_FIELDS = {"pcr_primer_reference_forward": "pcr_primer_forward", "pcr_primer_reference_reverse": "pcr_primer_reverse"}
-# Internal-only diagnostic facts (never a real FAIRe field, same
-# non-exported-checklist precedent as internal_information_withheld_llm_
-# guess): flags a primer whose name we found in the text but whose actual
-# sequence AND reference/DOI could not be pinned down -- a candidate for a
-# future targeted supplement crawl per an explicit user request, not
-# something to guess at here.
-_PRIMER_TRACEABILITY_FLAG_FIELDS = {
-    "pcr_primer_reference_forward": ("pcr_primer_name_forward", "primer_forward_source_unresolved"),
-    "pcr_primer_reference_reverse": ("pcr_primer_name_reverse", "primer_reverse_source_unresolved"),
-}
 # concentration is meant to hold a short numeric measurement (e.g.
 # "25.4 ng/uL"), not a description of how it was measured -- confirmed
 # live, a real bug (10.1002/ece3.6071): a sentence describing the kit/
@@ -239,8 +331,8 @@ def categorize_paragraphs(
 ) -> dict[int, list[tuple[str, frozenset[str]]]]:
     """Stage 2. `gated_paragraphs` is (paragraph_text, candidate_categories)
     pairs, already filtered by Stage 1's keyword gate -- typically
-    `split_into_paragraphs` + `candidate_categories_for_paragraph` applied
-    across a document's texts. Returns {paragraph_index:
+    `paragraphs_before_next_section_heading` + `candidate_categories_for_paragraph`
+    applied across a document's texts. Returns {paragraph_index:
     tagged_sentences}, `paragraph_index` matching `gated_paragraphs`'s own
     position, ready for `group_sentences_into_category_runs`.
 
@@ -359,18 +451,28 @@ def _valid_context_for_amount_field(field_name: str, quote: str) -> bool:
         return bool(_DNA_EXTRACTION_AMOUNT_CONTEXT_RE.search(quote))
     if field_name in {"samp_size", "samp_size_unit"}:
         return bool(_SAMPLE_SIZE_CONTEXT_RE.search(quote))
+    if field_name == "pool_dna_num":
+        return bool(_POOLING_ACTION_RE.search(quote) and _POOLING_SAMPLE_CONTEXT_RE.search(quote))
     return True
 
 
-def _valid_primer_reference_context(field_name: str, quote: str) -> bool:
-    # pcr_primer_reference_forward/reverse now share pcr_primer_name_*'s
-    # own broad cues (see section_categories.py) so a plain primer-naming
-    # sentence becomes a candidate at all -- this is what actually keeps
-    # it precise: only a quote that carries a real citation/DOI shape is
-    # accepted, never a bare primer-name sentence with nothing to cite.
-    if field_name in _PRIMER_SEQUENCE_FIELDS:
-        return bool(_PRIMER_REFERENCE_CITATION_CONTEXT_RE.search(quote))
-    return True
+# adapter_forward/adapter_reverse also exist in extraction/search_flags.py's
+# LLMJudgedSearchField taxonomy, which found the same real bug this guards
+# against (10.1093/ismejo/wrae013): a citation-bracket artifact ("[ ]")
+# passing the verbatim-quote check as if it were a real adapter sequence,
+# since it does appear literally in its own quote. Stage 3's own cue list
+# for these two terms is narrower than quote-judged's, so this hasn't been
+# observed to fire here yet, but the same failure mode is equally possible
+# whenever a paper names an adapter without giving its actual sequence.
+_ADAPTER_SEQUENCE_FIELDS = frozenset({"adapter_forward", "adapter_reverse"})
+_NUCLEOTIDE_SEQUENCE_RE = re.compile(r"^[ACGTURYSWKMBDHVN]{4,}$", re.IGNORECASE)
+
+
+def _valid_sequence_value(field_name: str, value: str) -> bool:
+    if field_name not in _ADAPTER_SEQUENCE_FIELDS:
+        return True
+    compact = re.sub(r"[\s-]", "", value)
+    return bool(_NUCLEOTIDE_SEQUENCE_RE.fullmatch(compact))
 
 
 def _amount_with_unit_from_quote(quote: str) -> str | None:
@@ -419,25 +521,62 @@ def _add_missing_amount_companions(grouped: dict[str, dict]) -> None:
             break
 
 
-def _resolve_primer_reference_fields(grouped: dict[str, dict]) -> list[str]:
-    """Cross-field primer-traceability resolution, run once per category
-    after every field has been extracted (it needs to know whether the
-    sequence field also got a value). Per an explicit user request:
-    reference/DOI extraction is a fallback for when the primer's own
-    sequence isn't reported, never additive alongside it; and when a
-    primer's name is known but neither its sequence nor a reference/DOI
-    could be pinned down, that's a real gap worth flagging (a future
-    targeted supplement-crawl candidate) rather than silently leaving it
-    blank. Returns the internal-only flag field names to emit."""
-    for reference_field, sequence_field in _PRIMER_SEQUENCE_FIELDS.items():
-        if reference_field in grouped and sequence_field in grouped:
-            del grouped[reference_field]
-    flags: list[str] = []
-    for reference_field, (name_field, flag_field) in _PRIMER_TRACEABILITY_FLAG_FIELDS.items():
-        sequence_field = _PRIMER_SEQUENCE_FIELDS[reference_field]
-        if name_field in grouped and sequence_field not in grouped and reference_field not in grouped:
-            flags.append(flag_field)
-    return flags
+def _add_filter_passive_active_fallback(grouped: dict[str, dict]) -> None:
+    """Default ordinary filtration evidence to passive/0 unless an active
+    driving mechanism is already stated.
+
+    The LLM stage only emits this boolean when the field is offered as a
+    candidate and the model chooses to answer it. Real papers often say only
+    "filtered through a 0.22 um Sterivex cartridge", which is enough to fill
+    filter_name/size_frac but not enough to contain words like active,
+    passive, pump, or pressure. For the FAIRe output this still should not be
+    blank: filtration with no stated active driving mechanism is the practical
+    passive/default case.
+    """
+    if _FILTER_PASSIVE_ACTIVE_FIELD in grouped:
+        return
+    quotes: list[str] = []
+    for field_name in _FILTER_EVIDENCE_FIELDS:
+        group = grouped.get(field_name)
+        if not group:
+            continue
+        for quote in group.get("quotes") or []:
+            if quote not in quotes:
+                quotes.append(quote)
+    if not quotes:
+        return
+
+    value = "1" if any(_ACTIVE_FILTRATION_CONTEXT_RE.search(quote) for quote in quotes) else "0"
+    grouped[_FILTER_PASSIVE_ACTIVE_FIELD] = {
+        "entries": [value],
+        "quotes": quotes,
+        "entry_quotes": {value: quotes},
+    }
+
+
+# A real live audit (10.7717/peerj.9857) caught dna_cleanup_0_1 left blank
+# while dna_cleanup_method resolved to a real value ("PCR clean-up kit
+# (Fermentas)") from the exact same quote -- the boolean's own cue list
+# ("DNA was cleaned", "cleanup was performed", ...) is narrower than the
+# method field's ("cleaned using", "cleanup kit", ...) and simply didn't
+# happen to match "Amplicons were cleaned using PCR clean-up kit
+# (Fermentas)". Rather than keep the two cue lists in permanent lockstep,
+# derive the boolean directly from the method field resolving at all: a
+# real cleanup method being named is definitionally "yes, a cleanup
+# happened" -- same "derive the companion from evidence that already
+# resolved" shape as _add_filter_passive_active_fallback above.
+_BOOLEAN_COMPANION_FROM_METHOD_FIELDS = {"dna_cleanup_method": "dna_cleanup_0_1"}
+
+
+def _add_missing_boolean_companions_from_method(grouped: dict[str, dict]) -> None:
+    for method_field, boolean_field in _BOOLEAN_COMPANION_FROM_METHOD_FIELDS.items():
+        if boolean_field in grouped:
+            continue
+        method_group = grouped.get(method_field)
+        if not method_group or not method_group.get("quotes"):
+            continue
+        quotes = method_group["quotes"]
+        grouped[boolean_field] = {"entries": ["1"], "quotes": quotes, "entry_quotes": {"1": quotes}}
 
 
 def extract_category_terms(
@@ -449,8 +588,8 @@ def extract_category_terms(
     # Raised from 1024 to this codebase's usual floor alongside the same
     # truncation bug's more severe Stage 2 instance (see categorize_
     # paragraphs) -- no direct evidence yet of this one truncating on a
-    # real paper, but a category with a dense run-text (e.g.
-    # pcr1_primary_amplification) is exposed to the identical risk.
+    # real paper, but a category with a dense run-text is exposed to the
+    # identical risk.
     max_output_tokens: int | None = MIN_LLM_MAX_OUTPUT_TOKENS,
 ) -> list[RawFactCandidate]:
     """Stage 3 for one category. `run_text` is Stage 2.5's assembled
@@ -497,9 +636,9 @@ def extract_category_terms(
         # the quote was actually tagged for -- this closes that gap.
         if field_name not in candidate.term_names:
             continue
-        if not _valid_context_for_amount_field(field_name, candidate.text):
+        if not _valid_sequence_value(field_name, value):
             continue
-        if not _valid_primer_reference_context(field_name, candidate.text):
+        if not _valid_context_for_amount_field(field_name, candidate.text):
             continue
         if not _is_valid_short_numeric_value(field_name, value):
             continue
@@ -538,10 +677,12 @@ def extract_category_terms(
             group["quotes"].append(candidate.text)
 
     _add_missing_amount_companions(grouped)
+    if category.name == "sample_prep":
+        _add_filter_passive_active_fallback(grouped)
+        _add_missing_boolean_companions_from_method(grouped)
     for field_name, group in grouped.items():
         if field_name.endswith(_BOOLEAN_FIELD_SUFFIX):
             _resolve_boolean_field_entries(group)
-    primer_traceability_flags = _resolve_primer_reference_fields(grouped)
 
     facts: list[RawFactCandidate] = []
     for field_name, group in grouped.items():
@@ -557,23 +698,6 @@ def extract_category_terms(
                 confidence_metadata={"detector": "section_category_term_extraction", "category": category.name},
             )
         )
-    for flag_field in primer_traceability_flags:
-        facts.append(
-            RawFactCandidate(
-                entity_level=EntityLevel.STUDY,
-                fact_type_candidate=flag_field,
-                raw_field_name=flag_field,
-                raw_value="1",
-                source_locator=f"{locator_prefix}:section_category_terms:{category.name}:{flag_field}",
-                support_type=SupportType.DETERMINISTICALLY_DERIVED,
-                evidence_quote=None,
-                confidence_metadata={
-                    "detector": "primer_traceability_flag",
-                    "category": category.name,
-                    "description": "Primer name found but neither its sequence nor a reference/DOI could be pinned down.",
-                },
-            )
-        )
     return facts
 
 
@@ -586,11 +710,10 @@ def extract_section_category_facts(
     """The full Stage 1 -> 2 -> 2.5 -> 3 pipeline across every supplied
     (title, text) pair. Additive alongside every existing extraction
     mechanism -- see module docstring."""
-    suppressed = low_confidence_categories(texts)
     gated_paragraphs: list[tuple[str, frozenset[str]]] = []
     for _title, text in texts:
-        for paragraph in split_into_paragraphs(text):
-            candidates = candidate_categories_for_paragraph(paragraph) - suppressed
+        for paragraph in paragraphs_before_next_section_heading(text):
+            candidates = candidate_categories_for_paragraph(paragraph)
             if candidates:
                 gated_paragraphs.append((paragraph, candidates))
     if not gated_paragraphs:
@@ -614,6 +737,112 @@ def extract_section_category_facts(
         )
     facts.extend(_fallback_only_leftover_facts(run_texts_by_category, locator_prefix=locator_prefix))
     return facts
+
+
+def _quote_text_for_fact(fact: RawFactCandidate) -> str:
+    return " ".join((fact.evidence_quote or fact.raw_value or "").split())
+
+
+def _split_pipe_values(value: str) -> list[str]:
+    return [part.strip() for part in value.split("|") if part.strip()]
+
+
+def _normalization_parts(value: object) -> list[str]:
+    if isinstance(value, list):
+        pieces = [str(piece).strip() for piece in value]
+    else:
+        pieces = [piece.strip() for piece in str(value or "").split("|")]
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for piece in pieces:
+        piece = piece.strip(" ;,.")
+        if not piece or piece.casefold() in {"none", "not found", "n/a", "not applicable"}:
+            continue
+        key = piece.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(piece)
+    return normalized
+
+
+def normalize_controlled_sample_prep_facts(
+    backend: LLMBackend,
+    facts: list[RawFactCandidate],
+    *,
+    locator_prefix: str,
+    max_output_tokens: int | None = 256,
+) -> list[RawFactCandidate]:
+    """Second pass over already-extracted long-form sample-prep quotes only.
+
+    The first-pass extractors intentionally keep source-faithful sentences.
+    This refinement turns selected fields into short comparable technique
+    names, while temporarily appending the original source sentences after
+    the normalized names so audits can judge the normalization quickly.
+    """
+    facts_by_field: dict[str, list[str]] = {}
+    for spec in _FIELD_NORMALIZATION_SPECS:
+        quotes: list[str] = []
+        seen: set[str] = set()
+        for fact in facts:
+            if fact.fact_type_candidate != spec.field_name:
+                continue
+            quote = _quote_text_for_fact(fact)
+            if not quote:
+                continue
+            for part in _split_pipe_values(quote):
+                cleaned = " ".join(part.split())
+                key = cleaned.casefold()
+                if cleaned and key not in seen:
+                    seen.add(key)
+                    quotes.append(cleaned)
+        if quotes:
+            facts_by_field[spec.field_name] = quotes
+
+    normalized_facts: list[RawFactCandidate] = []
+    for spec in _FIELD_NORMALIZATION_SPECS:
+        quotes = facts_by_field.get(spec.field_name)
+        if not quotes:
+            continue
+
+        quote_block = "\n".join(f"Q{index:03d}: {quote}" for index, quote in enumerate(quotes, start=1))
+        prompt = f"""{spec.prompt}
+
+Use only these supplied quotes:
+{quote_block}
+
+Return ONLY a JSON object: {{"{spec.field_name}": "term1 | term2"}}
+"""
+        parsed, _response = backend.generate_json(
+            prompt,
+            system=spec.system,
+            temperature=0,
+            max_tokens=max_output_tokens,
+        )
+        if parsed is None:
+            raise LLMBackendError(f"{backend.label}: {spec.field_name} normalization returned invalid JSON after retries")
+        value = parsed.get(spec.field_name) if isinstance(parsed, dict) else ""
+        normalized = _normalization_parts(value)
+        if not normalized:
+            continue
+
+        normalized_field = f"{spec.field_name}{_NORMALIZATION_SUFFIX}"
+        normalized_facts.append(
+            RawFactCandidate(
+                entity_level=EntityLevel.STUDY,
+                fact_type_candidate=normalized_field,
+                raw_field_name=normalized_field,
+                raw_value=" | ".join([*normalized, *quotes]),
+                source_locator=f"{locator_prefix}:{spec.field_name}:normalized_from_extracted_quotes",
+                support_type=SupportType.EXPLICIT,
+                evidence_quote=" | ".join(quotes),
+                confidence_metadata={
+                    "detector": f"llm_normalized_{spec.field_name}",
+                    "source_quote_count": len(quotes),
+                },
+            )
+        )
+    return normalized_facts
 
 
 # A category can have more than one fallback_only term when a specific
@@ -739,3 +968,115 @@ def _fallback_only_leftover_facts(
                 )
             )
     return facts
+
+
+# x_pulled_env_var: a dedicated second pass over x_env_var_block's OWN raw
+# quotes (never re-reads the paper), per an explicit user request --
+# x_env_var_block stays exactly as-is (a broad, cue-gated capture of every
+# candidate environmental-measurement sentence), and this field extracts
+# only the genuine "name = value" pairs out of it. Two real, live-audit-
+# confirmed failure modes motivate this: (1) a candidate sentence can
+# match x_env_var_block's own cues (e.g. "chlorophyll maxima") while
+# stating no actual measured number at all -- a bare mention, not a
+# value; (2) a candidate sentence can report a real number that belongs to
+# a LATER experimental manipulation (a climate room, an incubation
+# chamber, an acclimation phase) rather than the original sample's own
+# in-situ condition at collection, and x_env_var_block's cue-gate alone
+# can't distinguish the two since both use the same variable names. Same
+# "dedicated single-purpose function" mechanism as study_factor.py's
+# generate_study_factor -- one field, one custom prompt -- but grounded
+# like every other quote-gated field in this module: the numeric value
+# itself must appear verbatim in its own cited quote (only the variable
+# NAME is allowed to be a light paraphrase/abbreviation of the quote's own
+# wording), so SupportType.EXPLICIT applies, not INFERRED.
+def extract_pulled_env_var_facts(
+    backend: LLMBackend,
+    section_category_term_facts: list[RawFactCandidate],
+    *,
+    locator_prefix: str,
+    max_output_tokens: int | None = MIN_LLM_MAX_OUTPUT_TOKENS,
+) -> list[RawFactCandidate]:
+    env_var_fact = next(
+        (fact for fact in section_category_term_facts if fact.fact_type_candidate == "x_env_var_block"),
+        None,
+    )
+    if env_var_fact is None or not env_var_fact.evidence_quote:
+        return []
+
+    quotes = [q.strip() for q in env_var_fact.evidence_quote.split(" | ") if q.strip()]
+    if not quotes:
+        return []
+
+    quote_lines = "\n".join(f"Q{i + 1:03d}: {quote}" for i, quote in enumerate(quotes))
+    prompt = f"""You are extracting genuine measured environmental-variable values that describe the ORIGINAL
+environmental sample itself (the water, sediment, soil, or other material at its point of collection) -- its
+in-situ condition at the time and place the sample was actually taken.
+
+From each candidate quote below, return one object per genuine "variable = value" pair, but ONLY when both of
+these hold:
+- The quote states an explicit measured number together with its variable (temperature, salinity, pH,
+  chlorophyll, dissolved oxygen, a nutrient concentration, etc.). A quote that only mentions a variable's name in
+  passing, with no actual number attached to it, supports nothing -- return nothing for that quote.
+- The value describes the ORIGINAL sample's own in-situ condition at collection. Do NOT extract a value from a
+  LATER experimental manipulation, incubation, acclimation, climate room, laboratory chamber, or other
+  controlled/testing condition, even if it reuses the same variable name and even if a real number is present
+  (e.g. a "climate room set to an in situ bottom water temperature of ~6C" or an "acclimation phase" measurement
+  is NOT the original sample and must be excluded).
+
+Do not invent a value. Copy the numeric value and its unit exactly as it appears in the quote.
+
+Candidate quotes:
+{quote_lines}
+
+Return ONLY a JSON array. Each object must be:
+{{"variable": "<short name or chemical formula/abbreviation for the variable>", "value": "<value copied verbatim from the quote, including its unit>", "quote_id": "Q001"}}
+"""
+    parsed, _response = backend.generate_json(
+        prompt,
+        system="You extract only genuine, in-situ, verbatim-valued environmental measurements from supplied quote IDs.",
+        temperature=0,
+        max_tokens=max_output_tokens,
+    )
+    if parsed is None:
+        raise LLMBackendError(f"{backend.label}: x_pulled_env_var extraction returned invalid JSON after retries")
+    if not isinstance(parsed, list):
+        return []
+
+    quotes_by_id = {f"Q{i + 1:03d}": quote for i, quote in enumerate(quotes)}
+    pairs: list[str] = []
+    used_quotes: list[str] = []
+    seen_pairs: set[str] = set()
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        variable = str(item.get("variable") or "").strip()
+        value = str(item.get("value") or "").strip()
+        quote_id = str(item.get("quote_id") or "").strip()
+        quote = quotes_by_id.get(quote_id)
+        if not variable or not value or quote is None:
+            continue
+        if value.casefold() not in quote.casefold():
+            continue
+        pair = f"{variable} = {value}"
+        if pair.casefold() in seen_pairs:
+            continue
+        seen_pairs.add(pair.casefold())
+        pairs.append(pair)
+        if quote not in used_quotes:
+            used_quotes.append(quote)
+
+    if not pairs:
+        return []
+
+    return [
+        RawFactCandidate(
+            entity_level=EntityLevel.STUDY,
+            fact_type_candidate="x_pulled_env_var",
+            raw_field_name="x_pulled_env_var",
+            raw_value=" | ".join(pairs),
+            source_locator=f"{locator_prefix}:x_pulled_env_var:llm_refined_from_env_var_block",
+            support_type=SupportType.EXPLICIT,
+            evidence_quote=" | ".join(used_quotes),
+            confidence_metadata={"detector": "x_pulled_env_var_refinement"},
+        )
+    ]

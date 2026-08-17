@@ -54,6 +54,12 @@ from fair_ocean_agent.database.models import (
 )
 from fair_ocean_agent.extraction.section_categories import SECTION_CATEGORIES
 from fair_ocean_agent.mapping.faire import TARGET_SCHEMA, clean_assay_name_value, resolve_project_id
+from fair_ocean_agent.mapping.primer_library import (
+    INHERITED_SEQUENCE_FIELD,
+    PRIMER_NAME_TO_SEQUENCE_FIELD,
+    corpus_primer_sequence,
+    study_primer_name,
+)
 from fair_ocean_agent.standards.faire_registry import build_faire_registry
 
 FAIRE_SCHEMA_DIR = REPO_ROOT / "schemas" / "faire"
@@ -96,6 +102,15 @@ INTERNAL_ALIAS_SAMPLE_IDS_FIELD = "internal_alias_sample_ids"
 # SAMPLE_METADATA_SUPPRESSED_FIELDS below.
 CUSTOM_ENV_VAR_BLOCK_FIELD = "x_env_var_block"
 
+# Same custom-non-FAIRe-field treatment as CUSTOM_ENV_VAR_BLOCK_FIELD, and the
+# same STUDY-level MappingRule shape -- a dedicated second pass over
+# CUSTOM_ENV_VAR_BLOCK_FIELD's own quotes (extraction/section_category_
+# extraction.py::extract_pulled_env_var_facts) that keeps only genuine
+# "name = value" measured pairs, per an explicit user request to keep
+# x_env_var_block exactly as-is and add this as a separate, filtered
+# companion column rather than replacing it.
+CUSTOM_PULLED_ENV_VAR_FIELD = "x_pulled_env_var"
+
 # Same custom-non-FAIRe-field treatment as CUSTOM_ENV_VAR_BLOCK_FIELD above,
 # for projectMetadata this time. Per an explicit user request: every real
 # column header found in a structured (CSV/TSV/XLSX/XLS) supplement table
@@ -129,7 +144,7 @@ _ALIAS_MERGE_EXCLUDED_FIELDS = frozenset({"samp_name", "materialSampleID"})
 _BROADCAST_ENTITY_PIPE_JOIN_FIELDS = frozenset({"samp_mat_process"})
 
 # extraction/section_categories.py's per-category "<name>_0_1" detection
-# facts (e.g. "pcr1_primary_amplification_0_1") -- a diagnostic coverage
+# facts (e.g. "sample_prep_0_1") -- a diagnostic coverage
 # signal for tuning that module's keyword lists against real papers, never
 # registered as real FAIRe checklist terms (not in schemas/faire/
 # classes.yaml), same internal-only precedent as INTERNAL_STUDY_ID_FIELD.
@@ -151,26 +166,46 @@ def _section_category_detection_values(session: Session, study_id: str) -> dict[
     return {field: ("1" if field in detected else "0") for field in INTERNAL_SECTION_DETECTION_FIELDS}
 
 
-# extraction/section_category_extraction.py's primer-traceability flags --
-# a primer whose name was found in the text but whose sequence AND
-# reference/DOI could not be pinned down, per an explicit user request to
-# track these as future targeted-supplement-crawl candidates. Same
-# internal-only, always-"0"-or-"1" precedent as INTERNAL_SECTION_DETECTION_
-# FIELDS above, not a real FAIRe checklist term.
+# mapping/primer_library.py's corpus-wide primer name -> sequence lookup --
+# a primer whose name we found in the text but whose actual sequence
+# couldn't be pinned down, either from this paper's own extraction or from
+# any other paper in the corpus that names the same primer, per an
+# explicit user request to track these as future targeted-reference-crawl
+# candidates (extraction/publication_metadata.py::
+# extract_primer_reference_citations + workflow/handlers.py::
+# handle_discover_primer_reference_study already do this crawl
+# automatically when a real citation DOI is found; this flag surfaces the
+# cases still left unresolved even after that). Same internal-only,
+# always-"0"-or-"1" precedent as INTERNAL_SECTION_DETECTION_FIELDS above,
+# not a real FAIRe checklist term. Computed live at export time (not its
+# own persisted RawFact) so it can never go stale relative to the corpus.
 INTERNAL_PRIMER_TRACEABILITY_FIELDS = ("primer_forward_source_unresolved", "primer_reverse_source_unresolved")
+_SEQUENCE_FIELD_TO_TRACEABILITY_FLAG = {
+    "pcr_primer_forward": "primer_forward_source_unresolved",
+    "pcr_primer_reverse": "primer_reverse_source_unresolved",
+}
 
 
 def _primer_traceability_values(session: Session, study_id: str) -> dict[str, str]:
-    flagged = set(
-        session.scalars(
-            select(RawFact.fact_type_candidate).where(
-                RawFact.study_id == study_id,
-                RawFact.entity_id.is_(None),
-                RawFact.fact_type_candidate.in_(INTERNAL_PRIMER_TRACEABILITY_FIELDS),
-            )
+    flags = {field: "0" for field in INTERNAL_PRIMER_TRACEABILITY_FIELDS}
+    for name_field, sequence_field in PRIMER_NAME_TO_SEQUENCE_FIELD.items():
+        primer_name = study_primer_name(session, study_id, name_field)
+        if not primer_name:
+            continue
+        has_own_sequence = (
+            session.scalars(
+                select(RawFact.fact_id).where(
+                    RawFact.study_id == study_id,
+                    RawFact.fact_type_candidate.in_((sequence_field, INHERITED_SEQUENCE_FIELD[sequence_field])),
+                    RawFact.review_status != ReviewStatus.REJECTED.value,
+                )
+            ).first()
+            is not None
         )
-    )
-    return {field: ("1" if field in flagged else "0") for field in INTERNAL_PRIMER_TRACEABILITY_FIELDS}
+        if has_own_sequence or corpus_primer_sequence(session, primer_name, sequence_field) is not None:
+            continue
+        flags[_SEQUENCE_FIELD_TO_TRACEABILITY_FLAG[sequence_field]] = "1"
+    return flags
 
 
 # EXPERIMENTAL, not a real FAIRe field -- see extraction/study_factor.py's
@@ -285,6 +320,26 @@ PROJECT_METADATA_SUPPRESSED_FIELDS = frozenset(
         "screen_other",
         "concentration_method",
         "concentration_unit",
+        # Removed entirely per an explicit user request ("i forgot to ask
+        # for this removal") -- no longer extracted, mapped, or exported
+        # anywhere.
+        "tax_assign_cat",
+        # Removed per explicit user request: these qPCR/PCR bookkeeping
+        # fields are low-value for the current workflow and should not
+        # consume LLM work or appear in exported tables.
+        "pcr2_analysis_software",
+        "pcr_analysis_software",
+        "automaticBaselineValue",
+        "automaticThresholdQuantificationCycle",
+        "baselineValue",
+        "pcr_assay_lod_LL",
+        "pcr_assay_lod_UL",
+        "pcr_assay_lod_techreps",
+        "pcr_assay_loq_LL",
+        "pcr_assay_loq_UL",
+        "pcr_assay_loq_techreps",
+        "std_seq",
+        "std_type",
     }
 )
 
@@ -331,6 +386,9 @@ SAMPLE_METADATA_SUPPRESSED_FIELDS = frozenset(
         "tot_org_c_meth",
         "tot_nitro_cont_meth",
         "tot_nitro_content",
+        "nitro_unit",
+        "tot_inorg_nitro",
+        "diss_oxygen",
         "concentration_method",
         "concentration_unit",
         # The following removed entirely per an explicit user request
@@ -350,9 +408,8 @@ SAMPLE_METADATA_SUPPRESSED_FIELDS = frozenset(
         # explicit user request: their combined coverage now lives in one
         # column instead, CUSTOM_ENV_VAR_BLOCK_FIELD below (extraction/
         # section_categories.py's x_env_var_block CategoryTerm, sample_prep
-        # category). Deliberately excludes diss_oxygen, which keeps its own
-        # column -- it already has a separate working LLMJudgedSearchField
-        # mechanism and was never part of the bundle.
+        # category). Legacy standalone diss_oxygen is now suppressed too:
+        # these variables are extracted through the bundled env-var route.
         "diss_inorg_carb",
         "diss_inorg_nitro",
         "diss_org_carb",
@@ -789,7 +846,13 @@ def export_faire(session: Session, output_dir: str | Path) -> dict[str, int]:
             sample_rows.append(row)
     counts["sampleMetadata"] = _write_csv(
         output_dir / "sampleMetadata.csv",
-        [INTERNAL_STUDY_ID_FIELD, INTERNAL_ALIAS_SAMPLE_IDS_FIELD, *sample_columns, CUSTOM_ENV_VAR_BLOCK_FIELD],
+        [
+            INTERNAL_STUDY_ID_FIELD,
+            INTERNAL_ALIAS_SAMPLE_IDS_FIELD,
+            *sample_columns,
+            CUSTOM_ENV_VAR_BLOCK_FIELD,
+            CUSTOM_PULLED_ENV_VAR_FIELD,
+        ],
         sample_rows,
     )
 

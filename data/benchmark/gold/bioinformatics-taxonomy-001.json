@@ -36,11 +36,6 @@
       "evidence_quote": "removed using the DADA2 consensus method"
     },
     {
-      "fact_type_candidate": "taxonomic_assignment_method",
-      "raw_value": "naive Bayesian classifier",
-      "evidence_quote": "assigned taxonomy using a naive Bayesian classifier"
-    },
-    {
       "fact_type_candidate": "reference_database",
       "raw_value": "SILVA 138",
       "evidence_quote": "against the SILVA 138 reference database"

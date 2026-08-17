@@ -36,19 +36,9 @@
       "evidence_quote": "clustered by swarm version 2.1.3"
     },
     {
-      "fact_type_candidate": "taxonomic_assignment_method",
-      "raw_value": "ecotag",
-      "evidence_quote": "Taxonomic assignment was performed via ‘ecotag"
-    },
-    {
       "fact_type_candidate": "reference_database",
       "raw_value": "EMBL database (Release version r143)",
       "evidence_quote": "against the EMBL database (Release version r143)"
-    },
-    {
-      "fact_type_candidate": "taxonomic_assignment_method",
-      "raw_value": "BLAST",
-      "evidence_quote": "An additional taxonomic assignment was carried out using BLAST against the NCBI reference database"
     },
     {
       "fact_type_candidate": "reference_database",

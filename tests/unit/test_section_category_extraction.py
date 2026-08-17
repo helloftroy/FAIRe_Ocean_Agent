@@ -4,18 +4,20 @@ import json
 
 import pytest
 
+from fair_ocean_agent.database.enums import EntityLevel, SupportType
 from fair_ocean_agent.extraction.section_categories import SECTION_CATEGORIES
 from fair_ocean_agent.extraction.section_category_extraction import (
     categorize_paragraphs,
     extract_category_terms,
+    extract_pulled_env_var_facts,
     extract_section_category_facts,
+    normalize_controlled_sample_prep_facts,
 )
 from fair_ocean_agent.llm.base import LLMBackendError
 from fair_ocean_agent.llm.mock import MockLLMBackend
+from fair_ocean_agent.sources.base import RawFactCandidate
 
-_PCR1_CATEGORY = next(c for c in SECTION_CATEGORIES if c.name == "pcr1_primary_amplification")
 _SAMPLE_PREP_CATEGORY = next(c for c in SECTION_CATEGORIES if c.name == "sample_prep")
-_OTU_ASV_CATEGORY = next(c for c in SECTION_CATEGORIES if c.name == "otu_asv_generation_filtering")
 
 
 def test_categorize_paragraphs_empty_input_makes_no_llm_call():
@@ -27,77 +29,72 @@ def test_categorize_paragraphs_empty_input_makes_no_llm_call():
 def test_categorize_paragraphs_tags_sentences_from_llm_response():
     response = json.dumps(
         [
-            {"sentence_id": "S0.0", "categories": ["pcr1_primary_amplification"]},
-            {"sentence_id": "S0.1", "categories": ["library_prep_sequencing", "assay_definition"]},
+            {"sentence_id": "S0.0", "categories": ["sample_prep"]},
+            {"sentence_id": "S0.1", "categories": []},
         ]
     )
     backend = MockLLMBackend(responses=[response])
-    paragraph = "PCR was performed. Libraries were sequenced on Illumina."
-    result = categorize_paragraphs(
-        backend, [(paragraph, frozenset({"pcr1_primary_amplification", "library_prep_sequencing", "assay_definition"}))]
-    )
-    assert result[0][0] == ("PCR was performed.", frozenset({"pcr1_primary_amplification"}))
-    assert result[0][1] == (
-        "Libraries were sequenced on Illumina.",
-        frozenset({"library_prep_sequencing", "assay_definition"}),
-    )
+    paragraph = "Samples were stored at -80C. An unrelated aside sentence."
+    result = categorize_paragraphs(backend, [(paragraph, frozenset({"sample_prep"}))])
+    assert result[0][0] == ("Samples were stored at -80C.", frozenset({"sample_prep"}))
+    assert result[0][1] == ("An unrelated aside sentence.", frozenset())
 
 
 def test_categorize_paragraphs_omitted_sentence_gets_empty_category_set():
-    response = json.dumps([{"sentence_id": "S0.0", "categories": ["pcr1_primary_amplification"]}])
+    response = json.dumps([{"sentence_id": "S0.0", "categories": ["sample_prep"]}])
     backend = MockLLMBackend(responses=[response])
-    paragraph = "PCR was performed. An unrelated aside sentence."
-    result = categorize_paragraphs(backend, [(paragraph, frozenset({"pcr1_primary_amplification"}))])
+    paragraph = "Samples were stored at -80C. An unrelated aside sentence."
+    result = categorize_paragraphs(backend, [(paragraph, frozenset({"sample_prep"}))])
     assert result[0][1] == ("An unrelated aside sentence.", frozenset())
 
 
 def test_categorize_paragraphs_ignores_unknown_category_names():
-    response = json.dumps([{"sentence_id": "S0.0", "categories": ["pcr1_primary_amplification", "not_a_real_category"]}])
+    response = json.dumps([{"sentence_id": "S0.0", "categories": ["sample_prep", "not_a_real_category"]}])
     backend = MockLLMBackend(responses=[response])
-    result = categorize_paragraphs(backend, [("PCR was performed.", frozenset({"pcr1_primary_amplification"}))])
-    assert result[0][0][1] == frozenset({"pcr1_primary_amplification"})
+    result = categorize_paragraphs(backend, [("Samples were stored at -80C.", frozenset({"sample_prep"}))])
+    assert result[0][0][1] == frozenset({"sample_prep"})
 
 
 def test_categorize_paragraphs_raises_on_invalid_json_after_retries():
     backend = MockLLMBackend(responses=["not json"])
     with pytest.raises(LLMBackendError):
-        categorize_paragraphs(backend, [("PCR was performed.", frozenset({"pcr1_primary_amplification"}))])
+        categorize_paragraphs(backend, [("Samples were stored at -80C.", frozenset({"sample_prep"}))])
 
 
 def test_extract_category_terms_no_candidates_makes_no_llm_call():
     backend = MockLLMBackend(responses=["[]"])
-    facts = extract_category_terms(backend, _PCR1_CATEGORY, "Nothing relevant here at all.", locator_prefix="test")
+    facts = extract_category_terms(backend, _SAMPLE_PREP_CATEGORY, "Nothing relevant here at all.", locator_prefix="test")
     assert facts == []
     assert backend.calls == []
 
 
 def test_extract_category_terms_extracts_verbatim_values_and_pipe_joins_conflicts():
     run_text = (
-        "PCR used a commercial master mix (Qiagen HotStarTaq). "
-        "The annealing temperature was 55C for 30 seconds. "
-        "PCR cycles: 35 cycles were performed."
+        "DNA was extracted using the DNeasy PowerSoil kit. "
+        "Samples were stored at -80C prior to extraction. "
+        "Sterile 10-mL cutoff syringes were used for subsampling."
     )
     response = json.dumps(
         [
-            {"field": "commercial_mm", "raw_value": "Qiagen HotStarTaq", "quote_id": "Q001"},
-            {"field": "annealingTemp", "raw_value": "55C", "quote_id": "Q002"},
-            {"field": "pcr_cycles", "raw_value": "35 cycles", "quote_id": "Q003"},
+            {"field": "nucl_acid_ext_kit", "raw_value": "DNeasy PowerSoil kit", "quote_id": "Q001"},
+            {"field": "samp_store_temp", "raw_value": "-80C", "quote_id": "Q002"},
+            {"field": "sterilise_method", "raw_value": "Sterile 10-mL cutoff syringes", "quote_id": "Q003"},
         ]
     )
     backend = MockLLMBackend(responses=[response])
-    facts = extract_category_terms(backend, _PCR1_CATEGORY, run_text, locator_prefix="test")
+    facts = extract_category_terms(backend, _SAMPLE_PREP_CATEGORY, run_text, locator_prefix="test")
     by_field = {f.fact_type_candidate: f for f in facts}
-    assert by_field["commercial_mm"].raw_value == "Qiagen HotStarTaq"
-    assert by_field["annealingTemp"].raw_value == "55C"
-    assert by_field["pcr_cycles"].raw_value == "35 cycles"
+    assert by_field["nucl_acid_ext_kit"].raw_value == "DNeasy PowerSoil kit"
+    assert by_field["samp_store_temp"].raw_value == "-80C"
+    assert by_field["sterilise_method"].raw_value == "Sterile 10-mL cutoff syringes"
     assert all(f.support_type.value == "explicit" for f in facts)
 
 
 def test_extract_category_terms_rejects_hallucinated_field_names():
-    run_text = "PCR amplification was performed in a total reaction volume of 25 uL."
-    response = json.dumps([{"field": "not_a_real_pcr1_field", "raw_value": "25 uL", "quote_id": "Q001"}])
+    run_text = "DNA was extracted using the DNeasy PowerSoil kit."
+    response = json.dumps([{"field": "not_a_real_sample_prep_field", "raw_value": "DNeasy PowerSoil kit", "quote_id": "Q001"}])
     backend = MockLLMBackend(responses=[response])
-    facts = extract_category_terms(backend, _PCR1_CATEGORY, run_text, locator_prefix="test")
+    facts = extract_category_terms(backend, _SAMPLE_PREP_CATEGORY, run_text, locator_prefix="test")
     assert facts == []
 
 
@@ -129,6 +126,79 @@ def test_extract_category_terms_rejects_method_description_as_a_concentration_va
     assert facts == []
 
 
+def test_extract_category_terms_pool_dna_num_keeps_pooling_sentences():
+    run_text = (
+        "DNA extracts from three replicate samples were pooled before PCR. "
+        "RNA samples were pooled in equal volumes before library preparation."
+    )
+    response = json.dumps(
+        [
+            {
+                "field": "pool_dna_num",
+                "raw_value": "DNA extracts from three replicate samples were pooled before PCR",
+                "quote_id": "Q001",
+            },
+            {
+                "field": "pool_dna_num",
+                "raw_value": "RNA samples were pooled in equal volumes before library preparation",
+                "quote_id": "Q002",
+            },
+        ]
+    )
+    backend = MockLLMBackend(responses=[response])
+    facts = extract_category_terms(backend, _SAMPLE_PREP_CATEGORY, run_text, locator_prefix="test")
+
+    assert len(facts) == 1
+    assert facts[0].fact_type_candidate == "pool_dna_num"
+    assert facts[0].raw_value == (
+        "DNA extracts from three replicate samples were pooled before PCR | "
+        "RNA samples were pooled in equal volumes before library preparation"
+    )
+
+
+def test_extract_category_terms_derives_dna_cleanup_0_1_from_resolved_method():
+    """Real bug caught live (10.7717/peerj.9857): dna_cleanup_0_1 was left
+    blank while dna_cleanup_method resolved to a real value from the exact
+    same quote ("Amplicons were cleaned using PCR clean-up kit
+    (Fermentas)") -- the boolean's own narrower cue list never matched it.
+    A resolved method is definitionally "yes, a cleanup happened"."""
+    run_text = "Amplicons were cleaned using PCR clean-up kit (Fermentas) prior to the second PCR."
+    response = json.dumps(
+        [{"field": "dna_cleanup_method", "raw_value": "PCR clean-up kit (Fermentas)", "quote_id": "Q001"}]
+    )
+    backend = MockLLMBackend(responses=[response])
+    facts = extract_category_terms(backend, _SAMPLE_PREP_CATEGORY, run_text, locator_prefix="test")
+    by_field = {f.fact_type_candidate: f.raw_value for f in facts}
+    assert by_field["dna_cleanup_method"] == "PCR clean-up kit (Fermentas)"
+    assert by_field["dna_cleanup_0_1"] == "1"
+
+
+def test_extract_category_terms_does_not_derive_dna_cleanup_0_1_when_already_answered():
+    run_text = "No cleanup was performed on the extracted DNA."
+    response = json.dumps([{"field": "dna_cleanup_0_1", "raw_value": "0", "quote_id": "Q001"}])
+    backend = MockLLMBackend(responses=[response])
+    facts = extract_category_terms(backend, _SAMPLE_PREP_CATEGORY, run_text, locator_prefix="test")
+    by_field = {f.fact_type_candidate: f.raw_value for f in facts}
+    assert by_field["dna_cleanup_0_1"] == "0"
+
+
+def test_extract_category_terms_pool_dna_num_rejects_library_pooling_without_sample_context():
+    run_text = "Sequencing libraries were pooled in equimolar amounts before loading on the MiSeq."
+    response = json.dumps(
+        [
+            {
+                "field": "pool_dna_num",
+                "raw_value": "Sequencing libraries were pooled in equimolar amounts before loading on the MiSeq",
+                "quote_id": "Q001",
+            }
+        ]
+    )
+    backend = MockLLMBackend(responses=[response])
+    facts = extract_category_terms(backend, _SAMPLE_PREP_CATEGORY, run_text, locator_prefix="test")
+
+    assert facts == []
+
+
 def test_extract_category_terms_boolean_field_accepts_1_with_no_digit_in_its_own_quote():
     """Real bug found live (10.1371/journal.pone.0303937): the generic
     verbatim-substring guard is meaningless (and actively harmful) for a
@@ -149,6 +219,30 @@ def test_extract_category_terms_boolean_field_accepts_1_with_no_digit_in_its_own
     facts = extract_category_terms(backend, _SAMPLE_PREP_CATEGORY, run_text, locator_prefix="test")
     assert len(facts) == 1
     assert facts[0].raw_value == "1"
+
+
+def test_extract_category_terms_derives_passive_filter_when_filter_present_without_active_mechanism():
+    """Generic filtration evidence should still fill filter_passive_active_0_1.
+
+    Many papers report only a filter name/material/pore size, not explicit
+    active/passive language. Once filtration is clearly present, the practical
+    default is passive/0 unless pump, pressure, vacuum, etc. are stated.
+    """
+    run_text = "Water samples were filtered through a 0.22 um Sterivex cartridge filter."
+    response = json.dumps(
+        [
+            {"field": "filter_name", "raw_value": "Sterivex", "quote_id": "Q001"},
+            {"field": "size_frac", "raw_value": "0.22 um", "quote_id": "Q001"},
+        ]
+    )
+    backend = MockLLMBackend(responses=[response])
+    facts = extract_category_terms(backend, _SAMPLE_PREP_CATEGORY, run_text, locator_prefix="test")
+
+    by_type = {fact.fact_type_candidate: fact for fact in facts}
+    assert by_type["filter_name"].raw_value == "Sterivex"
+    assert by_type["size_frac"].raw_value == "0.22 um"
+    assert by_type["filter_passive_active_0_1"].raw_value == "0"
+    assert "Sterivex" in by_type["filter_passive_active_0_1"].evidence_quote
 
 
 def test_extract_category_terms_boolean_field_rejects_non_boolean_values():
@@ -194,99 +288,13 @@ def test_extract_category_terms_rejects_values_not_present_in_the_cited_quote():
     enforced programmatically, not just via the prompt -- a value that
     doesn't literally appear in its own cited quote is discarded even if
     the model returns it."""
-    run_text = "PCR amplification was performed in a total reaction volume of 25 uL."
+    run_text = "Samples were stored at -80C prior to extraction."
     response = json.dumps(
-        [{"field": "amplificationReactionVolume", "raw_value": "50 uL", "quote_id": "Q001"}]
+        [{"field": "samp_store_temp", "raw_value": "-20C", "quote_id": "Q001"}]
     )
     backend = MockLLMBackend(responses=[response])
-    facts = extract_category_terms(backend, _PCR1_CATEGORY, run_text, locator_prefix="test")
+    facts = extract_category_terms(backend, _SAMPLE_PREP_CATEGORY, run_text, locator_prefix="test")
     assert facts == []
-
-
-# --- primer reference/traceability (explicit user request) ------------------
-
-
-def test_extract_category_terms_primer_reference_extracted_when_no_sequence_found():
-    """When only the primer's name is given (no sequence), a trailing bare
-    citation is a valid fallback source -- per an explicit user request:
-    'if a primer sequence isn't listed we just take the name... I want to
-    be able to also take the reference for primers'."""
-    run_text = "We amplified the V4 region using the universal primers 515F/806R (Caporaso et al., 2011)."
-    response = json.dumps(
-        [
-            {"field": "pcr_primer_name_forward", "raw_value": "515F", "quote_id": "Q001"},
-            {"field": "pcr_primer_name_reverse", "raw_value": "806R", "quote_id": "Q001"},
-            {"field": "pcr_primer_reference_forward", "raw_value": "(Caporaso et al., 2011)", "quote_id": "Q001"},
-            {"field": "pcr_primer_reference_reverse", "raw_value": "(Caporaso et al., 2011)", "quote_id": "Q001"},
-        ]
-    )
-    backend = MockLLMBackend(responses=[response])
-    facts = extract_category_terms(backend, _PCR1_CATEGORY, run_text, locator_prefix="test")
-    by_type = {f.fact_type_candidate: f.raw_value for f in facts}
-    assert by_type["pcr_primer_reference_forward"] == "(Caporaso et al., 2011)"
-    assert by_type["pcr_primer_reference_reverse"] == "(Caporaso et al., 2011)"
-    assert "primer_forward_source_unresolved" not in by_type
-    assert "primer_reverse_source_unresolved" not in by_type
-
-
-def test_extract_category_terms_primer_reference_dropped_when_sequence_also_present():
-    """Per an explicit user request: reference extraction is only a
-    fallback for when the sequence isn't reported -- if the sequence IS
-    extracted, the reference must not also be populated alongside it."""
-    run_text = (
-        "The forward primer sequence was 5'-GTGYCAGCMGCCGCGGTAA-3'. "
-        "We used the universal primers 515F/806R (Caporaso et al., 2011)."
-    )
-    response = json.dumps(
-        [
-            {"field": "pcr_primer_forward", "raw_value": "5'-GTGYCAGCMGCCGCGGTAA-3'", "quote_id": "Q001"},
-            {"field": "pcr_primer_reference_forward", "raw_value": "(Caporaso et al., 2011)", "quote_id": "Q002"},
-        ]
-    )
-    backend = MockLLMBackend(responses=[response])
-    facts = extract_category_terms(backend, _PCR1_CATEGORY, run_text, locator_prefix="test")
-    by_type = {f.fact_type_candidate: f.raw_value for f in facts}
-    assert by_type["pcr_primer_forward"] == "5'-GTGYCAGCMGCCGCGGTAA-3'"
-    assert "pcr_primer_reference_forward" not in by_type
-    assert "primer_forward_source_unresolved" not in by_type
-
-
-def test_extract_category_terms_flags_primer_when_neither_sequence_nor_reference_found():
-    """Per an explicit user request: 'if no reference is given and no
-    sequence given, flag it' -- a candidate for a future targeted
-    supplement crawl, surfaced as an internal-only diagnostic fact."""
-    run_text = "We amplified the V4 region using the universal primers 515F/806R for all samples."
-    response = json.dumps(
-        [
-            {"field": "pcr_primer_name_forward", "raw_value": "515F", "quote_id": "Q001"},
-            {"field": "pcr_primer_name_reverse", "raw_value": "806R", "quote_id": "Q001"},
-        ]
-    )
-    backend = MockLLMBackend(responses=[response])
-    facts = extract_category_terms(backend, _PCR1_CATEGORY, run_text, locator_prefix="test")
-    by_type = {f.fact_type_candidate: f.raw_value for f in facts}
-    assert by_type["primer_forward_source_unresolved"] == "1"
-    assert by_type["primer_reverse_source_unresolved"] == "1"
-    assert "pcr_primer_reference_forward" not in by_type
-
-
-def test_extract_category_terms_rejects_primer_reference_without_a_real_citation_shape():
-    """A hallucinated 'reference' with no citation/DOI shape in its own
-    quote is discarded rather than trusted -- the broadened cues alone
-    would otherwise let a plain primer-name sentence become a reference
-    candidate with nothing real to cite."""
-    run_text = "We amplified the V4 region using the universal primers 515F/806R for all samples."
-    response = json.dumps(
-        [
-            {"field": "pcr_primer_name_forward", "raw_value": "515F", "quote_id": "Q001"},
-            {"field": "pcr_primer_reference_forward", "raw_value": "515F/806R", "quote_id": "Q001"},
-        ]
-    )
-    backend = MockLLMBackend(responses=[response])
-    facts = extract_category_terms(backend, _PCR1_CATEGORY, run_text, locator_prefix="test")
-    by_type = {f.fact_type_candidate: f.raw_value for f in facts}
-    assert "pcr_primer_reference_forward" not in by_type
-    assert by_type["primer_forward_source_unresolved"] == "1"
 
 
 def test_extract_category_terms_rejects_value_for_field_the_quote_was_never_offered_for():
@@ -294,154 +302,37 @@ def test_extract_category_terms_rejects_value_for_field_the_quote_was_never_offe
     the verbatim guard only checks that a value's TEXT appears in its cited
     quote, not that the returned field name is one of the field(s) that
     quote was actually candidate-tagged for. A quote tagged only
-    [screen_other] ("...spurious sequences...the lowest number of reads in
-    a sample was 18,696...") also contains a read count, and the model
-    attached it to min_reads_cutoff instead of the screen_other field the
-    quote was offered for -- accepted before this fix since "18,696" is
-    genuinely verbatim in that same quote's text."""
-    run_text = (
-        "After removal of the low quality, chimera and spurious sequences (false positive sequences) "
-        "during the bioinformatic treatment and the filtration of the lowest abundant reads, the lowest "
-        "number of reads in a sample was 18,696 for the first experiment."
-    )
-    response = json.dumps([{"field": "min_reads_cutoff", "raw_value": "18,696", "quote_id": "Q001"}])
+    [samp_mat_process] ("...chopped into small pieces...the total dried
+    weight was 7 g.") also contains a weight, and a model could attach it
+    to samp_size instead of the samp_mat_process field the quote was
+    offered for -- accepted before this fix since "7 g" is genuinely
+    verbatim in that same quote's text."""
+    run_text = "The subsampled sediment was chopped into small pieces and the total dried weight was 7 g."
+    response = json.dumps([{"field": "samp_size", "raw_value": "7 g", "quote_id": "Q001"}])
     backend = MockLLMBackend(responses=[response])
-    facts = extract_category_terms(backend, _OTU_ASV_CATEGORY, run_text, locator_prefix="test")
+    facts = extract_category_terms(backend, _SAMPLE_PREP_CATEGORY, run_text, locator_prefix="test")
     assert facts == []
 
 
 def test_extract_category_terms_dedups_identical_values_across_quotes():
-    run_text = "PCR cycles: 35 cycles were performed. Later, 35 cycles were confirmed again."
+    run_text = "Samples were stored at -80C. Later, storage at -80C was confirmed again."
     response = json.dumps(
         [
-            {"field": "pcr_cycles", "raw_value": "35 cycles", "quote_id": "Q001"},
-            {"field": "pcr_cycles", "raw_value": "35 cycles", "quote_id": "Q002"},
+            {"field": "samp_store_temp", "raw_value": "-80C", "quote_id": "Q001"},
+            {"field": "samp_store_temp", "raw_value": "-80C", "quote_id": "Q002"},
         ]
     )
     backend = MockLLMBackend(responses=[response])
-    facts = extract_category_terms(backend, _PCR1_CATEGORY, run_text, locator_prefix="test")
+    facts = extract_category_terms(backend, _SAMPLE_PREP_CATEGORY, run_text, locator_prefix="test")
     assert len(facts) == 1
-    assert facts[0].raw_value == "35 cycles"
+    assert facts[0].raw_value == "-80C"
 
 
 def test_extract_category_terms_raises_on_invalid_json_after_retries():
-    run_text = "PCR used a commercial master mix (Qiagen HotStarTaq)."
+    run_text = "DNA was extracted using the DNeasy PowerSoil kit."
     backend = MockLLMBackend(responses=["not json"])
     with pytest.raises(LLMBackendError):
-        extract_category_terms(backend, _PCR1_CATEGORY, run_text, locator_prefix="test")
-
-
-def test_extract_category_terms_surfaces_rrna_f_r_primer_name_quote():
-    run_text = (
-        "The V3-V4 region of the 16S rRNA gene was amplified using universal primers "
-        "16S rRNA F and 16S rRNA R."
-    )
-    response = json.dumps(
-        [
-            {"field": "pcr_primer_name_forward", "raw_value": "16S rRNA F", "quote_id": "Q001"},
-            {"field": "pcr_primer_name_reverse", "raw_value": "16S rRNA R", "quote_id": "Q001"},
-        ]
-    )
-    backend = MockLLMBackend(responses=[response])
-
-    facts = extract_category_terms(backend, _PCR1_CATEGORY, run_text, locator_prefix="test")
-
-    by_field = {fact.fact_type_candidate: fact.raw_value for fact in facts}
-    assert by_field["pcr_primer_name_forward"] == "16S rRNA F"
-    assert by_field["pcr_primer_name_reverse"] == "16S rRNA R"
-
-
-def test_extract_category_terms_surfaces_bare_primer_pair_naming():
-    """Regression guard for a real gap found live (10.1038/s42003-024-06136-2):
-    a paper simply naming its primer pair directly ("the universal primers
-    of X/Y") -- the overwhelmingly common real-world phrasing -- matched
-    none of pcr_primer_name_forward/reverse's original cues (all meta-
-    descriptive: "primer designated", "primer ID", "primer abbreviation"),
-    so this sentence never even became a candidate quote and the field
-    silently went from populated in an earlier run to empty. Captures the
-    real prompt to confirm the sentence is actually OFFERED as a candidate
-    for both fields, not just that a canned mock response round-trips."""
-    run_text = (
-        "Amplicon of the 16 S rRNA gene was prepared using the two-round PCR amplification "
-        "strategy with the universal primers of Uni519F/806r, as described in Zhao et al."
-    )
-    captured_prompt = {}
-
-    def fake_backend(prompt: str) -> str:
-        captured_prompt["value"] = prompt
-        return json.dumps(
-            [
-                {"field": "pcr_primer_name_forward", "raw_value": "Uni519F", "quote_id": "Q001"},
-                {"field": "pcr_primer_name_reverse", "raw_value": "806r", "quote_id": "Q001"},
-            ]
-        )
-
-    backend = MockLLMBackend(responses=fake_backend)
-
-    facts = extract_category_terms(backend, _PCR1_CATEGORY, run_text, locator_prefix="test")
-
-    prompt = captured_prompt["value"]
-    quote_line = next(line for line in prompt.splitlines() if "Uni519F/806r" in line)
-    # The bracketed term list prefixing this specific candidate quote line
-    # (e.g. "Q001 [pcr_primer_name_forward, pcr_primer_name_reverse]: ...")
-    # is what actually proves the sentence was offered as a candidate for
-    # these fields -- both names also appear, unconditionally, in the
-    # prompt's own field-definition list further up, so checking the whole
-    # prompt wouldn't catch a regression back to the old, narrower cues.
-    assert "pcr_primer_name_forward" in quote_line
-    assert "pcr_primer_name_reverse" in quote_line
-
-    by_field = {fact.fact_type_candidate: fact.raw_value for fact in facts}
-    assert by_field["pcr_primer_name_forward"] == "Uni519F"
-    assert by_field["pcr_primer_name_reverse"] == "806r"
-
-
-def test_extract_section_category_facts_full_pipeline_on_real_paper_text():
-    """Grounded in the real PNAS 10.1073/pnas.2005917117 supplementary
-    methods text this module's Stage 1 gate was validated against
-    (real dense, multi-category paragraph shape), exercising Stage 1
-    (paragraph gate) -> Stage 2 (LLM categorization, mocked) -> Stage 2.5
-    (run-grouping) -> Stage 3 (LLM term extraction, mocked) end to end.
-    Uses phrasing that genuinely matches a real CategoryTerm's own
-    distinctive search cues (not just the looser category-level
-    keywords), since Stage 3's term-level gate is deliberately as strict
-    as the category-level one is loose."""
-    text = (
-        "PCR amplification was performed. The forward primer name was 515F and the reverse "
-        "primer name was 806R. The sequencing instrument was an Ion Torrent Personal Genome "
-        "Machine."
-    )
-
-    categorization_response = json.dumps(
-        [
-            {"sentence_id": "S0.0", "categories": ["pcr1_primary_amplification"]},
-            {"sentence_id": "S0.1", "categories": ["pcr1_primary_amplification"]},
-            {"sentence_id": "S0.2", "categories": ["library_prep_sequencing"]},
-        ]
-    )
-
-    def fake_backend(prompt: str) -> str:
-        if "categorizing sentences" in prompt:
-            return categorization_response
-        if 'extracting FAIRe "PCR1 / primary amplification"' in prompt:
-            return json.dumps(
-                [
-                    {"field": "pcr_primer_name_forward", "raw_value": "515F", "quote_id": "Q001"},
-                    {"field": "pcr_primer_name_reverse", "raw_value": "806R", "quote_id": "Q001"},
-                ]
-            )
-        if 'extracting FAIRe "Library preparation' in prompt:
-            return json.dumps(
-                [{"field": "instrument", "raw_value": "Ion Torrent Personal Genome Machine", "quote_id": "Q001"}]
-            )
-        return "[]"
-
-    backend = MockLLMBackend(responses=fake_backend)
-    facts = extract_section_category_facts(backend, [("Supplementary Methods", text)], locator_prefix="test")
-    by_field = {f.fact_type_candidate: f.raw_value for f in facts}
-    assert by_field["pcr_primer_name_forward"] == "515F"
-    assert by_field["pcr_primer_name_reverse"] == "806R"
-    assert by_field["instrument"] == "Ion Torrent Personal Genome Machine"
+        extract_category_terms(backend, _SAMPLE_PREP_CATEGORY, run_text, locator_prefix="test")
 
 
 def test_extract_section_category_facts_sample_prep_category_on_real_paper_text():
@@ -522,6 +413,47 @@ def test_extract_category_terms_samp_store_sol_from_real_paper_text():
     assert by_field["samp_store_sol"] == "lysis buffer"
 
 
+def test_extract_category_terms_storage_duration_location_and_method_candidates():
+    run_text = (
+        "Each sediment sub-section was put into sterile bags and stored onboard at -20C. "
+        "These samples were then transported to the laboratory under frozen conditions. "
+        "The dried samples were transferred to sterile tubes until further use."
+    )
+    captured_prompt = {}
+
+    def fake_backend(prompt: str) -> str:
+        captured_prompt["value"] = prompt
+        return json.dumps(
+            [
+                {"field": "samp_store_loc", "raw_value": "onboard", "quote_id": "Q001"},
+                {"field": "samp_store_temp", "raw_value": "-20C", "quote_id": "Q001"},
+                {
+                    "field": "samp_store_method_additional",
+                    "raw_value": "transported to the laboratory under frozen conditions",
+                    "quote_id": "Q002",
+                },
+                {"field": "samp_store_dur", "raw_value": "until further use", "quote_id": "Q003"},
+            ]
+        )
+
+    backend = MockLLMBackend(responses=fake_backend)
+    facts = extract_category_terms(backend, _SAMPLE_PREP_CATEGORY, run_text, locator_prefix="test")
+    by_field = {fact.fact_type_candidate: fact.raw_value for fact in facts}
+
+    assert by_field["samp_store_loc"] == "onboard"
+    assert by_field["samp_store_temp"] == "-20C"
+    assert by_field["samp_store_method_additional"] == "transported to the laboratory under frozen conditions"
+    assert by_field["samp_store_dur"] == "until further use"
+
+    prompt = captured_prompt["value"]
+    onboard_quote = next(line for line in prompt.splitlines() if "stored onboard" in line)
+    transported_quote = next(line for line in prompt.splitlines() if "transported to the laboratory" in line)
+    until_quote = next(line for line in prompt.splitlines() if "until further use" in line)
+    assert "samp_store_loc" in onboard_quote
+    assert "samp_store_method_additional" in transported_quote
+    assert "samp_store_dur" in until_quote
+
+
 def test_extract_category_terms_lysis_and_sep_cues_cover_a_real_manual_protocol():
     """Grounded in the real 10.1371/journal.pone.0303937 CTAB/phenol-
     chloroform manual extraction protocol: neither nucl_acid_ext_lysis
@@ -549,6 +481,126 @@ def test_extract_category_terms_lysis_and_sep_cues_cover_a_real_manual_protocol(
     by_field = {fact.fact_type_candidate: fact.raw_value for fact in facts}
     assert by_field["nucl_acid_ext_lysis"] == "treated in an ultrasonic water bath"
     assert by_field["nucl_acid_ext_sep"] == "purified by phenol-chloroform extraction"
+
+
+def test_normalize_controlled_sample_prep_facts_standardizes_then_appends_quotes():
+    facts = [
+        RawFactCandidate(
+            entity_level=EntityLevel.STUDY,
+            fact_type_candidate="nucl_acid_ext_lysis",
+            raw_field_name="nucl_acid_ext_lysis",
+            raw_value="treated in an ultrasonic water bath | proteinase K digestion",
+            source_locator="test",
+            support_type=SupportType.EXPLICIT,
+            evidence_quote="treated in an ultrasonic water bath | proteinase K digestion",
+        ),
+        RawFactCandidate(
+            entity_level=EntityLevel.STUDY,
+            fact_type_candidate="nucl_acid_ext_sep",
+            raw_field_name="nucl_acid_ext_sep",
+            raw_value="DNA was purified by phenol-chloroform extraction",
+            source_locator="test",
+            support_type=SupportType.EXPLICIT,
+            evidence_quote="DNA was purified by phenol-chloroform extraction",
+        ),
+        RawFactCandidate(
+            entity_level=EntityLevel.STUDY,
+            fact_type_candidate="prep_method_additional",
+            raw_field_name="prep_method_additional",
+            raw_value="Sediment was freeze-dried and ground with a mortar and pestle",
+            source_locator="test",
+            support_type=SupportType.EXPLICIT,
+            evidence_quote="Sediment was freeze-dried and ground with a mortar and pestle",
+        ),
+        RawFactCandidate(
+            entity_level=EntityLevel.STUDY,
+            fact_type_candidate="nucl_acid_ext_method_additional",
+            raw_field_name="nucl_acid_ext_method_additional",
+            raw_value="RNA was removed by RNase treatment",
+            source_locator="test",
+            support_type=SupportType.EXPLICIT,
+            evidence_quote="RNA was removed by RNase treatment",
+        ),
+        RawFactCandidate(
+            entity_level=EntityLevel.STUDY,
+            fact_type_candidate="samp_collect_device",
+            raw_field_name="samp_collect_device",
+            raw_value="Water samples were collected using Niskin bottles",
+            source_locator="test",
+            support_type=SupportType.EXPLICIT,
+            evidence_quote="Water samples were collected using Niskin bottles",
+        ),
+        RawFactCandidate(
+            entity_level=EntityLevel.STUDY,
+            fact_type_candidate="samp_collect_method",
+            raw_field_name="samp_collect_method",
+            raw_value="Integrated water samples were collected from the upper 50 m",
+            source_locator="test",
+            support_type=SupportType.EXPLICIT,
+            evidence_quote="Integrated water samples were collected from the upper 50 m",
+        ),
+        RawFactCandidate(
+            entity_level=EntityLevel.STUDY,
+            fact_type_candidate="samp_mat_process",
+            raw_field_name="samp_mat_process",
+            raw_value="Samples were filtered, freeze-dried, and ground before DNA extraction",
+            source_locator="test",
+            support_type=SupportType.EXPLICIT,
+            evidence_quote="Samples were filtered, freeze-dried, and ground before DNA extraction",
+        )
+    ]
+    backend = MockLLMBackend(
+        responses=[
+            json.dumps({"nucl_acid_ext_lysis": "sonication | proteinase K"}),
+            json.dumps({"nucl_acid_ext_sep": "phenol-chloroform"}),
+            json.dumps({"prep_method_additional": "freeze-drying | grinding"}),
+            json.dumps({"nucl_acid_ext_method_additional": "RNase treatment"}),
+            json.dumps({"samp_collect_device": "Niskin bottle"}),
+            json.dumps({"samp_collect_method": "integrated-depth sampling"}),
+            json.dumps({"samp_mat_process": "filtration | freeze-drying | grinding"}),
+        ]
+    )
+
+    normalized = normalize_controlled_sample_prep_facts(backend, facts, locator_prefix="test")
+
+    by_field = {fact.fact_type_candidate: fact for fact in normalized}
+    assert by_field["nucl_acid_ext_lysis_normalized"].raw_value == (
+        "sonication | proteinase K | treated in an ultrasonic water bath | proteinase K digestion"
+    )
+    assert by_field["nucl_acid_ext_sep_normalized"].raw_value == (
+        "phenol-chloroform | DNA was purified by phenol-chloroform extraction"
+    )
+    assert by_field["prep_method_additional_normalized"].raw_value == (
+        "freeze-drying | grinding | Sediment was freeze-dried and ground with a mortar and pestle"
+    )
+    assert by_field["nucl_acid_ext_method_additional_normalized"].raw_value == (
+        "RNase treatment | RNA was removed by RNase treatment"
+    )
+    assert by_field["samp_collect_device_normalized"].raw_value == (
+        "Niskin bottle | Water samples were collected using Niskin bottles"
+    )
+    assert by_field["samp_collect_method_normalized"].raw_value == (
+        "integrated-depth sampling | Integrated water samples were collected from the upper 50 m"
+    )
+    assert by_field["samp_mat_process_normalized"].raw_value == (
+        "filtration | freeze-drying | grinding | Samples were filtered, freeze-dried, and ground before DNA extraction"
+    )
+    assert "treated in an ultrasonic water bath" in backend.calls[0]["prompt"]
+    assert "DNA was purified by phenol-chloroform extraction" in backend.calls[1]["prompt"]
+    assert "Sediment was freeze-dried and ground" in backend.calls[2]["prompt"]
+    assert "RNA was removed by RNase treatment" in backend.calls[3]["prompt"]
+    assert "Water samples were collected using Niskin bottles" in backend.calls[4]["prompt"]
+    assert "Integrated water samples were collected" in backend.calls[5]["prompt"]
+    assert "Samples were filtered, freeze-dried" in backend.calls[6]["prompt"]
+
+
+def test_normalize_controlled_sample_prep_facts_makes_no_call_without_source_quotes():
+    backend = MockLLMBackend(responses=[json.dumps({"nucl_acid_ext_lysis": "sonication"})])
+
+    normalized = normalize_controlled_sample_prep_facts(backend, [], locator_prefix="test")
+
+    assert normalized == []
+    assert backend.calls == []
 
 
 def test_extract_category_terms_derives_dna_extraction_amount_from_unit_only_response():
@@ -759,3 +811,68 @@ def test_extract_section_category_facts_no_gated_paragraphs_makes_no_llm_call():
     assert facts == []
     assert backend.calls == []
 
+
+def _env_var_block_fact(quote: str) -> RawFactCandidate:
+    return RawFactCandidate(
+        entity_level=EntityLevel.STUDY,
+        fact_type_candidate="x_env_var_block",
+        raw_field_name="x_env_var_block",
+        raw_value=quote,
+        source_locator="test",
+        support_type=SupportType.EXPLICIT,
+        evidence_quote=quote,
+    )
+
+
+def test_extract_pulled_env_var_facts_keeps_only_verbatim_grounded_pairs():
+    """Real evidence (10.1093/ismejo/wrae013, STUDY-01c947869c9d): a
+    genuine in-situ reading and a later climate-room/acclimation reading
+    both use the same variable names and both state real numbers -- the
+    prompt is responsible for excluding the latter (untestable without a
+    live LLM), but the verbatim guard here must still reject any value the
+    model claims that doesn't literally appear in its own cited quote."""
+    quote = (
+        "In situ bottom water temperature (6.5°C), dissolved O2 (11.9 mg L-1), and salinity (6.4 PSU) were "
+        "measured with a ProODO probe."
+    )
+    response = json.dumps(
+        [
+            {"variable": "temperature", "value": "6.5°C", "quote_id": "Q001"},
+            {"variable": "salinity", "value": "6.4 PSU", "quote_id": "Q001"},
+            # Hallucinated -- never appears in the quote -- must be dropped.
+            {"variable": "pH", "value": "8.1", "quote_id": "Q001"},
+        ]
+    )
+    backend = MockLLMBackend(responses=[response])
+
+    facts = extract_pulled_env_var_facts(backend, [_env_var_block_fact(quote)], locator_prefix="test")
+
+    assert len(facts) == 1
+    assert facts[0].fact_type_candidate == "x_pulled_env_var"
+    assert facts[0].raw_value == "temperature = 6.5°C | salinity = 6.4 PSU"
+    assert facts[0].evidence_quote == quote
+
+
+def test_extract_pulled_env_var_facts_empty_llm_response_produces_no_fact():
+    """Real evidence (STUDY-1e007d7a6809): a quote that only names sampling
+    depths and a qualitative "chlorophyll maxima" location, with no actual
+    measured chlorophyll number, should yield nothing once the model
+    correctly reports no genuine pairs."""
+    quote = (
+        "Water samples were collected from depths of 30 m, chlorophyll maxima (Cmax), 200 m, 600 m, 2,000 m, "
+        "3,500 m, and near the bottom with the help of Niskin bottles."
+    )
+    backend = MockLLMBackend(responses=["[]"])
+
+    facts = extract_pulled_env_var_facts(backend, [_env_var_block_fact(quote)], locator_prefix="test")
+
+    assert facts == []
+
+
+def test_extract_pulled_env_var_facts_no_source_fact_makes_no_llm_call():
+    backend = MockLLMBackend(responses=["[]"])
+
+    facts = extract_pulled_env_var_facts(backend, [], locator_prefix="test")
+
+    assert facts == []
+    assert backend.calls == []

@@ -31,11 +31,6 @@
       "evidence_quote": "confidence of greater than or equal to 0.80"
     },
     {
-      "fact_type_candidate": "taxonomic_assignment_method",
-      "raw_value": "SILVAngs pipeline",
-      "evidence_quote": "reclassified through the SILVAngs pipeline"
-    },
-    {
       "fact_type_candidate": "reference_database",
       "raw_value": "SILVA 128 reference library",
       "evidence_quote": "with the SILVA 128 reference library"

@@ -10,10 +10,12 @@ import pytest
 from fair_ocean_agent.database.enums import EntityLevel, ReviewStatus, SupportType
 from fair_ocean_agent.database.models import RawFact, Study
 from fair_ocean_agent.extraction.publication_metadata import (
+    _funding_paragraphs_from_jats,
     extract_code_repo_from_text,
     extract_from_jats_authors,
     extract_from_jats_permissions,
     extract_method_section_citations,
+    extract_primer_reference_citations,
     extract_publication_metadata_facts,
     format_bibliographic_citation,
     generate_funding_source,
@@ -296,6 +298,146 @@ def test_method_section_citations_preserve_multiple_subsection_headings():
     )
 
 
+_PRIMER_XML = """
+<article>
+  <body>
+    <sec>
+      <title>Methods</title>
+      <sec>
+        <title>DNA extraction and PCR amplification</title>
+        <p>We amplified the V4 region using the forward primer 515F
+        <xref ref-type="bibr" rid="ref1">1</xref> without further modification.</p>
+      </sec>
+    </sec>
+  </body>
+  <back>
+    <ref-list>
+      <ref id="ref1">
+        <element-citation>
+          <article-title>Global patterns of 16S rRNA diversity</article-title>
+          <pub-id pub-id-type="doi">10.1038/ismej.2012.8</pub-id>
+        </element-citation>
+      </ref>
+    </ref-list>
+  </back>
+</article>
+"""
+
+
+def test_primer_reference_citations_resolves_real_doi_next_to_primer_name():
+    facts = extract_primer_reference_citations(
+        _PRIMER_XML, {"pcr_primer_name_forward": "515F", "pcr_primer_name_reverse": ""}, locator_prefix="t"
+    )
+    assert len(facts) == 1
+    assert facts[0].fact_type_candidate == "pcr_primer_reference_forward"
+    assert facts[0].raw_value == "doi: 10.1038/ismej.2012.8"
+    assert facts[0].support_type == SupportType.DETERMINISTICALLY_DERIVED
+    assert "515F" in facts[0].evidence_quote
+    assert facts[0].confidence_metadata["primer_name"] == "515F"
+    assert facts[0].confidence_metadata["ref_id"] == "ref1"
+
+
+def test_primer_reference_citations_prefers_the_citation_nearest_the_primer_name():
+    """Real bug caught live against 10.1038/s42003-024-06136-2 (PMC11009272):
+    a real Methods paragraph cites something UNRELATED earlier
+    ("Similar to Zhao et al. [28] where AOA's distribution was explored...")
+    before actually attributing the primers later in the same paragraph
+    ("...primers of Uni519F/806r, as described in Zhao et al. [38]").
+    Taking the first citation marker in the whole paragraph resolved to the
+    wrong reference (28, about AOA distribution) instead of the real one
+    (38, the actual primer source) -- the nearest marker to the primer
+    name's own position must win instead."""
+    xml = """
+    <article>
+      <body>
+        <sec>
+          <title>Methods</title>
+          <p>Similar to Zhao et al. <xref ref-type="bibr" rid="ref28">28</xref> where AOA's distribution was
+          explored, we investigated NOB. Amplicon of the 16S rRNA gene was prepared using the primers of
+          Uni519F/806r, as described in Zhao et al. <xref ref-type="bibr" rid="ref38">38</xref>.</p>
+        </sec>
+      </body>
+      <back>
+        <ref-list>
+          <ref id="ref28"><element-citation><pub-id pub-id-type="doi">10.1000/wrong-reference</pub-id></element-citation></ref>
+          <ref id="ref38"><element-citation><pub-id pub-id-type="doi">10.1000/right-reference</pub-id></element-citation></ref>
+        </ref-list>
+      </back>
+    </article>
+    """
+    facts = extract_primer_reference_citations(
+        xml, {"pcr_primer_name_forward": "Uni519F", "pcr_primer_name_reverse": ""}, locator_prefix="t"
+    )
+    assert len(facts) == 1
+    assert facts[0].raw_value == "doi: 10.1000/right-reference"
+    assert facts[0].confidence_metadata["ref_id"] == "ref38"
+
+
+def test_primer_reference_citations_falls_back_to_reference_title_without_doi():
+    xml = """
+    <article>
+      <body>
+        <sec>
+          <title>Methods</title>
+          <p>We used the reverse primer 806R <xref ref-type="bibr" rid="ref2">2</xref> as previously described.</p>
+        </sec>
+      </body>
+      <back>
+        <ref-list>
+          <ref id="ref2">
+            <element-citation>
+              <article-title>Improved reverse primer design for prokaryotic diversity</article-title>
+            </element-citation>
+          </ref>
+        </ref-list>
+      </back>
+    </article>
+    """
+    facts = extract_primer_reference_citations(
+        xml, {"pcr_primer_name_forward": "", "pcr_primer_name_reverse": "806R"}, locator_prefix="t"
+    )
+    assert len(facts) == 1
+    assert facts[0].fact_type_candidate == "pcr_primer_reference_reverse"
+    assert facts[0].raw_value == "Improved reverse primer design for prokaryotic diversity"
+    assert not facts[0].raw_value.startswith("doi: ")
+
+
+def test_primer_reference_citations_no_match_when_primer_name_not_mentioned():
+    facts = extract_primer_reference_citations(
+        _PRIMER_XML, {"pcr_primer_name_forward": "806R", "pcr_primer_name_reverse": ""}, locator_prefix="t"
+    )
+    assert facts == []
+
+
+def test_primer_reference_citations_empty_primer_names_short_circuits():
+    facts = extract_primer_reference_citations(_PRIMER_XML, {}, locator_prefix="t")
+    assert facts == []
+
+
+def test_primer_reference_citations_ignores_a_sentence_with_no_citation_marker():
+    xml = """
+    <article>
+      <body>
+        <sec>
+          <title>Methods</title>
+          <p>We amplified the V4 region using the forward primer 515F with no citation at all.</p>
+        </sec>
+      </body>
+      <back>
+        <ref-list>
+          <ref id="ref1">
+            <element-citation><pub-id pub-id-type="doi">10.1038/ismej.2012.8</pub-id></element-citation>
+          </ref>
+        </ref-list>
+      </back>
+    </article>
+    """
+    facts = extract_primer_reference_citations(
+        xml, {"pcr_primer_name_forward": "515F", "pcr_primer_name_reverse": ""}, locator_prefix="t"
+    )
+    assert facts == []
+
+
 def test_generate_funding_source_from_jats_funding_paragraph():
     xml = """
     <article>
@@ -361,6 +503,96 @@ Reference text.
     assert facts[0].support_type == SupportType.EXPLICIT
     assert "National Science Foundation" in facts[0].evidence_quote
     assert "The funders had no role" in backend.calls[0]["prompt"]
+
+
+def test_funding_source_filters_institutional_units_and_fragments():
+    xml = """
+    <article>
+      <back>
+        <sec sec-type="funding">
+          <title>Funding</title>
+          <p>Research was funded by the National Science Foundation (DEB-1054766),
+          a departmental start-up grant from Section of Integrative Biology at the
+          University of Texas at Austin, and a PADI Foundation Award.</p>
+        </sec>
+      </back>
+    </article>
+    """
+    backend = MockLLMBackend(
+        responses=[
+            json.dumps(
+                {
+                    "funding_source": (
+                        "National Science Foundation | Section of Integrative Biology at the "
+                        "University of Texas at Austin | PADI Foundation | W"
+                    )
+                }
+            )
+        ]
+    )
+
+    facts = generate_funding_source(backend, xml, locator_prefix="t")
+
+    assert len(facts) == 1
+    assert facts[0].raw_value == "National Science Foundation | PADI Foundation"
+
+
+def test_funding_source_drops_host_university_when_not_named_program():
+    xml = """
+    <article>
+      <back>
+        <sec sec-type="funding">
+          <title>Funding</title>
+          <p>This work was funded by Simons Foundation and the National Science
+          Foundation. R.Z. was supported by MIT Molina Postdoctoral Fellowship.
+          R.Z. was supported by Trond Mohn Foundation and University of Bergen
+          through Centre for Deep Sea Research.</p>
+        </sec>
+      </back>
+    </article>
+    """
+    backend = MockLLMBackend(
+        responses=[
+            json.dumps(
+                {
+                    "funding_source": (
+                        "Simons Foundation | National Science Foundation | "
+                        "MIT Molina Postdoctoral Fellowship | Trond Mohn Foundation | University of Bergen"
+                    )
+                }
+            )
+        ]
+    )
+
+    facts = generate_funding_source(backend, xml, locator_prefix="t")
+
+    assert len(facts) == 1
+    assert facts[0].raw_value == (
+        "Simons Foundation | National Science Foundation | "
+        "MIT Molina Postdoctoral Fellowship | Trond Mohn Foundation"
+    )
+
+
+def test_funding_jats_section_uses_direct_paragraphs_only():
+    xml = """
+    <article>
+      <back>
+        <sec sec-type="funding">
+          <title>Funding</title>
+          <p>This study was funded by the Research Council of Norway and the Austrian Science Fund.</p>
+          <sec>
+            <title>Sequencing method note</title>
+            <p>The utilization of these two compounds has been suggested and was supported by single-cell
+            genome sequencing in a previous experiment.</p>
+          </sec>
+        </sec>
+      </back>
+    </article>
+    """
+
+    paragraphs = _funding_paragraphs_from_jats(xml)
+
+    assert paragraphs == ["This study was funded by the Research Council of Norway and the Austrian Science Fund."]
 
 
 def test_generate_funding_source_no_funding_text_makes_no_llm_call():

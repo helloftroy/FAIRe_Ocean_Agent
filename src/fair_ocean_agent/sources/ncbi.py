@@ -238,7 +238,12 @@ _FILTER_MATERIAL_TERMS = (
     "track etched polycarbonate",
 )
 _FILTER_NAME_TERMS = ("Sterivex", "Millipore", "Whatman", "Nalgene", "Supor", "Durapore")
-_FILTER_ACTIVE_RE = re.compile(r"\bcartridge\b|\bpump(?:ed|ing)?\b|\bperistaltic\b", re.IGNORECASE)
+_FILTER_ACTIVE_RE = re.compile(
+    r"\b(?:active(?:ly)?\s+filter|pumped?|pumping|pump|peristaltic|vacuum|"
+    r"suction|pressure|overpressure|pressuri[sz]ed|compressed\s+air|forced\s+through|"
+    r"flow\s*rate|flowrate)\b",
+    re.IGNORECASE,
+)
 _FILTER_PASSIVE_RE = re.compile(r"\bpassive\b|\bsubmerged\b|\bgravity\b", re.IGNORECASE)
 _CONTEXT_WINDOW = 40
 _GENERIC_BIOSAMPLE_TITLE_RE = re.compile(
@@ -335,6 +340,8 @@ def _derive_filter_facts(value: str) -> dict[str, str]:
     if _FILTER_ACTIVE_RE.search(value):
         derived["filter_passive_active_0_1"] = "1"
     elif _FILTER_PASSIVE_RE.search(value):
+        derived["filter_passive_active_0_1"] = "0"
+    elif any(field in derived for field in ("size_frac", "filter_diameter", "filter_material", "filter_name", "prefilter_material")):
         derived["filter_passive_active_0_1"] = "0"
     return derived
 
