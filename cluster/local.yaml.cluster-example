@@ -1,0 +1,27 @@
+# Copy this to config/local.yaml on the cluster (that path is gitignored
+# on purpose -- it's where a real endpoint/API-key config lives, same
+# convention as your Mac's own config/local.yaml).
+#
+# This assumes cluster/run_extraction.sbatch starts `ollama serve` itself
+# at the top of the GPU job, on the same node/allocation the pipeline then
+# runs against -- so base_url stays localhost, exactly like your Mac
+# setup. If your cluster instead runs a persistent, shared Ollama/vLLM
+# service on a different host, point base_url at that host instead.
+
+llm:
+  enabled: true
+  provider: "openai_compatible"
+  base_url: "http://localhost:11434/v1"
+  # Same model as your local Mac runs, for a controlled comparison. Once
+  # you've confirmed the split pipeline works end to end, a real A100 has
+  # plenty of headroom for a larger/better model -- change this and re-run
+  # `ollama pull <model>` (see README's one-time model download step).
+  model: "qwen3:4b-instruct-16k"
+  num_ctx: 16384
+  extraction_max_chars_per_call: 16000
+  max_output_tokens: 2048
+  max_concurrency: 1
+  # A GPU is far less likely to time out than a memory-starved laptop, but
+  # keep some headroom over the default 180s while you're validating this
+  # setup for the first time.
+  timeout_seconds: 300

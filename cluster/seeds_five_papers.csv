@@ -1,0 +1,7 @@
+seed_id,title,doi,pmid,pmcid,bioproject_accession,ena_study_accession,dataset_id,repository,url,notes
+usual-01,,10.1038/s42003-024-06136-2,,,,,,,,s42003 -- polymetallic nodule coral/nitrite oxidizer paper, the recurring validation set
+usual-02,,10.1093/ismejo/wrae013,,,,,,,,wrae013 -- methanotroph/infauna coastal sediment paper, the recurring validation set
+usual-03,,10.7717/peerj.9857,,,,,,,,coral spawning settlement-cue paper, the recurring validation set
+usual-04,,10.3389/fmicb.2024.1295149,,,,,,,,fmicb prokaryote diversity paper, the recurring validation set
+usual-05,,10.1371/journal.pone.0303937,,,,,,,,plankton filtration bias / flowmeter paper, the recurring validation set
+usual-06,,10.1073/pnas.2005917117,,,,,,,,PNAS geochemical transition zone paper -- discovered via citation-expansion from s42003, not an original seed, but a fixture of this same validation set
