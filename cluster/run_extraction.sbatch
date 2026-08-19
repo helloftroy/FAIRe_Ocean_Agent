@@ -19,7 +19,14 @@
 #SBATCH --error=logs/extraction_%j.err
 
 set -euo pipefail
-cd "$(dirname "$0")/.."   # repo root (fair_ocean_agent/)
+# $(dirname "$0") is NOT reliable here -- sbatch commonly stages/copies the
+# submitted script before running it, so $0 can point at a spool directory
+# you don't have write access to, not this repo. SLURM_SUBMIT_DIR is the
+# standard, reliable way to get back to wherever `sbatch` was actually run
+# from (confirmed live: this exact mkdir failed with "Permission denied"
+# using the dirname approach).
+: "${SLURM_SUBMIT_DIR:?SLURM_SUBMIT_DIR is unset -- this script must be run via sbatch, not directly.}"
+cd "${SLURM_SUBMIT_DIR}"   # repo root (fair_ocean_agent/), i.e. wherever you ran `sbatch cluster/run_extraction.sbatch` from
 mkdir -p logs
 
 if [ ! -f cluster/env_activate.sh ]; then
