@@ -50,13 +50,22 @@ if [ "${ENV_MANAGER}" = "conda" ]; then
     CONDA_ENV_TARGET="${CONDA_ENV_PREFIX}"
     CONDA_CREATE_FLAG=(-p "${CONDA_ENV_PREFIX}")
     CONDA_ACTIVATE_TARGET="${CONDA_ENV_PREFIX}"
-    # Pip's own download/build cache is a SEPARATE thing from the env
-    # itself and defaults to $HOME/.cache/pip -- it can independently blow
-    # the same quota even once the env is on scratch. Default it
-    # alongside the env unless the caller already set PIP_CACHE_DIR.
+    # Two SEPARATE caches, neither the same thing as the env itself, both
+    # defaulting under $HOME and both able to independently blow the same
+    # quota even once the env is on scratch (confirmed live: the very
+    # first `conda create` failed with "Disk quota exceeded" writing to
+    # $HOME/miniforge3/pkgs/cache/... -- conda's OWN package cache --
+    # despite the env's own -p target already being on scratch):
+    #   - pip's download/build cache (PIP_CACHE_DIR, default $HOME/.cache/pip)
+    #   - conda's package cache (CONDA_PKGS_DIRS, default $HOME/miniforge3/pkgs
+    #     and $HOME/.conda/pkgs -- used by `conda create`/`conda install`,
+    #     unrelated to pip)
+    # Default both alongside the env unless the caller already set them.
     export PIP_CACHE_DIR="${PIP_CACHE_DIR:-$(dirname "${CONDA_ENV_PREFIX}")/pip_cache}"
-    mkdir -p "${PIP_CACHE_DIR}"
+    export CONDA_PKGS_DIRS="${CONDA_PKGS_DIRS:-$(dirname "${CONDA_ENV_PREFIX}")/conda_pkgs}"
+    mkdir -p "${PIP_CACHE_DIR}" "${CONDA_PKGS_DIRS}"
     echo "PIP_CACHE_DIR=${PIP_CACHE_DIR}"
+    echo "CONDA_PKGS_DIRS=${CONDA_PKGS_DIRS}"
   else
     CONDA_ENV_TARGET="${CONDA_ENV_NAME}"
     CONDA_CREATE_FLAG=(-n "${CONDA_ENV_NAME}")
@@ -116,6 +125,7 @@ if [ "${ENV_MANAGER}" = "conda" ]; then
 source "${CONDA_SH}"
 conda activate "${CONDA_ACTIVATE_TARGET}"
 $([ -n "${CONDA_ENV_PREFIX}" ] && echo "export PIP_CACHE_DIR=\"${PIP_CACHE_DIR}\"")
+$([ -n "${CONDA_ENV_PREFIX}" ] && echo "export CONDA_PKGS_DIRS=\"${CONDA_PKGS_DIRS}\"")
 _expected_prefix="${EXPECTED_PREFIX}"
 _actual_prefix="\$(python -c 'import sys; print(sys.prefix)')"
 if [ "\${_actual_prefix}" != "\${_expected_prefix}" ]; then
