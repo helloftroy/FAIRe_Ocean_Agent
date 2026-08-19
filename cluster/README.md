@@ -54,6 +54,23 @@ testing:
 CONDA_ENV_NAME=faire-vllm ./cluster/setup_env.sh
 ```
 
+**If `$HOME` has a small quota** (common on HPC -- confirmed live:
+`pip install vllm` failed partway through with "Disk quota exceeded",
+since vLLM alone pulls in torch + CUDA libraries, easily several GB),
+put the env on scratch space instead with `CONDA_ENV_PREFIX`. This also
+redirects pip's own download/build cache there (it defaults to
+`$HOME/.cache/pip` and would hit the same quota independently of where
+the env itself lives, even once the env is moved):
+
+```bash
+CONDA_ENV_PREFIX=/scratch/$USER/conda_envs/faire-agent ./cluster/setup_env.sh
+```
+
+Find your real scratch path first if you don't already know it:
+`echo $SCRATCH`, or check your cluster's docs -- the path above is just
+an illustrative example, not a guess at your specific cluster's
+convention.
+
 If your cluster doesn't have (mini)conda/miniforge at all, use a plain
 venv instead (needs a real `python3.10+` already on PATH or via
 `module load` -- `setup_env.sh` checks the version and fails with a clear
@@ -131,11 +148,11 @@ expected to show up even though it's not its own row).
 
 ```bash
 mkdir -p logs
-sbatch cluster/run_discovery.sbatch
+sbatch --account=191001-364393 cluster/run_discovery.sbatch
 # wait for it to complete -- squeue -u $USER, or:
 sbatch --dependency=afterok:<job_id_from_above> cluster/run_extraction.sbatch
 # or, for vLLM instead of the default Ollama:
-#   sbatch --dependency=afterok:<job_id_from_above> --export=ALL,LLM_BACKEND=vllm cluster/run_extraction.sbatch
+sbatch --dependency=afterok:<job_id_from_above> --export=ALL,LLM_BACKEND=vllm cluster/run_extraction.sbatch
 ```
 
 Check progress:
@@ -171,6 +188,12 @@ retry a stuck batch than to debug a single multi-day job.
 
 ## Troubleshooting
 
+- **`pip install vllm` (or anything else) fails with "Disk quota
+  exceeded"**: `$HOME` is full/quota-limited -- see `CONDA_ENV_PREFIX` in
+  the "One-time setup" section above to move the env (and pip's cache)
+  to scratch space instead. If you already have a partially-installed env
+  under `$HOME/miniforge3/envs/...` from before making this switch, free
+  the quota it used with `conda env remove -n <name>`.
 - **`sbatch: error: Invalid partition`**: the partition names in these
   scripts (`service`, `gpu-a100`) are copied from `multimodal_granite`'s
   own jobs as a starting point -- confirm the real names for your
