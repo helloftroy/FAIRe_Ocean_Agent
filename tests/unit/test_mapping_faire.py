@@ -61,6 +61,62 @@ def _fact(session, study, *, entity=None, field, value, entity_level, support=Su
     return fact
 
 
+def test_filter_passive_active_defaults_from_broad_checklist_evidence(db_session):
+    """Real gap caught live (10.1093/ismejo/wrae013): filter_name resolved
+    via the generic broad-checklist (llm_text_extraction), not the
+    category pipeline or the BioSample samp_mat_process derivation --
+    neither of which carries its own fallback for evidence gathered
+    outside its own mechanism. filter_passive_active_0_1 must still
+    default to passive/0 since no active-filtration language is present."""
+    study = _study(db_session, title="Filter passive/active broad-checklist gap")
+    _fact(db_session, study, field="filter_name", value="Henke-Ject", entity_level="study")
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    fact = (
+        db_session.query(RawFact)
+        .filter_by(study_id=study.study_id, fact_type_candidate="filter_passive_active_0_1")
+        .one()
+    )
+    assert fact.raw_value == "0"
+
+
+def test_filter_passive_active_defaults_to_active_when_pump_language_present(db_session):
+    study = _study(db_session, title="Filter passive/active with pump evidence")
+    fact = _fact(db_session, study, field="filter_name", value="Sterivex cartridge", entity_level="study")
+    fact.evidence_quote = "Water was pumped through a Sterivex cartridge filter using a peristaltic pump."
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    result = (
+        db_session.query(RawFact)
+        .filter_by(study_id=study.study_id, fact_type_candidate="filter_passive_active_0_1")
+        .one()
+    )
+    assert result.raw_value == "1"
+
+
+def test_filter_passive_active_backfill_is_idempotent_and_skips_when_already_resolved(db_session):
+    study = _study(db_session, title="Filter passive/active already resolved")
+    _fact(db_session, study, field="filter_name", value="Sterivex cartridge", entity_level="study")
+    _fact(db_session, study, field="filter_passive_active_0_1", value="1", entity_level="study")
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    count = (
+        db_session.query(RawFact)
+        .filter_by(study_id=study.study_id, fact_type_candidate="filter_passive_active_0_1")
+        .count()
+    )
+    assert count == 1
+
+
 def test_maps_sample_level_structured_facts(db_session):
     study = _study(db_session, title="Sample-level mapping")
     sample = Entity(study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN1")

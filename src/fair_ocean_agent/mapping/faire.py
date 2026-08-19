@@ -898,6 +898,76 @@ def _sync_checklist_version(session: Session, study_id: str) -> None:
     )
 
 
+_FILTER_EVIDENCE_FACT_TYPES = frozenset(
+    {"filter_material", "filter_name", "filter_diameter", "filter_surface_area", "size_frac", "prefilter_material"}
+)
+_FILTER_PASSIVE_ACTIVE_FIELD = "filter_passive_active_0_1"
+# Same regex as extraction/section_category_extraction.py's own
+# _ACTIVE_FILTRATION_CONTEXT_RE (that copy stays scoped to the category
+# pipeline's own single extraction call, on purpose -- see the docstring
+# below for why a second copy is needed here rather than importing it).
+_ACTIVE_FILTRATION_CONTEXT_RE = re.compile(
+    r"\b(?:active(?:ly)?\s+filter|pumped?|pumping|pump|peristaltic|vacuum|"
+    r"suction|pressure|overpressure|pressuri[sz]ed|compressed\s+air|syringe\s+pressure|"
+    r"forced\s+through|fan-driven|flowmeter|flow\s*rate|flowrate)\b",
+    re.IGNORECASE,
+)
+
+
+def _backfill_filter_passive_active_default(session: Session, study_id: str) -> None:
+    """Real gap confirmed live (10.1093/ismejo/wrae013): filter evidence
+    (filter_name, size_frac, ...) can come from any of three independent
+    mechanisms -- extraction/section_category_extraction.py's own
+    category-pipeline CategoryTerm cues, sources/ncbi.py's
+    _derive_filter_facts (a real BioSample's own samp_mat_process
+    attribute), or the generic broad-checklist (FaireExtractionField) --
+    but only the first two carry their own "default to passive/0 unless an
+    active mechanism is stated" fallback, each scoped to only the evidence
+    THEY themselves gathered in one call. wrae013's own filter_name came
+    from the broad-checklist path (llm_text_extraction), so neither
+    fallback ever saw it, leaving filter_passive_active_0_1 blank despite
+    real filter evidence existing. Same fallback logic, scoped instead to
+    every raw_fact this study has for a filter-evidence field, regardless
+    of which mechanism produced it. Idempotent: a filter_passive_active_0_1
+    fact from ANY mechanism (including this one, on a prior run) blocks
+    re-creation."""
+    already_has_value = session.scalar(
+        select(RawFact.fact_id).where(
+            RawFact.study_id == study_id,
+            RawFact.fact_type_candidate == _FILTER_PASSIVE_ACTIVE_FIELD,
+            RawFact.review_status != ReviewStatus.REJECTED.value,
+        )
+    )
+    if already_has_value is not None:
+        return
+    evidence_rows = session.execute(
+        select(RawFact.raw_value, RawFact.evidence_quote).where(
+            RawFact.study_id == study_id,
+            RawFact.fact_type_candidate.in_(_FILTER_EVIDENCE_FACT_TYPES),
+            RawFact.review_status != ReviewStatus.REJECTED.value,
+        )
+    ).all()
+    if not evidence_rows:
+        return
+    texts = [text for row in evidence_rows for text in row if text]
+    value = "1" if any(_ACTIVE_FILTRATION_CONTEXT_RE.search(text) for text in texts) else "0"
+    session.add(
+        RawFact(
+            study_id=study_id,
+            entity_id=None,
+            source_id=None,
+            source_locator="mapping.faire._backfill_filter_passive_active_default",
+            raw_field_name=_FILTER_PASSIVE_ACTIVE_FIELD,
+            raw_value=value,
+            fact_type_candidate=_FILTER_PASSIVE_ACTIVE_FIELD,
+            entity_level=EntityLevel.STUDY.value,
+            support_type=SupportType.DETERMINISTICALLY_DERIVED.value,
+            extraction_method="filter_passive_active_default_backfill",
+            review_status=ReviewStatus.ACCEPTED.value,
+        )
+    )
+
+
 def map_study_to_faire(session: Session, study_id: str) -> int:
     """Idempotent: re-derives every FAIRe StandardizedValue for a study
     from scratch each time it's called (delete-then-recreate), so it's safe
@@ -905,6 +975,7 @@ def map_study_to_faire(session: Session, study_id: str) -> int:
     materialize_legacy_experiment_runs(session, study_id)
     reconcile_sample_aliases(session, study_id)
     resolve_primer_sequences_from_corpus(session, study_id)
+    _backfill_filter_passive_active_default(session, study_id)
     sync_assay_target_taxa_from_biosample_organisms(session, study_id)
     sync_recorded_by_from_biosample_or_first_author(session, study_id)
     _sync_checklist_version(session, study_id)
