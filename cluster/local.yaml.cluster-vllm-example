@@ -1,0 +1,23 @@
+# Copy this to config/local.yaml on the cluster if you're using vLLM
+# instead of Ollama (LLM_BACKEND=vllm when submitting run_extraction.sbatch).
+#
+# Unlike Ollama's own model tags (e.g. "qwen3:4b-instruct-16k", a custom
+# Ollama Modelfile build), vLLM loads real Hugging Face Hub model repos
+# directly -- `model` below must be a real HF repo id, not an Ollama tag.
+# Qwen3-4B-Instruct-2507 is the closest real HF equivalent to the Ollama
+# model this pipeline was validated against on a Mac.
+
+llm:
+  enabled: true
+  provider: "openai_compatible"
+  base_url: "http://localhost:8000/v1"
+  model: "Qwen/Qwen3-4B-Instruct-2507"
+  # vLLM ignores num_ctx (that's an Ollama/llama.cpp-specific knob); its
+  # own context limit is controlled by --max-model-len on the `vllm serve`
+  # command in run_extraction.sbatch, or the model's own default if you
+  # don't pass it. Leave this here anyway -- unused by vLLM, harmless.
+  num_ctx: 16384
+  extraction_max_chars_per_call: 16000
+  max_output_tokens: 2048
+  max_concurrency: 1
+  timeout_seconds: 300

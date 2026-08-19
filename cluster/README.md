@@ -39,26 +39,24 @@ This creates `.venv`, installs the package, and initializes an empty
 database at `data/fair_ocean.db`. Edit `cluster/setup_env.sh` first if
 your cluster needs `module load` instead of a plain `python3` on PATH.
 
-### Config
+### Config and LLM backend
+
+`run_extraction.sbatch` supports three backends via `LLM_BACKEND`
+(default `ollama`): `ollama`, `vllm`, or `external` (an endpoint you're
+already running/managing some other way -- the script starts nothing,
+just trusts `config/local.yaml`'s `base_url`). `config/local.yaml` itself
+is gitignored on purpose (same as your local Mac's own copy) -- it's
+where the real endpoint lives.
+
+**Ollama** (default -- what this pipeline was validated against on a Mac):
 
 ```bash
 cp cluster/local.yaml.cluster-example config/local.yaml
 ```
 
-`config/local.yaml` is gitignored on purpose (same as your local Mac's
-own copy) -- it's where the real LLM endpoint lives. The example assumes
-`run_extraction.sbatch` starts `ollama serve` itself inside the GPU job,
-so `base_url` stays `http://localhost:11434/v1`. If your cluster instead
-runs vLLM (`vllm serve <model> --port ...`, also OpenAI-compatible) or a
-shared, persistent endpoint on a different host, point `base_url` there
-instead and set `USE_OLLAMA=0` when submitting `run_extraction.sbatch`
-(see below) -- no other pipeline changes needed either way.
-
-### One-time model download
-
 GPU nodes on most clusters have no internet access (this is normal, and
-is exactly why `run_extraction.sbatch` never tries to reach one) -- so
-the model has to be downloaded once, from somewhere that *does* have
+exactly why `run_extraction.sbatch` never tries to reach one) -- so the
+model has to be downloaded once, from somewhere that *does* have
 internet, onto storage the GPU node can also see:
 
 ```bash
@@ -71,10 +69,26 @@ Ollama caches the model under `~/.ollama/models` -- as long as `$HOME` is
 the same shared filesystem the GPU job sees (normal on HPC), this only
 needs to happen once, not per job.
 
-If `ollama` isn't installable on your cluster at all, vLLM is a plain
-`pip install vllm` and serves the same OpenAI-compatible API -- swap
-`USE_OLLAMA=0` and adjust `config/local.yaml`'s `base_url`/`model`
-accordingly; the rest of this setup is unchanged.
+**vLLM** (if Ollama gives you trouble -- e.g. it needs a real install and
+some clusters restrict what login nodes can install/run persistently):
+
+```bash
+pip install vllm
+cp cluster/local.yaml.cluster-vllm-example config/local.yaml
+
+# One-time model download (needs internet -- run from a login node):
+./cluster/download_vllm_model.sh   # defaults to Qwen/Qwen3-4B-Instruct-2507
+```
+
+vLLM loads real Hugging Face Hub model repos, not Ollama's own tags --
+`config/local.yaml`'s `model` must be a real HF repo id (the example uses
+`Qwen/Qwen3-4B-Instruct-2507`, the closest real equivalent to the Ollama
+model this pipeline was validated against). Submit with
+`sbatch --export=ALL,LLM_BACKEND=vllm cluster/run_extraction.sbatch`.
+`run_extraction.sbatch` sets `HF_HUB_OFFLINE=1` on the GPU node, so a
+model that wasn't actually downloaded first fails fast with a clear error
+in `logs/vllm_<job_id>.log` instead of hanging trying to reach
+huggingface.co.
 
 ## Running the 5/6-paper validation set
 
@@ -90,6 +104,8 @@ mkdir -p logs
 sbatch cluster/run_discovery.sbatch
 # wait for it to complete -- squeue -u $USER, or:
 sbatch --dependency=afterok:<job_id_from_above> cluster/run_extraction.sbatch
+# or, for vLLM instead of the default Ollama:
+#   sbatch --dependency=afterok:<job_id_from_above> --export=ALL,LLM_BACKEND=vllm cluster/run_extraction.sbatch
 ```
 
 Check progress:
@@ -131,6 +147,14 @@ retry a stuck batch than to debug a single multi-day job.
   account with `sinfo` and edit the `#SBATCH --partition=` lines.
 - **`run_extraction.sbatch` exits with "Model '...' is not pulled"**: run
   the one-time `ollama pull` step above from a node with internet access.
+- **Ollama giving you trouble generally** (install permissions, service
+  won't start, etc.): switch to vLLM -- see the "vLLM" setup section
+  above. No pipeline code changes needed either way, just
+  `config/local.yaml` and `LLM_BACKEND=vllm` at submit time.
+- **`run_extraction.sbatch` with `LLM_BACKEND=vllm` hangs or times out
+  waiting for vllm**: check `logs/vllm_<job_id>.log` directly -- a model
+  that wasn't downloaded first (see `download_vllm_model.sh`) fails there
+  with a clear `HF_HUB_OFFLINE` error rather than in the main log.
 - **`run_discovery.sbatch` fails with connection errors**: that
   partition doesn't actually have outbound internet after all -- check
   with your cluster's support docs, or test with a plain `curl

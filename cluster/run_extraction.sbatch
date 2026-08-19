@@ -41,22 +41,24 @@ if [ ! -f config/local.yaml ]; then
   exit 2
 fi
 
-# --- Start a local Ollama server for this job, if requested (default). ---
-# Set USE_OLLAMA=0 if config/local.yaml already points at a persistent,
-# separately-managed endpoint (e.g. a shared vLLM service).
-USE_OLLAMA="${USE_OLLAMA:-1}"
-OLLAMA_PID=""
-if [ "${USE_OLLAMA}" = "1" ]; then
+# --- Start a local LLM server for this job. ---
+# LLM_BACKEND=ollama (default), vllm, or external (config/local.yaml
+# already points at a persistent, separately-managed endpoint you're
+# starting/managing some other way -- this script starts nothing).
+LLM_BACKEND="${LLM_BACKEND:-ollama}"
+SERVER_PID=""
+
+if [ "${LLM_BACKEND}" = "ollama" ]; then
   if ! command -v ollama >/dev/null 2>&1; then
     echo "ollama not found on PATH. Either install it (see cluster/README.md's" >&2
-    echo "'One-time model download' section) or set USE_OLLAMA=0 if you're using" >&2
-    echo "a different endpoint already running." >&2
+    echo "'One-time model download' section), set LLM_BACKEND=vllm, or set" >&2
+    echo "LLM_BACKEND=external if you're using a different endpoint already running." >&2
     exit 2
   fi
   echo "Starting ollama serve..."
   ollama serve > logs/ollama_${SLURM_JOB_ID:-local}.log 2>&1 &
-  OLLAMA_PID=$!
-  trap '[ -n "${OLLAMA_PID}" ] && kill "${OLLAMA_PID}" 2>/dev/null || true' EXIT
+  SERVER_PID=$!
+  trap '[ -n "${SERVER_PID}" ] && kill "${SERVER_PID}" 2>/dev/null || true' EXIT
 
   echo "Waiting for ollama to respond..."
   for _ in $(seq 1 30); do
@@ -67,7 +69,7 @@ if [ "${USE_OLLAMA}" = "1" ]; then
     sleep 2
   done
   if ! curl -s -m 5 http://localhost:11434/api/tags >/dev/null 2>&1; then
-    echo "ollama did not become responsive in time." >&2
+    echo "ollama did not become responsive in time -- check logs/ollama_${SLURM_JOB_ID:-local}.log" >&2
     exit 1
   fi
 
@@ -80,6 +82,47 @@ if [ "${USE_OLLAMA}" = "1" ]; then
     exit 2
   fi
   echo "Model '${MODEL_NAME}' is present."
+
+elif [ "${LLM_BACKEND}" = "vllm" ]; then
+  if ! command -v vllm >/dev/null 2>&1; then
+    echo "vllm not found on PATH. Install it in this venv first:" >&2
+    echo "  pip install vllm" >&2
+    echo "(see cluster/README.md's 'vLLM instead of Ollama' section)" >&2
+    exit 2
+  fi
+  MODEL_NAME="$(python -c "import yaml; print(yaml.safe_load(open('config/local.yaml'))['llm']['model'])")"
+  # vLLM pulls from the Hugging Face Hub on first use and caches under
+  # HF_HOME -- GPU nodes have no internet, so this must already be cached
+  # from a prior download-only run on a node that does (see README).
+  # HF_HUB_OFFLINE=1 makes a missing/uncached model fail fast and clearly
+  # instead of hanging trying to reach huggingface.co.
+  export HF_HOME="${HF_HOME:-$(pwd)/cluster/hf_cache}"
+  export HF_HUB_OFFLINE=1
+  echo "Starting vllm serve (model=${MODEL_NAME}, HF_HOME=${HF_HOME})..."
+  vllm serve "${MODEL_NAME}" --host 0.0.0.0 --port 8000 > logs/vllm_${SLURM_JOB_ID:-local}.log 2>&1 &
+  SERVER_PID=$!
+  trap '[ -n "${SERVER_PID}" ] && kill "${SERVER_PID}" 2>/dev/null || true' EXIT
+
+  echo "Waiting for vllm to respond (model loading can take a few minutes)..."
+  for _ in $(seq 1 60); do
+    if curl -s -m 5 http://localhost:8000/v1/models >/dev/null 2>&1; then
+      echo "vllm is up."
+      break
+    fi
+    sleep 5
+  done
+  if ! curl -s -m 5 http://localhost:8000/v1/models >/dev/null 2>&1; then
+    echo "vllm did not become responsive in time -- check logs/vllm_${SLURM_JOB_ID:-local}.log" >&2
+    echo "(a missing/uncached model under HF_HUB_OFFLINE=1 will show up there as a clear error)" >&2
+    exit 1
+  fi
+
+elif [ "${LLM_BACKEND}" = "external" ]; then
+  echo "LLM_BACKEND=external: not starting a server, trusting config/local.yaml's base_url."
+
+else
+  echo "Unknown LLM_BACKEND='${LLM_BACKEND}'. Use ollama, vllm, or external." >&2
+  exit 2
 fi
 
 echo "=== LLM text extraction (main papers) ==="
