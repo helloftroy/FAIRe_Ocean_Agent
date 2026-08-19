@@ -35,9 +35,39 @@ cd FAIRe_Ocean_Agent/fair_ocean_agent
 ./cluster/setup_env.sh
 ```
 
-This creates `.venv`, installs the package, and initializes an empty
-database at `data/fair_ocean.db`. Edit `cluster/setup_env.sh` first if
-your cluster needs `module load` instead of a plain `python3` on PATH.
+This package needs Python >=3.10; the cluster's own `python3` may not be
+(3.9 is common on HPC login nodes). `setup_env.sh` defaults to conda for
+exactly this reason -- it runs, in effect:
+
+```bash
+source "$HOME/miniforge3/etc/profile.d/conda.sh"
+conda create -n faire-agent python=3.12 -y
+conda activate faire-agent
+```
+
+then installs the package into that env. Override the env name/Python
+version/miniforge location with `CONDA_ENV_NAME`/`PYTHON_VERSION`/
+`MINIFORGE_HOME`, e.g. if you already have a `faire-vllm` env from
+testing:
+
+```bash
+CONDA_ENV_NAME=faire-vllm ./cluster/setup_env.sh
+```
+
+If your cluster doesn't have (mini)conda/miniforge at all, use a plain
+venv instead (needs a real `python3.10+` already on PATH or via
+`module load` -- `setup_env.sh` checks the version and fails with a clear
+message rather than a cryptic pip error if not):
+
+```bash
+ENV_MANAGER=venv PYTHON_BIN=python3.11 ./cluster/setup_env.sh
+```
+
+Either way, `setup_env.sh` writes `cluster/env_activate.sh` (gitignored,
+machine-specific) recording exactly how to activate whichever environment
+it just set up -- `run_discovery.sbatch`/`run_extraction.sbatch`/
+`download_vllm_model.sh` all just source that file, so there's nothing to
+edit in the job scripts themselves regardless of which path you chose.
 
 ### Config and LLM backend
 

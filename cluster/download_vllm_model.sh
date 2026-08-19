@@ -6,7 +6,13 @@
 # Usage: ./cluster/download_vllm_model.sh [model-repo-id]
 set -euo pipefail
 cd "$(dirname "$0")/.."   # repo root (fair_ocean_agent/)
-source .venv/bin/activate
+
+if [ ! -f cluster/env_activate.sh ]; then
+  echo "cluster/env_activate.sh is missing -- run ./cluster/setup_env.sh first." >&2
+  exit 2
+fi
+# shellcheck source=/dev/null
+source cluster/env_activate.sh
 
 MODEL="${1:-Qwen/Qwen3-4B-Instruct-2507}"
 export HF_HOME="${HF_HOME:-$(pwd)/cluster/hf_cache}"

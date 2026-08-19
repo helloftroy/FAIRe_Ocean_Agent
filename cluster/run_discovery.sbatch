@@ -22,9 +22,12 @@ set -euo pipefail
 cd "$(dirname "$0")/.."   # repo root (fair_ocean_agent/)
 mkdir -p logs
 
-# If your cluster requires modules/conda, uncomment and edit:
-# module load anaconda
-source .venv/bin/activate
+if [ ! -f cluster/env_activate.sh ]; then
+  echo "cluster/env_activate.sh is missing -- run ./cluster/setup_env.sh first." >&2
+  exit 2
+fi
+# shellcheck source=/dev/null
+source cluster/env_activate.sh
 
 echo "Job started: $(date)"
 echo "Host: $(hostname)"
