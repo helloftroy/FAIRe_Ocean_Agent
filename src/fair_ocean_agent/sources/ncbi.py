@@ -239,7 +239,7 @@ _FILTER_MATERIAL_TERMS = (
 )
 _FILTER_NAME_TERMS = ("Sterivex", "Millipore", "Whatman", "Nalgene", "Supor", "Durapore")
 _FILTER_ACTIVE_RE = re.compile(
-    r"\b(?:active(?:ly)?\s+filter|pumped?|pumping|pump|peristaltic|vacuum|"
+    r"\b(?:Sterivex|active(?:ly)?\s+filter|pumped?|pumping|pump|peristaltic|vacuum|"
     r"suction|pressure|overpressure|pressuri[sz]ed|compressed\s+air|forced\s+through|"
     r"flow\s*rate|flowrate)\b",
     re.IGNORECASE,

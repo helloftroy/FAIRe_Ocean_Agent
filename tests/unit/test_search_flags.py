@@ -1541,6 +1541,37 @@ def test_detect_llm_judged_otu_db_keeps_ncbi_nr_database_value():
     assert by_type["otu_db"].raw_value == "nonredundant (nr) NCBI database"
 
 
+def test_detect_llm_judged_otu_seq_comp_appr_lists_tools_before_quotes():
+    """otu_seq_comp_appr remains reviewable, but the useful machine-readable
+    tool names must come first instead of burying BLAST/VSEARCH inside a
+    long methods quote."""
+    quote = (
+        "ASVs were assigned taxonomy using BLASTn against GenBank and "
+        "classify-consensus vsearch in QIIME 2."
+    )
+    backend = MockLLMBackend(
+        responses=[
+            json.dumps(
+                [
+                    {"field": "otu_seq_comp_appr", "raw_value": quote, "quote_id": "Q001"},
+                ]
+            )
+        ]
+    )
+
+    facts = detect_llm_judged_search_facts(
+        backend,
+        (("Bioinformatics", quote),),
+        locator_prefix="paper:PMC1",
+    )
+
+    by_type = {fact.fact_type_candidate: fact for fact in facts}
+    assert by_type["otu_seq_comp_appr"].raw_value == (
+        "classify-consensus vsearch | BLASTn | ASVs were assigned taxonomy using BLASTn "
+        "against GenBank and classify-consensus vsearch in QIIME 2."
+    )
+
+
 
 
 def test_detect_llm_judged_search_facts_rejects_bad_quote_ids_and_vocab_values():

@@ -145,7 +145,6 @@ def test_handler_can_force_local_pdf_fulltext_source(db_session, monkeypatch, tm
     monkeypatch.setattr(handlers, "generate_study_target_taxonomic_scope", lambda *args, **kwargs: [])
     monkeypatch.setattr(handlers, "generate_rights_holder", lambda *args, **kwargs: [])
     monkeypatch.setattr(handlers, "generate_funding_source", lambda *args, **kwargs: [])
-    monkeypatch.setattr(handlers, "generate_information_withheld_llm_guess", lambda *args, **kwargs: [])
     monkeypatch.setattr(handlers, "extract_section_category_facts", lambda *args, **kwargs: [])
     monkeypatch.setattr(handlers, "detect_llm_judged_search_facts", lambda *args, **kwargs: [])
     monkeypatch.setattr(
@@ -583,8 +582,8 @@ def test_handler_keeps_text_probeable_structured_fields_in_paper_prompt(db_sessi
     # At least the checklist-style call must retain depth -- not every
     # call, since handle_extract_text_facts now also makes several other
     # LLM calls with entirely different prompt shapes (study_factor,
-    # study_target_taxonomic_scope, information_withheld_llm_guess, the
-    # section-category pipeline's own calls, ...).
+    # study_target_taxonomic_scope, the section-category pipeline's own
+    # calls, ...).
     assert any("- depth:" in call["prompt"] for call in backend.calls)
 
 

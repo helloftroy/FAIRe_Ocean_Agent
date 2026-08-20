@@ -96,6 +96,15 @@ _FUNDING_TEXT_RE = re.compile(
     r"fellowship|scholarship|commission|program(?:me)?)\b",
     re.IGNORECASE,
 )
+_FUNDING_AUTHOR_CONTRIBUTION_RE = re.compile(r"\bfunding\s+acquisition\s*:", re.IGNORECASE)
+_FUNDED_BY_SEGMENT_RE = re.compile(
+    r"\b(?:funded|supported)\s+by\s+(.+?)(?:\.\s*The\s+funders\b|\.?\s*$)",
+    re.IGNORECASE,
+)
+_FUNDING_PARENTHESES_RE = re.compile(
+    r"\s*\((?:[^)]*\b(?:grant|grants|award|awards|fellowship|scholarship|GRK)\b[^)]*|[A-Z]{2,}[-\s]?\d+[^)]*)\)",
+    re.IGNORECASE,
+)
 _RIGHTS_TITLE_RE = re.compile(
     r"\b(?:rights|rights and permissions|permissions|copyright|license|open access)\b",
     re.IGNORECASE,
@@ -385,7 +394,11 @@ def _direct_paragraphs_under(element: ET.Element) -> list[str]:
 
 
 def _funding_sentences(text: str) -> list[str]:
-    return [sentence for sentence in _sentences(text) if _FUNDING_TEXT_RE.search(sentence)]
+    return [
+        sentence
+        for sentence in _sentences(text)
+        if _FUNDING_TEXT_RE.search(sentence) and not _FUNDING_AUTHOR_CONTRIBUTION_RE.search(sentence)
+    ]
 
 
 def _funding_paragraphs_from_jats(fulltext_xml: str | None) -> list[str]:
@@ -494,6 +507,7 @@ def _filter_funding_source_value(value: object) -> str:
     seen: set[str] = set()
     for piece in pieces:
         piece = piece.strip(" ;,.")
+        piece = re.sub(r"\bReversibi\s+lity\b", "Reversibility", piece)
         if not piece or _ABSENT_FUNDING_RE.match(piece):
             continue
         if len(piece) <= 2 or not re.search(r"[A-Za-z]", piece):
@@ -506,6 +520,31 @@ def _filter_funding_source_value(value: object) -> str:
         seen.add(key)
         normalized.append(piece)
     return " | ".join(normalized)
+
+
+def _fallback_funding_sources_from_text(funding_text: str) -> str:
+    """Conservative backup for explicit "funded/supported by X" prose.
+
+    This is intentionally narrower than the LLM: it only handles direct
+    funded-by clauses and lets the existing post-filter drop plain host
+    institutions after grant-number parentheticals are removed. That keeps
+    PLOS-style lines such as "funded by DFG Research Training Group R3 ...
+    (GRK 2272) and by the University of Konstanz (AFF grants ...)" from
+    going blank or losing the DFG program, without reintroducing random
+    affiliation/institution noise.
+    """
+    candidates: list[str] = []
+    for match in _FUNDED_BY_SEGMENT_RE.finditer(funding_text):
+        segment = _clean_text(match.group(1))
+        segment = re.sub(r"\bThe\s+funders\b.*$", "", segment, flags=re.IGNORECASE).strip()
+        pieces = re.split(r"\s+(?:and|,)\s+by\s+(?:the\s+)?|\s*;\s*", segment, flags=re.IGNORECASE)
+        for piece in pieces:
+            piece = _FUNDING_PARENTHESES_RE.sub("", piece)
+            piece = re.sub(r"^\s*(?:the\s+)?", "", piece, flags=re.IGNORECASE)
+            piece = piece.strip(" ;,.")
+            if piece:
+                candidates.append(piece)
+    return _filter_funding_source_value(candidates)
 
 
 def _rights_paragraphs_from_jats(fulltext_xml: str | None) -> list[str]:
@@ -676,9 +715,11 @@ ministries, named grant programs, named fellowships, named scholarships, or name
 numbers, award numbers, author initials, ordinary conflict-of-interest statements, or "the funders had no role"
 boilerplate. Do not include universities, departments, sections, institutes, laboratories, facilities, centers,
 field stations, or consortia unless the text explicitly names them as a grant/fellowship/award/scholarship
-program. Do not include acknowledgements, collaborators, sequencing facilities, host institutions, affiliations,
-or partial/truncated fragments. Use the names as written when possible. If there is more than one funding source,
-join the names with " | ". If no funding source name is present, return an empty string.
+program. For named programs that include a funding agency acronym, such as "DFG Research Training Group R3",
+preserve the full agency + program phrase. Do not include acknowledgements, collaborators, sequencing facilities,
+host institutions, affiliations, or partial/truncated fragments. Use the names as written when possible. If there
+is more than one funding source, join the names with " | ". If no funding source name is present, return an empty
+string.
 
 Funding text:
 {funding_text}
@@ -694,6 +735,8 @@ Return ONLY a JSON object: {{"funding_source": "<pipe-delimited funder names>"}}
     if parsed is None:
         raise LLMBackendError(f"{backend.label}: funding_source generation returned invalid JSON after retries")
     value = _normalize_funding_source_value(parsed.get("funding_source") if isinstance(parsed, dict) else "")
+    if not value:
+        value = _fallback_funding_sources_from_text(funding_text)
     if not value:
         return []
 

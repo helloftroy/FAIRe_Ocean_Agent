@@ -505,6 +505,47 @@ Reference text.
     assert "The funders had no role" in backend.calls[0]["prompt"]
 
 
+def test_generate_funding_source_falls_back_for_plos_dfg_funding_line():
+    """Regression guard for 10.1371/journal.pone.0303937: the funding
+    paragraph is present in PDF/plain text, but the model can over-trim it
+    to blank or a fragment. The deterministic backup should preserve the
+    explicit DFG agency + named program phrase."""
+    backend = MockLLMBackend(responses=[json.dumps({"funding_source": ""})])
+    text = """Funding
+This research was funded by DFG
+Research Training Group R3 - Responses to biotic
+and abiotic Changes, Resilience and Reversibi lity of
+Lake Ecosystems (GRK 2272) and by the
+University of Konstanz (AFF grants 2019-2021 to
+DS). The funders had no role in study design.
+
+Author contributions
+Funding acquisition: David Schleheck.
+"""
+
+    facts = generate_funding_source(backend, text, locator_prefix="pdf")
+
+    assert len(facts) == 1
+    assert facts[0].raw_value == (
+        "DFG Research Training Group R3 - Responses to biotic and abiotic "
+        "Changes, Resilience and Reversibility of Lake Ecosystems"
+    )
+    assert "Funding acquisition: David Schleheck" not in facts[0].evidence_quote
+
+
+def test_funding_sentences_ignore_author_contribution_funding_acquisition():
+    backend = MockLLMBackend(responses=[json.dumps({"funding_source": "David Schleheck"})])
+
+    facts = generate_funding_source(
+        backend,
+        "Author contributions\nFunding acquisition: David Schleheck.\n",
+        locator_prefix="pdf",
+    )
+
+    assert facts == []
+    assert backend.calls == []
+
+
 def test_funding_source_filters_institutional_units_and_fragments():
     xml = """
     <article>

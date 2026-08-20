@@ -2498,6 +2498,81 @@ _VERBATIM_REQUIRED_FIELDS = frozenset(
     }
 )
 
+_OTU_SEQ_COMP_TOOL_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("classify-consensus vsearch", re.compile(r"\bclassify[-_\s]+consensus[-_\s]+vsearch\b", re.IGNORECASE)),
+    ("QIIME 2 feature-classifier", re.compile(r"\bQIIME\s*2\s+feature[-_\s]+classifier\b", re.IGNORECASE)),
+    ("q2-feature-classifier", re.compile(r"\bq2[-_\s]+feature[-_\s]+classifier\b", re.IGNORECASE)),
+    ("classify-sklearn", re.compile(r"\bclassify[-_\s]+sklearn\b", re.IGNORECASE)),
+    ("RDP Classifier", re.compile(r"\bRDP\s+Classifier\b|\bRibosomal\s+Database\s+Project\s+classifier\b", re.IGNORECASE)),
+    ("IDTAXA", re.compile(r"\bIDTAXA\b|\bDECIPHER\s+IdTaxa\b", re.IGNORECASE)),
+    ("MegaBLAST", re.compile(r"\bMegaBLAST\b", re.IGNORECASE)),
+    ("BLASTX", re.compile(r"\bBLASTX\b", re.IGNORECASE)),
+    ("BLASTn", re.compile(r"\bBLASTn\b", re.IGNORECASE)),
+    ("BLAST", re.compile(r"\bBLAST\b", re.IGNORECASE)),
+    ("VSEARCH", re.compile(r"\bVSEARCH\b", re.IGNORECASE)),
+    ("USEARCH", re.compile(r"\bUSEARCH\b", re.IGNORECASE)),
+    ("CREST4", re.compile(r"\bCREST4\b", re.IGNORECASE)),
+    ("CREST", re.compile(r"\bCREST\b", re.IGNORECASE)),
+    ("Kraken2", re.compile(r"\bKraken\s*2(?:\.\d+(?:\.\d+)*)?\b|\bKraken2(?:\s+\d+(?:\.\d+)*)?\b", re.IGNORECASE)),
+    ("Kraken", re.compile(r"\bKraken\b", re.IGNORECASE)),
+    ("SINTAX", re.compile(r"\bSINTAX\b", re.IGNORECASE)),
+    ("SEPP", re.compile(r"\bSEPP\b|\bq2[-_\s]+fragment[-_\s]+insertion\b", re.IGNORECASE)),
+    ("EPA-ng", re.compile(r"\bEPA[-_\s]+ng\b", re.IGNORECASE)),
+    ("pplacer", re.compile(r"\bpplacer\b", re.IGNORECASE)),
+    ("PROTAX", re.compile(r"\bPROTAX\b", re.IGNORECASE)),
+    ("TIPP", re.compile(r"\bTIPP\b", re.IGNORECASE)),
+)
+
+
+def _otu_seq_comp_tool_values(text: str) -> list[str]:
+    values: list[str] = []
+    seen: set[str] = set()
+    for canonical, pattern in _OTU_SEQ_COMP_TOOL_PATTERNS:
+        match = pattern.search(text)
+        if not match:
+            continue
+        value = " ".join(match.group(0).split())
+        if canonical in {"Kraken2", "Kraken"}:
+            value = value.replace("Kraken 2", "Kraken2")
+        key = canonical.casefold()
+        if key in seen:
+            continue
+        if canonical in {"BLAST", "VSEARCH", "Kraken", "CREST"}:
+            lower_values = " | ".join(values).casefold()
+            if canonical.casefold() in lower_values:
+                continue
+        seen.add(key)
+        values.append(value)
+    return values
+
+
+def _format_otu_seq_comp_appr_value(entries: list[dict], quotes: list[str]) -> str:
+    tools: list[str] = []
+    seen_tools: set[str] = set()
+    for text in [*(str(entry["raw_value"]) for entry in entries), *quotes]:
+        for tool in _otu_seq_comp_tool_values(text):
+            key = tool.casefold()
+            if key in seen_tools:
+                continue
+            seen_tools.add(key)
+            tools.append(tool)
+
+    quote_parts: list[str] = []
+    seen_quotes: set[str] = set()
+    for text in [*(str(entry["raw_value"]) for entry in entries), *quotes]:
+        cleaned = " ".join(str(text).split()).strip()
+        if not cleaned:
+            continue
+        if any(cleaned.casefold() == tool.casefold() for tool in tools):
+            continue
+        key = cleaned.casefold()
+        if key in seen_quotes:
+            continue
+        seen_quotes.add(key)
+        quote_parts.append(cleaned)
+
+    return " | ".join([*tools, *quote_parts])
+
 
 def _facts_from_llm_judgement(
     parsed,
@@ -2567,12 +2642,17 @@ def _facts_from_llm_judgement(
         entries = sorted(group["entries"], key=lambda entry: entry["priority"])
         if field_name in SINGLE_BEST_LLM_JUDGED_FIELDS:
             entries = entries[:1]
+        raw_value = (
+            _format_otu_seq_comp_appr_value(entries, group["quotes"])
+            if field_name == "otu_seq_comp_appr"
+            else " | ".join(entry["raw_value"] for entry in entries)
+        )
         facts.append(
             RawFactCandidate(
                 entity_level=EntityLevel.STUDY,
                 fact_type_candidate=field_name,
                 raw_field_name=field_name,
-                raw_value=" | ".join(entry["raw_value"] for entry in entries),
+                raw_value=raw_value,
                 source_locator=f"{locator_prefix}:llm_judged_search:{field_name}",
                 support_type=SupportType.EXPLICIT,
                 evidence_quote=" | ".join(group["quotes"]),

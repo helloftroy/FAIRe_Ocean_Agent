@@ -8,7 +8,6 @@ import json
 import pytest
 
 from fair_ocean_agent.extraction.study_factor import (
-    generate_information_withheld_llm_guess,
     generate_study_factor,
     generate_study_target_taxonomic_scope,
 )
@@ -154,61 +153,3 @@ def test_generate_study_target_taxonomic_scope_malformed_xml_returns_no_facts():
     assert facts == []
     assert backend.calls == []
 
-
-_METHODS_TEXTS = [("Methods", "DNA was extracted using a standard kit and amplified with 16S primers.")]
-
-
-def test_generate_information_withheld_llm_guess_returns_pipe_delimited_gaps():
-    """EXPERIMENTAL field, per an explicit user request to "try using that
-    as an output" -- the model's own speculative assessment of likely
-    reporting gaps, kept entirely separate from the real, verbatim-only
-    informationWithheld field."""
-    response = json.dumps(
-        {"information_withheld_llm_guess": "no code repository provided | no replicate count reported"}
-    )
-    backend = MockLLMBackend(responses=[response])
-
-    facts = generate_information_withheld_llm_guess(backend, _METHODS_TEXTS, locator_prefix="test")
-
-    assert len(facts) == 1
-    fact = facts[0]
-    assert fact.fact_type_candidate == "information_withheld_llm_guess"
-    assert fact.raw_value == "no code repository provided | no replicate count reported"
-    assert fact.support_type.value == "inferred"
-
-
-def test_generate_information_withheld_llm_guess_no_text_makes_no_llm_call():
-    backend = MockLLMBackend(responses=["{}"])
-    facts = generate_information_withheld_llm_guess(backend, [], locator_prefix="test")
-    assert facts == []
-    assert backend.calls == []
-
-
-def test_generate_information_withheld_llm_guess_blank_texts_make_no_llm_call():
-    backend = MockLLMBackend(responses=["{}"])
-    facts = generate_information_withheld_llm_guess(backend, [("Methods", "")], locator_prefix="test")
-    assert facts == []
-    assert backend.calls == []
-
-
-def test_generate_information_withheld_llm_guess_empty_value_returns_no_facts():
-    response = json.dumps({"information_withheld_llm_guess": ""})
-    backend = MockLLMBackend(responses=[response])
-    facts = generate_information_withheld_llm_guess(backend, _METHODS_TEXTS, locator_prefix="test")
-    assert facts == []
-
-
-def test_generate_information_withheld_llm_guess_raises_on_invalid_json_after_retries():
-    backend = MockLLMBackend(responses=["not json"])
-    with pytest.raises(LLMBackendError):
-        generate_information_withheld_llm_guess(backend, _METHODS_TEXTS, locator_prefix="test")
-
-
-def test_generate_information_withheld_llm_guess_truncates_long_combined_text():
-    long_text = "A" * 20000
-    response = json.dumps({"information_withheld_llm_guess": ""})
-    backend = MockLLMBackend(responses=[response])
-    generate_information_withheld_llm_guess(
-        backend, [("Methods", long_text)], locator_prefix="test", max_chars=12000
-    )
-    assert len(backend.calls[0]["prompt"]) < 20000

@@ -326,6 +326,26 @@ def test_biosample_extract_structured_facts_derives_filter_facts_from_samp_mat_p
     assert by_type["size_frac"].raw_field_name == "samp_mat_process"
 
 
+def test_biosample_extract_structured_facts_treats_sterivex_as_active_filter(biosample_adapter):
+    raw = {
+        "bioproject_accession": "PRJNA1425045",
+        "total_linked_samples": 1,
+        "truncated": False,
+        "samples": [
+            {
+                "accession": "SAMN_STERIVEX",
+                "title": "MIMS Environmental sample",
+                "attributes": {"samp_mat_process": "0.22 um Sterivex filtration followed by DNA extraction"},
+            }
+        ],
+    }
+    facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw))
+
+    by_type = {f.fact_type_candidate: f for f in facts}
+    assert by_type["filter_name"].raw_value == "Sterivex"
+    assert by_type["filter_passive_active_0_1"].raw_value == "1"
+
+
 def test_biosample_extract_structured_facts_no_filter_facts_when_nothing_stated(biosample_adapter):
     raw = {
         "bioproject_accession": "PRJNA1425045",

@@ -70,7 +70,6 @@ from fair_ocean_agent.extraction.section_category_extraction import (
     normalize_controlled_sample_prep_facts,
 )
 from fair_ocean_agent.extraction.study_factor import (
-    generate_information_withheld_llm_guess,
     generate_study_factor,
     generate_study_target_taxonomic_scope,
 )
@@ -1568,23 +1567,6 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
         source.source_id,
         funding_source_facts,
         extraction_method="llm_generated_funding_source",
-        model_name=backend.label,
-        prompt_version=PROMPT_VERSION,
-        review_status=ReviewStatus.ACCEPTED.value,
-    )
-    # EXPERIMENTAL, not a real FAIRe field -- see generate_information_
-    # withheld_llm_guess's own docstring. Surfaced only as a separate
-    # internal diagnostic export column, never merged into the real
-    # informationWithheld value.
-    information_withheld_guess_facts = generate_information_withheld_llm_guess(
-        backend, list(section_texts), locator_prefix=locator_prefix
-    )
-    _persist_candidate_facts(
-        session,
-        study.study_id,
-        source.source_id,
-        information_withheld_guess_facts,
-        extraction_method="llm_generated_information_withheld_guess",
         model_name=backend.label,
         prompt_version=PROMPT_VERSION,
         review_status=ReviewStatus.ACCEPTED.value,
