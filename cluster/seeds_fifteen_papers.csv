@@ -1,0 +1,16 @@
+seed_id,title,doi,pmid,pmcid,bioproject_accession,ena_study_accession,dataset_id,repository,url,notes
+usual-01,,10.1038/s42003-024-06136-2,,,,,,,,s42003 -- polymetallic nodule coral/nitrite oxidizer paper, the recurring validation set. Shares BioProject PRJNA529480 with usual-06 (PNAS) -- reuses/reanalyzes that paper's own BioSamples, the real test case for cross-study entity merging in sampleMetadata.
+usual-02,,10.1093/ismejo/wrae013,,,,,,,,wrae013 -- methanotroph/infauna coastal sediment paper, the recurring validation set
+usual-03,,10.7717/peerj.333,,,,,,,,coral spawning settlement-cue paper (Davies et al. 2014), the recurring validation set -- previously seeded with the wrong DOI (10.7717/peerj.9857, an unrelated human liver-failure paper), fixed 2026-08-20
+usual-04,,10.3389/fmicb.2024.1295149,,,,,,,,fmicb prokaryote diversity paper, the recurring validation set
+usual-05,,10.1371/journal.pone.0303937,,,,,,,,plankton filtration bias / flowmeter paper, the recurring validation set
+usual-06,,10.1073/pnas.2005917117,,,,,,,,PNAS geochemical transition zone paper -- shares BioProject PRJNA529480 with usual-01 (s42003); this is THE reanalyzed-samples/entity-merging test case, seeded explicitly here rather than relying on citation-expansion to find it (which has not reliably fired in past runs)
+backup-01,,10.1002/2015jg003300,,,,,,,,backup filler for 15-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt
+backup-02,,10.1007/s00338-021-02143-5,,,,,,,,backup filler for 15-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt
+backup-03,,10.1016/j.heliyon.2019.e02876,,,,,,,,backup filler for 15-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt
+backup-04,,10.1021/acs.est.9b02212,,,,,,,,backup filler for 15-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt
+backup-05,,10.1073/pnas.2103275118,,,,,,,,backup filler for 15-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt
+backup-06,,10.1111/1755-0998.12218,,,,,,,,backup filler for 15-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt
+backup-07,,10.1134/s002626171406006x,,,,,,,,backup filler for 15-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt
+backup-08,,10.26650/ase20241434217,,,,,,,,backup filler for 15-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt
+backup-09,,10.3389/fmicb.2019.02244,,,,,,,,backup filler for 15-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt
