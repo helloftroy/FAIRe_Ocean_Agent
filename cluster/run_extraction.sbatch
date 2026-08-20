@@ -118,6 +118,20 @@ elif [ "${LLM_BACKEND}" = "vllm" ]; then
   # forces the same fallback rather than chasing down the cluster's CUDA
   # toolkit module/path.
   export VLLM_USE_FLASHINFER_SAMPLER=0
+  # A cluster's module-injected LD_LIBRARY_PATH (e.g. a spack-managed
+  # toolchain) can shadow this conda env's own bundled libstdc++ with an
+  # older system one (/usr/lib64/libstdc++.so.6) -- confirmed live: vllm's
+  # own sqlite3 import chain, via a bundled libicui18n.so, failed with
+  # "version CXXABI_1.3.15 not found" the moment anything pulled in a C++
+  # library, even though the newer libstdc++ needed was sitting right
+  # there in the same conda env. Scoped to just this vllm process (not a
+  # blanket export in cluster/env_activate.sh) -- confirmed live that
+  # exporting it shell-wide instead broke plain `git` in an interactive
+  # session afterward: `git`'s libldap dependency picked up this conda
+  # env's own openssl build over the system one and crashed with
+  # "undefined symbol: EVP_md2" the moment LD_LIBRARY_PATH leaked into a
+  # shell running anything besides this pipeline's own python/vllm.
+  export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
   echo "Starting vllm serve (model=${MODEL_NAME}, HF_HOME=${HF_HOME})..."
   vllm serve "${MODEL_NAME}" --host 0.0.0.0 --port 8000 > logs/vllm_${SLURM_JOB_ID:-local}.log 2>&1 &
   SERVER_PID=$!
