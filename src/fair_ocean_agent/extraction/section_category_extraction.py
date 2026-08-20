@@ -66,7 +66,10 @@ _POOLING_SAMPLE_CONTEXT_RE = re.compile(
     r"\b(?:DNA|RNA|nucleic\s+acids?|extracts?|samples?|subsamples?)\b",
     re.IGNORECASE,
 )
+_SIZE_FRAC_FIELD = "size_frac"
+_SIZE_FRAC_VALUE_RE = re.compile(r"\b\d+(?:\.\d+)?\s*[-\s]?\s*[µμu]m\b", re.IGNORECASE)
 _FILTER_PASSIVE_ACTIVE_FIELD = "filter_passive_active_0_1"
+_ACTIVE_FILTER_NAME_RE = re.compile(r"\bSterivex\b", re.IGNORECASE)
 _FILTER_EVIDENCE_FIELDS = frozenset(
     {
         "filter_material",
@@ -523,35 +526,82 @@ def _add_missing_amount_companions(grouped: dict[str, dict]) -> None:
 
 def _add_filter_passive_active_fallback(grouped: dict[str, dict]) -> None:
     """Default ordinary filtration evidence to passive/0 unless an active
-    driving mechanism is already stated.
+    driving mechanism or active-by-design filter is stated.
 
     The LLM stage only emits this boolean when the field is offered as a
     candidate and the model chooses to answer it. Real papers often say only
-    "filtered through a 0.22 um Sterivex cartridge", which is enough to fill
+    "filtered through a 0.22 um cartridge", which is enough to fill
     filter_name/size_frac but not enough to contain words like active,
     passive, pump, or pressure. For the FAIRe output this still should not be
     blank: filtration with no stated active driving mechanism is the practical
-    passive/default case.
+    passive/default case. Sterivex is an exception: those cartridge filters
+    are treated as active even when the paper omits pump/pressure wording.
     """
-    if _FILTER_PASSIVE_ACTIVE_FIELD in grouped:
-        return
     quotes: list[str] = []
     for field_name in _FILTER_EVIDENCE_FIELDS:
         group = grouped.get(field_name)
         if not group:
             continue
+        for entry in group.get("entries") or []:
+            if entry not in quotes:
+                quotes.append(entry)
         for quote in group.get("quotes") or []:
             if quote not in quotes:
                 quotes.append(quote)
+    existing_group = grouped.get(_FILTER_PASSIVE_ACTIVE_FIELD)
+    if existing_group:
+        if any(_ACTIVE_FILTER_NAME_RE.search(text) for text in quotes):
+            existing_group["entry_quotes"].setdefault("1", [])
+            for quote in quotes:
+                if quote not in existing_group["entry_quotes"]["1"]:
+                    existing_group["entry_quotes"]["1"].append(quote)
+                if quote not in existing_group["quotes"]:
+                    existing_group["quotes"].append(quote)
+            if "1" not in existing_group["entries"]:
+                existing_group["entries"].append("1")
+        return
     if not quotes:
         return
 
-    value = "1" if any(_ACTIVE_FILTRATION_CONTEXT_RE.search(quote) for quote in quotes) else "0"
+    value = "1" if any(
+        _ACTIVE_FILTRATION_CONTEXT_RE.search(quote) or _ACTIVE_FILTER_NAME_RE.search(quote)
+        for quote in quotes
+    ) else "0"
     grouped[_FILTER_PASSIVE_ACTIVE_FIELD] = {
         "entries": [value],
         "quotes": quotes,
         "entry_quotes": {value: quotes},
     }
+
+
+def _add_size_frac_values_from_candidate_quotes(
+    grouped: dict[str, dict],
+    candidates: tuple[_TermQuoteCandidate, ...],
+) -> None:
+    """Capture every micrometer pore size in size_frac candidate quotes.
+
+    Real filtration sentences often describe a filter cascade, e.g. 180-um,
+    5.0-um, and 0.2-um filters in one sentence. The LLM can return only the
+    first value even though the quote supports all three; once the sentence
+    has already passed the size_frac cue gate, extracting the simple
+    micrometer values deterministically is safer than another prompt tweak.
+    """
+    group = grouped.setdefault(_SIZE_FRAC_FIELD, {"entries": [], "quotes": [], "entry_quotes": {}})
+    for candidate in candidates:
+        if _SIZE_FRAC_FIELD not in candidate.term_names:
+            continue
+        for match in _SIZE_FRAC_VALUE_RE.finditer(candidate.text):
+            value = " ".join(match.group(0).split())
+            key = value.casefold()
+            group["entry_quotes"].setdefault(key, [])
+            if candidate.text not in group["entry_quotes"][key]:
+                group["entry_quotes"][key].append(candidate.text)
+            if not any(entry.casefold() == key for entry in group["entries"]):
+                group["entries"].append(value)
+            if candidate.text not in group["quotes"]:
+                group["quotes"].append(candidate.text)
+    if not group["entries"]:
+        grouped.pop(_SIZE_FRAC_FIELD, None)
 
 
 # A real live audit (10.7717/peerj.9857) caught dna_cleanup_0_1 left blank
@@ -678,6 +728,7 @@ def extract_category_terms(
 
     _add_missing_amount_companions(grouped)
     if category.name == "sample_prep":
+        _add_size_frac_values_from_candidate_quotes(grouped, candidates)
         _add_filter_passive_active_fallback(grouped)
         _add_missing_boolean_companions_from_method(grouped)
     for field_name, group in grouped.items():
@@ -766,6 +817,25 @@ def _normalization_parts(value: object) -> list[str]:
     return normalized
 
 
+def _sort_terms_by_first_occurrence(terms: list[str], reference_text: str) -> list[str]:
+    """Orders normalized terms by where each one's evidence actually first
+    appears in the source quotes, instead of leaving them in whatever order
+    the normalization LLM call happened to emit its JSON list in -- there
+    was previously no ordering policy at all here, confirmed live: a real
+    nucl_acid_ext_sep value had its terms in an order that matched neither
+    the paper's own text nor any obvious technique sequence. A term whose
+    exact text isn't found verbatim in the quotes (e.g. the model
+    paraphrased it) sorts after every term that was found, keeping its
+    original relative position among other not-found terms."""
+    reference = reference_text.casefold()
+
+    def _position(term: str) -> int:
+        index = reference.find(term.casefold())
+        return index if index >= 0 else len(reference)
+
+    return sorted(terms, key=_position)
+
+
 def normalize_controlled_sample_prep_facts(
     backend: LLMBackend,
     facts: list[RawFactCandidate],
@@ -825,6 +895,7 @@ Return ONLY a JSON object: {{"{spec.field_name}": "term1 | term2"}}
         normalized = _normalization_parts(value)
         if not normalized:
             continue
+        normalized = _sort_terms_by_first_occurrence(normalized, " ".join(quotes))
 
         normalized_field = f"{spec.field_name}{_NORMALIZATION_SUFFIX}"
         normalized_facts.append(

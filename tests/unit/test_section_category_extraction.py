@@ -221,12 +221,11 @@ def test_extract_category_terms_boolean_field_accepts_1_with_no_digit_in_its_own
     assert facts[0].raw_value == "1"
 
 
-def test_extract_category_terms_derives_passive_filter_when_filter_present_without_active_mechanism():
+def test_extract_category_terms_derives_active_filter_for_sterivex_without_active_language():
     """Generic filtration evidence should still fill filter_passive_active_0_1.
 
-    Many papers report only a filter name/material/pore size, not explicit
-    active/passive language. Once filtration is clearly present, the practical
-    default is passive/0 unless pump, pressure, vacuum, etc. are stated.
+    Sterivex cartridge filters are active-by-design, even when papers do
+    not state explicit active/pump/pressure wording.
     """
     run_text = "Water samples were filtered through a 0.22 um Sterivex cartridge filter."
     response = json.dumps(
@@ -241,8 +240,57 @@ def test_extract_category_terms_derives_passive_filter_when_filter_present_witho
     by_type = {fact.fact_type_candidate: fact for fact in facts}
     assert by_type["filter_name"].raw_value == "Sterivex"
     assert by_type["size_frac"].raw_value == "0.22 um"
-    assert by_type["filter_passive_active_0_1"].raw_value == "0"
+    assert by_type["filter_passive_active_0_1"].raw_value == "1"
     assert "Sterivex" in by_type["filter_passive_active_0_1"].evidence_quote
+
+
+def test_extract_category_terms_derives_passive_filter_when_generic_filter_present_without_active_mechanism():
+    run_text = "Water samples were filtered through a 0.22 um cartridge filter."
+    response = json.dumps(
+        [
+            {"field": "filter_name", "raw_value": "cartridge filter", "quote_id": "Q001"},
+            {"field": "size_frac", "raw_value": "0.22 um", "quote_id": "Q001"},
+        ]
+    )
+    backend = MockLLMBackend(responses=[response])
+    facts = extract_category_terms(backend, _SAMPLE_PREP_CATEGORY, run_text, locator_prefix="test")
+
+    by_type = {fact.fact_type_candidate: fact for fact in facts}
+    assert by_type["filter_passive_active_0_1"].raw_value == "0"
+
+
+def test_extract_category_terms_sterivex_upgrades_llm_zero_to_active():
+    run_text = "Water samples were filtered through a 0.22 um Sterivex cartridge filter."
+    response = json.dumps(
+        [
+            {"field": "filter_name", "raw_value": "Sterivex", "quote_id": "Q001"},
+            {"field": "filter_passive_active_0_1", "raw_value": "0", "quote_id": "Q001"},
+        ]
+    )
+    backend = MockLLMBackend(responses=[response])
+    facts = extract_category_terms(backend, _SAMPLE_PREP_CATEGORY, run_text, locator_prefix="test")
+
+    by_type = {fact.fact_type_candidate: fact for fact in facts}
+    assert by_type["filter_passive_active_0_1"].raw_value == "1"
+
+
+def test_extract_category_terms_adds_all_size_fracs_from_filter_cascade_quote():
+    """Real regression from the PLOS plankton-filtration paper:
+    one filtration sentence contains 180-um, 5.0-um, and 0.2-um filters.
+    The model may return only the first value, but all three are simple
+    pore-size facts once the quote is already a size_frac candidate."""
+    run_text = (
+        "The water was filtered through a 180-μm filter, followed by a "
+        "5.0-μm polycarbonate membrane and a 0.2-μm polycarbonate membrane."
+    )
+    response = json.dumps(
+        [{"field": "size_frac", "raw_value": "180-μm", "quote_id": "Q001"}]
+    )
+    backend = MockLLMBackend(responses=[response])
+    facts = extract_category_terms(backend, _SAMPLE_PREP_CATEGORY, run_text, locator_prefix="test")
+
+    by_type = {fact.fact_type_candidate: fact for fact in facts}
+    assert by_type["size_frac"].raw_value == "180-μm | 5.0-μm | 0.2-μm"
 
 
 def test_extract_category_terms_boolean_field_rejects_non_boolean_values():

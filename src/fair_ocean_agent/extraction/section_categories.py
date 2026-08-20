@@ -341,7 +341,11 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
             ), definition='Total surface area of the filter membrane, usually in mm².'),
             CategoryTerm("size_frac", (
                 "pore size", "filtering pore size", "filter pore size", "µm filter", "um filter",
-                "0.22 µm", "0.22 um", "0.2 µm", "0.2 um", "0.45 µm", "0.45 um",
+                "μm filter", "µm membrane", "μm membrane", "um membrane",
+                "180-µm", "180-μm", "180-um", "5.0-µm", "5.0-μm", "5.0-um",
+                "0.22 µm", "0.22 μm", "0.22 um", "0.22-µm", "0.22-μm", "0.22-um",
+                "0.2 µm", "0.2 μm", "0.2 um", "0.2-µm", "0.2-μm", "0.2-um",
+                "0.45 µm", "0.45 μm", "0.45 um", "0.45-µm", "0.45-μm", "0.45-um",
             ), definition='Pore size of the main filter used to collect/sample material, in µm.'),
             CategoryTerm("prefilter_material", (
                 "pre-filter material", "prefilter material", "pre-sort material",
@@ -361,7 +365,10 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
                 "flow rate", "flowrate", "filtered through", "filtered onto", "filtered on",
                 "filtration through", "filtration onto", "filter membrane", "membrane filter",
                 "filter cartridge", "cartridge filter", "Sterivex", "pore size", "µm filter",
-                "um filter", "0.22 µm", "0.22 um", "0.2 µm", "0.2 um", "0.45 µm", "0.45 um",
+                "μm filter", "um filter", "µm membrane", "μm membrane", "um membrane",
+                "0.22 µm", "0.22 μm", "0.22 um", "0.22-µm", "0.22-μm", "0.22-um",
+                "0.2 µm", "0.2 μm", "0.2 um", "0.2-µm", "0.2-μm", "0.2-um",
+                "0.45 µm", "0.45 μm", "0.45 um", "0.45-µm", "0.45-μm", "0.45-um",
             ), definition='Whether the filtration/collection of water or air was active or passive. Return exactly 1 for active filtration and 0 for passive filtration. Active = 1: water or air is explicitly forced or moved through a filter using a pump, compressed air, vacuum, fan, syringe pressure, peristaltic pump, pressure vessel, or another mechanical driving force. Passive = 0: filtration is described but no active forcing mechanism is stated, or the filter/material is simply exposed, submerged, suspended, or stationed in the environment and material accumulates without mechanically forcing water or air through it. Do not interpret 0 as "no filtration" or 1 as "filtration present" -- this field distinguishes active versus passive filtration only.'),
             CategoryTerm("pump_flow_rate", (
                 "pump flow rate", "flow rate of", "pumped at a rate", "L/min", "flow rate was",

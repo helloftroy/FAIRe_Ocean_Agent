@@ -156,7 +156,7 @@ def _resolve_entity_id(session: Session, study_id: str, fact: RawFact, rule: Map
 _PIPE_UNION_TARGET_FIELDS = frozenset(
     {
         "targetTaxonomicAssay", "targetTaxonomicScope", "platform", "instrument", "samp_mat_process", "otu_db",
-        "x_env_var_block", "spreadsheet_headers",
+        "size_frac", "x_env_var_block", "spreadsheet_headers",
     }
 )
 _PIPE_UNION_REVIEW_ON_MULTIPLE_FIELDS = frozenset({"platform", "instrument"})
@@ -171,6 +171,7 @@ _NORMALIZED_FACT_SOURCE_FIELDS = {
     "samp_collect_method_normalized": "samp_collect_method",
     "samp_mat_process_normalized": "samp_mat_process",
 }
+_NORMALIZED_FACT_TYPE_FOR_FIELD = {native_name: normalized for normalized, native_name in _NORMALIZED_FACT_SOURCE_FIELDS.items()}
 _COLLAPSED_SAMPLE_UNIT_FIELDS = {
     "concentration": "concentration_unit",
     "diss_inorg_carb": "diss_inorg_carb_unit",
@@ -812,22 +813,48 @@ def _apply_sample_type_routed_facts(
             # evidence this is a genuine multi-sample-type conflict rather
             # than one miscategorized quote. Fall back to the same "oldest
             # fact wins" broadcast this field would have received had it
-            # never been flagged as routable.
-            all_facts = list(
-                session.scalars(
+            # never been flagged as routable -- EXCEPT this fallback re-
+            # queries raw facts directly by native_name, so it never knew
+            # about a "terms | quote" normalized sibling (routed fields are
+            # detected/queried by native_name alone, see
+            # _detect_sample_type_routed_facts above; normalized facts live
+            # under a differently-named fact_type and were never part of
+            # that query). Confirmed live: samp_mat_process fell through to
+            # this exact branch for a paper describing both water and
+            # sediment samples, and the routed path handed back the bare
+            # quote-only fact even though a real normalized fact existed --
+            # prefer it here too, same as the main broadcast loop above.
+            normalized_fact_type = _NORMALIZED_FACT_TYPE_FOR_FIELD.get(native_name)
+            oldest = None
+            if normalized_fact_type is not None:
+                oldest = session.scalar(
                     select(RawFact)
                     .where(
                         RawFact.study_id == study_id,
                         RawFact.entity_id.is_(None),
-                        RawFact.fact_type_candidate == native_name,
+                        RawFact.fact_type_candidate == normalized_fact_type,
                         RawFact.review_status != ReviewStatus.REJECTED.value,
+                        RawFact.raw_value.is_not(None),
                     )
                     .order_by(RawFact.created_at)
+                    .limit(1)
                 )
-            )
-            if not all_facts:
-                continue
-            oldest = all_facts[0]
+            if oldest is None:
+                all_facts = list(
+                    session.scalars(
+                        select(RawFact)
+                        .where(
+                            RawFact.study_id == study_id,
+                            RawFact.entity_id.is_(None),
+                            RawFact.fact_type_candidate == native_name,
+                            RawFact.review_status != ReviewStatus.REJECTED.value,
+                        )
+                        .order_by(RawFact.created_at)
+                    )
+                )
+                if not all_facts:
+                    continue
+                oldest = all_facts[0]
             value = rule.transform(oldest.raw_value)
             if value is None:
                 continue
@@ -907,7 +934,7 @@ _FILTER_PASSIVE_ACTIVE_FIELD = "filter_passive_active_0_1"
 # pipeline's own single extraction call, on purpose -- see the docstring
 # below for why a second copy is needed here rather than importing it).
 _ACTIVE_FILTRATION_CONTEXT_RE = re.compile(
-    r"\b(?:active(?:ly)?\s+filter|pumped?|pumping|pump|peristaltic|vacuum|"
+    r"\b(?:Sterivex|active(?:ly)?\s+filter|pumped?|pumping|pump|peristaltic|vacuum|"
     r"suction|pressure|overpressure|pressuri[sz]ed|compressed\s+air|syringe\s+pressure|"
     r"forced\s+through|fan-driven|flowmeter|flow\s*rate|flowrate)\b",
     re.IGNORECASE,
@@ -1001,13 +1028,30 @@ def map_study_to_faire(session: Session, study_id: str) -> int:
             .order_by(RawFact.created_at)
         )
     )
-    normalized_source_fields = {
-        _NORMALIZED_FACT_SOURCE_FIELDS[fact.fact_type_candidate]
-        for fact in facts
-        if fact.fact_type_candidate in _NORMALIZED_FACT_SOURCE_FIELDS
-        and fact.raw_value is not None
-        and fact.review_status != ReviewStatus.REJECTED.value
-    }
+    # Suppress by TARGET FIELD, not by the specific raw fact_type_candidate
+    # the "_normalized" fact was itself named after -- several of these
+    # FAIRe target fields have more than one competing extraction path
+    # (e.g. nucl_acid_ext_lysis's own quote-only fact AND the broad-
+    # checklist's separately-named dna_lysis_method both map to
+    # sampleMetadata.nucl_acid_ext_lysis via rules.py). Keying suppression
+    # on fact_type_candidate alone only ever silenced the identically-named
+    # sibling; every OTHER competitor stayed un-suppressed, older, and won
+    # -- confirmed live: a real export showed nucl_acid_ext_lysis holding
+    # only dna_lysis_method's bare, quote-less value even though a full
+    # "terms | quote" normalized fact existed right alongside it. Resolving
+    # through rules_for() instead means this covers every current and
+    # future competing fact_type automatically, not just the ones known
+    # about today.
+    normalized_target_fields: set[str] = set()
+    for fact in facts:
+        if (
+            fact.fact_type_candidate not in _NORMALIZED_FACT_SOURCE_FIELDS
+            or fact.raw_value is None
+            or fact.review_status == ReviewStatus.REJECTED.value
+        ):
+            continue
+        for rule in rules_for(fact.fact_type_candidate, fact.entity_level):
+            normalized_target_fields.add(rule.target_field)
     collapsed_unit_lookup = _collapsed_unit_lookup(facts)
     created = 0
     seen: dict[tuple[str, str, str | None], StandardizedValue] = {}
@@ -1016,11 +1060,14 @@ def map_study_to_faire(session: Session, study_id: str) -> int:
     for fact in facts:
         if fact.fact_type_candidate is None or fact.raw_value is None:
             continue
-        if fact.fact_type_candidate in normalized_source_fields:
-            continue
         if fact.fact_type_candidate in routed_facts_by_field:
             continue  # handled by _apply_sample_type_routed_facts below instead
         for rule in rules_for(fact.fact_type_candidate, fact.entity_level):
+            if (
+                rule.target_field in normalized_target_fields
+                and fact.fact_type_candidate not in _NORMALIZED_FACT_SOURCE_FIELDS
+            ):
+                continue  # a "terms | quote" normalized fact already won this target field
             if rule.target_field == "materialSampleID":
                 entity_id = _resolve_entity_id(session, study_id, fact, rule)
                 if entity_id is None:

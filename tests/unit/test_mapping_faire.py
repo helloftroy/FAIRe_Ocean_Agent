@@ -100,6 +100,22 @@ def test_filter_passive_active_defaults_to_active_when_pump_language_present(db_
     assert result.raw_value == "1"
 
 
+def test_filter_passive_active_defaults_to_active_for_sterivex_without_pump_language(db_session):
+    study = _study(db_session, title="Filter passive/active with Sterivex evidence")
+    _fact(db_session, study, field="filter_name", value="Sterivex filter", entity_level="study")
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    result = (
+        db_session.query(RawFact)
+        .filter_by(study_id=study.study_id, fact_type_candidate="filter_passive_active_0_1")
+        .one()
+    )
+    assert result.raw_value == "1"
+
+
 def test_filter_passive_active_backfill_is_idempotent_and_skips_when_already_resolved(db_session):
     study = _study(db_session, title="Filter passive/active already resolved")
     _fact(db_session, study, field="filter_name", value="Sterivex cartridge", entity_level="study")
@@ -1665,6 +1681,27 @@ def test_filter_name_placeholder_is_ignored_when_real_filter_name_exists(db_sess
         entity_id=None,
     ).one()
     assert value.standardized_value == "Swinnex 47 mm filter holder"
+
+
+def test_study_level_size_frac_values_are_pipe_union_preserved(db_session):
+    """Regression guard for the PLOS plankton-filtration paper: the study
+    used a filter cascade (180-um, 5.0-um, 0.2-um), but size_frac was not a
+    pipe-union target, so only the first standardized value survived."""
+    study = _study(db_session, title="Filter cascade")
+    _fact(db_session, study, field="size_frac", value="180-μm", entity_level="study", support=SupportType.EXPLICIT)
+    _fact(db_session, study, field="size_frac", value="5.0-μm", entity_level="study", support=SupportType.EXPLICIT)
+    _fact(db_session, study, field="size_frac", value="0.2-μm", entity_level="study", support=SupportType.EXPLICIT)
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    value = db_session.query(StandardizedValue).filter_by(
+        study_id=study.study_id,
+        target_field="size_frac",
+        entity_id=None,
+    ).one()
+    assert value.standardized_value == "180-μm | 5.0-μm | 0.2-μm"
 
 
 def test_llm_atomic_assay_facts_map_to_faire_protocol_fields_with_review(db_session):
