@@ -56,6 +56,22 @@ _METHODS_ROOT_RE = re.compile(
     r"^(?:\d+(?:\.\d+)*\s+)?(?:materials?\s+and\s+methods?|methods?|methodology|experimental\s+procedures?)\b",
     re.IGNORECASE,
 )
+# Once a Results/Discussion/Conclusions/References heading has been seen,
+# only these narrow, canonical trailing-section titles stay eligible --
+# confirmed live (10.3389/fmicb.2024.1295149): a Results subsection titled
+# "Taxonomic abundance of the prokaryotic..." was wrongly re-included
+# because its title happens to share a keyword ("taxonomic") with
+# RELEVANT_SECTION_TITLE_PATTERNS' broad Methods-subheading vocabulary,
+# pulling ~14,000 chars of Results/Discussion prose into what should be a
+# Methods-only extraction. The JATS XML path (extraction/sections.py)
+# doesn't have this problem because real <sec> nesting lets it exclude a
+# leaf by its actual parent section, not by keyword coincidence; the flat
+# PDF path has no such structure to fall back on, so once we're
+# definitely past the relevant zone, only this short allowlist (not the
+# full keyword list) can pull a later heading back in -- Data Availability
+# and Supplementary Materials legitimately sit after Discussion as their
+# own top-level sections, not as its subsections.
+_TRAILING_METADATA_TITLE_RE = re.compile(r"data availab|supplementary material", re.IGNORECASE)
 _KNOWN_HEADING_RE = re.compile(
     r"^(?:\d+(?:\.\d+)*\s+)?(?:"
     r"abstract|introduction|materials?\s+and\s+methods?|methods?|methodology|experimental\s+procedures?|"
@@ -130,16 +146,22 @@ def extract_pdf_sections(content: bytes | str | Path | BinaryIO, max_chars: int 
     selected: list[dict] = []
     total_chars = 0
     under_methods = False
+    past_relevant_zone = False
     for section in sections:
         if total_chars >= max_chars:
             break
         title = section.title
         if _is_result_or_discussion_title(title) or _RESULTS_OR_END_RE.search(title):
             under_methods = False
+            past_relevant_zone = True
             continue
         if _METHODS_ROOT_RE.search(title):
             under_methods = True
-        relevant = under_methods or _is_relevant_title(title)
+            past_relevant_zone = False
+        if past_relevant_zone:
+            relevant = bool(_TRAILING_METADATA_TITLE_RE.search(title))
+        else:
+            relevant = under_methods or _is_relevant_title(title)
         if not relevant or not section.text:
             continue
         remaining = max_chars - total_chars

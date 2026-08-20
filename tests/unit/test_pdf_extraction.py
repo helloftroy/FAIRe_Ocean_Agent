@@ -36,3 +36,22 @@ def test_extract_pdf_text_preserves_page_boundaries_for_main_paper_pdf():
     assert "\f" in text
     assert "Sampling" in text
     assert "DNA extraction and amplicon sequencing" in text
+
+
+def test_extract_pdf_sections_excludes_results_subsection_sharing_methods_vocabulary():
+    """Real regression from 10.3389/fmicb.2024.1295149: the Results section
+    has its own subsection titled "Taxonomic abundance of the prokaryotic
+    ...", which was wrongly re-included (~14,000 chars of Results/
+    Discussion prose, 3x the correct total) because its title shares the
+    "taxonom" keyword with a legitimate Methods-subheading pattern. The
+    literal "Results" heading itself was already correctly excluded --
+    the bug was the very next heading slipping back in via the broad
+    keyword fallback, independent of the Results/Methods boundary state."""
+    sections = extract_pdf_sections(PDF_DIR / "fmicb-15-1295149.pdf")
+
+    titles = [section["title"] for section in sections]
+    assert "Taxonomic abundance of the prokaryotic" not in titles
+    joined = "\n".join(section["text"] for section in sections)
+    assert "884,780 ASVs categorized as Bacteria" not in joined
+    total_chars = sum(len(section["text"]) for section in sections)
+    assert total_chars < 10000
