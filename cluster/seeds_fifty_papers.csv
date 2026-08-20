@@ -1,0 +1,57 @@
+seed_id,title,doi,pmid,pmcid,bioproject_accession,ena_study_accession,dataset_id,repository,url,notes
+usual-01,,10.1038/s42003-024-06136-2,,,,,,,,s42003 -- polymetallic nodule coral/nitrite oxidizer paper, the recurring validation set. Shares BioProject PRJNA529480 with usual-06 (PNAS) -- reuses/reanalyzes that paper's own BioSamples, the real test case for cross-study entity merging in sampleMetadata.
+usual-02,,10.1093/ismejo/wrae013,,,,,,,,wrae013 -- methanotroph/infauna coastal sediment paper, the recurring validation set
+usual-03,,10.7717/peerj.333,,,,,,,,coral spawning settlement-cue paper (Davies et al. 2014), the recurring validation set -- previously seeded with the wrong DOI (10.7717/peerj.9857, an unrelated human liver-failure paper), fixed 2026-08-20
+usual-04,,10.3389/fmicb.2024.1295149,,,,,,,,fmicb prokaryote diversity paper, the recurring validation set
+usual-05,,10.1371/journal.pone.0303937,,,,,,,,plankton filtration bias / flowmeter paper, the recurring validation set
+usual-06,,10.1073/pnas.2005917117,,,,,,,,PNAS geochemical transition zone paper -- shares BioProject PRJNA529480 with usual-01 (s42003); this is THE reanalyzed-samples/entity-merging test case, seeded explicitly here rather than relying on citation-expansion to find it (which has not reliably fired in past runs)
+backup-01,,10.1002/2015jg003300,,,,,,,,backup filler for 15-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt
+backup-02,,10.1007/s00338-021-02143-5,,,,,,,,backup filler for 15-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt
+backup-03,,10.1016/j.heliyon.2019.e02876,,,,,,,,backup filler for 15-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt
+backup-04,,10.1021/acs.est.9b02212,,,,,,,,backup filler for 15-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt
+backup-05,,10.1073/pnas.2103275118,,,,,,,,backup filler for 15-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt
+backup-06,,10.1111/1755-0998.12218,,,,,,,,backup filler for 15-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt
+backup-07,,10.1134/s002626171406006x,,,,,,,,backup filler for 15-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt
+backup-08,,10.26650/ase20241434217,,,,,,,,backup filler for 15-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt
+backup-09,,10.3389/fmicb.2019.02244,,,,,,,,backup filler for 15-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt
+backup-10,,10.1002/edn3.184,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-11,,10.1002/edn3.570,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-12,,10.1002/lom3.10602,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-13,,10.1007/s00248-017-1097-5,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-14,,10.1007/s00338-004-0428-4,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-15,,10.1007/s00338-021-02089-8,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-16,,10.1007/s10482-014-0130-7,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-17,,10.1007/s11802-021-4448-2,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-18,,10.1007/s44211-023-00280-1,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-19,,10.1016/j.dsr.2024.104416,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-20,,10.1016/j.ecss.2021.107661,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-21,,10.1016/j.ese.2023.100275,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-22,,10.1016/j.marenvres.2018.08.012,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-23,,10.1016/j.marpolbul.2012.11.032,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-24,,10.1016/j.marpolbul.2024.116275,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-25,,10.1016/j.scitotenv.2018.03.108,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-26,,10.1016/j.scitotenv.2023.164258,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-27,,10.1016/j.watres.2023.120225,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-28,,10.1038/ismej.2014.247,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-29,,10.1038/s41396-020-0675-6,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-30,,10.1038/s41586-020-2385-7,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-31,,10.1038/s41598-020-66290-5,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-32,,10.1038/s41598-024-60762-8,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-33,,10.1038/srep35272,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-34,,10.1080/17451000.2019.1702214,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-35,,10.1093/femsle/fnab026,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-36,,10.1093/pnasnexus/pgae081,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-37,,10.1101/2020.06.24.169110,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-38,,10.1101/2024.04.15.589529,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-39,,10.1111/1462-2920.15185,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-40,,10.1111/1755-0998.13375,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-41,,10.1111/fwb.14107,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-42,,10.1111/jeu.12975,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-43,,10.1111/mec.15587,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-44,,10.1128/aem.00057-14,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-45,,10.1128/msphere.00073-24,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-46,,10.1134/s1022795415110071,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-47,,10.1186/s40168-020-00826-9,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-48,,10.1264/jsme2.me17048,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-49,,10.1371/journal.pone.0134416,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
+backup-50,,10.1371/journal.pone.0286228,,,,,,,,"backup filler for 50-paper pressure test, spread-sampled from data/seeds/mdp_all_imported_dois.txt"
