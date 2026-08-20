@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = REPO_ROOT / "config"
-MIN_LLM_MAX_OUTPUT_TOKENS = 2048
+MIN_LLM_MAX_OUTPUT_TOKENS = 4096
 MIN_LLM_EXTRACTION_MAX_CHARS_PER_CALL = 16000
 
 

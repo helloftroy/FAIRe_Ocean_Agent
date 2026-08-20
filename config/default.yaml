@@ -23,9 +23,13 @@ llm:
   temperature: 0
   # Keep extraction budgets high enough for FAIRe-aware prompts. Smaller
   # environment overrides are clamped upward in config.py because 2500-char
-  # chunks and 1024-token outputs dropped real PCR/library facts in live runs.
+  # chunks and 1024-token outputs dropped real PCR/library facts in live runs
+  # -- confirmed live again at 2048 with a smaller cluster model (Qwen3-4B):
+  # depth, adapter_forward/reverse, and even primer facts went missing
+  # entirely from a single collapsed pass over the full ~3,300-token
+  # checklist, the same truncated-response shape as the original 1024 bug.
   extraction_max_chars_per_call: 16000
-  max_output_tokens: 2048
+  max_output_tokens: 4096
   max_concurrency: 1
   # Optional request/context hint for compatible servers. Ollama's
   # OpenAI-compatible endpoint may ignore this; use OLLAMA_CONTEXT_LENGTH or

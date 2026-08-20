@@ -18,6 +18,10 @@ llm:
   # don't pass it. Leave this here anyway -- unused by vLLM, harmless.
   num_ctx: 16384
   extraction_max_chars_per_call: 16000
-  max_output_tokens: 2048
+  # 2048 confirmed live to drop real facts (depth, adapter_forward/reverse,
+  # even primers) with a smaller model like Qwen3-4B run against the full
+  # ~3,300-token checklist in one collapsed pass -- see config/default.yaml's
+  # own comment for the original, smaller-scale version of this same bug.
+  max_output_tokens: 4096
   max_concurrency: 1
   timeout_seconds: 300

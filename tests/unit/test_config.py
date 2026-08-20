@@ -62,7 +62,7 @@ def test_llm_size_env_overrides_cannot_shrink_extraction_budget(monkeypatch, tmp
 
     config = load_config(env_file=tmp_path / "does-not-exist.env")
 
-    assert config.llm.max_output_tokens == 2048
+    assert config.llm.max_output_tokens == 4096
     assert config.llm.extraction_max_chars_per_call == 16000
     reset_config_cache()
     monkeypatch.delenv("LOCAL_LLM_MAX_OUTPUT_TOKENS", raising=False)
