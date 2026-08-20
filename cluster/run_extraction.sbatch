@@ -108,6 +108,16 @@ elif [ "${LLM_BACKEND}" = "vllm" ]; then
   # instead of hanging trying to reach huggingface.co.
   export HF_HOME="${HF_HOME:-$(pwd)/cluster/hf_cache}"
   export HF_HUB_OFFLINE=1
+  # flashinfer's top-k/top-p sampling kernel JIT-compiles a CUDA extension
+  # on first use via nvcc -- confirmed live: GPU compute nodes commonly
+  # ship the CUDA driver/runtime but not the full toolkit, so this failed
+  # with "Could not find nvcc and default cuda_home='/usr/local/cuda'
+  # doesn't exist" partway through the very first inference request.
+  # vLLM's PyTorch-native sampler needs nothing extra and is what it uses
+  # automatically whenever flashinfer itself isn't installed, so this just
+  # forces the same fallback rather than chasing down the cluster's CUDA
+  # toolkit module/path.
+  export VLLM_USE_FLASHINFER_SAMPLER=0
   echo "Starting vllm serve (model=${MODEL_NAME}, HF_HOME=${HF_HOME})..."
   vllm serve "${MODEL_NAME}" --host 0.0.0.0 --port 8000 > logs/vllm_${SLURM_JOB_ID:-local}.log 2>&1 &
   SERVER_PID=$!
