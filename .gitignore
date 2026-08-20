@@ -9,6 +9,7 @@ dist/
 .env
 config/local.yaml
 cluster/env_activate.sh
+cluster/.env_config
 cluster/hf_cache/
 
 data/*.db
