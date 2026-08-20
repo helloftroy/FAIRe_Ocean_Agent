@@ -31,62 +31,18 @@ this to work -- normal on HPC, since `data/fair_ocean.db` and
 ```bash
 # On a login node (needs internet):
 git clone https://github.com/helloftroy/FAIRe_Ocean_Agent.git
-cd FAIRe_Ocean_Agent/fair_ocean_agent
-./cluster/setup_env.sh
+cd FAIRe_Ocean_Agent
+git pull
+conda create -p /scratch/morrill/users/hmp278/conda_envs/faire-agent \
+  -c conda-forge \
+  python=3.11 pip openssl ca-certificates certifi -y
+
+MINIFORGE_HOME=/scratch/morrill/users/hmp278/miniforge3 \
+CONDA_ENV_PREFIX=/scratch/morrill/users/hmp278/conda_envs/faire-agent \
+  ./cluster/setup_env.sh
 ```
+conda activate /scratch/morrill/users/hmp278/conda_envs/faire-agent
 
-This package needs Python >=3.10; the cluster's own `python3` may not be
-(3.9 is common on HPC login nodes). `setup_env.sh` defaults to conda for
-exactly this reason -- it runs, in effect:
-
-```bash
-source "$HOME/miniforge3/etc/profile.d/conda.sh"
-conda create -n faire-agent python=3.12 -y
-conda activate faire-agent
-```
-
-then installs the package into that env. Override the env name/Python
-version/miniforge location with `CONDA_ENV_NAME`/`PYTHON_VERSION`/
-`MINIFORGE_HOME`, e.g. if you already have a `faire-vllm` env from
-testing:
-
-```bash
-CONDA_ENV_NAME=faire-vllm ./cluster/setup_env.sh
-```
-
-**If `$HOME` has a small quota** (common on HPC -- confirmed live:
-`pip install vllm` failed partway through with "Disk quota exceeded",
-since vLLM alone pulls in torch + CUDA libraries, easily several GB),
-put the env on scratch space instead with `CONDA_ENV_PREFIX`. This also
-redirects pip's own download/build cache there (it defaults to
-`$HOME/.cache/pip` and would hit the same quota independently of where
-the env itself lives, even once the env is moved):
-
-```bash
-CONDA_ENV_PREFIX=/scratch/$USER/conda_envs/faire-agent ./cluster/setup_env.sh
-```
-
-Find your real scratch path first if you don't already know it:
-`echo $SCRATCH`, or check your cluster's docs -- the path above is just
-an illustrative example, not a guess at your specific cluster's
-convention.
-
-If your cluster doesn't have (mini)conda/miniforge at all, use a plain
-venv instead (needs a real `python3.10+` already on PATH or via
-`module load` -- `setup_env.sh` checks the version and fails with a clear
-message rather than a cryptic pip error if not):
-
-```bash
-ENV_MANAGER=venv PYTHON_BIN=python3.11 ./cluster/setup_env.sh
-```
-
-Either way, `setup_env.sh` writes `cluster/env_activate.sh` (gitignored,
-machine-specific) recording exactly how to activate whichever environment
-it just set up -- `run_discovery.sbatch`/`run_extraction.sbatch`/
-`download_vllm_model.sh` all just source that file, so there's nothing to
-edit in the job scripts themselves regardless of which path you chose.
-
-### Config and LLM backend
 
 `run_extraction.sbatch` supports three backends via `LLM_BACKEND`
 (default `ollama`): `ollama`, `vllm`, or `external` (an endpoint you're
@@ -121,6 +77,12 @@ some clusters restrict what login nodes can install/run persistently):
 
 ```bash
 pip install vllm
+# vllm pulls in flashinfer for CUDA kernel fusion; versions before
+# 0.6.16.post4 have a type annotation in flashinfer/comm/fd_exchange.py
+# that only evaluates on Python 3.12+, so `vllm serve` crashes at model
+# load time on Python 3.10/3.11 with "TypeError: type 'array.array' is
+# not subscriptable". Pin past the fix:
+pip install "flashinfer-python>=0.6.16.post4"
 cp cluster/local.yaml.cluster-vllm-example config/local.yaml
 
 # One-time model download (needs internet -- run from a login node):
@@ -153,6 +115,9 @@ sbatch --account=191001-364393 cluster/run_discovery.sbatch
 sbatch --dependency=afterok:<job_id_from_above> cluster/run_extraction.sbatch
 # or, for vLLM instead of the default Ollama:
 sbatch --dependency=afterok:<job_id_from_above> --export=ALL,LLM_BACKEND=vllm cluster/run_extraction.sbatch
+sbatch --account=191001-364393 --dependency=afterok:27427 --export=ALL,LLM_BACKEND=vllm cluster/run_extraction.sbatch
+
+
 ```
 
 Check progress:
@@ -208,6 +173,11 @@ retry a stuck batch than to debug a single multi-day job.
   waiting for vllm**: check `logs/vllm_<job_id>.log` directly -- a model
   that wasn't downloaded first (see `download_vllm_model.sh`) fails there
   with a clear `HF_HUB_OFFLINE` error rather than in the main log.
+- **`logs/vllm_<job_id>.log` shows `TypeError: type 'array.array' is not
+  subscriptable` in `flashinfer/comm/fd_exchange.py`**: an old
+  `flashinfer-python` (pulled in by `pip install vllm`) that only works on
+  Python 3.12+ -- run `pip install "flashinfer-python>=0.6.16.post4"` in
+  the same env (see the vLLM setup section above), then resubmit.
 - **`run_discovery.sbatch` fails with connection errors**: that
   partition doesn't actually have outbound internet after all -- check
   with your cluster's support docs, or test with a plain `curl
