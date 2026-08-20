@@ -184,6 +184,18 @@ _SEQUENCE_FIELD_TO_TRACEABILITY_FLAG = {
     "pcr_primer_forward": "primer_forward_source_unresolved",
     "pcr_primer_reverse": "primer_reverse_source_unresolved",
 }
+# Per an explicit user request: this flag means "no sequence AND no
+# reference to chase it down either" -- a real dead end, not merely "the
+# sequence itself isn't known yet". A study whose paper names a primer
+# without its sequence but DOES cite where it came from (real DOI, or a
+# fallback title/citation text when the reference has no DOI -- see
+# extract_primer_reference_citations) has a genuine lead recorded in
+# pcr_primer_reference_forward/reverse, even before that lead is actually
+# chased down to a sequence, so it should NOT be flagged unresolved.
+_SEQUENCE_FIELD_TO_REFERENCE_FIELD = {
+    "pcr_primer_forward": "pcr_primer_reference_forward",
+    "pcr_primer_reverse": "pcr_primer_reference_reverse",
+}
 
 
 def _primer_traceability_values(session: Session, study_id: str) -> dict[str, str]:
@@ -204,34 +216,20 @@ def _primer_traceability_values(session: Session, study_id: str) -> dict[str, st
         )
         if has_own_sequence or corpus_primer_sequence(session, primer_name, sequence_field) is not None:
             continue
+        has_reference = (
+            session.scalars(
+                select(RawFact.fact_id).where(
+                    RawFact.study_id == study_id,
+                    RawFact.fact_type_candidate == _SEQUENCE_FIELD_TO_REFERENCE_FIELD[sequence_field],
+                    RawFact.review_status != ReviewStatus.REJECTED.value,
+                )
+            ).first()
+            is not None
+        )
+        if has_reference:
+            continue
         flags[_SEQUENCE_FIELD_TO_TRACEABILITY_FLAG[sequence_field]] = "1"
     return flags
-
-
-# EXPERIMENTAL, not a real FAIRe field -- see extraction/study_factor.py's
-# generate_information_withheld_llm_guess docstring. Read directly from
-# RawFact (never mapped/merged into the real informationWithheld
-# StandardizedValue) so the model's own speculative "what looks missing"
-# guess can be compared side by side against the real, verbatim-only
-# informationWithheld column without either one contaminating the other.
-INTERNAL_INFORMATION_WITHHELD_LLM_GUESS_FIELD = "internal_information_withheld_llm_guess"
-
-
-def _information_withheld_llm_guess_value(session: Session, study_id: str) -> str:
-    return (
-        session.scalar(
-            select(RawFact.raw_value)
-            .where(
-                RawFact.study_id == study_id,
-                RawFact.entity_id.is_(None),
-                RawFact.fact_type_candidate == "information_withheld_llm_guess",
-                RawFact.review_status != ReviewStatus.REJECTED.value,
-            )
-            .order_by(RawFact.created_at)
-            .limit(1)
-        )
-        or ""
-    )
 
 
 @lru_cache(maxsize=1)
@@ -757,7 +755,6 @@ def export_faire(session: Session, output_dir: str | Path) -> dict[str, int]:
         assays_with_values = [assay for assay in assay_entities if _entity_values(session, assay.entity_id)]
         section_detection = _section_category_detection_values(session, study.study_id)
         primer_traceability = _primer_traceability_values(session, study.study_id)
-        information_withheld_llm_guess = _information_withheld_llm_guess_value(session, study.study_id)
         if not assays_with_values:
             if project_id is None and not broadcast:
                 continue  # nothing at all mapped for this study -- don't emit an all-blank row
@@ -766,7 +763,6 @@ def export_faire(session: Session, output_dir: str | Path) -> dict[str, int]:
             row[INTERNAL_STUDY_ID_FIELD] = study.study_id
             row.update(section_detection)
             row.update(primer_traceability)
-            row[INTERNAL_INFORMATION_WITHHELD_LLM_GUESS_FIELD] = information_withheld_llm_guess
             project_rows.append(row)
             continue
         for assay in assays_with_values:
@@ -777,7 +773,6 @@ def export_faire(session: Session, output_dir: str | Path) -> dict[str, int]:
             row[INTERNAL_STUDY_ID_FIELD] = study.study_id
             row.update(section_detection)
             row.update(primer_traceability)
-            row[INTERNAL_INFORMATION_WITHHELD_LLM_GUESS_FIELD] = information_withheld_llm_guess
             project_rows.append(row)
     counts["projectMetadata"] = _write_csv(
         output_dir / "projectMetadata.csv",
@@ -785,7 +780,6 @@ def export_faire(session: Session, output_dir: str | Path) -> dict[str, int]:
             INTERNAL_STUDY_ID_FIELD,
             *INTERNAL_SECTION_DETECTION_FIELDS,
             *INTERNAL_PRIMER_TRACEABILITY_FIELDS,
-            INTERNAL_INFORMATION_WITHHELD_LLM_GUESS_FIELD,
             *project_columns,
             CUSTOM_SPREADSHEET_HEADERS_FIELD,
         ],

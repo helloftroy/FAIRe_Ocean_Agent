@@ -15,7 +15,6 @@ from fair_ocean_agent.database.models import (
 from fair_ocean_agent.exports.faire import (
     EMPTY_CLASSES,
     INTERNAL_ALIAS_SAMPLE_IDS_FIELD,
-    INTERNAL_INFORMATION_WITHHELD_LLM_GUESS_FIELD,
     INTERNAL_PRIMER_TRACEABILITY_FIELDS,
     INTERNAL_SECTION_DETECTION_FIELDS,
     INTERNAL_STUDY_ID_FIELD,
@@ -912,6 +911,43 @@ def test_primer_traceability_flags_when_name_known_but_sequence_unknown_anywhere
     assert rows[0]["primer_reverse_source_unresolved"] == "0"
 
 
+def test_primer_traceability_clears_when_a_reference_citation_is_found(db_session, tmp_path):
+    """Per an explicit user request: unresolved means "no sequence AND no
+    reference to chase either" -- a real dead end. A study that names a
+    primer without its sequence but DOES cite where it came from (a real
+    pcr_primer_reference_forward/reverse fact -- DOI, or a fallback title
+    when the reference has no DOI, see extract_primer_reference_citations)
+    has a genuine lead recorded, so it should NOT be flagged unresolved
+    even before that lead is actually chased down to a real sequence."""
+    study = Study(title="Primer traceability, resolved via reference citation")
+    db_session.add(study)
+    db_session.flush()
+    db_session.add(ExternalIdentifier(study_id=study.study_id, identifier_type=IdentifierType.BIOPROJECT_ACCESSION.value, identifier_value="PRJNA_PRIMER_REF1"))
+    db_session.add(
+        RawFact(
+            study_id=study.study_id, entity_id=None, raw_field_name="pcr_primer_name_forward",
+            raw_value="515F", fact_type_candidate="pcr_primer_name_forward", entity_level="study",
+            support_type=SupportType.EXPLICIT.value,
+        )
+    )
+    db_session.add(
+        RawFact(
+            study_id=study.study_id, entity_id=None, raw_field_name="pcr_primer_reference_forward",
+            raw_value="doi: 10.1234/some-other-paper", fact_type_candidate="pcr_primer_reference_forward",
+            entity_level="study", support_type=SupportType.DETERMINISTICALLY_DERIVED.value,
+        )
+    )
+    db_session.commit()
+
+    export_faire(db_session, tmp_path)
+
+    with (tmp_path / "projectMetadata.csv").open() as f:
+        rows = list(csv.DictReader(f))
+    assert len(rows) == 1
+    assert rows[0]["primer_forward_source_unresolved"] == "0"
+    assert rows[0]["primer_reverse_source_unresolved"] == "0"
+
+
 def test_primer_traceability_clears_once_this_paper_has_its_own_sequence(db_session, tmp_path):
     study = Study(title="Primer traceability, resolved by this paper")
     db_session.add(study)
@@ -994,13 +1030,10 @@ def test_primer_traceability_clears_via_corpus_lookup_from_a_different_study(db_
     assert needs_it_row["pcr_primer_forward"] == "GTGYCAGCMGCCGCGGTAA"
 
 
-def test_project_metadata_information_withheld_llm_guess_column(db_session, tmp_path):
-    """EXPERIMENTAL internal diagnostic column, per an explicit user
-    request to compare the model's own speculative "what looks missing"
-    guess against the real informationWithheld value -- never merged into
-    that real FAIRe column, and excluded from field_reference.csv like
-    every other INTERNAL_* column."""
-    study = Study(title="Information withheld guess export test")
+def test_project_metadata_does_not_export_information_withheld_llm_guess_column(db_session, tmp_path):
+    """Legacy speculative information-withheld guesses are ignored even if
+    an old raw_fact remains in the database."""
+    study = Study(title="Removed information withheld guess export test")
     db_session.add(study)
     db_session.flush()
     db_session.add(ExternalIdentifier(study_id=study.study_id, identifier_type=IdentifierType.BIOPROJECT_ACCESSION.value, identifier_value="PRJNA10"))
@@ -1021,33 +1054,14 @@ def test_project_metadata_information_withheld_llm_guess_column(db_session, tmp_
     with (tmp_path / "projectMetadata.csv").open() as f:
         rows = list(csv.DictReader(f))
     assert len(rows) == 1
-    assert rows[0][INTERNAL_INFORMATION_WITHHELD_LLM_GUESS_FIELD] == (
-        "no code repository provided | no replicate count reported"
-    )
+    assert "internal_information_withheld_llm_guess" not in rows[0]
     # The real FAIRe field is untouched by the guess -- still just the
     # deterministic default since no real withheld-information fact exists.
     assert rows[0]["informationWithheld"] == "Nothing indicated as withheld"
 
     with (tmp_path / "field_reference.csv").open() as f:
         field_names = {r["faire_field"] for r in csv.DictReader(f)}
-    assert INTERNAL_INFORMATION_WITHHELD_LLM_GUESS_FIELD not in field_names
-
-
-def test_project_metadata_information_withheld_llm_guess_blank_when_absent(db_session, tmp_path):
-    study = Study(title="No guess generated")
-    db_session.add(study)
-    db_session.flush()
-    db_session.add(ExternalIdentifier(study_id=study.study_id, identifier_type=IdentifierType.BIOPROJECT_ACCESSION.value, identifier_value="PRJNA11"))
-    db_session.commit()
-    map_study_to_faire(db_session, study.study_id)
-    db_session.commit()
-
-    export_faire(db_session, tmp_path)
-
-    with (tmp_path / "projectMetadata.csv").open() as f:
-        rows = list(csv.DictReader(f))
-    assert len(rows) == 1
-    assert rows[0][INTERNAL_INFORMATION_WITHHELD_LLM_GUESS_FIELD] == ""
+    assert "internal_information_withheld_llm_guess" not in field_names
 
 
 def test_project_metadata_suppressed_fields_never_appear_as_columns(db_session, tmp_path):
