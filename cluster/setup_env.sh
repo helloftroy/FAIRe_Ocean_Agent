@@ -87,6 +87,16 @@ if [ "${ENV_MANAGER}" = "conda" ]; then
   fi
   conda activate "${CONDA_ACTIVATE_TARGET}"
 
+  # A cluster's module-injected LD_LIBRARY_PATH (e.g. a spack-managed
+  # toolchain) can shadow this conda env's own bundled libstdc++ with an
+  # older system one (/usr/lib64/libstdc++.so.6) -- confirmed live: vllm's
+  # own sqlite3 import chain, via a bundled libicui18n.so, failed with
+  # "version CXXABI_1.3.15 not found" the moment anything pulled in a C++
+  # library, even though the newer libstdc++ needed was sitting right
+  # there in the same conda env. The conda env's own lib/ has to come
+  # first in the search path.
+  export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+
   # A shell profile that auto-activates some OTHER virtualenv/conda env
   # (pyenv, pipenv, direnv, a login-script default) can silently win over
   # `conda activate` above -- confirmed live: on a shell with a pipenv env
@@ -124,6 +134,10 @@ if [ "${ENV_MANAGER}" = "conda" ]; then
 # CONDA_ENV_PREFIX/etc if you're not using the defaults).
 source "${CONDA_SH}"
 conda activate "${CONDA_ACTIVATE_TARGET}"
+# A cluster's module-injected LD_LIBRARY_PATH can shadow this conda env's
+# own bundled libstdc++ with an older system one -- see setup_env.sh's own
+# comment above this same line for the real error this fixes.
+export LD_LIBRARY_PATH="\${CONDA_PREFIX}/lib\${LD_LIBRARY_PATH:+:\${LD_LIBRARY_PATH}}"
 $([ -n "${CONDA_ENV_PREFIX}" ] && echo "export PIP_CACHE_DIR=\"${PIP_CACHE_DIR}\"")
 $([ -n "${CONDA_ENV_PREFIX}" ] && echo "export CONDA_PKGS_DIRS=\"${CONDA_PKGS_DIRS}\"")
 _expected_prefix="${EXPECTED_PREFIX}"
