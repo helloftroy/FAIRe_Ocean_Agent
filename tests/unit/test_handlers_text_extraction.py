@@ -657,16 +657,30 @@ def test_handler_keeps_text_probeable_structured_fields_in_paper_prompt(db_sessi
 def test_handler_asks_about_everything_when_nothing_resolved_yet(db_session, monkeypatch):
     """No StandardizedValue rows at all (MAP_FAIRE hasn't run) must leave
     the full checklist intact -- nothing gets excluded via structured-first
-    when nothing has been resolved yet. (The checklist is the full one, not
-    a topic-narrowed subset, since extract_facts_from_section's default is
-    now a single collapsed pass over every concept -- see its own
-    docstring for why the old per-topic-focus split was removed.)"""
+    when nothing has been resolved yet. The handler now passes
+    focuses=EXTRACTION_FOCUSES (see extraction/text.py's v17 docstring),
+    so "depth" and "dna_extraction_kit" land in separate topic-focused
+    calls rather than one combined prompt -- across all calls is still the
+    right check, same as the per-topic-focus split always required before
+    v8 collapsed it into one pass. The fixture text must actually mention
+    both topics: segments_for_focus's own keyword-cue skip means a focus
+    whose topic never comes up in the text legitimately never fires,
+    independent of (and not to be confused with) structured-first
+    exclusion, which is what this test exists to check."""
     study = _seeded_study_with_pmcid(db_session)
     task = _task_for(db_session, study)
 
+    xml = """<article><body>
+<sec><title>Materials and Methods</title>
+<sec><title>Sampling</title><p>Water samples were collected on 4 January 2022 at a depth of 5 meters.</p></sec>
+<sec><title>DNA extraction</title><p>DNA was extracted using the DNeasy PowerSoil Kit.</p></sec>
+</sec>
+</body></article>"""
     backend = MockLLMBackend(responses=["[]"])
     handlers._llm_backend_cache = backend
-    monkeypatch.setattr(handlers, "_build_enabled_adapters", lambda: {"europe_pmc": FakeEuropePmcAdapter()})
+    monkeypatch.setattr(
+        handlers, "_build_enabled_adapters", lambda: {"europe_pmc": FakeEuropePmcAdapter(fulltext_xml=xml)}
+    )
 
     handlers.handle_extract_text_facts(db_session, task)
     db_session.commit()

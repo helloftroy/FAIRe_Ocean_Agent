@@ -81,6 +81,7 @@ from fair_ocean_agent.extraction.study_factor import (
     generate_study_target_taxonomic_scope,
 )
 from fair_ocean_agent.extraction.text import (
+    EXTRACTION_FOCUSES,
     PROMPT_VERSION,
     extract_facts_from_section,
     resolved_faire_fields_for_study,
@@ -1918,6 +1919,7 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
                 max_section_chars_per_call=llm_config.extraction_max_chars_per_call,
                 max_output_tokens=llm_config.max_output_tokens,
                 active_flags=active_flags,
+                focuses=EXTRACTION_FOCUSES,
             )
         except LLMBackendError as exc:
             logger.warning(

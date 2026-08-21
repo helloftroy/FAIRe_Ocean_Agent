@@ -467,6 +467,7 @@ def field_names_for_reference(
     exclude_faire_hints: frozenset[str] = frozenset(),
     include_group_names: frozenset[str] | None = None,
     include_fallback_names: frozenset[str] | None = None,
+    include_native_names: frozenset[str] | None = None,
     active_flags: frozenset[str] = frozenset(),
 ) -> frozenset[str]:
     excluded_hints = exclude_faire_hints | LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS
@@ -478,6 +479,7 @@ def field_names_for_reference(
             f.native_name
             for f in fields
             if f.faire_hint not in excluded_hints
+            and (include_native_names is None or f.native_name in include_native_names)
             and (not f.required_any_flags or (f.required_any_flags & active_flags))
         )
     names.update(
@@ -485,6 +487,7 @@ def field_names_for_reference(
         for f in FALLBACK_NARRATIVE_FIELDS
         if f.native_name not in LLM_EXCLUDED_OPTIONAL_NATIVE_FIELDS
         if include_fallback_names is None or f.native_name in include_fallback_names
+        if include_native_names is None or f.native_name in include_native_names
     )
     return frozenset(names)
 

@@ -105,6 +105,35 @@ what `allowed_fact_types` accepts back on the main and recall passes, so
 a gated field can never sneak through a hallucinated response even when
 it was never shown.
 
+**v16 -> v17: topic-focused extraction (EXTRACTION_FOCUSES) is back, in a
+finer-grained form, and workflow/handlers.py + workflow/supplement_handlers.py
+now pass it explicitly.** v8 collapsed the old 5-focus split into one
+single-pass call over the full checklist once a real, larger model context
+became available. That single pass is still this function's own default
+(`focuses=(None,)`) -- unchanged, so nothing importing it directly without
+an explicit `focuses=` sees any behavior change -- but real production
+extraction (both call sites) now passes `focuses=EXTRACTION_FOCUSES`
+explicitly, per an explicit user request: confirmed live, the old
+`primer_pcr_assay` focus bundled three whole FAIRe field groups (PCR /
+assay setup=19 + Controls & replicates=1 + qPCR / standard curve=16 = 36
+fields) into one call -- barely smaller than the 68-field full checklist
+it replaced -- and a real extraction against a real paper's own Methods
+text correctly returned ~15 other facts from that call while silently
+dropping forward_primer_name/reverse_primer_name, even though the primer
+names were stated in plain text right next to facts the model got right.
+EXTRACTION_FOCUSES now has 8 focuses (was 5), sized 5-14 fields each (was
+up to 36) -- the oversized PCR/qPCR bundle split into four genuinely
+tight topics (primer_target, pcr_assay_setup, qpcr_standard_curve,
+qpcr_detection_limits) via ExtractionFocus's new `native_names` field,
+which restricts a focus to a field subset within its own group_names
+(field_names_for_reference only selected whole FAIRe groups before this).
+More LLM calls per section, deliberately traded for smaller, less
+ambiguous checklists per call -- per the user's own explicit priority
+("even if that means it takes longer"). segments_for_focus's existing
+keyword-cue skip (a focus with no matching cues in a section's own text
+never fires) keeps this from actually costing 8x calls on every section in
+practice.
+
 **v9 -> v10: optional per-fact `assay_tag` for multi-assay papers.** A
 paper can describe more than one distinct assay run on the same samples
 (e.g. a 16S PCR assay and an 18S PCR assay), each with its own primers,
@@ -275,6 +304,12 @@ class ExtractionFocus:
     group_names: frozenset[str]
     keywords: frozenset[str]
     fallback_names: frozenset[str] = frozenset()
+    # Restricts a focus to a subset of its own group_names' fields --
+    # lets one oversized FAIRe field group (e.g. "PCR / assay setup"'s 19
+    # fields) be split into several genuinely small, topically-tight
+    # passes instead of one still-large pass. Empty (the default) means
+    # every field in group_names is included, same as before this existed.
+    native_names: frozenset[str] = frozenset()
 
 
 EXTRACTION_FOCUSES: tuple[ExtractionFocus, ...] = (
@@ -323,31 +358,95 @@ EXTRACTION_FOCUSES: tuple[ExtractionFocus, ...] = (
         ),
         fallback_names=frozenset({"DNA_extraction_method"}),
     ),
+    # The old single "primer_pcr_assay" focus bundled three whole FAIRe
+    # field groups (PCR / assay setup=19 + Controls & replicates=1 +
+    # qPCR / standard curve=16 = 36 fields) into one call -- barely
+    # smaller than the full 68-field checklist it was meant to replace,
+    # and still large enough that a small local model reliably dropped
+    # specific fields (confirmed live: forward_primer_name/
+    # reverse_primer_name went missing from real extractions even though
+    # ~15 OTHER facts from the very same call succeeded). Split into four
+    # genuinely small, topically-tight focuses instead -- per an explicit
+    # user request to keep every pass small, not just this one group.
+    # native_names (see ExtractionFocus) restricts each to its own field
+    # subset within group_names, since field_names_for_reference only
+    # selects whole FAIRe groups otherwise.
     ExtractionFocus(
-        name="primer_pcr_assay",
-        description="assay, target marker, primer, PCR condition, qPCR, control, and replicate facts",
-        group_names=frozenset({"PCR / assay setup", "Controls & replicates", "qPCR / standard curve"}),
-        keywords=frozenset(
+        name="primer_target",
+        description="PCR/amplicon primer identity: target gene/subfragment, primer names and sequences, probe, and amplicon size",
+        group_names=frozenset({"PCR / assay setup"}),
+        native_names=frozenset(
             {
-                "assay",
-                "target",
-                "marker",
-                "primer",
-                "pcr",
-                "qpcr",
-                "anneal",
-                "cycle",
-                "thermocycler",
-                "amplicon",
-                "master mix",
-                "control",
-                "replicate",
-                "standard curve",
-                "lod",
-                "loq",
+                "target_gene",
+                "target_subfragment",
+                "forward_primer_sequence",
+                "reverse_primer_sequence",
+                "forward_primer_name",
+                "reverse_primer_name",
+                "amplicon_size",
+                "probe_sequence",
+                "probe_concentration",
             }
         ),
+        keywords=frozenset({"primer", "target", "marker", "amplicon", "probe", "16s", "18s", "its", "coi"}),
+    ),
+    ExtractionFocus(
+        name="pcr_assay_setup",
+        description="assay identity, PCR thermal cycling conditions, master mix, and PCR replicate facts",
+        group_names=frozenset({"PCR / assay setup", "Controls & replicates"}),
+        native_names=frozenset(
+            {
+                "assay_name",
+                "assay_type",
+                "annealing_temperature",
+                "pcr_cycle_count",
+                "commercial_master_mix",
+                "custom_master_mix",
+                "second_pcr_annealing_temperature",
+                "second_pcr_cycle_count",
+                "assay_target_taxa",
+                "study_target_taxonomic_scope",
+                "pcr_replicate_count",
+            }
+        ),
+        keywords=frozenset({"assay", "pcr", "anneal", "cycle", "thermocycler", "master mix", "replicate"}),
         fallback_names=frozenset({"PCR_amplification_conditions"}),
+    ),
+    ExtractionFocus(
+        name="qpcr_standard_curve",
+        description="qPCR quantification cycle, standard curve, and amplification-efficiency facts",
+        group_names=frozenset({"qPCR / standard curve"}),
+        native_names=frozenset(
+            {
+                "quantification_cycle_threshold",
+                "quantification_cycle",
+                "qpcr_standard_concentration",
+                "qpcr_standard_concentration_unit",
+                "qpcr_standard_source",
+                "standard_curve_slope",
+                "standard_curve_intercept",
+                "standard_curve_r_squared",
+                "qpcr_amplification_efficiency",
+            }
+        ),
+        keywords=frozenset({"qpcr", "standard curve", "efficiency", "slope", "intercept", " ct ", " cq ", "threshold cycle"}),
+    ),
+    ExtractionFocus(
+        name="qpcr_detection_limits",
+        description="qPCR estimated copy number and assay limit of detection/quantification facts",
+        group_names=frozenset({"qPCR / standard curve"}),
+        native_names=frozenset(
+            {
+                "estimated_copy_number",
+                "estimated_copy_number_unit",
+                "estimated_copy_number_method",
+                "assay_limit_of_detection",
+                "assay_limit_of_detection_unit",
+                "assay_limit_of_quantification",
+                "assay_limit_of_quantification_unit",
+            }
+        ),
+        keywords=frozenset({"copy number", "limit of detection", "limit of quantification", "lod", "loq"}),
     ),
     ExtractionFocus(
         name="sequencing_library",
@@ -467,7 +566,7 @@ def build_extraction_instructions(
         exclude_faire_hints,
         include_group_names=focus.group_names if focus else None,
         include_fallback_names=focus.fallback_names if focus else None,
-        include_native_names=include_native_names,
+        include_native_names=include_native_names or (focus.native_names if focus and focus.native_names else None),
         active_flags=active_flags,
     )
     focus_sentence = (
@@ -735,6 +834,7 @@ def fact_type_names_for_focus(
         exclude_faire_hints,
         include_group_names=focus.group_names,
         include_fallback_names=focus.fallback_names,
+        include_native_names=focus.native_names or None,
         active_flags=active_flags,
     )
 

@@ -405,7 +405,7 @@ def test_recall_second_pass_failure_fails_the_extraction():
 
 
 def test_recall_missing_fact_types_skips_primer_sequences_without_nucleotide_text():
-    primer_focus = next(focus for focus in EXTRACTION_FOCUSES if focus.name == "primer_pcr_assay")
+    primer_focus = next(focus for focus in EXTRACTION_FOCUSES if focus.name == "primer_target")
     name_only_segments = segment_source_text("PCR", "PCR used MiFish-U-F and MiFish-U-R primers.")
     sequence_segments = segment_source_text("PCR", "PCR used primers GTGYCAGCMGCCGCGGTAA and GGACTACNVGGGTWTCTAAT.")
 
@@ -477,13 +477,17 @@ def test_prompt_embeds_faire_hints_as_hints_not_identity():
 
 
 def test_focused_prompt_only_embeds_requested_topic_checklist():
-    primer_focus = next(focus for focus in EXTRACTION_FOCUSES if focus.name == "primer_pcr_assay")
-    prompt = build_prompt("PCR", SECTION_TEXT, focus=primer_focus)
+    pcr_focus = next(focus for focus in EXTRACTION_FOCUSES if focus.name == "pcr_assay_setup")
+    prompt = build_prompt("PCR", SECTION_TEXT, focus=pcr_focus)
 
-    assert "This focused pass is only for assay, target marker, primer" in prompt
+    assert "This focused pass is only for assay identity, PCR thermal cycling conditions" in prompt
     assert "annealing_temperature" in prompt
     assert "reference_database" not in prompt
     assert "sequencing_instrument" not in prompt
+    # native_names further restricts this focus below its own group_names
+    # (PCR / assay setup, Controls & replicates) -- primer_target's own
+    # fields must NOT leak into this sibling focus's checklist.
+    assert "forward_primer_sequence" not in prompt
 
 
 def test_segments_for_focus_skips_unrelated_topic_prompts():
@@ -491,7 +495,7 @@ def test_segments_for_focus_skips_unrelated_topic_prompts():
         "Methods",
         "PCR reactions used MiFish-U-F and MiFish-U-R primers.\n\nLibraries were sequenced on an Illumina MiSeq.",
     )
-    primer_focus = next(focus for focus in EXTRACTION_FOCUSES if focus.name == "primer_pcr_assay")
+    primer_focus = next(focus for focus in EXTRACTION_FOCUSES if focus.name == "primer_target")
     sequencing_focus = next(focus for focus in EXTRACTION_FOCUSES if focus.name == "sequencing_library")
 
     assert [segment.segment_id for segment in segments_for_focus("Methods", segments, primer_focus)] == ["METHODS.P001"]
