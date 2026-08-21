@@ -20,8 +20,23 @@ from __future__ import annotations
 
 import argparse
 import csv
+import re
 import sqlite3
 from pathlib import Path
+
+# The seed CSV's own ena_study_accession column normalizes strictly to
+# this shape (identity/identifiers.py's ENA_STUDY_PATTERN) -- confirmed
+# live, ena_studies.ena_study_accession isn't always actually ENA-native:
+# for an NCBI-originated submission ENA also mirrors, it's frequently
+# just a copy of the same PRJNA... bioproject_accession (e.g. real row:
+# bioproject_accession=PRJNA449545, ena_study_accession=PRJNA449545,
+# secondary_study_accession=SRP139374), which the strict normalizer
+# rejects outright. Not a data-loss risk either way: bioproject_accession
+# already carries that exact value in its own correct column, and
+# secondary_study_accession (routed to sra_study_accession below) already
+# carries the real SRA-mirror accession -- this only decides which single
+# column a given ena_study_accession value is worth repeating into.
+_ENA_STUDY_ACCESSION_RE = re.compile(r"^(ERP\d+|PRJEB\d+)$")
 
 SEED_COLUMNS = (
     "seed_id",
@@ -54,15 +69,13 @@ def convert(db_path: Path, out_path: Path) -> tuple[int, int]:
         for row in rows:
             doi = row["primary_doi"] or ""
             source = row["seed_source"]  # 'mgnify' or 'ena' -- paper_seeds is a UNION ALL of both
-            # secondary_study_accession is SRP/ERP/DRP -- sra_study_accession
-            # (not ena_study_accession, whose normalizer only accepts
-            # ERP.../PRJEB...) is the seed column that actually normalizes
-            # the full family (discovery/seed_loader.py). ENA rows carry a
-            # real ena_study_accession of their own (the view's ENA branch
-            # reads it straight off ena_studies, unlike the MGnify branch,
-            # which never has one) -- routed to that column directly rather
-            # than through sra_study_accession's broader-but-less-specific
-            # normalizer.
+            # Only use ena_study_accession when it's actually ENA-native
+            # shaped (see _ENA_STUDY_ACCESSION_RE's own comment) -- an
+            # NCBI-mirrored value is already fully captured via
+            # bioproject_accession instead, so this never loses the
+            # identifier, just decides where it belongs.
+            raw_ena_accession = (row["ena_study_accession"] or "") if source == "ena" else ""
+            ena_accession = raw_ena_accession if _ENA_STUDY_ACCESSION_RE.match(raw_ena_accession) else ""
             writer.writerow(
                 {
                     "seed_id": f"{source}-{row['mgnify_accession'] or row['canonical_dataset_id']}",
@@ -71,7 +84,7 @@ def convert(db_path: Path, out_path: Path) -> tuple[int, int]:
                     "pmid": row["primary_pmid"] or "",
                     "pmcid": row["primary_pmcid"] or "",
                     "bioproject_accession": row["bioproject_accession"] or "",
-                    "ena_study_accession": (row["ena_study_accession"] or "") if source == "ena" else "",
+                    "ena_study_accession": ena_accession,
                     "sra_study_accession": row["secondary_study_accession"] or "",
                     "dataset_id": row["mgnify_accession"] or "",
                     "repository": source,
