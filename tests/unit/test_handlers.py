@@ -317,6 +317,34 @@ def test_handler_mines_fulltext_identifiers_and_resolves_repository_sources(db_s
     assert db_session.query(Source).filter_by(study_id=study.study_id, source_name="europe_pmc_fulltext").count() == 0
 
 
+def test_discover_identifiers_from_fulltext_uses_local_pdf_with_no_pmcid(db_session, monkeypatch, tmp_path):
+    """Real gap, confirmed live: a closed-access paper with no PMCID at all
+    (e.g. 10.1111/jeu.12975, 10.1002/edn3.570) previously had NO route to
+    ever surface its own BioProject/BioSample accessions -- this function
+    required a PMCID unconditionally before ever checking for a local PDF
+    override, the same latent gap handle_extract_text_facts had."""
+    study = Study(title="No PMCID, local PDF only")
+    db_session.add(study)
+    db_session.flush()
+
+    pdf_path = tmp_path / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n%%EOF")
+    monkeypatch.setenv(handlers.LOCAL_PDF_PATH_ENV, str(pdf_path))
+    monkeypatch.setattr(
+        handlers, "extract_pdf_text", lambda path: "Raw reads are available under BioProject PRJNA515494."
+    )
+    bioproject_adapter = FakeAdapter("ncbi_bioproject", record=_make_record("ncbi_bioproject"))
+
+    handlers._discover_identifiers_from_fulltext(db_session, study, {"ncbi_bioproject": bioproject_adapter})
+    db_session.commit()
+
+    identifiers = {
+        (ei.identifier_type, ei.identifier_value, ei.source)
+        for ei in db_session.query(ExternalIdentifier).filter_by(study_id=study.study_id).all()
+    }
+    assert (IdentifierType.BIOPROJECT_ACCESSION.value, "PRJNA515494", "local_pdf_identifier_scan") in identifiers
+
+
 def test_handler_discovers_supplements_inline_during_doi_driven_discovery(db_session, monkeypatch):
     """A DOI-driven DISCOVER_IDENTIFIERS pass must also surface
     supplementary-material references for free, not only via a separate

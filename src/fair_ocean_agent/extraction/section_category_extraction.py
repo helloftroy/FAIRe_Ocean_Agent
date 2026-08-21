@@ -108,10 +108,19 @@ _FIELD_NORMALIZATION_SPECS: tuple[_NormalizationSpec, ...] = (
         prompt=(
             "From the supplied nucleic-acid extraction text, identify the techniques or reagents explicitly used "
             "to lyse cells or disrupt biological material to release nucleic acids. Return only short standardized "
-            "technique names, separated by | when multiple methods were used.\n\n"
-            "Normalize equivalent wording to simple terms, for example:\n"
-            "bead beating, sonication, mechanical homogenization, freeze-thaw, heat lysis, SDS, CTAB, lysozyme, "
-            "proteinase K, enzymatic lysis, osmotic lysis, alkaline lysis, kit-proprietary."
+            "technique names, separated by | when multiple methods were used. Extract the specific technique, "
+            "not a broad category. Do not infer chemistry from a kit name unless it is stated. Use "
+            "kit-proprietary lysis only when a commercial extraction kit is explicitly used but the lysis "
+            "mechanism is not stated.\n\nCanonical examples:\n"
+            "bead beating, bead milling, mechanical homogenization, rotor-stator homogenization, manual grinding, "
+            "mortar-and-pestle grinding, cryogenic grinding, sonication, ultrasonication, French press, "
+            "high-pressure homogenization, freeze-thaw lysis, heat lysis, boiling lysis, osmotic lysis, alkaline "
+            "lysis, SDS lysis, CTAB lysis, guanidinium thiocyanate lysis, guanidinium hydrochloride lysis, "
+            "Triton X-100 lysis, NP-40 lysis, Tween lysis, sodium deoxycholate lysis, "
+            "N-lauroylsarcosine/Sarkosyl lysis, lysozyme lysis, proteinase K digestion, lyticase lysis, "
+            "zymolyase lysis, mutanolysin lysis, achromopeptidase lysis, cellulase digestion, chitinase "
+            "digestion, enzymatic digestion, kit-proprietary lysis. Use other:<short literal technique> for a "
+            "clearly stated lysis technique absent from this list."
         ),
     ),
     _NormalizationSpec(
@@ -120,9 +129,18 @@ _FIELD_NORMALIZATION_SPECS: tuple[_NormalizationSpec, ...] = (
         prompt=(
             "From the supplied nucleic-acid extraction text, identify the technique(s) used to separate or purify "
             "nucleic acids from the lysed sample. Return only short standardized technique names, separated by | "
-            "when multiple methods were used. Normalize equivalent wording to terms such as silica/spin-column, "
-            "magnetic beads, phenol-chloroform, chloroform extraction, alcohol precipitation, solid-phase "
-            "extraction, or another clearly stated separation technique."
+            "when multiple methods were used. Extract the specific separation principle. Do not classify "
+            "centrifugation alone as a separation technique unless it is clearly part of a named separation "
+            "principle.\n\nCanonical examples:\n"
+            "silica spin-column, silica membrane, silica adsorption, glass-fiber adsorption, "
+            "magnetic-bead purification, SPRI bead purification, solid-phase extraction, "
+            "phenol-chloroform extraction, phenol-chloroform-isoamyl alcohol extraction, chloroform extraction, "
+            "organic phase extraction, TRIzol phase separation, ethanol precipitation, isopropanol precipitation, "
+            "alcohol precipitation, PEG precipitation, sodium acetate precipitation, ammonium acetate "
+            "precipitation, lithium chloride precipitation, salting-out, anion-exchange column, ion-exchange "
+            "chromatography, hydroxyapatite purification, density-gradient ultracentrifugation, CsCl gradient "
+            "purification, ultrafiltration, centrifugal-filter purification, dialysis, precipitation-only. Use "
+            "other:<short literal technique> for a clearly stated separation technique absent from this list."
         ),
     ),
     _NormalizationSpec(
@@ -130,11 +148,13 @@ _FIELD_NORMALIZATION_SPECS: tuple[_NormalizationSpec, ...] = (
         system="You normalize sample-preparation evidence to short controlled operation names.",
         prompt=(
             "From the supplied sample-preparation text, identify important preparation operations performed before "
-            "nucleic-acid extraction that are not already captured by specific filtration, storage, precipitation, "
-            "or extraction fields. Return short standardized technique names separated by |. Examples include "
-            "homogenization, grinding, cutting/slicing, subsampling, centrifugation, washing, pelleting, "
-            "resuspension, freeze-drying, drying, thawing, or mixing. Do not include sample collection, storage "
-            "conditions, filtration details already captured elsewhere, nucleic-acid extraction, PCR, or sequencing."
+            "nucleic-acid extraction that are not already captured by specific collection, filtration, storage, "
+            "precipitation, extraction, PCR, or sequencing fields. Return short standardized technique names "
+            "separated by |. Use this as a small residual field, not a duplicate dump of samp_mat_process.\n\n"
+            "Canonical examples: filter handling, filter subdivision, filter folding, aseptic handling, mixing, "
+            "vortexing, shaking/agitation, incubation, thawing, pressure-assisted processing, vacuum-assisted "
+            "processing, sequential processing, flow monitoring, manual transfer, settling. Use other:<short "
+            "literal technique> for a clearly stated residual preparation operation absent from this list."
         ),
     ),
     _NormalizationSpec(
@@ -143,9 +163,14 @@ _FIELD_NORMALIZATION_SPECS: tuple[_NormalizationSpec, ...] = (
         prompt=(
             "From the supplied nucleic-acid extraction text, identify additional extraction procedures not already "
             "represented by the extraction kit, lysis, or separation method. Return short standardized technique "
-            "names separated by |. Examples include RNase treatment, DNase treatment, inhibitor removal, repeated "
-            "extraction, carrier-assisted precipitation, desalting, or another explicitly stated "
-            "extraction-specific procedure."
+            "names separated by |. Do not include generic incubation temperatures, reagent volumes, or "
+            "centrifugation durations just because they occur in the extraction protocol.\n\nCanonical examples: "
+            "RNase treatment, DNase treatment, inhibitor removal, humic-acid removal, desalting, buffer exchange, "
+            "nucleic-acid concentration, carrier-assisted precipitation, glycogen-assisted precipitation, "
+            "linear-polyacrylamide-assisted precipitation, repeated extraction, sequential extraction, multiple "
+            "elution, heated elution, extended digestion, nuclease inactivation, RNA stabilization, DNA "
+            "stabilization. Use other:<short literal technique> for a clearly stated extraction-specific procedure "
+            "absent from this list."
         ),
     ),
     _NormalizationSpec(
@@ -154,10 +179,16 @@ _FIELD_NORMALIZATION_SPECS: tuple[_NormalizationSpec, ...] = (
         prompt=(
             "From the supplied sampling text, identify the physical device(s) used to obtain the environmental or "
             "biological sample from its source. Return short standardized device names separated by | when multiple "
-            "devices were used. Examples include Niskin bottle, box corer, multicorer, Van Veen grab, sediment "
-            "corer, plankton net, syringe, swab, pump, or another explicitly stated collection device. Do not "
-            "include containers or equipment used only after collection for storage, processing, filtration, or "
-            "laboratory analysis."
+            "devices were used. Do not include containers or equipment used only after collection for storage, "
+            "processing, filtration, or laboratory analysis.\n\nCanonical examples: Niskin bottle, Nansen bottle, "
+            "GO-FLO bottle, Van Dorn bottle, Kemmerer bottle, CTD rosette, water sampling bottle, underway intake, "
+            "flow-through sampler, pump, peristaltic pump, submersible pump, syringe, box corer, multicorer, "
+            "gravity corer, piston corer, push core, hand corer, vibracorer, sediment corer, Van Veen grab, Ekman "
+            "grab, Ponar grab, Smith-McIntyre grab, sediment grab, sediment trap, porewater sampler, Rhizon "
+            "sampler, plankton net, bongo net, ring net, WP2 net, neuston net, manta net, MOCNESS, trawl, beam "
+            "trawl, otter trawl, epibenthic sled, dredge, swab, biopsy punch, scraper, spatula, scoop, forceps, "
+            "filter cartridge, in-situ filtration sampler, passive eDNA sampler. Use other:<short literal device> "
+            "for a clearly stated collection device absent from this list."
         ),
     ),
     _NormalizationSpec(
@@ -165,9 +196,17 @@ _FIELD_NORMALIZATION_SPECS: tuple[_NormalizationSpec, ...] = (
         system="You normalize sampling-method evidence to short controlled method names.",
         prompt=(
             "From the supplied sampling text, identify the method used to obtain the sample from its original "
-            "environment or source. Return short standardized method names separated by |. Examples include "
-            "water-column sampling, sediment coring, grab sampling, net sampling, swabbing, pumping, "
-            "integrated-depth sampling, surface-water sampling, or another explicitly stated collection method."
+            "environment or source. Return short standardized method names separated by |. Distinguish the method "
+            "from the physical device, e.g. samp_collect_device = Niskin bottle but samp_collect_method = "
+            "depth-specific water sampling.\n\nCanonical examples: discrete water sampling, depth-specific water "
+            "sampling, integrated-depth water sampling, surface-water sampling, bottom-water sampling, underway "
+            "water sampling, flow-through water sampling, pumped water sampling, sediment coring, push coring, "
+            "grab sampling, porewater sampling, sediment-trap sampling, hand collection, net sampling, vertical "
+            "net tow, horizontal net tow, oblique net tow, trawling, dredging, epibenthic sled sampling, swabbing, "
+            "scraping, biopsy sampling, tissue excision, dissection sampling, whole-organism collection, transect "
+            "sampling, quadrat sampling, active filtration sampling, passive sampling, biofilm sampling, benthic "
+            "substrate collection, ice coring, snow sampling. Use other:<short literal method> for a clearly "
+            "stated collection method absent from this list."
         ),
     ),
     _NormalizationSpec(
@@ -176,9 +215,16 @@ _FIELD_NORMALIZATION_SPECS: tuple[_NormalizationSpec, ...] = (
         prompt=(
             "From the supplied sample-processing text, identify physical or chemical processing applied to the "
             "collected sample before nucleic-acid extraction. Return short standardized technique names separated "
-            "by |. Examples include filtration, prefiltration, sieving, subsampling, homogenization, grinding, "
-            "cutting/slicing, centrifugation, pelleting, washing, resuspension, precipitation, freeze-drying, or "
-            "another explicitly stated processing step."
+            "by |. Do not collapse specific processing into a vague term when the specific method is known.\n\n"
+            "Canonical examples: filtration, prefiltration, vacuum filtration, pressure filtration, pump "
+            "filtration, syringe filtration, tangential-flow filtration, ultrafiltration, cascade filtration, "
+            "sequential filtration, size fractionation, sieving, wet sieving, dry sieving, subsampling, aliquoting, "
+            "cutting, slicing, dissection, scraping, homogenization, grinding, cryogenic grinding, milling, "
+            "crushing, tissue maceration, centrifugation, pelleting, sedimentation, settling, decanting, washing, "
+            "rinsing, resuspension, precipitation, density separation, density-gradient separation, flotation, "
+            "concentration, freeze-drying, lyophilization, air drying, oven drying, dehydration, cell sorting, "
+            "flow-cytometric sorting, magnetic cell separation, manual picking, decalcification. Use other:<short "
+            "literal processing step> for a clearly stated processing step absent from this list."
         ),
     ),
 )
@@ -829,9 +875,41 @@ def _sort_terms_by_first_occurrence(terms: list[str], reference_text: str) -> li
     original relative position among other not-found terms."""
     reference = reference_text.casefold()
 
+    aliases = {
+        "sonication": ("sonication", "sonicated", "ultrasonic", "ultrasonication"),
+        "ultrasonication": ("ultrasonication", "ultrasonic", "sonication", "sonicated"),
+        "bead beating": ("bead beating", "bead-beating", "bead beaten", "bead beat"),
+        "freeze-thaw lysis": ("freeze-thaw", "freeze thaw"),
+        "proteinase k digestion": ("proteinase k digestion", "proteinase k"),
+        "lysozyme lysis": ("lysozyme lysis", "lysozyme"),
+        "sds lysis": ("sds lysis", "sds"),
+        "ctab lysis": ("ctab lysis", "ctab"),
+        "phenol-chloroform extraction": ("phenol-chloroform extraction", "phenol/chloroform", "phenol chloroform"),
+        "phenol-chloroform-isoamyl alcohol extraction": (
+            "phenol-chloroform-isoamyl alcohol",
+            "phenol/chloroform/isoamyl alcohol",
+            "phenol chloroform isoamyl alcohol",
+        ),
+        "silica spin-column": ("silica spin-column", "spin column", "spin-column"),
+        "magnetic-bead purification": ("magnetic-bead", "magnetic bead"),
+        "freeze-drying": ("freeze-drying", "freeze dried", "freeze-dried", "lyophilized", "lyophilised"),
+        "lyophilization": ("lyophilization", "lyophilized", "lyophilised", "freeze-drying", "freeze-dried"),
+        "filtration": ("filtration", "filtered", "filtering"),
+        "prefiltration": ("prefiltration", "pre-filtered", "prefiltered", "pre-filtering", "prefiltering"),
+        "grinding": ("grinding", "ground"),
+        "manual grinding": ("manual grinding", "ground"),
+        "mortar-and-pestle grinding": ("mortar and pestle", "mortar-and-pestle"),
+        "integrated-depth water sampling": ("integrated-depth", "integrated depth", "integrated water"),
+        "depth-specific water sampling": ("depth-specific", "depth specific"),
+    }
+
     def _position(term: str) -> int:
-        index = reference.find(term.casefold())
-        return index if index >= 0 else len(reference)
+        positions = [
+            reference.find(alias)
+            for alias in aliases.get(term.casefold(), (term.casefold(),))
+            if reference.find(alias) >= 0
+        ]
+        return min(positions) if positions else len(reference)
 
     return sorted(terms, key=_position)
 

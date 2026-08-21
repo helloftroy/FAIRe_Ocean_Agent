@@ -502,6 +502,73 @@ def test_handler_raises_not_implemented_without_pmcid(db_session):
         handlers.handle_extract_text_facts(db_session, task)
 
 
+def test_handler_processes_local_pdf_even_with_no_pmcid_at_all(db_session, monkeypatch, tmp_path):
+    """Real gap, confirmed live: a closed-access paper never deposited in
+    PMC (no PMCID at all -- e.g. 10.1111/jeu.12975, 10.1002/edn3.570) has
+    no route to Europe PMC full text, but a locally-supplied PDF is a
+    genuine, independent alternative source. The PMCID requirement below
+    used to run unconditionally before ever checking for a local PDF
+    override, so this exact case raised NotImplementedError regardless of
+    whether a PDF was supplied."""
+    study = Study(title="No PMCID, local PDF only")
+    db_session.add(study)
+    db_session.flush()
+    task = _task_for(db_session, study)
+
+    pdf_path = tmp_path / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n%%EOF")
+    monkeypatch.setenv(handlers.LOCAL_PDF_PATH_ENV, str(pdf_path))
+    monkeypatch.setattr(
+        handlers,
+        "_build_enabled_adapters",
+        lambda: pytest.fail("Europe PMC should not be called when local PDF override is set"),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "extract_pdf_sections",
+        lambda path: [{"title": "Sampling", "text": "Water samples were collected on 4 January 2022."}],
+    )
+    monkeypatch.setattr(handlers, "extract_pdf_text", lambda path: "Abstract\n\nMethods")
+    monkeypatch.setattr(handlers, "detect_and_correct_elev_depth_mislabeling", lambda *args, **kwargs: None)
+    monkeypatch.setattr(handlers, "detect_text_search_flags", lambda *args, **kwargs: [])
+    monkeypatch.setattr(handlers, "detect_phix_percentage_facts", lambda *args, **kwargs: [])
+    monkeypatch.setattr(handlers, "detect_controlled_search_facts", lambda *args, **kwargs: [])
+    monkeypatch.setattr(handlers, "detect_section_categories_present", lambda *args, **kwargs: [])
+    monkeypatch.setattr(handlers, "generate_study_factor", lambda *args, **kwargs: [])
+    monkeypatch.setattr(handlers, "generate_study_target_taxonomic_scope", lambda *args, **kwargs: [])
+    monkeypatch.setattr(handlers, "generate_rights_holder", lambda *args, **kwargs: [])
+    monkeypatch.setattr(handlers, "generate_funding_source", lambda *args, **kwargs: [])
+    monkeypatch.setattr(handlers, "extract_section_category_facts", lambda *args, **kwargs: [])
+    monkeypatch.setattr(handlers, "detect_llm_judged_search_facts", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        handlers,
+        "extract_facts_from_section",
+        lambda *args, **kwargs: (
+            [
+                RawFactCandidate(
+                    entity_level=EntityLevel.STUDY,
+                    fact_type_candidate="collection_date",
+                    raw_field_name="collection_date",
+                    raw_value="2022-01-04",
+                    source_locator="pdf:Sampling",
+                    support_type=SupportType.EXPLICIT,
+                    evidence_quote="Water samples were collected on 4 January 2022.",
+                )
+            ],
+            None,
+        ),
+    )
+    handlers._llm_backend_cache = MockLLMBackend(label="mock-model", responses=[])
+
+    handlers.handle_extract_text_facts(db_session, task)
+    db_session.commit()
+
+    source = db_session.query(Source).filter_by(study_id=study.study_id, source_name="local_pdf_fulltext").one()
+    assert source.external_identifier == str(pdf_path.resolve())
+    facts = db_session.query(RawFact).filter_by(study_id=study.study_id, extraction_method="llm_text_extraction").all()
+    assert len(facts) == 1
+
+
 def test_handler_no_ops_when_no_open_access_fulltext(db_session, monkeypatch):
     study = _seeded_study_with_pmcid(db_session)
     task = _task_for(db_session, study)

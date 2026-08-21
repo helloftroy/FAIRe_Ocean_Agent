@@ -813,6 +813,38 @@ slots:
       - projectMetadata
       requirement_level: Optional
       requirement_level_code: O
+  internal_downstream_analysis_techniques:
+    name: internal_downstream_analysis_techniques
+    description: Pipe-delimited normalized techniques applied to processed sequence-derived
+      biological data such as OTU/ASV tables, taxonomic abundance tables, community
+      matrices, gene abundance tables, or sequence-derived features.
+    in_subset:
+    - Bioinformatics
+    slot_uri: internal:downstream_analysis_techniques
+    range: string
+    structured_pattern:
+      syntax: null
+      interpolated: null
+      partial_match: null
+    required: false
+    recommended: false
+    examples:
+    - value: Hellinger | Bray-Curtis | PCoA | PERMANOVA
+      description: Techniques applied to sequence-derived community data.
+    source:
+    - Local extension
+    mappings:
+      exact_mappings: []
+      close_mappings: []
+      related_mappings: []
+      narrow_mappings: []
+      broad_mappings: []
+    domain_of: []
+    annotations:
+      data_type:
+      - projectMetadata
+      requirement_level: Optional
+      requirement_level_code: O
   biological_rep:
     name: biological_rep
     description: The number of biological replicates collected at each sampling point

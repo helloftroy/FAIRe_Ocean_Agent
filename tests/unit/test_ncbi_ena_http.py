@@ -425,3 +425,36 @@ def test_ena_fetch_record_not_found_when_study_search_empty(retrieval_config):
     with pytest.raises(SourceRecordNotFoundError):
         adapter.fetch_record("PRJNA0000000")
     adapter.close()
+
+
+def test_resolve_sample_to_study_accession_uses_filereport_not_search(retrieval_config):
+    """Confirmed live against the real ENA API: /search with
+    query=sample_accession="..." returns an empty result set even for a
+    real, existing sample accession -- /filereport's own accession=
+    parameter (built for looking up one specific accession) is what
+    actually resolves it. Real case: 10.1073/pnas.2103275118's
+    SRS7105074 resolves to BioProject PRJNA649058."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/filereport")
+        params = dict(request.url.params)
+        assert params.get("accession") == "SRS7105074"
+        assert params.get("result") == "read_run"
+        return httpx.Response(200, json=[{"study_accession": "PRJNA649058"}])
+
+    adapter = EnaAdapter(
+        SourceConfig(name="ena", enabled=True, base_url="https://www.ebi.ac.uk/ena/portal/api", rate_limit_per_second=1000),
+        retrieval_config,
+        transport=httpx.MockTransport(handler),
+    )
+    assert adapter.resolve_sample_to_study_accession("SRS7105074") == "PRJNA649058"
+    adapter.close()
+
+
+def test_resolve_sample_to_study_accession_returns_none_when_not_found(retrieval_config):
+    adapter = EnaAdapter(
+        SourceConfig(name="ena", enabled=True, base_url="https://www.ebi.ac.uk/ena/portal/api", rate_limit_per_second=1000),
+        retrieval_config,
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=[])),
+    )
+    assert adapter.resolve_sample_to_study_accession("SRS0000000") is None
+    adapter.close()

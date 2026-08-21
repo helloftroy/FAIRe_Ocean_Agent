@@ -728,6 +728,8 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
     # entirely per an explicit user request.
     MappingRule("otu_seq_comp_appr", EntityLevel.STUDY.value, "projectMetadata", "otu_seq_comp_appr",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
+    MappingRule("internal_downstream_analysis_techniques", EntityLevel.STUDY.value, "projectMetadata",
+                "internal_downstream_analysis_techniques", MappingMethod.DETERMINISTIC_SYNONYM.value),
     MappingRule("pcr_0_1", EntityLevel.STUDY.value, "projectMetadata", "pcr_0_1",
                 MappingMethod.SUGGESTED_SEMANTIC.value, transform=_pcr_flag, enum_name="pcr_0_1_enum",
                 review_required=True),

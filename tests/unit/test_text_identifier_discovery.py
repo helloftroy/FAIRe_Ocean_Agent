@@ -1,10 +1,14 @@
+import httpx
+
 from fair_ocean_agent.database.enums import IdentifierType, RelationshipType, SupportType
 from fair_ocean_agent.discovery.text_identifiers import (
     extract_repository_identifiers_from_text,
+    resolve_sra_sample_accessions_to_studies,
     verify_deterministic_identifier,
     xml_to_text,
 )
-from fair_ocean_agent.sources.base import RelatedIdentifier, SourceRecord, SourceRecordNotFoundError
+from fair_ocean_agent.sources.base import RelatedIdentifier, SourceConfig, SourceRecord, SourceRecordNotFoundError
+from fair_ocean_agent.sources.ena import EnaAdapter
 
 
 def test_extract_repository_identifiers_from_text_finds_accessions_and_dataset_dois():
@@ -101,3 +105,54 @@ def test_verify_deterministic_identifier_skips_pangaea_adapter_for_a_bcodmo_doi(
     # Confirm the pangaea adapter really was skipped, not just coincidentally successful too:
     adapters_pangaea_only_fails = {"pangaea": _FakeAdapter(found=True), "bcodmo": _FakeAdapter(found=False)}
     assert verify_deterministic_identifier(adapters_pangaea_only_fails, rel) is False
+
+
+def _ena_adapter_resolving_all_samples_to(study_accession: str, *, retrieval_config) -> EnaAdapter:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[{"study_accession": study_accession}])
+
+    return EnaAdapter(
+        SourceConfig(name="ena", enabled=True, base_url="https://www.ebi.ac.uk/ena/portal/api", rate_limit_per_second=1000),
+        retrieval_config,
+        transport=httpx.MockTransport(handler),
+    )
+
+
+def test_resolve_sra_sample_accessions_to_studies_expands_range_and_routes_by_prefix(retrieval_config):
+    """Real regression from 10.1073/pnas.2103275118: the paper's Data
+    Availability statement cites only "SRS7105074 - SRS7105095" (an SRA
+    Sample-level accession range) and never states its own study
+    accession. ENA's own study_accession field for this NCBI/SRA-native
+    submission resolves to a PRJNA... BioProject, not an ENA-native
+    accession -- confirms guess_identifier_type routing, not a hardcoded
+    ENA_STUDY_ACCESSION assumption."""
+    text = "Sequencing data have been deposited in NCBI SRA: SRS7105074 - SRS7105095."
+    adapter = _ena_adapter_resolving_all_samples_to("PRJNA649058", retrieval_config=retrieval_config)
+
+    related = resolve_sra_sample_accessions_to_studies({"ena": adapter}, text, source_name="paper_scan")
+
+    assert len(related) == 1  # all 22 samples in the range resolve to the same parent study -- deduped
+    assert related[0].identifier_type == IdentifierType.BIOPROJECT_ACCESSION
+    assert related[0].value == "PRJNA649058"
+    adapter.close()
+
+
+def test_resolve_sra_sample_accessions_to_studies_handles_single_accession_no_range(retrieval_config):
+    text = "Raw reads are available under accession SRS7105074."
+    adapter = _ena_adapter_resolving_all_samples_to("PRJNA649058", retrieval_config=retrieval_config)
+
+    related = resolve_sra_sample_accessions_to_studies({"ena": adapter}, text, source_name="paper_scan")
+
+    assert related[0].value == "PRJNA649058"
+    adapter.close()
+
+
+def test_resolve_sra_sample_accessions_to_studies_returns_empty_without_ena_adapter():
+    text = "SRS7105074 - SRS7105095"
+    assert resolve_sra_sample_accessions_to_studies({}, text, source_name="paper_scan") == []
+
+
+def test_resolve_sra_sample_accessions_to_studies_returns_empty_when_no_accessions_present(retrieval_config):
+    adapter = _ena_adapter_resolving_all_samples_to("PRJNA649058", retrieval_config=retrieval_config)
+    assert resolve_sra_sample_accessions_to_studies({"ena": adapter}, "No accessions here.", source_name="x") == []
+    adapter.close()

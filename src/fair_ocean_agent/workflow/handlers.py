@@ -41,11 +41,13 @@ from fair_ocean_agent.database.models import (
 )
 from fair_ocean_agent.discovery.text_identifiers import (
     extract_repository_identifiers_from_text,
+    resolve_sra_sample_accessions_to_studies,
     verify_deterministic_identifier,
     xml_to_text,
 )
 from fair_ocean_agent.extraction.sections import select_relevant_sections
 from fair_ocean_agent.extraction.api_verification import detect_and_correct_elev_depth_mislabeling
+from fair_ocean_agent.extraction.downstream_analysis import detect_downstream_analysis_techniques
 from fair_ocean_agent.extraction.faire_fields import suppress_resolved_faire_hints_for_text
 from fair_ocean_agent.extraction.pdf import extract_pdf_sections, extract_pdf_text
 from fair_ocean_agent.extraction.publication_metadata import (
@@ -576,30 +578,48 @@ def _resolve_publication_sources(
 
 def _discover_identifiers_from_fulltext(session: Session, study: Study, adapters: dict[str, SourceAdapter]) -> Study:
     """Mine open full text for repository accessions after DOI metadata has
-    discovered a PMCID.
+    discovered a PMCID -- or, when FAIR_OCEAN_LOCAL_PDF_PATH is set, from a
+    locally-supplied PDF instead. A paper with no PMCID at all (never
+    deposited in PMC, even when freely readable elsewhere -- see
+    handle_extract_text_facts' own docstring) previously had NO route to
+    ever surface its BioProject/BioSample accessions: this function
+    required a PMCID unconditionally, same latent gap as EXTRACT_TEXT_FACTS
+    had before it also learned to prefer a local PDF.
 
     This deliberately does not create an `europe_pmc_fulltext` Source row:
     that row is the idempotency marker for EXTRACT_TEXT_FACTS, and identifier
     discovery must not cause later paper extraction to no-op.
     """
-    europe_pmc = adapters.get("europe_pmc")
-    if not isinstance(europe_pmc, EuropePmcAdapter):
-        return study
+    local_pdf_path = os.environ.get(LOCAL_PDF_PATH_ENV)
+    if local_pdf_path:
+        pdf_path = Path(local_pdf_path)
+        if not pdf_path.exists():
+            raise SourceRecordNotFoundError(f"local PDF does not exist: {pdf_path}")
+        text = extract_pdf_text(pdf_path)
+        source_name = "local_pdf_identifier_scan"
+    else:
+        europe_pmc = adapters.get("europe_pmc")
+        if not isinstance(europe_pmc, EuropePmcAdapter):
+            return study
+        pmcid = _identifier_value(session, study.study_id, IdentifierType.PMCID)
+        if pmcid is None:
+            return study
+        try:
+            fulltext_xml = europe_pmc.fetch_fulltext_xml(pmcid)
+        except SourceRecordNotFoundError:
+            logger.info("no open-access full text available for identifier scan: %s", pmcid)
+            return study
+        text = xml_to_text(fulltext_xml)
+        source_name = "europe_pmc_fulltext_identifier_scan"
 
-    pmcid = _identifier_value(session, study.study_id, IdentifierType.PMCID)
-    if pmcid is None:
-        return study
-
-    try:
-        fulltext_xml = europe_pmc.fetch_fulltext_xml(pmcid)
-    except SourceRecordNotFoundError:
-        logger.info("no open-access full text available for identifier scan: %s", pmcid)
-        return study
-
-    related = extract_repository_identifiers_from_text(
-        xml_to_text(fulltext_xml),
-        source_name="europe_pmc_fulltext_identifier_scan",
-    )
+    related = extract_repository_identifiers_from_text(text, source_name=source_name)
+    # SRA/ENA/DDBJ *sample*-level accessions (SRS/ERS/DRS, often cited as a
+    # range) are common in Data Availability statements but aren't a
+    # repository identifier this pipeline stores directly -- resolved here
+    # to whichever real parent study/BioProject accession they belong to
+    # instead (confirmed live: 10.1073/pnas.2103275118 cites only
+    # "SRS7105074 - SRS7105095" and never states its own study accession).
+    related += resolve_sra_sample_accessions_to_studies(adapters, text, source_name=source_name)
     verified = [r for r in related if verify_deterministic_identifier(adapters, r)]
     for dropped in related:
         if dropped not in verified:
@@ -608,9 +628,7 @@ def _discover_identifiers_from_fulltext(session: Session, study: Study, adapters
                 dropped.identifier_type.value, dropped.value,
             )
     if verified:
-        study = _apply_related_identifiers(
-            session, study, verified, "europe_pmc_fulltext_identifier_scan", source=None
-        )
+        study = _apply_related_identifiers(session, study, verified, source_name, source=None)
     return study
 
 
@@ -1346,19 +1364,30 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
     if study is None:
         raise ValueError(f"Study {task.study_id} not found")
 
-    pmcid_identifier = next(
-        (ei for ei in study.external_identifiers if ei.identifier_type == IdentifierType.PMCID.value), None
-    )
-    if pmcid_identifier is None:
-        raise NotImplementedError(
-            "EXTRACT_TEXT_FACTS requires a PMCID (discovered via Europe PMC during "
-            "DISCOVER_IDENTIFIERS) to fetch open-access full text -- this study has none."
+    local_pdf_path = os.environ.get(LOCAL_PDF_PATH_ENV)
+    # A closed-access paper with no PMCID at all (never deposited in PMC,
+    # even though it may be freely readable elsewhere -- confirmed live:
+    # several real eDNA papers OpenAlex marks as open-access still show
+    # Europe PMC's own isOpenAccess=N/inEPMC=N) previously could never
+    # reach the local_pdf_path branch below at all: this PMCID check ran
+    # unconditionally before it, regardless of whether a local PDF was
+    # supplied as the real alternative source. Only require a PMCID when
+    # there's no local PDF to fall back on instead.
+    pmcid: str | None = None
+    if not local_pdf_path:
+        pmcid_identifier = next(
+            (ei for ei in study.external_identifiers if ei.identifier_type == IdentifierType.PMCID.value), None
         )
-    pmcid = pmcid_identifier.identifier_value
+        if pmcid_identifier is None:
+            raise NotImplementedError(
+                "EXTRACT_TEXT_FACTS requires a PMCID (discovered via Europe PMC during "
+                "DISCOVER_IDENTIFIERS) to fetch open-access full text -- this study has none. "
+                f"Set {LOCAL_PDF_PATH_ENV} to process a locally-supplied PDF instead."
+            )
+        pmcid = pmcid_identifier.identifier_value
 
     backend = _build_llm_backend_cached()
     extraction_version = f"{PROMPT_VERSION}:{backend.label}"
-    local_pdf_path = os.environ.get(LOCAL_PDF_PATH_ENV)
     source_name = "local_pdf_fulltext" if local_pdf_path else "europe_pmc_fulltext"
     external_identifier = str(Path(local_pdf_path).resolve()) if local_pdf_path else pmcid
     already_recorded = (
@@ -1458,6 +1487,7 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
                         "llm_judged_quote_search",
                         "llm_text_extraction",
                         "controlled_sample_prep_refinement",
+                        "downstream_analysis_technique_detection",
                         "nucl_acid_ext_lysis_refinement",
                     )
                 ),
@@ -1610,6 +1640,16 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
         pulled_env_var_facts,
         extraction_method="x_pulled_env_var_refinement",
         model_name=backend.label,
+        prompt_version=PROMPT_VERSION,
+        review_status=ReviewStatus.ACCEPTED.value,
+    )
+    downstream_analysis_facts = detect_downstream_analysis_techniques(section_texts, locator_prefix=locator_prefix)
+    _persist_candidate_facts(
+        session,
+        study.study_id,
+        source.source_id,
+        downstream_analysis_facts,
+        extraction_method="downstream_analysis_technique_detection",
         prompt_version=PROMPT_VERSION,
         review_status=ReviewStatus.ACCEPTED.value,
     )

@@ -98,6 +98,7 @@ classes:
     - humidity
     - identificationRemarks
     - informationWithheld
+    - internal_downstream_analysis_techniques
     - inhibition_check
     - inhibition_check_0_1
     - input_read_count
@@ -346,6 +347,7 @@ classes:
     - error_rate_tool
     - error_rate_type
     - informationWithheld
+    - internal_downstream_analysis_techniques
     - inhibition_check
     - inhibition_check_0_1
     - institution
