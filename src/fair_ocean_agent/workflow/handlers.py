@@ -132,6 +132,17 @@ from fair_ocean_agent.workflow.worker import TASK_HANDLERS
 logger = get_logger(__name__)
 
 LOCAL_PDF_PATH_ENV = "FAIR_OCEAN_LOCAL_PDF_PATH"
+# A single global override, one PDF per whole process invocation -- fine
+# for a one-off manual test of one paper, but per an explicit user
+# request, a real batch run needs closed-access PDFs mixed in alongside
+# papers with no local PDF at all, so each study needs its OWN lookup, not
+# a process-wide override. FAIR_OCEAN_LOCAL_PDF_DIR takes a directory of
+# PDFs named by that paper's own DOI (slashes replaced with underscores,
+# e.g. 10.1002/2015JG003300 -> 10.1002_2015JG003300.pdf -- lowercased
+# before comparison, so case doesn't have to match exactly) and looks up
+# each study's own file there; LOCAL_PDF_PATH_ENV, when also set, still
+# wins as the single-paper override it always was.
+LOCAL_PDF_DIR_ENV = "FAIR_OCEAN_LOCAL_PDF_DIR"
 
 # Publication-oriented (DOI-keyed, populate `sources`' bibliographic
 # columns) vs repository-oriented (BioProject/ENA-accession-keyed,
@@ -590,8 +601,9 @@ def _resolve_publication_sources(
 
 def _discover_identifiers_from_fulltext(session: Session, study: Study, adapters: dict[str, SourceAdapter]) -> Study:
     """Mine open full text for repository accessions after DOI metadata has
-    discovered a PMCID -- or, when FAIR_OCEAN_LOCAL_PDF_PATH is set, from a
-    locally-supplied PDF instead. A paper with no PMCID at all (never
+    discovered a PMCID -- or, when a locally-supplied PDF is found for this
+    study (see _local_pdf_path_for_study), from that instead. A paper with
+    no PMCID at all (never
     deposited in PMC, even when freely readable elsewhere -- see
     handle_extract_text_facts' own docstring) previously had NO route to
     ever surface its BioProject/BioSample accessions: this function
@@ -602,11 +614,8 @@ def _discover_identifiers_from_fulltext(session: Session, study: Study, adapters
     that row is the idempotency marker for EXTRACT_TEXT_FACTS, and identifier
     discovery must not cause later paper extraction to no-op.
     """
-    local_pdf_path = os.environ.get(LOCAL_PDF_PATH_ENV)
-    if local_pdf_path:
-        pdf_path = Path(local_pdf_path)
-        if not pdf_path.exists():
-            raise SourceRecordNotFoundError(f"local PDF does not exist: {pdf_path}")
+    pdf_path = _local_pdf_path_for_study(session, study)
+    if pdf_path is not None:
         text = extract_pdf_text(pdf_path)
         source_name = "local_pdf_identifier_scan"
     else:
@@ -875,6 +884,39 @@ def _identifier_values(session: Session, study_id: str, identifier_type: Identif
 def _identifier_value(session: Session, study_id: str, identifier_type: IdentifierType) -> str | None:
     values = _identifier_values(session, study_id, identifier_type)
     return values[0] if values else None
+
+
+def _doi_pdf_filename(doi: str) -> str:
+    return doi.strip().lower().replace("/", "_") + ".pdf"
+
+
+def _local_pdf_path_for_study(session: Session, study: Study) -> Path | None:
+    """LOCAL_PDF_PATH_ENV (a single global override) always wins when set,
+    same one-paper-per-run behavior as before -- a deliberately-set path
+    that doesn't exist is a real configuration mistake, not "no PDF
+    supplied for this study," so it still raises rather than silently
+    falling through. Otherwise, LOCAL_PDF_DIR_ENV is checked for a file
+    named after this study's own DOI -- see that env var's own comment
+    above for the exact naming convention; NOT finding a match there is
+    the ordinary, expected case for a paper with no supplied PDF, so it
+    quietly returns None rather than raising. Neither env var set, or
+    this study has no DOI: None, callers fall back to their normal Europe
+    PMC fetch."""
+    global_override = os.environ.get(LOCAL_PDF_PATH_ENV)
+    if global_override:
+        pdf_path = Path(global_override)
+        if not pdf_path.exists():
+            raise SourceRecordNotFoundError(f"local PDF does not exist: {pdf_path}")
+        return pdf_path
+
+    pdf_dir = os.environ.get(LOCAL_PDF_DIR_ENV)
+    if not pdf_dir:
+        return None
+    doi = _identifier_value(session, study.study_id, IdentifierType.DOI)
+    if not doi:
+        return None
+    candidate = Path(pdf_dir) / _doi_pdf_filename(doi)
+    return candidate if candidate.exists() else None
 
 
 def _fetch_and_persist_repository_record(
@@ -1478,17 +1520,17 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
     if study is None:
         raise ValueError(f"Study {task.study_id} not found")
 
-    local_pdf_path = os.environ.get(LOCAL_PDF_PATH_ENV)
+    pdf_path = _local_pdf_path_for_study(session, study)
     # A closed-access paper with no PMCID at all (never deposited in PMC,
     # even though it may be freely readable elsewhere -- confirmed live:
     # several real eDNA papers OpenAlex marks as open-access still show
     # Europe PMC's own isOpenAccess=N/inEPMC=N) previously could never
-    # reach the local_pdf_path branch below at all: this PMCID check ran
+    # reach the local-PDF branch below at all: this PMCID check ran
     # unconditionally before it, regardless of whether a local PDF was
     # supplied as the real alternative source. Only require a PMCID when
     # there's no local PDF to fall back on instead.
     pmcid: str | None = None
-    if not local_pdf_path:
+    if pdf_path is None:
         pmcid_identifier = next(
             (ei for ei in study.external_identifiers if ei.identifier_type == IdentifierType.PMCID.value), None
         )
@@ -1496,14 +1538,14 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
             raise NotImplementedError(
                 "EXTRACT_TEXT_FACTS requires a PMCID (discovered via Europe PMC during "
                 "DISCOVER_IDENTIFIERS) to fetch open-access full text -- this study has none. "
-                f"Set {LOCAL_PDF_PATH_ENV} to process a locally-supplied PDF instead."
+                f"Set {LOCAL_PDF_PATH_ENV} or {LOCAL_PDF_DIR_ENV} to process a locally-supplied PDF instead."
             )
         pmcid = pmcid_identifier.identifier_value
 
     backend = _build_llm_backend_cached()
     extraction_version = f"{PROMPT_VERSION}:{backend.label}"
-    source_name = "local_pdf_fulltext" if local_pdf_path else "europe_pmc_fulltext"
-    external_identifier = str(Path(local_pdf_path).resolve()) if local_pdf_path else pmcid
+    source_name = "local_pdf_fulltext" if pdf_path is not None else "europe_pmc_fulltext"
+    external_identifier = str(pdf_path.resolve()) if pdf_path is not None else pmcid
     already_recorded = (
         session.query(Source)
         .filter_by(
@@ -1526,10 +1568,7 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
 
     fulltext_xml: str | None = None
     source_text_for_metadata: str | None = None
-    if local_pdf_path:
-        pdf_path = Path(local_pdf_path)
-        if not pdf_path.exists():
-            raise SourceRecordNotFoundError(f"local PDF does not exist: {pdf_path}")
+    if pdf_path is not None:
         sections = extract_pdf_sections(pdf_path)
         source_text_for_metadata = extract_pdf_text(pdf_path)
         logger.info(

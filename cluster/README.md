@@ -151,6 +151,49 @@ Worth doing in batches of a few hundred rather than all ~3000 at once,
 at least for the first real large-scale run -- easier to notice and
 retry a stuck batch than to debug a single multi-day job.
 
+## Closed-access papers (local PDFs)
+
+A paper with no PMCID at all (never deposited in Europe PMC/PubMed, even
+when it's genuinely freely readable elsewhere -- common for non-
+biomedical-focused journals, e.g. AGU's earth-science titles) has no route
+through the normal discovery/extraction path: there's no PMCID to fetch
+full text with, and no PMID for NCBI's own citation-linking either. A
+locally-supplied PDF is the real alternative source for these, for **both**
+discovery (mining the PDF's own text for BioProject/SRA/Zenodo/Dryad/etc.
+accessions) and extraction (running the LLM over the PDF's own sections)
+-- both stages check for one independently, so both `run_discovery.sbatch`
+and `run_extraction.sbatch` need the same env var set to get full benefit
+from a supplied PDF.
+
+Drop each PDF into one shared directory, named after that paper's own DOI
+with `/` replaced by `_` and lowercased -- e.g. `10.1002/2015JG003300`
+becomes:
+
+```bash
+mkdir -p data/local_pdfs
+cp ~/Downloads/jacobs-2021-palmyra.pdf data/local_pdfs/10.1007_s00338-021-02143-5.pdf
+```
+
+Then point `FAIR_OCEAN_LOCAL_PDF_DIR` at that directory on **both**
+submissions -- a paper with no matching file in the directory (the normal
+case for most of a batch) just falls through to the regular Europe PMC
+path unchanged, so PDF-supplied and non-PDF papers run together in the
+same batch with no other changes:
+
+```bash
+sbatch --account=191001-364393 \
+  --export=ALL,SEED_FILE=cluster/seeds_fifty_papers.csv,FAIR_OCEAN_LOCAL_PDF_DIR=$(pwd)/data/local_pdfs \
+  cluster/run_discovery.sbatch
+sbatch --account=191001-364393 --dependency=afterok:<job_id> \
+  --export=ALL,LLM_BACKEND=vllm,FAIR_OCEAN_LOCAL_PDF_DIR=$(pwd)/data/local_pdfs \
+  cluster/run_extraction.sbatch
+```
+
+`FAIR_OCEAN_LOCAL_PDF_PATH` (a single PDF path, no per-study lookup) still
+works exactly as before for a quick one-paper test -- it's checked first
+and wins over `FAIR_OCEAN_LOCAL_PDF_DIR` whenever both are set, so don't
+leave it set by accident in a shell you're about to run a real batch from.
+
 ## Troubleshooting
 
 - **`pip install vllm` (or anything else) fails with "Disk quota
