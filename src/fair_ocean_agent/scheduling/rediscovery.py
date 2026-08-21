@@ -47,6 +47,8 @@ DEFAULT_INTERVAL_DAYS = 90
 CITATION_RUN_TYPE = "citation_rediscovery"
 CITATION_DEFAULT_INTERVAL_DAYS = 90
 
+TEXT_EXTRACTION_RUN_TYPE = "full_text_extraction_rediscovery"
+
 
 def is_rediscovery_due(session: Session, interval_days: int = DEFAULT_INTERVAL_DAYS) -> bool:
     last_run = session.scalars(
@@ -161,3 +163,48 @@ def enqueue_citation_rediscovery_backfill(session: Session, run_id: str) -> int:
             idempotency_key=f"{CITATION_RUN_TYPE}:{accession}:{run_id}",
         )
     return len(accessions)
+
+
+def enqueue_full_text_extraction_backfill(session: Session, run_id: str) -> int:
+    """Same shape/purpose as enqueue_full_rediscovery, one layer down the
+    pipeline: discovery/seed_loader.py's enqueue_seed_backfill (and this
+    module's enqueue_full_rediscovery) only ever enqueue DISCOVER_IDENTIFIERS
+    for a study that doesn't already have one -- workflow/handlers.py's
+    plain enqueue_text_extraction_backfill has the identical gap for
+    EXTRACT_TEXT_FACTS. Confirmed live: extract_primer_reference_citations
+    (extraction/publication_metadata.py) correctly resolves a real DOI for
+    10.1038/s42003-024-06136-2's own "Zhao et al." citation when run
+    directly against its cached full text today, but a study whose
+    EXTRACT_TEXT_FACTS already ran before that logic existed (or before its
+    nearest-citation-marker fix landed) has pcr_primer_reference_forward/
+    reverse permanently stuck blank -- the default idempotency key
+    (task_type, study_id, source_id, payload) already exists forever once
+    that first task was created, so nothing about a newly-added extraction
+    capability ever gets a second look at an already-processed paper on its
+    own.
+
+    Targets every study with a known PMCID (same population as
+    enqueue_text_extraction_backfill), with a run-scoped idempotency key so
+    a repeat call always enqueues fresh tasks rather than permanently
+    no-op'ing after the first call. Unlike enqueue_full_rediscovery, does
+    NOT filter out NOT_ACCESSIBLE studies -- that flag is about whether
+    sequence data was ever found, an entirely different question from
+    whether this paper's own text is worth re-reading for methods/primer/
+    other fields."""
+    study_ids = sorted(
+        set(
+            session.scalars(
+                select(ExternalIdentifier.study_id).where(
+                    ExternalIdentifier.identifier_type == IdentifierType.PMCID.value
+                )
+            )
+        )
+    )
+    for study_id in study_ids:
+        enqueue_task(
+            session,
+            TaskType.EXTRACT_TEXT_FACTS,
+            study_id=study_id,
+            idempotency_key=f"{TEXT_EXTRACTION_RUN_TYPE}:{study_id}:{run_id}",
+        )
+    return len(study_ids)

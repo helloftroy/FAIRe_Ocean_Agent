@@ -303,6 +303,34 @@ def enqueue_citation_rediscovery_backfill_command() -> None:
     console.print(f"Queued DISCOVER_CITING_STUDIES for {count} BioProject accession(s).")
 
 
+@app.command("enqueue-full-text-extraction-backfill")
+def enqueue_full_text_extraction_backfill_command() -> None:
+    """Re-run EXTRACT_TEXT_FACTS for every study with a known PMCID, on
+    demand -- not just ones that never had one. The concrete case this
+    catches: a newly-added or fixed text-extraction capability (e.g.
+    extract_primer_reference_citations' primer-reference chasing) that
+    already-processed studies were never checked against --
+    EXTRACT_TEXT_FACTS's own idempotency otherwise means a study already
+    extracted once is never revisited, even after the extraction logic
+    itself gains new capability. Same shape as enqueue-full-rediscovery-
+    backfill, one layer down the pipeline -- see
+    scheduling/rediscovery.py::enqueue_full_text_extraction_backfill's own
+    docstring for the confirmed-live example that motivated this."""
+    from fair_ocean_agent.clock import utcnow
+    from fair_ocean_agent.database.enums import WorkflowRunStatus
+    from fair_ocean_agent.scheduling.rediscovery import TEXT_EXTRACTION_RUN_TYPE, enqueue_full_text_extraction_backfill
+
+    with session_scope() as session:
+        run = WorkflowRun(run_type=TEXT_EXTRACTION_RUN_TYPE, status=WorkflowRunStatus.RUNNING.value)
+        session.add(run)
+        session.flush()
+        count = enqueue_full_text_extraction_backfill(session, run.run_id)
+        run.candidates_found = count
+        run.status = WorkflowRunStatus.COMPLETED.value
+        run.ended_at = utcnow()
+    console.print(f"Queued EXTRACT_TEXT_FACTS for {count} stud(y/ies) with a known PMCID.")
+
+
 @app.command("worker")
 def worker_command(
     max_tasks: int | None = typer.Option(None, help="Stop after processing this many tasks"),
