@@ -89,6 +89,34 @@ sources:
     rate_limit_per_second: 5
     priority: 12
 
+  # Pass 2 (general-purpose dataset repositories): only queried once
+  # BioProject/SRA/ENA accession mining (Pass 1) has found nothing for a
+  # study -- see discovery/text_identifiers.py's Pass 2 gating and
+  # workflow/handlers.py's _discover_identifiers_from_fulltext.
+  zenodo:
+    enabled: true
+    base_url: "https://zenodo.org/api"
+    rate_limit_per_second: 3
+    priority: 13
+
+  dryad:
+    enabled: true
+    base_url: "https://datadryad.org/api/v2"
+    rate_limit_per_second: 3
+    priority: 14
+
+  figshare:
+    enabled: true
+    base_url: "https://api.figshare.com/v2"
+    rate_limit_per_second: 3
+    priority: 15
+
+  osf:
+    enabled: true
+    base_url: "https://api.osf.io/v2"
+    rate_limit_per_second: 3
+    priority: 16
+
 # Keyword search terms for later broad discovery (section 7). Not executed
 # until discovery.keyword_search_enabled is true and a keyword-search command
 # is run explicitly.

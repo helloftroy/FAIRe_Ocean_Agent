@@ -21,6 +21,7 @@ from fair_ocean_agent.database.enums import (
     AccessStatus,
     CanonicalStatus,
     ComponentStatus,
+    DataAvailabilityStatus,
     EntityLevel,
     EntityRelationshipType,
     IdentifierType,
@@ -40,7 +41,9 @@ from fair_ocean_agent.database.models import (
     Task,
 )
 from fair_ocean_agent.discovery.text_identifiers import (
+    extract_dataset_repository_identifiers_from_text,
     extract_repository_identifiers_from_text,
+    resolve_sra_run_accessions_to_studies,
     resolve_sra_sample_accessions_to_studies,
     verify_deterministic_identifier,
     xml_to_text,
@@ -106,8 +109,10 @@ from fair_ocean_agent.sources.base import (
 from fair_ocean_agent.sources.bcodmo import BcoDmoAdapter
 from fair_ocean_agent.sources.crossref import CrossrefAdapter
 from fair_ocean_agent.sources.datacite import DataCiteAdapter
+from fair_ocean_agent.sources.dryad import DryadAdapter
 from fair_ocean_agent.sources.ena import EnaAdapter
 from fair_ocean_agent.sources.europe_pmc import EuropePmcAdapter
+from fair_ocean_agent.sources.figshare import FigshareAdapter
 from fair_ocean_agent.sources.gbif import GbifAdapter
 from fair_ocean_agent.sources.ncbi import (
     NcbiBioProjectAdapter,
@@ -118,7 +123,10 @@ from fair_ocean_agent.sources.ncbi import (
 )
 from fair_ocean_agent.sources.obis import ObisAdapter
 from fair_ocean_agent.sources.openalex import OpenAlexAdapter
+from fair_ocean_agent.sources.osf import OsfAdapter
 from fair_ocean_agent.sources.pangaea import PangaeaAdapter
+from fair_ocean_agent.sources.sequence_file_heuristics import SequenceDataStatus
+from fair_ocean_agent.sources.zenodo import ZenodoAdapter
 from fair_ocean_agent.workflow.worker import TASK_HANDLERS
 
 logger = get_logger(__name__)
@@ -143,6 +151,10 @@ _REPOSITORY_ADAPTER_CLASSES: dict[str, type[SourceAdapter]] = {
     "datacite": DataCiteAdapter,
     "obis": ObisAdapter,
     "gbif": GbifAdapter,
+    "zenodo": ZenodoAdapter,
+    "dryad": DryadAdapter,
+    "figshare": FigshareAdapter,
+    "osf": OsfAdapter,
 }
 
 # Process-lifetime cache: rate limiting is per-adapter-instance state
@@ -196,7 +208,7 @@ def _build_enabled_adapters() -> dict[str, SourceAdapter]:
     if is_enabled("ena"):
         adapters["ena"] = EnaAdapter(make_config("ena"), retrieval_config)
 
-    for name in ("bcodmo", "pangaea", "datacite", "obis", "gbif"):
+    for name in ("bcodmo", "pangaea", "datacite", "obis", "gbif", "zenodo", "dryad", "figshare", "osf"):
         if is_enabled(name):
             adapters[name] = _REPOSITORY_ADAPTER_CLASSES[name](make_config(name), retrieval_config)
 
@@ -612,15 +624,56 @@ def _discover_identifiers_from_fulltext(session: Session, study: Study, adapters
         text = xml_to_text(fulltext_xml)
         source_name = "europe_pmc_fulltext_identifier_scan"
 
+    # Pass 1: deterministic accessions (BioProject, SRA/ENA study-level,
+    # and sample-/run-level resolved up to their parent study). Kept
+    # unconditional -- cheap, deterministic, already the existing behavior.
     related = extract_repository_identifiers_from_text(text, source_name=source_name)
-    # SRA/ENA/DDBJ *sample*-level accessions (SRS/ERS/DRS, often cited as a
-    # range) are common in Data Availability statements but aren't a
-    # repository identifier this pipeline stores directly -- resolved here
-    # to whichever real parent study/BioProject accession they belong to
-    # instead (confirmed live: 10.1073/pnas.2103275118 cites only
-    # "SRS7105074 - SRS7105095" and never states its own study accession).
+    # SRA/ENA/DDBJ *sample*- and *run*-level accessions (SRS/ERS/DRS,
+    # SRR/ERR/DRR, often cited as a range) are common in Data Availability
+    # statements but aren't a repository identifier this pipeline stores
+    # directly -- resolved here to whichever real parent study/BioProject
+    # accession they belong to instead (confirmed live: 10.1073/pnas.2103275118
+    # cites only "SRS7105074 - SRS7105095" and never states its own study
+    # accession).
     related += resolve_sra_sample_accessions_to_studies(adapters, text, source_name=source_name)
+    related += resolve_sra_run_accessions_to_studies(adapters, text, source_name=source_name)
     verified = [r for r in related if verify_deterministic_identifier(adapters, r)]
+
+    # Pass 2: general-purpose dataset repositories (Zenodo/Dryad/Figshare/
+    # OSF) -- only attempted once Pass 1 has come up empty, per an explicit
+    # user request for a staged search rather than always querying every
+    # repository. Real motivating cases where Pass 1 finds nothing at all:
+    # 10.1038/s41598-024-60762-8 (Zenodo DOI only) and 10.1002/edn3.184
+    # (Dryad dataset URL only).
+    if not verified:
+        pass2_related = extract_dataset_repository_identifiers_from_text(text, source_name=source_name)
+        pass2_verified = [r for r in pass2_related if verify_deterministic_identifier(adapters, r)]
+        related += pass2_related
+        verified += pass2_verified
+
+        # Pass 3: DataCite's own relatedIdentifiers for the ARTICLE's own
+        # DOI (not a dataset DOI already found in text) -- a structurally
+        # different, structured-API discovery channel that can surface a
+        # dataset the paper's own text never names at all. Only attempted
+        # once Pass 2 has also come up empty.
+        if not pass2_verified:
+            article_doi = _identifier_value(session, study.study_id, IdentifierType.DOI)
+            datacite = adapters.get("datacite")
+            if article_doi and isinstance(datacite, DataCiteAdapter):
+                pass3_related = [
+                    RelatedIdentifier(
+                        identifier_type=IdentifierType.DATASET_DOI,
+                        value=dataset_doi,
+                        relationship_type=RelationshipType.IS_DATASET_FOR,
+                        source="datacite_related_identifiers",
+                        confidence=SupportType.STRUCTURED_SOURCE,
+                    )
+                    for dataset_doi in datacite.find_datasets_citing(article_doi)
+                ]
+                pass3_verified = [r for r in pass3_related if verify_deterministic_identifier(adapters, r)]
+                related += pass3_related
+                verified += pass3_verified
+
     for dropped in related:
         if dropped not in verified:
             logger.info(
@@ -877,6 +930,14 @@ def _resolve_dataset_sources(
             study = _fetch_and_persist_repository_record(session, study, adapters, "pangaea", dataset_doi, persist_fn)
         if "bco-dmo" in dataset_doi.lower() or "bcodmo" in dataset_doi.lower():
             study = _fetch_and_persist_repository_record(session, study, adapters, "bcodmo", dataset_doi, persist_fn)
+        if "zenodo" in dataset_doi.lower():
+            study = _fetch_and_persist_repository_record(session, study, adapters, "zenodo", dataset_doi, persist_fn)
+        if "dryad" in dataset_doi.lower():
+            study = _fetch_and_persist_repository_record(session, study, adapters, "dryad", dataset_doi, persist_fn)
+        if "figshare" in dataset_doi.lower():
+            study = _fetch_and_persist_repository_record(session, study, adapters, "figshare", dataset_doi, persist_fn)
+        if "osf.io" in dataset_doi.lower():
+            study = _fetch_and_persist_repository_record(session, study, adapters, "osf", dataset_doi, persist_fn)
 
     if bcodmo_id:
         study = _fetch_and_persist_repository_record(session, study, adapters, "bcodmo", bcodmo_id, persist_fn)
@@ -888,6 +949,44 @@ def _resolve_dataset_sources(
         study = _fetch_and_persist_repository_record(session, study, adapters, "gbif", gbif_key, persist_fn)
 
     return study
+
+
+def _has_accessible_sequence_data_signal(session: Session, study: Study) -> bool:
+    """Checked once, at the end of handle_discover_identifiers, to decide
+    Study.data_availability_status -- see that column's own docstring.
+
+    Pass 1 success: real per-sample/run entities exist (BioProject/ENA/SRA
+    structured resolution creates SAMPLE/EXPERIMENT_RUN/SEQUENCING_RUN
+    entities directly, see _resolve_repository_sources). Pass 2/3 success:
+    a dataset-repository adapter's own file-listing check found something
+    (sources/sequence_file_heuristics.py's CONFIRMED/LIKELY tiers -- ABSENT
+    doesn't count, matching that module's own "don't waste time on a
+    record with nothing" framing)."""
+    has_sample_level_entity = (
+        session.query(Entity.entity_id)
+        .filter(
+            Entity.study_id == study.study_id,
+            Entity.entity_level.in_(
+                (EntityLevel.SAMPLE.value, EntityLevel.EXPERIMENT_RUN.value, EntityLevel.SEQUENCING_RUN.value)
+            ),
+        )
+        .first()
+        is not None
+    )
+    if has_sample_level_entity:
+        return True
+    positive_statuses = (SequenceDataStatus.CONFIRMED.value, SequenceDataStatus.LIKELY.value)
+    return (
+        session.query(RawFact.fact_id)
+        .filter(
+            RawFact.study_id == study.study_id,
+            RawFact.fact_type_candidate == "sequence_data_status",
+            RawFact.raw_value.in_(positive_statuses),
+            RawFact.review_status != ReviewStatus.REJECTED.value,
+        )
+        .first()
+        is not None
+    )
 
 
 def handle_discover_identifiers(session: Session, task: Task) -> None:
@@ -1053,6 +1152,21 @@ def handle_discover_identifiers(session: Session, task: Task) -> None:
     from fair_ocean_agent.workflow.settle_handlers import maybe_enqueue_settle_check
 
     maybe_enqueue_settle_check(session, study.study_id)
+
+    # Give-up tracking, per an explicit user request: after the staged
+    # repository search above (Pass 1/2/3) has had its full chance, record
+    # whether anything accessible was ever found. A primer-reference-
+    # chased study's only goal was a primer sequence or the next reference
+    # in the citation chain, not full sample data, so this question simply
+    # doesn't apply to it -- discovery_trigger is checked, not walked up
+    # the full lineage (see DataAvailabilityStatus's own docstring for why
+    # the simpler per-study check was chosen over a lineage walk).
+    if study.discovery_trigger != "primer_reference_citation":
+        study.data_availability_status = (
+            DataAvailabilityStatus.ACCESSIBLE.value
+            if _has_accessible_sequence_data_signal(session, study)
+            else DataAvailabilityStatus.NOT_ACCESSIBLE.value
+        )
 
     session.flush()
 

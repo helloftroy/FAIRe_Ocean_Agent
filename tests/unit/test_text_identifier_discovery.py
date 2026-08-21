@@ -2,7 +2,9 @@ import httpx
 
 from fair_ocean_agent.database.enums import IdentifierType, RelationshipType, SupportType
 from fair_ocean_agent.discovery.text_identifiers import (
+    extract_dataset_repository_identifiers_from_text,
     extract_repository_identifiers_from_text,
+    resolve_sra_run_accessions_to_studies,
     resolve_sra_sample_accessions_to_studies,
     verify_deterministic_identifier,
     xml_to_text,
@@ -156,3 +158,62 @@ def test_resolve_sra_sample_accessions_to_studies_returns_empty_when_no_accessio
     adapter = _ena_adapter_resolving_all_samples_to("PRJNA649058", retrieval_config=retrieval_config)
     assert resolve_sra_sample_accessions_to_studies({"ena": adapter}, "No accessions here.", source_name="x") == []
     adapter.close()
+
+
+def test_resolve_sra_run_accessions_to_studies_finds_and_resolves_run_accessions(retrieval_config):
+    """Real gap: only sample-level (SRS/ERS/DRS) accessions were
+    recognized before this -- run-level (SRR/ERR/DRR) citations in a Data
+    Availability statement were invisible."""
+    text = "Raw reads are archived under SRR12335159."
+    adapter = _ena_adapter_resolving_all_samples_to("PRJNA649058", retrieval_config=retrieval_config)
+
+    related = resolve_sra_run_accessions_to_studies({"ena": adapter}, text, source_name="paper_scan")
+
+    assert len(related) == 1
+    assert related[0].identifier_type == IdentifierType.BIOPROJECT_ACCESSION
+    assert related[0].value == "PRJNA649058"
+    adapter.close()
+
+
+def test_resolve_sra_run_accessions_to_studies_expands_run_range(retrieval_config):
+    text = "Runs SRR12335159 - SRR12335161 are available."
+    adapter = _ena_adapter_resolving_all_samples_to("PRJNA649058", retrieval_config=retrieval_config)
+
+    related = resolve_sra_run_accessions_to_studies({"ena": adapter}, text, source_name="paper_scan")
+
+    assert len(related) == 1  # all 3 runs resolve to the same parent study -- deduped
+    adapter.close()
+
+
+def test_extract_dataset_repository_identifiers_from_text_finds_all_four_pass2_repos():
+    text = (
+        "Sequences are deposited at Zenodo (10.5281/zenodo.10381280), "
+        "Dryad (10.5061/dryad.xksn02vdx), Figshare (10.6084/m9.figshare.21653471), "
+        "and OSF (10.17605/OSF.IO/EZCUJ)."
+    )
+    related = extract_dataset_repository_identifiers_from_text(text, source_name="paper_scan")
+    values = {r.value for r in related}
+    assert "10.5281/zenodo.10381280" in values
+    assert "10.5061/dryad.xksn02vdx" in values
+    assert "10.6084/m9.figshare.21653471" in values
+    assert "10.17605/osf.io/ezcuj" in values  # normalize_doi lowercases
+    assert all(r.identifier_type == IdentifierType.DATASET_DOI for r in related)
+
+
+def test_extract_dataset_repository_identifiers_from_text_ignores_unrelated_dois():
+    text = "This work builds on 10.1038/s41598-023-48804-z."
+    assert extract_dataset_repository_identifiers_from_text(text, source_name="paper_scan") == []
+
+
+def test_verify_deterministic_identifier_skips_zenodo_adapter_for_a_dryad_doi(retrieval_config):
+    """Mirrors the existing pangaea/bcodmo skip-guard test -- a Dryad DOI
+    must not be tried against the zenodo adapter first."""
+    rel = RelatedIdentifier(
+        identifier_type=IdentifierType.DATASET_DOI, value="10.5061/dryad.xksn02vdx",
+        relationship_type=RelationshipType.IS_DATASET_FOR, source="paper_scan",
+        confidence=SupportType.DETERMINISTICALLY_DERIVED,
+    )
+    adapters = {"zenodo": _FakeAdapter(found=True), "dryad": _FakeAdapter(found=True)}
+    assert verify_deterministic_identifier(adapters, rel) is True
+    adapters_zenodo_only_fails = {"zenodo": _FakeAdapter(found=True), "dryad": _FakeAdapter(found=False)}
+    assert verify_deterministic_identifier(adapters_zenodo_only_fails, rel) is False

@@ -22,24 +22,40 @@ _BCODMO_DOI_PATTERN = re.compile(
     r"\b10\.(?:1575|26008)/1912/(?:bco[-.]dmo|bcodmo)[^\s<>()\[\]{}\"']*",
     re.IGNORECASE,
 )
-# SRA/ENA/DDBJ *sample*-level accessions -- confirmed live
+# SRA/ENA/DDBJ *sample*- and *run*-level accessions -- confirmed live
 # (10.1073/pnas.2103275118) that a paper's Data Availability statement can
 # cite these directly ("SRS7105074 - SRS7105095") and never state its own
 # study accession at all, and as a RANGE (often with an en dash) rather
-# than every individual sample spelled out. Neither shape was previously
+# than every individual accession spelled out. Neither shape was previously
 # recognized: _SRA_STUDY_PATTERN above only matches the study-level
-# SRP/ERP/DRP prefixes, not sample-level SRS/ERS/DRS. Range pattern is
-# tried first and its matched span is blanked out of the text before the
-# plain single-accession pattern runs, so a range's own boundary values
-# aren't independently double-matched as standalone accessions too.
+# SRP/ERP/DRP prefixes, not sample-level SRS/ERS/DRS or run-level
+# SRR/ERR/DRR. Each range pattern is tried first and its matched span is
+# blanked out of the text before the plain single-accession pattern runs,
+# so a range's own boundary values aren't independently double-matched as
+# standalone accessions too.
 _SRA_SAMPLE_PATTERN = re.compile(r"\b(SRS|ERS|DRS)\d+\b", re.IGNORECASE)
 _SRA_SAMPLE_RANGE_PATTERN = re.compile(
     r"\b(SRS|ERS|DRS)(\d+)\s*[-–—]\s*(?:SRS|ERS|DRS)?(\d+)\b", re.IGNORECASE
 )
+_SRA_RUN_PATTERN = re.compile(r"\b(SRR|ERR|DRR)\d+\b", re.IGNORECASE)
+_SRA_RUN_RANGE_PATTERN = re.compile(
+    r"\b(SRR|ERR|DRR)(\d+)\s*[-–—]\s*(?:SRR|ERR|DRR)?(\d+)\b", re.IGNORECASE
+)
 # A typo'd or malformed range (e.g. transposed digits producing a huge
 # span) shouldn't silently trigger hundreds of speculative API lookups --
 # mirrors sources/ncbi.py's MAX_SAMPLES_PER_PROJECT-style safety caps.
-_MAX_SRA_SAMPLE_RANGE = 500
+_MAX_SRA_ACCESSION_RANGE = 500
+
+# Pass 2: general-purpose dataset repositories, tried only once Pass 1
+# (BioProject/SRA/ENA accessions above) has found nothing -- confirmed live
+# as real, distinct gaps: 10.1038/s41598-024-60762-8's Data Availability
+# names only a Zenodo DOI, 10.1002/edn3.184's only a Dryad dataset DOI.
+# Tagged DATASET_DOI, the same generic bucket Pangaea/BCO-DMO already share
+# above -- no new IdentifierType needed for DOI recognition itself.
+_ZENODO_DOI_PATTERN = re.compile(r"\b10\.5281/zenodo\.\d+\b", re.IGNORECASE)
+_DRYAD_DOI_PATTERN = re.compile(r"\b10\.5061/dryad\.[a-z0-9]+\b", re.IGNORECASE)
+_FIGSHARE_DOI_PATTERN = re.compile(r"\b10\.6084/m9\.figshare\.\d+(?:\.v\d+)?\b", re.IGNORECASE)
+_OSF_DOI_PATTERN = re.compile(r"\b10\.17605/OSF\.IO/[A-Z0-9]+\b", re.IGNORECASE)
 
 
 def xml_to_text(xml: str) -> str:
@@ -55,15 +71,15 @@ def xml_to_text(xml: str) -> str:
     return " ".join((text or "").strip() for text in root.itertext() if (text or "").strip())
 
 
-def _expand_sra_sample_range(prefix: str, start_digits: str, end_digits: str) -> list[str]:
+def _expand_sra_accession_range(prefix: str, start_digits: str, end_digits: str) -> list[str]:
     width = len(start_digits)
     start, end = int(start_digits), int(end_digits)
-    if end < start or (end - start + 1) > _MAX_SRA_SAMPLE_RANGE:
+    if end < start or (end - start + 1) > _MAX_SRA_ACCESSION_RANGE:
         return []
     return [f"{prefix}{str(n).zfill(width)}" for n in range(start, end + 1)]
 
 
-def _extract_sra_sample_accessions(text: str) -> list[str]:
+def _extract_sra_accessions(text: str, single_pattern: re.Pattern, range_pattern: re.Pattern) -> list[str]:
     seen: set[str] = set()
     accessions: list[str] = []
 
@@ -74,32 +90,41 @@ def _extract_sra_sample_accessions(text: str) -> list[str]:
             accessions.append(upper)
 
     range_spans: list[tuple[int, int]] = []
-    for match in _SRA_SAMPLE_RANGE_PATTERN.finditer(text):
+    for match in range_pattern.finditer(text):
         prefix = match.group(1).upper()
-        for value in _expand_sra_sample_range(prefix, match.group(2), match.group(3)):
+        for value in _expand_sra_accession_range(prefix, match.group(2), match.group(3)):
             add(value)
         range_spans.append((match.start(), match.end()))
 
     remaining = text
     for start, end in sorted(range_spans, reverse=True):
         remaining = remaining[:start] + " " * (end - start) + remaining[end:]
-    for match in _SRA_SAMPLE_PATTERN.finditer(remaining):
+    for match in single_pattern.finditer(remaining):
         add(match.group(0))
 
     return accessions
 
 
-def resolve_sra_sample_accessions_to_studies(
-    adapters: dict[str, SourceAdapter], text: str, *, source_name: str
+def _extract_sra_sample_accessions(text: str) -> list[str]:
+    return _extract_sra_accessions(text, _SRA_SAMPLE_PATTERN, _SRA_SAMPLE_RANGE_PATTERN)
+
+
+def _extract_sra_run_accessions(text: str) -> list[str]:
+    return _extract_sra_accessions(text, _SRA_RUN_PATTERN, _SRA_RUN_RANGE_PATTERN)
+
+
+def _resolve_sra_accessions_to_studies(
+    adapters: dict[str, SourceAdapter], accessions: list[str], *, source_name: str
 ) -> list[RelatedIdentifier]:
-    """SRA/ENA/DDBJ sample accessions (SRS/ERS/DRS) found in `text` resolve
-    to their real parent study via a live lookup here, rather than becoming
-    their own new identifier type with its own downstream handling -- this
-    pipeline's existing study-level resolution already knows how to expand
-    a BioProject/ENA study accession into the full sibling sample set (see
-    EnaAdapter.fetch_record / workflow/handlers.py's _resolve_repository_
-    sources), which is also strictly better than only capturing the
-    specific sample accessions a paper's own text happens to enumerate.
+    """Shared by the sample- and run-accession resolvers below: each
+    accession resolves to its real parent study via a live lookup, rather
+    than becoming its own new identifier type with its own downstream
+    handling -- this pipeline's existing study-level resolution already
+    knows how to expand a BioProject/ENA study accession into the full
+    sibling sample set (see EnaAdapter.fetch_record / workflow/handlers.py's
+    _resolve_repository_sources), which is also strictly better than only
+    capturing the specific accessions a paper's own text happens to
+    enumerate.
 
     ENA's own study_accession field for an NCBI/SRA-native submission
     (confirmed live: 10.1073/pnas.2103275118's own SRS7105074-95 range)
@@ -108,17 +133,14 @@ def resolve_sra_sample_accessions_to_studies(
     identifier type its own prefix actually is, rather than assuming it's
     always ENA_STUDY_ACCESSION."""
     ena = adapters.get("ena")
-    if not isinstance(ena, EnaAdapter):
-        return []
-    sample_accessions = _extract_sra_sample_accessions(text)
-    if not sample_accessions:
+    if not isinstance(ena, EnaAdapter) or not accessions:
         return []
 
     seen: set[tuple[IdentifierType, str]] = set()
     related: list[RelatedIdentifier] = []
-    for sample_accession in sample_accessions:
+    for accession in accessions:
         try:
-            study_accession = ena.resolve_sample_to_study_accession(sample_accession)
+            study_accession = ena.resolve_read_accession_to_study_accession(accession)
         except SourceRecordNotFoundError:
             continue
         if not study_accession:
@@ -145,6 +167,56 @@ def resolve_sra_sample_accessions_to_studies(
                 # SupportType.DETERMINISTICALLY_DERIVED matches every other
                 # identifier this module emits, all of which still pass
                 # through verify_deterministic_identifier below regardless.
+                confidence=SupportType.DETERMINISTICALLY_DERIVED,
+            )
+        )
+    return related
+
+
+def resolve_sra_sample_accessions_to_studies(
+    adapters: dict[str, SourceAdapter], text: str, *, source_name: str
+) -> list[RelatedIdentifier]:
+    """SRA/ENA/DDBJ sample accessions (SRS/ERS/DRS) found in `text`."""
+    return _resolve_sra_accessions_to_studies(adapters, _extract_sra_sample_accessions(text), source_name=source_name)
+
+
+def resolve_sra_run_accessions_to_studies(
+    adapters: dict[str, SourceAdapter], text: str, *, source_name: str
+) -> list[RelatedIdentifier]:
+    """SRA/ENA/DDBJ run accessions (SRR/ERR/DRR) found in `text`."""
+    return _resolve_sra_accessions_to_studies(adapters, _extract_sra_run_accessions(text), source_name=source_name)
+
+
+def extract_dataset_repository_identifiers_from_text(text: str, *, source_name: str) -> list[RelatedIdentifier]:
+    """Pass 2: Zenodo/Dryad/Figshare/OSF dataset DOIs, tried only once Pass 1
+    (extract_repository_identifiers_from_text + the SRA sample/run resolvers
+    above) has found nothing -- see workflow/handlers.py's
+    _discover_identifiers_from_fulltext for the gating. Same shape as
+    extract_repository_identifiers_from_text; kept separate so callers can
+    gate the two independently rather than always paying for both."""
+    candidates: list[tuple[IdentifierType, str]] = []
+    candidates.extend((IdentifierType.DATASET_DOI, match.group(0)) for match in _ZENODO_DOI_PATTERN.finditer(text))
+    candidates.extend((IdentifierType.DATASET_DOI, match.group(0)) for match in _DRYAD_DOI_PATTERN.finditer(text))
+    candidates.extend((IdentifierType.DATASET_DOI, match.group(0)) for match in _FIGSHARE_DOI_PATTERN.finditer(text))
+    candidates.extend((IdentifierType.DATASET_DOI, match.group(0)) for match in _OSF_DOI_PATTERN.finditer(text))
+
+    seen: set[tuple[IdentifierType, str]] = set()
+    related: list[RelatedIdentifier] = []
+    for identifier_type, raw_value in candidates:
+        try:
+            value = normalize_identifier(identifier_type, raw_value.rstrip(".,;:"))
+        except IdentifierError:
+            continue
+        key = (identifier_type, value)
+        if key in seen:
+            continue
+        seen.add(key)
+        related.append(
+            RelatedIdentifier(
+                identifier_type=identifier_type,
+                value=value,
+                relationship_type=RelationshipType.IS_DATASET_FOR,
+                source=source_name,
                 confidence=SupportType.DETERMINISTICALLY_DERIVED,
             )
         )
@@ -196,7 +268,7 @@ _VERIFICATION_ADAPTER_NAMES: dict[IdentifierType, tuple[str, ...]] = {
     IdentifierType.BIOPROJECT_ACCESSION: ("ncbi_bioproject", "ena"),
     IdentifierType.SRA_STUDY_ACCESSION: ("ena",),
     IdentifierType.ENA_STUDY_ACCESSION: ("ena",),
-    IdentifierType.DATASET_DOI: ("pangaea", "bcodmo", "datacite"),
+    IdentifierType.DATASET_DOI: ("pangaea", "bcodmo", "zenodo", "dryad", "figshare", "osf", "datacite"),
 }
 
 
@@ -224,6 +296,14 @@ def verify_deterministic_identifier(adapters: dict[str, SourceAdapter], related:
             if name == "pangaea" and "pangaea" not in lowered_value:
                 continue
             if name == "bcodmo" and "bco-dmo" not in lowered_value and "bcodmo" not in lowered_value:
+                continue
+            if name == "zenodo" and "zenodo" not in lowered_value:
+                continue
+            if name == "dryad" and "dryad" not in lowered_value:
+                continue
+            if name == "figshare" and "figshare" not in lowered_value:
+                continue
+            if name == "osf" and "osf.io" not in lowered_value:
                 continue
         try:
             adapter.fetch_record(related.value)

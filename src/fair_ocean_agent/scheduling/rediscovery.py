@@ -31,7 +31,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from fair_ocean_agent.clock import as_aware_utc, utcnow
-from fair_ocean_agent.database.enums import CanonicalStatus, IdentifierType, TaskType, WorkflowRunStatus
+from fair_ocean_agent.database.enums import (
+    CanonicalStatus,
+    DataAvailabilityStatus,
+    IdentifierType,
+    TaskType,
+    WorkflowRunStatus,
+)
 from fair_ocean_agent.database.models import ExternalIdentifier, Study, WorkflowRun
 from fair_ocean_agent.workflow.task_queue import enqueue_task
 
@@ -58,9 +64,18 @@ def enqueue_full_rediscovery(session: Session, run_id: str) -> int:
     every non-merged study (canonical_status == CANDIDATE, same scope as
     discovery/seed_loader.py's enqueue_seed_backfill -- CANONICAL/REJECTED
     are never actually set anywhere in this codebase yet, but the filter
-    is here for when they are)."""
+    is here for when they are), excluding one already marked
+    NOT_ACCESSIBLE (workflow/handlers.py's _has_accessible_sequence_data_signal)
+    -- this function's whole purpose is bypassing normal task idempotency
+    via a run-scoped key specifically to force periodic re-processing, so
+    without this filter it would keep re-running the identical staged
+    repository search against a study already confirmed to have nothing,
+    every single rediscovery cycle, forever."""
     study_ids = session.scalars(
-        select(Study.study_id).where(Study.canonical_status == CanonicalStatus.CANDIDATE.value)
+        select(Study.study_id).where(
+            Study.canonical_status == CanonicalStatus.CANDIDATE.value,
+            Study.data_availability_status != DataAvailabilityStatus.NOT_ACCESSIBLE.value,
+        )
     ).all()
     for study_id in study_ids:
         enqueue_task(

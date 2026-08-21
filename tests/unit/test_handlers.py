@@ -10,6 +10,7 @@ import pytest
 
 from fair_ocean_agent.database.enums import (
     CanonicalStatus,
+    DataAvailabilityStatus,
     EntityLevel,
     IdentifierType,
     RelationshipType,
@@ -315,6 +316,52 @@ def test_handler_mines_fulltext_identifiers_and_resolves_repository_sources(db_s
     ) in identifiers
     assert db_session.query(Source).filter_by(study_id=study.study_id, source_name="ncbi_biosample").count() == 1
     assert db_session.query(Source).filter_by(study_id=study.study_id, source_name="europe_pmc_fulltext").count() == 0
+    # Give-up tracking: a real per-sample entity got created via the
+    # resolved BioProject/BioSample chain, so this counts as accessible.
+    assert study.data_availability_status == DataAvailabilityStatus.ACCESSIBLE.value
+
+
+def test_handler_marks_not_accessible_when_no_repository_search_pass_finds_anything(db_session, monkeypatch):
+    """Give-up tracking, per an explicit user request: once the staged
+    repository search (BioProject/SRA/ENA, then Zenodo/Dryad/Figshare/OSF,
+    then DataCite) has fully run and found nothing accessible, the study
+    is marked NOT_ACCESSIBLE so future rediscovery backfills stop
+    re-searching it."""
+    study = _seeded_study_with_doi(db_session)
+    task = _task_for(db_session, study)
+
+    europe_pmc_adapter = FakeEuropePmcFullTextAdapter(
+        "<article><sec><title>Data Availability</title>"
+        "<p>Data are available from the corresponding author upon request.</p>"
+        "</sec></article>"
+    )
+    monkeypatch.setattr(handlers, "_build_enabled_adapters", lambda: {"europe_pmc": europe_pmc_adapter})
+
+    handlers.handle_discover_identifiers(db_session, task)
+    db_session.commit()
+
+    assert study.data_availability_status == DataAvailabilityStatus.NOT_ACCESSIBLE.value
+
+
+def test_handler_never_marks_a_primer_reference_citation_study(db_session, monkeypatch):
+    """A study reached only via primer-reference chasing has a different
+    goal (a primer sequence, or the next reference in the citation chain),
+    so the accessible-data question doesn't apply to it -- must stay
+    UNKNOWN even when the repository search finds nothing."""
+    study = _seeded_study_with_doi(db_session)
+    study.discovery_trigger = "primer_reference_citation"
+    db_session.flush()
+    task = _task_for(db_session, study)
+
+    europe_pmc_adapter = FakeEuropePmcFullTextAdapter(
+        "<article><sec><title>Data Availability</title><p>No data statement.</p></sec></article>"
+    )
+    monkeypatch.setattr(handlers, "_build_enabled_adapters", lambda: {"europe_pmc": europe_pmc_adapter})
+
+    handlers.handle_discover_identifiers(db_session, task)
+    db_session.commit()
+
+    assert study.data_availability_status == DataAvailabilityStatus.UNKNOWN.value
 
 
 def test_discover_identifiers_from_fulltext_uses_local_pdf_with_no_pmcid(db_session, monkeypatch, tmp_path):
@@ -343,6 +390,60 @@ def test_discover_identifiers_from_fulltext_uses_local_pdf_with_no_pmcid(db_sess
         for ei in db_session.query(ExternalIdentifier).filter_by(study_id=study.study_id).all()
     }
     assert (IdentifierType.BIOPROJECT_ACCESSION.value, "PRJNA515494", "local_pdf_identifier_scan") in identifiers
+
+
+def _seeded_study_with_pmcid_for_fulltext_scan(session, pmcid="PMC9999999") -> Study:
+    study = Study(title="A study")
+    session.add(study)
+    session.flush()
+    session.add(ExternalIdentifier(study_id=study.study_id, identifier_type=IdentifierType.PMCID.value, identifier_value=pmcid))
+    session.flush()
+    return study
+
+
+def test_discover_identifiers_from_fulltext_skips_pass2_when_pass1_already_found_something(db_session):
+    """Staged search, per an explicit user request: Zenodo/Dryad/Figshare/
+    OSF (Pass 2) are only queried once BioProject/SRA/ENA accession mining
+    (Pass 1) has come up empty. A Zenodo adapter present but never called
+    is the real assertion here, not just "no Zenodo identifier saved"."""
+    study = _seeded_study_with_pmcid_for_fulltext_scan(db_session)
+
+    class _FailIfCalledAdapter(FakeAdapter):
+        def fetch_record(self, identifier):
+            raise AssertionError("Pass 2 adapter should never be called when Pass 1 already found something")
+
+    europe_pmc_adapter = FakeEuropePmcFullTextAdapter(
+        "<article><sec><title>Data Availability</title>"
+        "<p>Raw reads are under NCBI BioProject PRJNA515494. "
+        "Related data also at 10.5281/zenodo.10381280.</p></sec></article>"
+    )
+    bioproject_adapter = FakeAdapter("ncbi_bioproject", record=_make_record("ncbi_bioproject"))
+    zenodo_adapter = _FailIfCalledAdapter("zenodo")
+
+    handlers._discover_identifiers_from_fulltext(
+        db_session, study, {"europe_pmc": europe_pmc_adapter, "ncbi_bioproject": bioproject_adapter, "zenodo": zenodo_adapter}
+    )
+    # Doesn't raise -> zenodo_adapter.fetch_record was correctly never called.
+
+
+def test_discover_identifiers_from_fulltext_tries_pass2_when_pass1_finds_nothing(db_session):
+    study = _seeded_study_with_pmcid_for_fulltext_scan(db_session)
+
+    europe_pmc_adapter = FakeEuropePmcFullTextAdapter(
+        "<article><sec><title>Data Availability</title>"
+        "<p>Related data at 10.5281/zenodo.10381280.</p></sec></article>"
+    )
+    zenodo_adapter = FakeAdapter("zenodo", record=_make_record("zenodo"))
+    handlers._discover_identifiers_from_fulltext(
+        db_session, study, {"europe_pmc": europe_pmc_adapter, "zenodo": zenodo_adapter}
+    )
+    db_session.commit()
+
+    identifiers = {
+        (ei.identifier_type, ei.identifier_value)
+        for ei in db_session.query(ExternalIdentifier).filter_by(study_id=study.study_id).all()
+    }
+    assert (IdentifierType.DATASET_DOI.value, "10.5281/zenodo.10381280") in identifiers
 
 
 def test_handler_discovers_supplements_inline_during_doi_driven_discovery(db_session, monkeypatch):

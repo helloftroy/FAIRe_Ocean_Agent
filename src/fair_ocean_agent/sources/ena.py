@@ -116,18 +116,24 @@ class EnaAdapter(SourceAdapter):
             content_hash=hash_payload(raw),
         )
 
-    def resolve_sample_to_study_accession(self, sample_accession: str) -> str | None:
-        """A sample-level accession (SRS/ERS/DRS -- cited directly in a
-        paper's Data Availability statement far more often than the
-        containing study accession, confirmed live: 10.1073/pnas.2103275118
-        cites "SRS7105074 - SRS7105095" and never states its own study
-        accession at all) resolves 1:1 to a real parent ENA study, but
-        fetch_record above only understands study-level accessions. Used to
-        translate a sample accession found by discovery/text_identifiers.py's
-        identifier mining into the study accession this pipeline's existing
-        resolution machinery already knows how to expand into the full
-        sibling sample set, rather than adding a whole new identifier type
-        and downstream handling path for one accession flavor."""
+    def resolve_read_accession_to_study_accession(self, accession: str) -> str | None:
+        """A sample- or run-level accession (SRS/ERS/DRS or SRR/ERR/DRR --
+        cited directly in a paper's Data Availability statement far more
+        often than the containing study accession, confirmed live:
+        10.1073/pnas.2103275118 cites "SRS7105074 - SRS7105095" and never
+        states its own study accession at all) resolves 1:1 to a real
+        parent ENA study, but fetch_record above only understands
+        study-level accessions. Used to translate a sample/run accession
+        found by discovery/text_identifiers.py's identifier mining into the
+        study accession this pipeline's existing resolution machinery
+        already knows how to expand into the full sibling sample set,
+        rather than adding a whole new identifier type and downstream
+        handling path for two more accession flavors.
+
+        Confirmed live that /filereport's accession= parameter resolves a
+        run accession (e.g. SRR12335159 -> PRJNA649058) exactly the same
+        way it resolves a sample accession -- it isn't sample-specific by
+        construction, so one method serves both."""
         # confirmed live: /search with query=sample_accession="..." returns
         # an empty result set for a real, existing sample accession
         # (SRS7105074) -- that query field only indexes read_run-linked
@@ -138,7 +144,7 @@ class EnaAdapter(SourceAdapter):
         rows, _ = self.http.get_json(
             f"{self.config.base_url}/filereport",
             params={
-                "accession": sample_accession,
+                "accession": accession,
                 "result": "read_run",
                 "fields": "study_accession",
                 "format": "json",

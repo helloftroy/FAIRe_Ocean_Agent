@@ -67,6 +67,28 @@ class DataCiteAdapter(SourceAdapter):
             from_cache=from_cache,
         )
 
+    def find_datasets_citing(self, article_doi: str) -> list[str]:
+        """Pass 3 (discovery/text_identifiers.py's staged repository search):
+        datasets whose OWN DataCite record declares a relatedIdentifiers
+        link back to `article_doi` -- a structured-API discovery channel,
+        distinct from mining the article's own text, that can surface a
+        dataset the paper's Data Availability section never names at all.
+        Confirmed live (both that the query mechanism itself works, via a
+        record with a known relation, and that it correctly returns nothing
+        for a record that has none): DataCite's query field needs the DOI
+        quoted (unquoted, a bare "10.xxxx/yyyy" is tokenized by slashes and
+        matches nothing)."""
+        payload, _ = self.http.get_json(
+            f"{self.config.base_url}/dois",
+            params={"query": f'relatedIdentifiers.relatedIdentifier:"{article_doi}"', "page[size]": 25},
+        )
+        dois: list[str] = []
+        for item in payload.get("data") or []:
+            doi = (item.get("attributes") or {}).get("doi") or item.get("id")
+            if doi and doi.lower() != article_doi.lower():
+                dois.append(doi)
+        return dois
+
     def search(self, query: SearchQuery) -> SearchPage:
         payload, _ = self.http.get_json(
             f"{self.config.base_url}/dois",

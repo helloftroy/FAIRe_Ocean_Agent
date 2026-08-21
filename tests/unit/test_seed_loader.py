@@ -1,7 +1,7 @@
 import json
 
 from fair_ocean_agent.config import REPO_ROOT
-from fair_ocean_agent.database.enums import IdentifierType
+from fair_ocean_agent.database.enums import DataAvailabilityStatus, IdentifierType
 from fair_ocean_agent.database.models import ExternalIdentifier, RawFact, Study
 from fair_ocean_agent.discovery.seed_loader import (
     SeedRow,
@@ -110,3 +110,21 @@ def test_enqueue_seed_backfill_queues_one_task_per_candidate_study(db_session):
     from fair_ocean_agent.database.models import Task
 
     assert db_session.query(Task).count() == 3
+
+
+def test_enqueue_seed_backfill_excludes_not_accessible_studies(db_session):
+    """Give-up tracking, per an explicit user request: a study already
+    confirmed to have no accessible sequence data (workflow/handlers.py's
+    _has_accessible_sequence_data_signal, checked at the end of a prior
+    DISCOVER_IDENTIFIERS run) shouldn't get re-queued for the identical
+    search on a plain backfill re-run."""
+    ingest_seed_file(db_session, TEMPLATE_PATH)
+    db_session.commit()
+
+    one_study = db_session.query(Study).first()
+    one_study.data_availability_status = DataAvailabilityStatus.NOT_ACCESSIBLE.value
+    db_session.commit()
+
+    n = enqueue_seed_backfill(db_session)
+    db_session.commit()
+    assert n == 2

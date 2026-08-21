@@ -427,7 +427,7 @@ def test_ena_fetch_record_not_found_when_study_search_empty(retrieval_config):
     adapter.close()
 
 
-def test_resolve_sample_to_study_accession_uses_filereport_not_search(retrieval_config):
+def test_resolve_read_accession_to_study_accession_uses_filereport_not_search(retrieval_config):
     """Confirmed live against the real ENA API: /search with
     query=sample_accession="..." returns an empty result set even for a
     real, existing sample accession -- /filereport's own accession=
@@ -446,15 +446,34 @@ def test_resolve_sample_to_study_accession_uses_filereport_not_search(retrieval_
         retrieval_config,
         transport=httpx.MockTransport(handler),
     )
-    assert adapter.resolve_sample_to_study_accession("SRS7105074") == "PRJNA649058"
+    assert adapter.resolve_read_accession_to_study_accession("SRS7105074") == "PRJNA649058"
     adapter.close()
 
 
-def test_resolve_sample_to_study_accession_returns_none_when_not_found(retrieval_config):
+def test_resolve_read_accession_to_study_accession_works_for_run_accessions_too(retrieval_config):
+    """Confirmed live: the real /filereport endpoint resolves a run
+    accession (SRR/ERR/DRR) exactly the same way it resolves a sample
+    accession -- accession= isn't sample-specific by construction, so one
+    method correctly serves both."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        assert params.get("accession") == "SRR12335159"
+        return httpx.Response(200, json=[{"study_accession": "PRJNA649058"}])
+
+    adapter = EnaAdapter(
+        SourceConfig(name="ena", enabled=True, base_url="https://www.ebi.ac.uk/ena/portal/api", rate_limit_per_second=1000),
+        retrieval_config,
+        transport=httpx.MockTransport(handler),
+    )
+    assert adapter.resolve_read_accession_to_study_accession("SRR12335159") == "PRJNA649058"
+    adapter.close()
+
+
+def test_resolve_read_accession_to_study_accession_returns_none_when_not_found(retrieval_config):
     adapter = EnaAdapter(
         SourceConfig(name="ena", enabled=True, base_url="https://www.ebi.ac.uk/ena/portal/api", rate_limit_per_second=1000),
         retrieval_config,
         transport=httpx.MockTransport(lambda request: httpx.Response(200, json=[])),
     )
-    assert adapter.resolve_sample_to_study_accession("SRS0000000") is None
+    assert adapter.resolve_read_accession_to_study_accession("SRS0000000") is None
     adapter.close()

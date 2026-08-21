@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from fair_ocean_agent.database.enums import (
     CanonicalStatus,
+    DataAvailabilityStatus,
     EntityLevel,
     IdentifierType,
     RelevanceStatus,
@@ -222,9 +223,19 @@ def enqueue_seed_backfill(session: Session) -> int:
     """Queue a DISCOVER_IDENTIFIERS task for every candidate study that
     doesn't already have one (idempotent via enqueue_task's default
     idempotency key). Returns the number of tasks enqueued or already
-    present."""
+    present.
+
+    Excludes a study already marked NOT_ACCESSIBLE (workflow/handlers.py's
+    _has_accessible_sequence_data_signal, checked at the end of a prior
+    DISCOVER_IDENTIFIERS run) -- per an explicit user request, once the
+    staged repository search has found nothing accessible for a study, a
+    plain re-run of this same backfill shouldn't keep re-queueing it for
+    the identical search."""
     study_ids = session.scalars(
-        select(Study.study_id).where(Study.canonical_status == CanonicalStatus.CANDIDATE.value)
+        select(Study.study_id).where(
+            Study.canonical_status == CanonicalStatus.CANDIDATE.value,
+            Study.data_availability_status != DataAvailabilityStatus.NOT_ACCESSIBLE.value,
+        )
     ).all()
     for study_id in study_ids:
         enqueue_task(session, TaskType.DISCOVER_IDENTIFIERS, study_id=study_id)

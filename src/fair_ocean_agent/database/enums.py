@@ -29,6 +29,23 @@ class RelevanceStatus(str, enum.Enum):
     UNKNOWN = "unknown"
 
 
+class DataAvailabilityStatus(str, enum.Enum):
+    """Whether this study's staged repository search (discovery/
+    text_identifiers.py's Pass 1/2/3, see _has_accessible_sequence_data_signal
+    in workflow/handlers.py) ever found real, accessible sequence data.
+    NOT_ACCESSIBLE is the "give up, stop re-searching" signal -- per an
+    explicit user request, checked by enqueue_seed_backfill/
+    enqueue_full_rediscovery/enqueue_citation_rediscovery_backfill so a
+    study that's already been searched with nothing found doesn't keep
+    getting re-queued for the same search. Not set at all for a study whose
+    discovery_trigger is "primer_reference_citation" -- that study's only
+    goal was a primer sequence or the next reference in the chain, not full
+    sample data, so the accessible-data question doesn't apply to it."""
+    UNKNOWN = "unknown"
+    ACCESSIBLE = "accessible"
+    NOT_ACCESSIBLE = "not_accessible"
+
+
 class IdentifierType(str, enum.Enum):
     DOI = "doi"
     PMID = "pmid"

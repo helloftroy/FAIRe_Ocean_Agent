@@ -1,7 +1,13 @@
 from datetime import timedelta
 
 from fair_ocean_agent.clock import utcnow
-from fair_ocean_agent.database.enums import CanonicalStatus, IdentifierType, TaskType, WorkflowRunStatus
+from fair_ocean_agent.database.enums import (
+    CanonicalStatus,
+    DataAvailabilityStatus,
+    IdentifierType,
+    TaskType,
+    WorkflowRunStatus,
+)
 from fair_ocean_agent.database.models import ExternalIdentifier, Study, Task, WorkflowRun
 from fair_ocean_agent.scheduling.rediscovery import (
     enqueue_citation_rediscovery_backfill,
@@ -63,6 +69,32 @@ def test_enqueue_full_rediscovery_targets_candidate_studies_with_fresh_idempoten
     new_tasks = db_session.query(Task).filter_by(study_id=study.study_id, task_type=TaskType.DISCOVER_IDENTIFIERS.value).all()
     assert len(new_tasks) == 2  # the old completed one, plus a genuinely new one this call created
     assert any(t.idempotency_key == f"quarterly_full_rediscovery:{study.study_id}:RUN-1" for t in new_tasks)
+
+
+def test_enqueue_full_rediscovery_excludes_not_accessible_studies(db_session):
+    """Give-up tracking, per an explicit user request: this function
+    deliberately bypasses normal task idempotency via a run-scoped key to
+    force periodic re-processing -- without this filter it would keep
+    re-running the identical staged repository search against a study
+    already confirmed to have nothing, every single rediscovery cycle,
+    forever."""
+    accessible = Study(
+        title="Has real data", canonical_status=CanonicalStatus.CANDIDATE.value,
+        data_availability_status=DataAvailabilityStatus.ACCESSIBLE.value,
+    )
+    not_accessible = Study(
+        title="Confirmed nothing accessible", canonical_status=CanonicalStatus.CANDIDATE.value,
+        data_availability_status=DataAvailabilityStatus.NOT_ACCESSIBLE.value,
+    )
+    db_session.add_all([accessible, not_accessible])
+    db_session.commit()
+
+    count = enqueue_full_rediscovery(db_session, run_id="RUN-2")
+    db_session.commit()
+
+    assert count == 1
+    assert db_session.query(Task).filter_by(study_id=not_accessible.study_id).count() == 0
+    assert db_session.query(Task).filter_by(study_id=accessible.study_id).count() == 1
 
 
 def test_is_citation_rediscovery_due_true_when_never_run(db_session):

@@ -32,6 +32,7 @@ from fair_ocean_agent.database.enums import (
     CandidateMatchReviewStatus,
     CanonicalStatus,
     ComponentStatus,
+    DataAvailabilityStatus,
     EntityLevel,
     EntityRootStatus,
     IdentifierType,
@@ -127,6 +128,13 @@ class Study(Base, TimestampMixin):
     entity_component_id: Mapped[str | None] = mapped_column(String)
     entity_component_status: Mapped[str] = mapped_column(String, default=ComponentStatus.NOT_APPLICABLE.value)
     entity_component_settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Set once, at the end of handle_discover_identifiers, after the staged
+    # repository search (discovery/text_identifiers.py's Pass 1/2/3) has
+    # run -- see workflow/handlers.py's _has_accessible_sequence_data_signal.
+    # NOT_ACCESSIBLE is the "give up" signal that stops future re-discovery
+    # backfills from re-queueing this study; see DataAvailabilityStatus'
+    # own docstring for the primer-reference-citation exception.
+    data_availability_status: Mapped[str] = mapped_column(String, default=DataAvailabilityStatus.UNKNOWN.value)
 
     external_identifiers: Mapped[list["ExternalIdentifier"]] = relationship(
         back_populates="study", cascade="all, delete-orphan"

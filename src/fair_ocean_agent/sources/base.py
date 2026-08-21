@@ -171,6 +171,15 @@ class RateLimitedClient:
             timeout=retrieval_config.request_timeout_seconds,
             headers={"User-Agent": retrieval_config.user_agent},
             transport=transport,
+            # Confirmed live: Zenodo's own DOI-cited "concept" record id
+            # (representing "all versions") 302s to the actual versioned
+            # record -- e.g. 10.5281/zenodo.10381280 (cited in a real paper's
+            # Data Availability text) redirects id 10381280 -> 10381281.
+            # Without this, _get_bytes got the redirect's own short HTML body
+            # back as a 200 and json.loads() on it raised an opaque
+            # JSONDecodeError instead of a clean, followed fetch. No existing
+            # adapter relies on redirects NOT being followed.
+            follow_redirects=True,
         )
         self._source_name = source_name
         self._min_interval = 1.0 / rate_limit_per_second if rate_limit_per_second > 0 else 0.0
