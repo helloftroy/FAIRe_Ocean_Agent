@@ -83,6 +83,17 @@ class SeedDiscoveryConfig:
         "dog",
         "feline",
         "cat",
+        # Per an explicit user request. MGnify's own biome lineage puts
+        # these under "root:Engineered:Food production:..." (confirmed
+        # live: fermented seafood/beverages/vegetables studies were among
+        # the real records this let through before biome parsing was
+        # fixed) -- "food" alone catches that whole lineage branch;
+        # "fermented"/"food production" stay as explicit belt-and-suspenders
+        # matches against the study title/abstract text too, independent
+        # of biome.
+        "food",
+        "fermented",
+        "food production",
     )
     accepted_experiment_types: tuple[str, ...] = (
         "amplicon",
