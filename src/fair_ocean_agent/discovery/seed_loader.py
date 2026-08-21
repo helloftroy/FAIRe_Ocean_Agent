@@ -43,6 +43,7 @@ SEED_COLUMNS = (
     "pmcid",
     "bioproject_accession",
     "ena_study_accession",
+    "sra_study_accession",
     "dataset_id",
     "repository",
     "url",
@@ -54,7 +55,17 @@ _COLUMN_TO_IDENTIFIER_TYPE = {
     "pmid": IdentifierType.PMID,
     "pmcid": IdentifierType.PMCID,
     "bioproject_accession": IdentifierType.BIOPROJECT_ACCESSION,
+    # ena_study_accession's own normalizer only accepts ERP.../PRJEB... --
+    # a DDBJ-native study is cited as DRP..., which never matches it (a
+    # real seed source found live: MGnify/ENA-first seed discovery's own
+    # secondary_study_accession field is frequently DRP-format). Rather
+    # than silently dropping those or stretching ena_study_accession's own
+    # normalizer to accept a prefix its name no longer matches,
+    # sra_study_accession is its own column mapping to the identifier type
+    # that already normalizes the full SRP/ERP/DRP family correctly
+    # (identity/identifiers.py's SRA_STUDY_PATTERN).
     "ena_study_accession": IdentifierType.ENA_STUDY_ACCESSION,
+    "sra_study_accession": IdentifierType.SRA_STUDY_ACCESSION,
     "url": IdentifierType.URL,
 }
 
@@ -84,6 +95,7 @@ class SeedRow(BaseModel):
     pmcid: str | None = None
     bioproject_accession: str | None = None
     ena_study_accession: str | None = None
+    sra_study_accession: str | None = None
     dataset_id: str | None = None
     repository: str | None = None
     url: str | None = None

@@ -22,6 +22,21 @@ def test_load_seed_rows_from_template_csv():
     assert rows[1].title is None  # blank cell normalized to None
 
 
+def test_sra_study_accession_column_accepts_ddbj_prefix(db_session):
+    """ena_study_accession's own normalizer only accepts ERP.../PRJEB...
+    -- a real gap found live while feeding a real MGnify/ENA-sourced seed
+    CSV through ingest-seeds (100 of 247 rows used a DRP-format
+    secondary_study_accession, which never matched ena_study_accession
+    and would otherwise have silently produced a study with zero
+    identifiers). sra_study_accession maps to IdentifierType.SRA_STUDY_ACCESSION,
+    whose own normalizer already accepts the full SRP/ERP/DRP family."""
+    row = SeedRow(seed_id="ddbj-1", sra_study_accession="DRP000157")
+    result = ingest_seed_row(db_session, row)
+    assert result.identifier_errors == []
+    identifiers = {ei.identifier_type: ei.identifier_value for ei in db_session.query(ExternalIdentifier).all()}
+    assert identifiers[IdentifierType.SRA_STUDY_ACCESSION.value] == "DRP000157"
+
+
 def test_load_seed_rows_from_jsonl(tmp_path):
     path = tmp_path / "seeds.jsonl"
     path.write_text(
