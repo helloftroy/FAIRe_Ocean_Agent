@@ -22,6 +22,8 @@ data/exports/*
 data/auto_fetched_pdfs/
 data/PDFs/
 data/paper_classification/
+data/seed_discovery/*.sqlite
+data/seed_discovery/*.sqlite-*
 
 standards/compiled/*
 !standards/compiled/.gitkeep
