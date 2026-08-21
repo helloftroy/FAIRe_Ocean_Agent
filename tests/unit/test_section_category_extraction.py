@@ -1,6 +1,7 @@
 """Tests for extraction/section_category_extraction.py (Stage 2 LLM
 sentence-categorization and Stage 3 category-scoped term extraction)."""
 import json
+import re
 
 import pytest
 
@@ -61,11 +62,68 @@ def test_categorize_paragraphs_raises_on_invalid_json_after_retries():
         categorize_paragraphs(backend, [("Samples were stored at -80C.", frozenset({"sample_prep"}))])
 
 
+def test_categorize_paragraphs_chunks_a_large_paper_instead_of_one_giant_call():
+    """Real live audit (10.1371/journal.pone.0303937, see this function's
+    own comment): one call for a whole paper's worth of candidate
+    sentences got silently truncated by the model's own output-token
+    limit, dropping everything past the cutoff. 130 one-sentence
+    paragraphs (well past _MAX_SENTENCES_PER_CATEGORIZATION_CALL=60) must
+    produce multiple smaller calls, not one call asking the model to
+    tag 130 sentences at once -- and every single sentence's tag must
+    still come back correctly regardless of which batch it landed in."""
+    paragraphs = [(f"Sentence number {i} about sample prep.", frozenset({"sample_prep"})) for i in range(130)]
+
+    def respond(prompt: str) -> str:
+        ids_in_this_call = re.findall(r"S(\d+)\.0", prompt)
+        return json.dumps([{"sentence_id": f"S{i}.0", "categories": ["sample_prep"]} for i in ids_in_this_call])
+
+    backend = MockLLMBackend(responses=respond)
+    result = categorize_paragraphs(backend, paragraphs)
+
+    assert len(backend.calls) == 3  # 60 + 60 + 10
+    sentences_per_call = [len(re.findall(r"\bS\d+\.0:", call["prompt"])) for call in backend.calls]
+    assert sentences_per_call == [60, 60, 10]
+    for i in range(130):
+        assert result[i][0][1] == frozenset({"sample_prep"}), f"sentence {i} lost its tag"
+
+
 def test_extract_category_terms_no_candidates_makes_no_llm_call():
     backend = MockLLMBackend(responses=["[]"])
     facts = extract_category_terms(backend, _SAMPLE_PREP_CATEGORY, "Nothing relevant here at all.", locator_prefix="test")
     assert facts == []
     assert backend.calls == []
+
+
+def test_extract_category_terms_chunks_a_dense_category_instead_of_one_giant_call():
+    """Same class of risk as categorize_paragraphs' own confirmed
+    truncation incident (see _MAX_CANDIDATES_PER_TERM_EXTRACTION_CALL's
+    comment), one layer down in Stage 3: a category with many matched
+    candidate quotes must go out as multiple smaller calls, and the
+    cross-batch accumulation into `grouped` (this function's own
+    post-processing runs once, after every batch) must still merge every
+    batch's real values into one final pipe-joined fact -- not just the
+    last batch's."""
+    run_text = " ".join(f"Sample {i} was collected using a sampler labeled SN-{i:03d}." for i in range(1, 46))
+
+    def respond(prompt: str) -> str:
+        # raw_value must be the literal SN-NNN substring so it survives
+        # extract_category_terms' own verbatim-in-quote guard -- the
+        # quote_id -> SN number mapping is recovered from the prompt's own
+        # candidate-quote lines, same as a real model reading them.
+        return json.dumps(
+            [
+                {"field": "samp_collect_device", "raw_value": f"SN-{sn}", "quote_id": qid}
+                for qid, sn in re.findall(r"(Q\d+) \[samp_collect_device\]: Sample \d+ .*?SN-(\d+)", prompt)
+            ]
+        )
+
+    backend = MockLLMBackend(responses=respond)
+    facts = extract_category_terms(backend, _SAMPLE_PREP_CATEGORY, run_text, locator_prefix="test")
+
+    assert len(backend.calls) == 2  # 40 + 5
+    by_field = {f.fact_type_candidate: f for f in facts}
+    values = set(by_field["samp_collect_device"].raw_value.split(" | "))
+    assert values == {f"SN-{i:03d}" for i in range(1, 46)}
 
 
 def test_extract_category_terms_extracts_verbatim_values_and_pipe_joins_conflicts():

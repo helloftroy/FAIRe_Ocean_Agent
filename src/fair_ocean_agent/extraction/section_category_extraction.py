@@ -358,24 +358,62 @@ Omit a sentence entirely if it belongs to none of its paragraph's own candidate 
 """
 
 
+# A real live audit (10.1371/journal.pone.0303937) caught this: one call
+# for the whole paper's worth of candidate sentences (112 here) needed
+# 2443 completion tokens and got silently cut off at 1024 (finish_reason
+# "length"), tagging only 47 of them -- everything past the cutoff,
+# including the sentence naming SILVA_132/FreshTrain for otu_db and the
+# chimera-filtration sentence feeding otu_asv_generation_filtering, was
+# never categorized at all, so nothing downstream in Stage 3 ever saw it
+# as a candidate. Even 2048 (this codebase's usual floor,
+# MIN_LLM_MAX_OUTPUT_TOKENS) still cut off at 92/112 sentences on this
+# same paper; 4096 was the first budget that reached finish_reason
+# "stop" for that one paper -- but a denser or longer paper could still
+# exceed even that, and per an explicit user request to prioritize
+# thoroughness over speed, categorize_paragraphs now implements the
+# "real long-term fix" this comment used to just call out as unfinished:
+# chunking, capped by sentence count (not paragraph count, since that's
+# the actual unit both the prompt and the model's per-item JSON output
+# scale with) rather than one shot for the whole paper. 60 was chosen
+# with real headroom: the confirmed incident's own density (112
+# sentences / 2443 tokens ~= 21.8 completion tokens/sentence) puts a
+# 60-sentence batch at ~1300 tokens against a 4096 budget, over 3x
+# headroom even before accounting for this being one of the more
+# candidate-dense real papers seen. A single paragraph large enough to
+# exceed this alone still goes out as its own (correspondingly larger)
+# batch -- sentences are never split across a paragraph's own boundary,
+# since gated_paragraphs' candidate-category list is per-paragraph, not
+# per-sentence, and splitting mid-paragraph would need that same list
+# repeated (and kept consistent) across whichever batches sentence 1 vs
+# sentence 40 landed in, for no benefit an unmerged paragraph -- these
+# are vanishingly rare in real methods prose -- doesn't already get for
+# free.
+_MAX_SENTENCES_PER_CATEGORIZATION_CALL = 60
+
+
+def _batched_by_sentence_count(
+    indexed: list[tuple[int, list[str], frozenset[str]]], max_sentences: int
+) -> list[list[tuple[int, list[str], frozenset[str]]]]:
+    batches: list[list[tuple[int, list[str], frozenset[str]]]] = []
+    current: list[tuple[int, list[str], frozenset[str]]] = []
+    current_count = 0
+    for item in indexed:
+        _, sentences, _ = item
+        if current and current_count + len(sentences) > max_sentences:
+            batches.append(current)
+            current = []
+            current_count = 0
+        current.append(item)
+        current_count += len(sentences)
+    if current:
+        batches.append(current)
+    return batches
+
+
 def categorize_paragraphs(
     backend: LLMBackend,
     gated_paragraphs: list[tuple[str, frozenset[str]]],
     *,
-    # A real live audit (10.1371/journal.pone.0303937) caught this: one
-    # call for the whole paper's worth of candidate sentences (112 here)
-    # needed 2443 completion tokens and got silently cut off at 1024
-    # (finish_reason "length"), tagging only 47 of them -- everything past
-    # the cutoff, including the sentence naming SILVA_132/FreshTrain for
-    # otu_db and the chimera-filtration sentence feeding
-    # otu_asv_generation_filtering, was never categorized at all, so
-    # nothing downstream in Stage 3 ever saw it as a candidate. Even 2048
-    # (this codebase's usual floor, MIN_LLM_MAX_OUTPUT_TOKENS) still cut
-    # off at 92/112 sentences on this same paper; 4096 was the first budget
-    # that reached finish_reason "stop". A large enough paper could still
-    # exceed even this -- Stage 2's own "one shot for the whole paper"
-    # design has an inherent scaling ceiling that a fixed budget can't
-    # fully close; chunking the batch would be the real long-term fix.
     max_output_tokens: int | None = 4096,
 ) -> dict[int, list[tuple[str, frozenset[str]]]]:
     """Stage 2. `gated_paragraphs` is (paragraph_text, candidate_categories)
@@ -385,9 +423,10 @@ def categorize_paragraphs(
     tagged_sentences}, `paragraph_index` matching `gated_paragraphs`'s own
     position, ready for `group_sentences_into_category_runs`.
 
-    One call for the whole batch (not one per paragraph) -- the
-    efficiency the categorize-then-extract redesign was for in the first
-    place."""
+    One call per _MAX_SENTENCES_PER_CATEGORIZATION_CALL-sized batch (see
+    its own comment for why), not one call for the whole paper -- still
+    far fewer calls than one per paragraph, the efficiency the
+    categorize-then-extract redesign was for in the first place."""
     if not gated_paragraphs:
         return {}
     indexed = [
@@ -398,22 +437,23 @@ def categorize_paragraphs(
     if not indexed:
         return {}
 
-    prompt = _build_categorization_prompt(indexed)
-    parsed, _response = backend.generate_json(
-        prompt,
-        system=(
-            "You categorize methods-text sentences into topic categories using only the listed "
-            "candidate categories per paragraph."
-        ),
-        temperature=0,
-        max_tokens=max_output_tokens,
-    )
-    if parsed is None:
-        raise LLMBackendError(f"{backend.label}: section-category sentence tagging returned invalid JSON after retries")
-
+    valid_category_names = {category.name for category in SECTION_CATEGORIES}
     tags_by_sentence: dict[tuple[int, int], frozenset[str]] = {}
-    if isinstance(parsed, list):
-        valid_category_names = {category.name for category in SECTION_CATEGORIES}
+    for batch in _batched_by_sentence_count(indexed, _MAX_SENTENCES_PER_CATEGORIZATION_CALL):
+        prompt = _build_categorization_prompt(batch)
+        parsed, _response = backend.generate_json(
+            prompt,
+            system=(
+                "You categorize methods-text sentences into topic categories using only the listed "
+                "candidate categories per paragraph."
+            ),
+            temperature=0,
+            max_tokens=max_output_tokens,
+        )
+        if parsed is None:
+            raise LLMBackendError(f"{backend.label}: section-category sentence tagging returned invalid JSON after retries")
+        if not isinstance(parsed, list):
+            continue
         for item in parsed:
             if not isinstance(item, dict):
                 continue
@@ -675,6 +715,18 @@ def _add_missing_boolean_companions_from_method(grouped: dict[str, dict]) -> Non
         grouped[boolean_field] = {"entries": ["1"], "quotes": quotes, "entry_quotes": {"1": quotes}}
 
 
+# Same rationale/precedent as _MAX_SENTENCES_PER_CATEGORIZATION_CALL
+# above (Stage 2's own, confirmed-live version of this same truncation
+# risk): per an explicit user request to prioritize thoroughness over
+# speed, this dense-category call is chunked too, even without its own
+# confirmed incident yet -- "no direct evidence yet of this one
+# truncating" was never a claim that it couldn't, and matches
+# quote_candidates_for_llm_judged_search's own existing max_candidates=40
+# precedent (search_flags.py) for the same "candidate quote judging"
+# call shape.
+_MAX_CANDIDATES_PER_TERM_EXTRACTION_CALL = 40
+
+
 def extract_category_terms(
     backend: LLMBackend,
     category: SectionCategory,
@@ -683,9 +735,7 @@ def extract_category_terms(
     locator_prefix: str,
     # Raised from 1024 to this codebase's usual floor alongside the same
     # truncation bug's more severe Stage 2 instance (see categorize_
-    # paragraphs) -- no direct evidence yet of this one truncating on a
-    # real paper, but a category with a dense run-text is exposed to the
-    # identical risk.
+    # paragraphs).
     max_output_tokens: int | None = MIN_LLM_MAX_OUTPUT_TOKENS,
 ) -> list[RawFactCandidate]:
     """Stage 3 for one category. `run_text` is Stage 2.5's assembled
@@ -698,79 +748,81 @@ def extract_category_terms(
     if not candidates:
         return []
 
-    prompt = _build_term_extraction_prompt(category, candidates)
-    parsed, _response = backend.generate_json(
-        prompt,
-        system=f'You extract FAIRe "{category.label}" facts from supplied quote IDs only.',
-        temperature=0,
-        max_tokens=max_output_tokens,
-    )
-    if parsed is None:
-        raise LLMBackendError(f"{backend.label}: {category.name} term extraction returned invalid JSON after retries")
-    if not isinstance(parsed, list):
-        return []
-
     terms_by_name = {term.native_name: term for term in category.terms if not term.fallback_only}
     candidates_by_id = {c.quote_id: c for c in candidates}
     grouped: dict[str, dict] = {}
-    for item in parsed:
-        if not isinstance(item, dict):
+
+    for batch_start in range(0, len(candidates), _MAX_CANDIDATES_PER_TERM_EXTRACTION_CALL):
+        batch = candidates[batch_start : batch_start + _MAX_CANDIDATES_PER_TERM_EXTRACTION_CALL]
+        prompt = _build_term_extraction_prompt(category, batch)
+        parsed, _response = backend.generate_json(
+            prompt,
+            system=f'You extract FAIRe "{category.label}" facts from supplied quote IDs only.',
+            temperature=0,
+            max_tokens=max_output_tokens,
+        )
+        if parsed is None:
+            raise LLMBackendError(f"{backend.label}: {category.name} term extraction returned invalid JSON after retries")
+        if not isinstance(parsed, list):
             continue
-        field_name = str(item.get("field") or "").strip()
-        value = str(item.get("raw_value") or "").strip()
-        quote_id = str(item.get("quote_id") or "").strip()
-        term = terms_by_name.get(field_name)
-        candidate = candidates_by_id.get(quote_id)
-        if term is None or candidate is None or not value:
-            continue
-        # A real live audit caught the model answering a quote_id with a
-        # field name that quote was never even offered for (e.g. Q002 was
-        # only tagged/candidate-listed for screen_other, but the model
-        # attached its value to min_reads_cutoff instead, since that
-        # value happened to also appear verbatim in the same quote text).
-        # The verbatim guard below only checks the TEXT, not which field
-        # the quote was actually tagged for -- this closes that gap.
-        if field_name not in candidate.term_names:
-            continue
-        if not _valid_sequence_value(field_name, value):
-            continue
-        if not _valid_context_for_amount_field(field_name, candidate.text):
-            continue
-        if not _is_valid_short_numeric_value(field_name, value):
-            continue
-        if field_name.endswith(_BOOLEAN_FIELD_SUFFIX):
-            # A real live audit (10.1371/journal.pone.0303937) caught
-            # this: filter_passive_active_0_1 is a JUDGED classification
-            # ("1"/"0"), not a copied value -- the verbatim check below is
-            # meaningless for it (a single digit character coincidentally
-            # appears in almost any real quote, e.g. a catalog/model
-            # number), and worse, actively harmful here: the one quote
-            # that unambiguously supports "1" ("...connected to
-            # compressed air and an overpressure of 2 bar was applied.")
-            # has no literal "1" anywhere in it, while an unrelated quote
-            # that only names a flowmeter MODEL NUMBER happened to
-            # contain a stray "0" and won by pure chance. Boolean fields
-            # are validated by shape instead (only "0"/"1" survive), with
-            # the actual value chosen after the loop by _resolve_boolean_
-            # field_entries below.
-            if value not in ("0", "1"):
+        for item in parsed:
+            if not isinstance(item, dict):
                 continue
-        # Verbatim-only guard: a prompt instruction alone is never trusted
-        # to be self-enforcing anywhere else in this codebase -- discard
-        # any value that doesn't literally appear in its own cited quote,
-        # rather than trusting the model's self-report of verbatim-ness.
-        elif value.casefold() not in candidate.text.casefold():
-            continue
-        group = grouped.setdefault(field_name, {"entries": [], "quotes": [], "entry_quotes": {}})
-        key = value.casefold()
-        group["entry_quotes"].setdefault(key, [])
-        if candidate.text not in group["entry_quotes"][key]:
-            group["entry_quotes"][key].append(candidate.text)
-        if any(entry.casefold() == key for entry in group["entries"]):
-            continue
-        group["entries"].append(value)
-        if candidate.text not in group["quotes"]:
-            group["quotes"].append(candidate.text)
+            field_name = str(item.get("field") or "").strip()
+            value = str(item.get("raw_value") or "").strip()
+            quote_id = str(item.get("quote_id") or "").strip()
+            term = terms_by_name.get(field_name)
+            candidate = candidates_by_id.get(quote_id)
+            if term is None or candidate is None or not value:
+                continue
+            # A real live audit caught the model answering a quote_id with a
+            # field name that quote was never even offered for (e.g. Q002 was
+            # only tagged/candidate-listed for screen_other, but the model
+            # attached its value to min_reads_cutoff instead, since that
+            # value happened to also appear verbatim in the same quote text).
+            # The verbatim guard below only checks the TEXT, not which field
+            # the quote was actually tagged for -- this closes that gap.
+            if field_name not in candidate.term_names:
+                continue
+            if not _valid_sequence_value(field_name, value):
+                continue
+            if not _valid_context_for_amount_field(field_name, candidate.text):
+                continue
+            if not _is_valid_short_numeric_value(field_name, value):
+                continue
+            if field_name.endswith(_BOOLEAN_FIELD_SUFFIX):
+                # A real live audit (10.1371/journal.pone.0303937) caught
+                # this: filter_passive_active_0_1 is a JUDGED classification
+                # ("1"/"0"), not a copied value -- the verbatim check below is
+                # meaningless for it (a single digit character coincidentally
+                # appears in almost any real quote, e.g. a catalog/model
+                # number), and worse, actively harmful here: the one quote
+                # that unambiguously supports "1" ("...connected to
+                # compressed air and an overpressure of 2 bar was applied.")
+                # has no literal "1" anywhere in it, while an unrelated quote
+                # that only names a flowmeter MODEL NUMBER happened to
+                # contain a stray "0" and won by pure chance. Boolean fields
+                # are validated by shape instead (only "0"/"1" survive), with
+                # the actual value chosen after the loop by _resolve_boolean_
+                # field_entries below.
+                if value not in ("0", "1"):
+                    continue
+            # Verbatim-only guard: a prompt instruction alone is never trusted
+            # to be self-enforcing anywhere else in this codebase -- discard
+            # any value that doesn't literally appear in its own cited quote,
+            # rather than trusting the model's self-report of verbatim-ness.
+            elif value.casefold() not in candidate.text.casefold():
+                continue
+            group = grouped.setdefault(field_name, {"entries": [], "quotes": [], "entry_quotes": {}})
+            key = value.casefold()
+            group["entry_quotes"].setdefault(key, [])
+            if candidate.text not in group["entry_quotes"][key]:
+                group["entry_quotes"][key].append(candidate.text)
+            if any(entry.casefold() == key for entry in group["entries"]):
+                continue
+            group["entries"].append(value)
+            if candidate.text not in group["quotes"]:
+                group["quotes"].append(candidate.text)
 
     _add_missing_amount_companions(grouped)
     if category.name == "sample_prep":
