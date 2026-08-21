@@ -4,11 +4,13 @@ from fair_ocean_agent.database.enums import IdentifierType, RelationshipType, Su
 from fair_ocean_agent.discovery.text_identifiers import (
     extract_dataset_repository_identifiers_from_text,
     extract_repository_identifiers_from_text,
+    resolve_sequence_accessions_from_text,
     resolve_sra_run_accessions_to_studies,
     resolve_sra_sample_accessions_to_studies,
     verify_deterministic_identifier,
     xml_to_text,
 )
+from fair_ocean_agent.discovery.sequence_accessions import find_sequence_accessions
 from fair_ocean_agent.sources.base import RelatedIdentifier, SourceConfig, SourceRecord, SourceRecordNotFoundError
 from fair_ocean_agent.sources.ena import EnaAdapter
 
@@ -27,6 +29,38 @@ def test_extract_repository_identifiers_from_text_finds_accessions_and_dataset_d
     assert (IdentifierType.SRA_STUDY_ACCESSION, "SRP040596") in values
     assert (IdentifierType.DATASET_DOI, "10.1594/pangaea.923577") in values
     assert (IdentifierType.DATASET_DOI, "10.26008/1912/bco-dmo.765432.1") in values
+
+
+def test_find_sequence_accessions_classifies_representative_families():
+    text = (
+        "PRJEB1 PRJDB2 ERA000003 DRA005630 ERP000004 DRP000005 "
+        "ERS000006 DRS000007 ERX000008 DRX000009 ERR000010 DRR000011 "
+        "SAMEA12 SAMD13 GCA_000001405.29 GCF_000001405.40 PRJCA14 SAMC15 CRA16 CRX17 CRR18"
+    )
+
+    found = {(match.identifier_type, match.accession, match.archive) for match in find_sequence_accessions(text)}
+
+    assert (IdentifierType.BIOPROJECT_ACCESSION, "PRJEB1", "ENA") in found
+    assert (IdentifierType.BIOPROJECT_ACCESSION, "PRJDB2", "DDBJ") in found
+    assert (IdentifierType.SRA_SUBMISSION_ACCESSION, "ERA000003", "ENA") in found
+    assert (IdentifierType.SRA_SUBMISSION_ACCESSION, "DRA005630", "DDBJ") in found
+    assert (IdentifierType.SRA_STUDY_ACCESSION, "ERP000004", "ENA") in found
+    assert (IdentifierType.SRA_STUDY_ACCESSION, "DRP000005", "DDBJ") in found
+    assert (IdentifierType.SRA_SAMPLE_ACCESSION, "ERS000006", "ENA") in found
+    assert (IdentifierType.SRA_SAMPLE_ACCESSION, "DRS000007", "DDBJ") in found
+    assert (IdentifierType.SRA_EXPERIMENT_ACCESSION, "ERX000008", "ENA") in found
+    assert (IdentifierType.SRA_EXPERIMENT_ACCESSION, "DRX000009", "DDBJ") in found
+    assert (IdentifierType.SRA_RUN_ACCESSION, "ERR000010", "ENA") in found
+    assert (IdentifierType.SRA_RUN_ACCESSION, "DRR000011", "DDBJ") in found
+    assert (IdentifierType.BIOSAMPLE_ACCESSION, "SAMEA12", "ENA") in found
+    assert (IdentifierType.BIOSAMPLE_ACCESSION, "SAMD13", "DDBJ") in found
+    assert (IdentifierType.ASSEMBLY_ACCESSION, "GCA_000001405.29", "INSDC") in found
+    assert (IdentifierType.ASSEMBLY_ACCESSION, "GCF_000001405.40", "NCBI") in found
+    assert (IdentifierType.CNCB_PROJECT_ACCESSION, "PRJCA14", "CNCB") in found
+    assert (IdentifierType.CNCB_BIOSAMPLE_ACCESSION, "SAMC15", "CNCB") in found
+    assert (IdentifierType.CNCB_STUDY_ACCESSION, "CRA16", "CNCB") in found
+    assert (IdentifierType.CNCB_EXPERIMENT_ACCESSION, "CRX17", "CNCB") in found
+    assert (IdentifierType.CNCB_RUN_ACCESSION, "CRR18", "CNCB") in found
 
 
 def test_extract_repository_identifiers_from_text_ignores_generic_citation_dois():
@@ -182,6 +216,61 @@ def test_resolve_sra_run_accessions_to_studies_expands_run_range(retrieval_confi
     related = resolve_sra_run_accessions_to_studies({"ena": adapter}, text, source_name="paper_scan")
 
     assert len(related) == 1  # all 3 runs resolve to the same parent study -- deduped
+    adapter.close()
+
+
+def test_resolve_sequence_accessions_from_text_resolves_dra_submission_to_parent_study(retrieval_config):
+    text = (
+        "Raw sequencing data have been deposited in GenBank/EMBL/DDBJ "
+        "under accession number DRA005630."
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/filereport")
+        params = dict(request.url.params)
+        assert params.get("accession") == "DRA005630"
+        assert params.get("result") == "read_run"
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "study_accession": "PRJDB12345",
+                    "secondary_study_accession": "DRP004321",
+                    "sample_accession": "SAMD00000001",
+                    "secondary_sample_accession": "DRS00000001",
+                    "experiment_accession": "DRX00000001",
+                    "run_accession": "DRR00000001",
+                    "submission_accession": "DRA005630",
+                },
+                {
+                    "study_accession": "PRJDB12345",
+                    "secondary_study_accession": "DRP004321",
+                    "sample_accession": "SAMD00000002",
+                    "secondary_sample_accession": "DRS00000002",
+                    "experiment_accession": "DRX00000002",
+                    "run_accession": "DRR00000002",
+                    "submission_accession": "DRA005630",
+                },
+            ],
+        )
+
+    adapter = EnaAdapter(
+        SourceConfig(name="ena", enabled=True, base_url="https://www.ebi.ac.uk/ena/portal/api", rate_limit_per_second=1000),
+        retrieval_config,
+        transport=httpx.MockTransport(handler),
+    )
+
+    related = resolve_sequence_accessions_from_text({"ena": adapter}, text, source_name="paper_scan")
+    values = {(item.identifier_type, item.value, item.confidence) for item in related}
+
+    assert (IdentifierType.SRA_SUBMISSION_ACCESSION, "DRA005630", SupportType.STRUCTURED_SOURCE) in values
+    assert (IdentifierType.BIOPROJECT_ACCESSION, "PRJDB12345", SupportType.STRUCTURED_SOURCE) in values
+    assert (IdentifierType.SRA_STUDY_ACCESSION, "DRP004321", SupportType.STRUCTURED_SOURCE) in values
+    assert (IdentifierType.BIOSAMPLE_ACCESSION, "SAMD00000001", SupportType.STRUCTURED_SOURCE) in values
+    assert (IdentifierType.SRA_SAMPLE_ACCESSION, "DRS00000002", SupportType.STRUCTURED_SOURCE) in values
+    assert (IdentifierType.SRA_EXPERIMENT_ACCESSION, "DRX00000001", SupportType.STRUCTURED_SOURCE) in values
+    assert (IdentifierType.SRA_RUN_ACCESSION, "DRR00000002", SupportType.STRUCTURED_SOURCE) in values
+    assert verify_deterministic_identifier({"ena": adapter}, related[0]) is True
     adapter.close()
 
 

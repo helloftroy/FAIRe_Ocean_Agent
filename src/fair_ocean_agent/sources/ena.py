@@ -16,6 +16,7 @@ from fair_ocean_agent.database.enums import (
     IdentifierType,
     RelationshipType,
 )
+from fair_ocean_agent.discovery.sequence_accessions import ResolvedSequenceRecord, accession_archive
 from fair_ocean_agent.identity.identifiers import guess_identifier_type
 from fair_ocean_agent.logging_setup import get_logger
 from fair_ocean_agent.sources.base import (
@@ -39,6 +40,10 @@ RUN_FIELDS = (
     "library_construction_protocol,instrument_platform,instrument_model,"
     "base_count,read_count,fastq_bytes,fastq_md5,fastq_ftp,first_public"
 )
+RESOLUTION_FIELDS = (
+    "study_accession,secondary_study_accession,sample_accession,secondary_sample_accession,"
+    "experiment_accession,run_accession,submission_accession"
+)
 
 # Same rationale as NCBI's MAX_SAMPLES_PER_PROJECT: bound worst-case work per
 # task against very large run collections; truncation is logged, not silent.
@@ -57,6 +62,11 @@ def _fastq_check_url(url: str) -> str:
     if url.startswith("http://") or url.startswith("https://"):
         return url
     return f"https://{url}"
+
+
+def _append_unique(values: list[str], value: str | None) -> None:
+    if value and value not in values:
+        values.append(value)
 
 
 class EnaAdapter(SourceAdapter):
@@ -153,6 +163,76 @@ class EnaAdapter(SourceAdapter):
         if not rows:
             return None
         return rows[0].get("study_accession") or None
+
+    def resolve_sequence_accession(self, accession: str, accession_type: IdentifierType) -> ResolvedSequenceRecord:
+        """Resolve a cited INSDC read accession to the normalized accession
+        hierarchy used by discovery. ENA's filereport accession lookup works
+        for submission-, sample-, experiment-, and run-level identifiers in
+        the mirrored INSDC read archive; the caller can then feed returned
+        BioProject/study identifiers into the existing repository expansion
+        path."""
+        normalized_accession = accession.upper()
+        resolved = ResolvedSequenceRecord(
+            cited_accession=normalized_accession,
+            cited_accession_type=accession_type.value,
+            archive=accession_archive(normalized_accession, accession_type),
+        )
+
+        if accession_type == IdentifierType.ASSEMBLY_ACCESSION:
+            resolved.assembly_accessions.append(normalized_accession)
+            resolved.resolution_status = "assembly_only"
+            resolved.resolution_method = "assembly_accession_detected"
+            return resolved
+
+        rows, _ = self.http.get_json(
+            f"{self.config.base_url}/filereport",
+            params={
+                "accession": normalized_accession,
+                "result": "read_run",
+                "fields": RESOLUTION_FIELDS,
+                "format": "json",
+                "limit": MAX_RUNS_PER_STUDY + 1,
+            },
+        )
+        if not rows:
+            resolved.resolution_status = "accession_found_resolution_failed"
+            resolved.resolution_method = "ena_filereport_read_run"
+            return resolved
+
+        for row in rows[:MAX_RUNS_PER_STUDY]:
+            study_accession = row.get("study_accession")
+            if study_accession:
+                guessed_type = guess_identifier_type(study_accession)
+                if guessed_type == IdentifierType.BIOPROJECT_ACCESSION:
+                    _append_unique(resolved.bioproject_accessions, study_accession)
+                else:
+                    _append_unique(resolved.sra_study_accessions, study_accession)
+            _append_unique(resolved.sra_study_accessions, row.get("secondary_study_accession"))
+            _append_unique(resolved.biosample_accessions, row.get("sample_accession"))
+            _append_unique(resolved.sra_sample_accessions, row.get("secondary_sample_accession"))
+            _append_unique(resolved.sra_experiment_accessions, row.get("experiment_accession"))
+            _append_unique(resolved.sra_run_accessions, row.get("run_accession"))
+            _append_unique(resolved.sra_submission_accessions, row.get("submission_accession"))
+
+        if accession_type == IdentifierType.SRA_SUBMISSION_ACCESSION:
+            _append_unique(resolved.sra_submission_accessions, normalized_accession)
+        elif accession_type == IdentifierType.SRA_STUDY_ACCESSION:
+            _append_unique(resolved.sra_study_accessions, normalized_accession)
+        elif accession_type == IdentifierType.SRA_SAMPLE_ACCESSION:
+            _append_unique(resolved.sra_sample_accessions, normalized_accession)
+        elif accession_type == IdentifierType.SRA_EXPERIMENT_ACCESSION:
+            _append_unique(resolved.sra_experiment_accessions, normalized_accession)
+        elif accession_type == IdentifierType.SRA_RUN_ACCESSION:
+            _append_unique(resolved.sra_run_accessions, normalized_accession)
+
+        resolved.raw_sequence_data_resolved = bool(resolved.sra_run_accessions)
+        resolved.resolution_status = (
+            "raw_sequence_runs_found"
+            if resolved.raw_sequence_data_resolved
+            else "accession_found_resolved_without_runs"
+        )
+        resolved.resolution_method = "ena_filereport_read_run"
+        return resolved
 
     def search(self, query: SearchQuery) -> SearchPage:
         rows, _ = self.http.get_json(

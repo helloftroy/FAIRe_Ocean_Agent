@@ -45,8 +45,7 @@ from fair_ocean_agent.database.models import (
 from fair_ocean_agent.discovery.text_identifiers import (
     extract_dataset_repository_identifiers_from_text,
     extract_repository_identifiers_from_text,
-    resolve_sra_run_accessions_to_studies,
-    resolve_sra_sample_accessions_to_studies,
+    resolve_sequence_accessions_from_text,
     verify_deterministic_identifier,
     xml_to_text,
 )
@@ -636,19 +635,13 @@ def _discover_identifiers_from_fulltext(session: Session, study: Study, adapters
         text = xml_to_text(fulltext_xml)
         source_name = "europe_pmc_fulltext_identifier_scan"
 
-    # Pass 1: deterministic accessions (BioProject, SRA/ENA study-level,
-    # and sample-/run-level resolved up to their parent study). Kept
-    # unconditional -- cheap, deterministic, already the existing behavior.
+    # Pass 1: deterministic sequence/data accessions. Direct BioProjects and
+    # study-level accessions are verified by their native adapters; lower
+    # INSDC levels (DRA/ERA/SRA submissions, samples, experiments, runs) are
+    # first resolved through ENA's mirrored read archive and normalized to the
+    # parent identifiers this pipeline already expands.
     related = extract_repository_identifiers_from_text(text, source_name=source_name)
-    # SRA/ENA/DDBJ *sample*- and *run*-level accessions (SRS/ERS/DRS,
-    # SRR/ERR/DRR, often cited as a range) are common in Data Availability
-    # statements but aren't a repository identifier this pipeline stores
-    # directly -- resolved here to whichever real parent study/BioProject
-    # accession they belong to instead (confirmed live: 10.1073/pnas.2103275118
-    # cites only "SRS7105074 - SRS7105095" and never states its own study
-    # accession).
-    related += resolve_sra_sample_accessions_to_studies(adapters, text, source_name=source_name)
-    related += resolve_sra_run_accessions_to_studies(adapters, text, source_name=source_name)
+    related += resolve_sequence_accessions_from_text(adapters, text, source_name=source_name)
     verified = [r for r in related if verify_deterministic_identifier(adapters, r)]
 
     # Pass 2: general-purpose dataset repositories (Zenodo/Dryad/Figshare/
@@ -887,6 +880,48 @@ def _identifier_values(session: Session, study_id: str, identifier_type: Identif
 def _identifier_value(session: Session, study_id: str, identifier_type: IdentifierType) -> str | None:
     values = _identifier_values(session, study_id, identifier_type)
     return values[0] if values else None
+
+
+_SEQUENCE_SOURCE_IDENTIFIER_TYPES = (
+    IdentifierType.BIOSAMPLE_ACCESSION,
+    IdentifierType.SRA_SUBMISSION_ACCESSION,
+    IdentifierType.SRA_SAMPLE_ACCESSION,
+    IdentifierType.SRA_EXPERIMENT_ACCESSION,
+    IdentifierType.SRA_RUN_ACCESSION,
+    IdentifierType.SRA_ANALYSIS_ACCESSION,
+    IdentifierType.ASSEMBLY_ACCESSION,
+    IdentifierType.CNCB_PROJECT_ACCESSION,
+    IdentifierType.CNCB_BIOSAMPLE_ACCESSION,
+    IdentifierType.CNCB_STUDY_ACCESSION,
+    IdentifierType.CNCB_EXPERIMENT_ACCESSION,
+    IdentifierType.CNCB_RUN_ACCESSION,
+)
+
+
+def _sequence_source_identifier_values(session: Session, study_id: str) -> list[str]:
+    values: list[str] = []
+    for identifier_type in _SEQUENCE_SOURCE_IDENTIFIER_TYPES:
+        values.extend(_identifier_values(session, study_id, identifier_type))
+    return list(dict.fromkeys(values))
+
+
+def _resolve_sequence_source_identifiers(session: Session, study: Study, adapters: dict[str, SourceAdapter]) -> Study:
+    accessions = _sequence_source_identifier_values(session, study.study_id)
+    if not accessions:
+        return study
+    related: list[RelatedIdentifier] = []
+    for accession in accessions:
+        related.extend(
+            resolve_sequence_accessions_from_text(
+                adapters,
+                accession,
+                source_name="external_identifier_sequence_accession_resolution",
+            )
+        )
+    verified = [r for r in related if verify_deterministic_identifier(adapters, r)]
+    if verified:
+        study = _apply_related_identifiers(session, study, verified, "external_identifier_sequence_accession_resolution", source=None)
+    return study
 
 
 def _doi_pdf_filename(doi: str) -> str:
@@ -1134,17 +1169,18 @@ def handle_discover_identifiers(session: Session, task: Task) -> None:
     bioproject_accessions = _identifier_values(session, study.study_id, IdentifierType.BIOPROJECT_ACCESSION)
     ena_accessions = _identifier_values(session, study.study_id, IdentifierType.ENA_STUDY_ACCESSION)
     sra_accessions = _identifier_values(session, study.study_id, IdentifierType.SRA_STUDY_ACCESSION)
+    sequence_source_accessions = _sequence_source_identifier_values(session, study.study_id)
     bcodmo_ids = _identifier_values(session, study.study_id, IdentifierType.BCODMO_DATASET_ID)
     pangaea_ids = _identifier_values(session, study.study_id, IdentifierType.PANGAEA_ID)
     obis_uuids = _identifier_values(session, study.study_id, IdentifierType.OBIS_DATASET_UUID)
     gbif_keys = _identifier_values(session, study.study_id, IdentifierType.GBIF_DATASET_KEY)
 
-    if not any((doi, dataset_dois, bioproject_accessions, ena_accessions, sra_accessions, bcodmo_ids, pangaea_ids, obis_uuids, gbif_keys)):
+    if not any((doi, dataset_dois, bioproject_accessions, ena_accessions, sra_accessions, sequence_source_accessions, bcodmo_ids, pangaea_ids, obis_uuids, gbif_keys)):
         raise NotImplementedError(
             "DISCOVER_IDENTIFIERS currently resolves studies with a DOI "
             "(crossref/europe_pmc/openalex), a dataset DOI "
             "(datacite plus native repository adapters where recognized), "
-            "a BioProject/ENA study accession (ncbi_bioproject/ncbi_biosample/ena), "
+            "a BioProject/ENA study/source sequence accession (ncbi_bioproject/ncbi_biosample/ena), "
             "or a BCO-DMO/PANGAEA/OBIS/GBIF dataset identifier. This study has none of those."
         )
 
@@ -1159,6 +1195,10 @@ def handle_discover_identifiers(session: Session, task: Task) -> None:
         study = _discover_publication_metadata_from_sources(session, study, _build_enabled_adapters(), doi)
 
     dataset_dois = _identifier_values(session, study.study_id, IdentifierType.DATASET_DOI)
+    bioproject_accessions = _identifier_values(session, study.study_id, IdentifierType.BIOPROJECT_ACCESSION)
+    ena_accessions = _identifier_values(session, study.study_id, IdentifierType.ENA_STUDY_ACCESSION)
+    sra_accessions = _identifier_values(session, study.study_id, IdentifierType.SRA_STUDY_ACCESSION)
+    study = _resolve_sequence_source_identifiers(session, study, _build_enabled_adapters())
     bioproject_accessions = _identifier_values(session, study.study_id, IdentifierType.BIOPROJECT_ACCESSION)
     ena_accessions = _identifier_values(session, study.study_id, IdentifierType.ENA_STUDY_ACCESSION)
     sra_accessions = _identifier_values(session, study.study_id, IdentifierType.SRA_STUDY_ACCESSION)

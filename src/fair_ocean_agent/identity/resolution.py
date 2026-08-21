@@ -61,8 +61,19 @@ _DATASET_ACCESSION_IDENTIFIER_TYPES = frozenset(
     {
         IdentifierType.BIOPROJECT_ACCESSION,
         IdentifierType.BIOSAMPLE_ACCESSION,
+        IdentifierType.SRA_SUBMISSION_ACCESSION,
         IdentifierType.SRA_STUDY_ACCESSION,
+        IdentifierType.SRA_SAMPLE_ACCESSION,
+        IdentifierType.SRA_EXPERIMENT_ACCESSION,
+        IdentifierType.SRA_RUN_ACCESSION,
+        IdentifierType.SRA_ANALYSIS_ACCESSION,
         IdentifierType.ENA_STUDY_ACCESSION,
+        IdentifierType.ASSEMBLY_ACCESSION,
+        IdentifierType.CNCB_PROJECT_ACCESSION,
+        IdentifierType.CNCB_BIOSAMPLE_ACCESSION,
+        IdentifierType.CNCB_STUDY_ACCESSION,
+        IdentifierType.CNCB_EXPERIMENT_ACCESSION,
+        IdentifierType.CNCB_RUN_ACCESSION,
     }
 )
 from fair_ocean_agent.logging_setup import get_logger

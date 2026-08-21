@@ -34,11 +34,23 @@ PMCID_PATTERN = re.compile(r"^PMC\d+$", re.IGNORECASE)
 BIOPROJECT_PATTERN = re.compile(r"^PRJ(NA|EB|DB)\d+$", re.IGNORECASE)
 # NCBI BioSample: SAMN (NCBI), SAME (ENA), SAMD (DDBJ)
 BIOSAMPLE_PATTERN = re.compile(r"^SAM(N|E|D)[A-Z]?\d+$", re.IGNORECASE)
+# SRA/ENA/DDBJ accession hierarchy
+SRA_SUBMISSION_PATTERN = re.compile(r"^(SRA|ERA|DRA)\d+$", re.IGNORECASE)
 # SRA/ENA/DDBJ study accessions
 SRA_STUDY_PATTERN = re.compile(r"^(SRP|ERP|DRP)\d+$", re.IGNORECASE)
+SRA_SAMPLE_PATTERN = re.compile(r"^(SRS|ERS|DRS)\d+$", re.IGNORECASE)
+SRA_EXPERIMENT_PATTERN = re.compile(r"^(SRX|ERX|DRX)\d+$", re.IGNORECASE)
+SRA_RUN_PATTERN = re.compile(r"^(SRR|ERR|DRR)\d+$", re.IGNORECASE)
+SRA_ANALYSIS_PATTERN = re.compile(r"^(SRZ|ERZ|DRZ)\d+$", re.IGNORECASE)
 # ENA study accessions overlap with SRA study accessions (ERP...) and also
 # appear as the BioProject-equivalent PRJEB... for ENA-native submissions.
 ENA_STUDY_PATTERN = re.compile(r"^(ERP\d+|PRJEB\d+)$", re.IGNORECASE)
+ASSEMBLY_PATTERN = re.compile(r"^GC[AF]_\d{9}\.\d+$", re.IGNORECASE)
+CNCB_PROJECT_PATTERN = re.compile(r"^PRJCA\d+$", re.IGNORECASE)
+CNCB_BIOSAMPLE_PATTERN = re.compile(r"^SAMC\d+$", re.IGNORECASE)
+CNCB_STUDY_PATTERN = re.compile(r"^CRA\d+$", re.IGNORECASE)
+CNCB_EXPERIMENT_PATTERN = re.compile(r"^CRX\d+$", re.IGNORECASE)
+CNCB_RUN_PATTERN = re.compile(r"^CRR\d+$", re.IGNORECASE)
 
 GBIF_DATASET_KEY_PATTERN = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE
@@ -101,6 +113,13 @@ def normalize_sra_study_accession(raw: str) -> str:
     return value
 
 
+def _normalize_patterned_accession(raw: str, pattern: re.Pattern, label: str) -> str:
+    value = raw.strip().upper()
+    if not pattern.match(value):
+        raise IdentifierError(f"Not a valid {label}: {raw!r}")
+    return value
+
+
 def normalize_ena_study_accession(raw: str) -> str:
     value = raw.strip().upper()
     if not ENA_STUDY_PATTERN.match(value):
@@ -129,8 +148,19 @@ _NORMALIZERS = {
     IdentifierType.PMCID: normalize_pmcid,
     IdentifierType.BIOPROJECT_ACCESSION: normalize_bioproject_accession,
     IdentifierType.BIOSAMPLE_ACCESSION: normalize_biosample_accession,
+    IdentifierType.SRA_SUBMISSION_ACCESSION: lambda raw: _normalize_patterned_accession(raw, SRA_SUBMISSION_PATTERN, "SRA submission accession"),
     IdentifierType.SRA_STUDY_ACCESSION: normalize_sra_study_accession,
+    IdentifierType.SRA_SAMPLE_ACCESSION: lambda raw: _normalize_patterned_accession(raw, SRA_SAMPLE_PATTERN, "SRA sample accession"),
+    IdentifierType.SRA_EXPERIMENT_ACCESSION: lambda raw: _normalize_patterned_accession(raw, SRA_EXPERIMENT_PATTERN, "SRA experiment accession"),
+    IdentifierType.SRA_RUN_ACCESSION: lambda raw: _normalize_patterned_accession(raw, SRA_RUN_PATTERN, "SRA run accession"),
+    IdentifierType.SRA_ANALYSIS_ACCESSION: lambda raw: _normalize_patterned_accession(raw, SRA_ANALYSIS_PATTERN, "SRA analysis accession"),
     IdentifierType.ENA_STUDY_ACCESSION: normalize_ena_study_accession,
+    IdentifierType.ASSEMBLY_ACCESSION: lambda raw: _normalize_patterned_accession(raw, ASSEMBLY_PATTERN, "assembly accession"),
+    IdentifierType.CNCB_PROJECT_ACCESSION: lambda raw: _normalize_patterned_accession(raw, CNCB_PROJECT_PATTERN, "CNCB project accession"),
+    IdentifierType.CNCB_BIOSAMPLE_ACCESSION: lambda raw: _normalize_patterned_accession(raw, CNCB_BIOSAMPLE_PATTERN, "CNCB BioSample accession"),
+    IdentifierType.CNCB_STUDY_ACCESSION: lambda raw: _normalize_patterned_accession(raw, CNCB_STUDY_PATTERN, "CNCB study accession"),
+    IdentifierType.CNCB_EXPERIMENT_ACCESSION: lambda raw: _normalize_patterned_accession(raw, CNCB_EXPERIMENT_PATTERN, "CNCB experiment accession"),
+    IdentifierType.CNCB_RUN_ACCESSION: lambda raw: _normalize_patterned_accession(raw, CNCB_RUN_PATTERN, "CNCB run accession"),
     IdentifierType.GBIF_DATASET_KEY: normalize_gbif_dataset_key,
     IdentifierType.OBIS_DATASET_UUID: normalize_obis_dataset_uuid,
 }
@@ -155,10 +185,21 @@ def guess_identifier_type(raw: str) -> IdentifierType | None:
     IdentifierType.OTHER and flag for review."""
     value = raw.strip()
     checks: list[tuple[IdentifierType, re.Pattern]] = [
+        (IdentifierType.CNCB_PROJECT_ACCESSION, CNCB_PROJECT_PATTERN),
         (IdentifierType.BIOPROJECT_ACCESSION, BIOPROJECT_PATTERN),
+        (IdentifierType.CNCB_BIOSAMPLE_ACCESSION, CNCB_BIOSAMPLE_PATTERN),
         (IdentifierType.BIOSAMPLE_ACCESSION, BIOSAMPLE_PATTERN),
+        (IdentifierType.SRA_SUBMISSION_ACCESSION, SRA_SUBMISSION_PATTERN),
         (IdentifierType.ENA_STUDY_ACCESSION, ENA_STUDY_PATTERN),
         (IdentifierType.SRA_STUDY_ACCESSION, SRA_STUDY_PATTERN),
+        (IdentifierType.SRA_SAMPLE_ACCESSION, SRA_SAMPLE_PATTERN),
+        (IdentifierType.SRA_EXPERIMENT_ACCESSION, SRA_EXPERIMENT_PATTERN),
+        (IdentifierType.SRA_RUN_ACCESSION, SRA_RUN_PATTERN),
+        (IdentifierType.SRA_ANALYSIS_ACCESSION, SRA_ANALYSIS_PATTERN),
+        (IdentifierType.ASSEMBLY_ACCESSION, ASSEMBLY_PATTERN),
+        (IdentifierType.CNCB_STUDY_ACCESSION, CNCB_STUDY_PATTERN),
+        (IdentifierType.CNCB_EXPERIMENT_ACCESSION, CNCB_EXPERIMENT_PATTERN),
+        (IdentifierType.CNCB_RUN_ACCESSION, CNCB_RUN_PATTERN),
         (IdentifierType.PMCID, PMCID_PATTERN),
     ]
     for identifier_type, pattern in checks:
