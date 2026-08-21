@@ -90,3 +90,44 @@ def init_db() -> None:
     from fair_ocean_agent.database.models import Base
 
     Base.metadata.create_all(get_engine())
+
+
+def check_schema_drift() -> dict[str, list[str] | bool]:
+    """Read-only diagnostic: a database that was ever bootstrapped via
+    init_db()/create_all() -- rather than `alembic upgrade head` from the
+    start -- can silently drift from the ORM models, because create_all()
+    only creates tables that don't exist yet; it never adds a column that a
+    later Alembic migration added to an already-existing table. Running
+    `alembic upgrade head` directly against such a database fails outright
+    (it has no alembic_version row, so Alembic tries to replay every
+    migration from the very first one, including CREATE TABLE for tables
+    that already exist -- confirmed live).
+
+    Reports, without changing anything: whether the alembic_version tracking
+    table exists, and for every table that already exists in the live
+    database, which of its current ORM-model columns are missing from it.
+    Does not attempt to fix anything or guess an Alembic revision to stamp
+    -- what to do about any reported drift depends on exactly what's
+    missing, which should be decided deliberately, not automatically,
+    against a database holding real production data."""
+    from sqlalchemy import inspect
+
+    from fair_ocean_agent.database.models import Base
+
+    engine = get_engine()
+    inspector = inspect(engine)
+    existing_tables = set(inspector.get_table_names())
+
+    missing_by_table: dict[str, list[str]] = {}
+    for table in Base.metadata.sorted_tables:
+        if table.name not in existing_tables:
+            continue
+        live_columns = {col["name"] for col in inspector.get_columns(table.name)}
+        missing = [c.name for c in table.columns if c.name not in live_columns]
+        if missing:
+            missing_by_table[table.name] = missing
+
+    return {
+        "alembic_version_table_present": "alembic_version" in existing_tables,
+        "missing_columns_by_table": missing_by_table,
+    }

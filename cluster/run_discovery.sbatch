@@ -46,7 +46,14 @@ SEED_FILE="${SEED_FILE:-cluster/seeds_five_papers.csv}"
 echo "Database: ${FAIR_OCEAN_DATABASE_URL}"
 echo "Seed file: ${SEED_FILE}"
 
-python -m fair_ocean_agent.cli init-db
+# init-db (Base.metadata.create_all) only creates tables that don't exist
+# yet -- it never adds a new column to an already-existing table, so an
+# already-populated database silently stays on its old schema forever
+# after a code update that adds a migration, until something actually
+# breaks on the missing column. alembic upgrade head replaces it here:
+# confirmed live it builds the exact same full schema from nothing on a
+# brand-new database too, so this is safe unconditionally, fresh or not.
+python -m alembic -c alembic.ini upgrade head
 python -m fair_ocean_agent.cli ingest-seeds "${SEED_FILE}"
 python -m fair_ocean_agent.cli enqueue-seed-backfill
 python -m fair_ocean_agent.cli worker --until-empty

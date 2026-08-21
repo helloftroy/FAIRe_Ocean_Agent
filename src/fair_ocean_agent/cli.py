@@ -19,6 +19,7 @@ from rich.table import Table
 from fair_ocean_agent.config import load_benchmark_candidates, load_config
 from fair_ocean_agent.database.enums import TaskType
 from fair_ocean_agent.database.models import ValidationResult, WorkflowRun
+from fair_ocean_agent.database.session import check_schema_drift as _check_schema_drift
 from fair_ocean_agent.database.session import init_db as _init_db
 from fair_ocean_agent.database.session import session_scope
 from fair_ocean_agent.discovery.seed_loader import enqueue_seed_backfill, ingest_seed_file
@@ -56,6 +57,38 @@ def init_db_command() -> None:
     schema changes are tracked as migrations."""
     _init_db()
     console.print("[green]Database initialized.[/green]")
+
+
+@app.command("check-schema-drift")
+def check_schema_drift_command() -> None:
+    """Read-only: report whether this database was ever fully brought up to
+    date via `alembic upgrade head`, and if not, exactly which columns
+    (added by a migration to an already-existing table, which init-db's
+    create_all() can never backfill) are missing from it right now. Changes
+    nothing -- safe to run against a real, populated database at any time."""
+    report = _check_schema_drift()
+    if report["alembic_version_table_present"] and not report["missing_columns_by_table"]:
+        console.print("[green]No drift detected: alembic_version is present and every table has all current columns.[/green]")
+        console.print("`alembic upgrade head` is safe to run directly.")
+        return
+
+    if not report["alembic_version_table_present"]:
+        console.print("[yellow]No alembic_version table -- this database has never been Alembic-managed "
+                       "(likely bootstrapped via init-db only).[/yellow]")
+
+    missing = report["missing_columns_by_table"]
+    if missing:
+        console.print("[yellow]Columns present in the ORM models but missing from this database:[/yellow]")
+        for table_name, columns in missing.items():
+            console.print(f"  {table_name}: {', '.join(columns)}")
+    else:
+        console.print("[green]No missing columns detected on any existing table.[/green]")
+
+    console.print(
+        "\n[bold]Do not run `alembic upgrade head` directly yet[/bold] -- without an "
+        "alembic_version row it will try to CREATE TABLE for tables that already "
+        "exist and fail. Report this output before applying a fix."
+    )
 
 
 @app.command("ingest-seeds")
@@ -170,6 +203,40 @@ def enqueue_faire_completeness_backfill_command() -> None:
     with session_scope() as session:
         count = fair_ocean_agent.workflow.validation_handlers.enqueue_faire_completeness_backfill(session)
     console.print(f"Queued VALIDATE_FAIRE_COMPLETENESS for {count} stud(y/ies).")
+
+
+@app.command("enqueue-full-rediscovery-backfill")
+def enqueue_full_rediscovery_backfill_command() -> None:
+    """Re-run DISCOVER_IDENTIFIERS for every candidate study, on demand --
+    not just ones with a failed/manual-review task. The concrete case this
+    catches: a newly-enabled adapter (or newly-supported identifier type,
+    e.g. Zenodo/Dryad/Figshare/OSF, SRA run-level accessions, the
+    open-access PDF auto-fetch) that already-discovered studies were never
+    checked against -- DISCOVER_IDENTIFIERS's own idempotency otherwise
+    means a study already discovered once is never revisited, even after
+    the discovery logic itself gains new capability. `weekly-update` also
+    runs this automatically every quarterly_full_rediscovery_interval_days
+    (config.py's SchedulingConfig); this command is for triggering it
+    immediately instead of waiting for that cadence. Excludes any study
+    already marked data_availability_status=not_accessible (give-up
+    tracking, see workflow/handlers.py's _has_accessible_sequence_data_signal)
+    -- if the last full check found nothing accessible anywhere, a newly-
+    enabled adapter is exactly the kind of thing that verdict should be
+    re-checked against, so consider clearing that flag for studies you
+    specifically want re-examined rather than skipped."""
+    from fair_ocean_agent.clock import utcnow
+    from fair_ocean_agent.database.enums import WorkflowRunStatus
+    from fair_ocean_agent.scheduling.rediscovery import RUN_TYPE, enqueue_full_rediscovery
+
+    with session_scope() as session:
+        run = WorkflowRun(run_type=RUN_TYPE, status=WorkflowRunStatus.RUNNING.value)
+        session.add(run)
+        session.flush()
+        count = enqueue_full_rediscovery(session, run.run_id)
+        run.candidates_found = count
+        run.status = WorkflowRunStatus.COMPLETED.value
+        run.ended_at = utcnow()
+    console.print(f"Queued DISCOVER_IDENTIFIERS for {count} candidate stud(y/ies).")
 
 
 @app.command("enqueue-citation-rediscovery-backfill")
