@@ -24,13 +24,16 @@ Usage:
 """
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy import select
 
-from fair_ocean_agent.database.enums import CanonicalStatus
+from fair_ocean_agent.database.enums import CanonicalStatus, IdentifierType
 from fair_ocean_agent.database.models import Study
 from fair_ocean_agent.database.session import session_scope
 from fair_ocean_agent.workflow.handlers import _auto_fetch_open_access_pdf, _build_enabled_adapters, _local_pdf_path_for_study, _identifier_value
-from fair_ocean_agent.database.enums import IdentifierType
+
+logger = logging.getLogger(__name__)
 
 
 def main() -> None:
@@ -38,6 +41,7 @@ def main() -> None:
     fetched = 0
     already_covered = 0
     checked = 0
+    errored = 0
 
     with session_scope() as session:
         studies = session.scalars(
@@ -50,7 +54,19 @@ def main() -> None:
                 already_covered += 1
                 continue
             checked += 1
-            _auto_fetch_open_access_pdf(session, study, adapters)
+            try:
+                _auto_fetch_open_access_pdf(session, study, adapters)
+            except Exception as exc:
+                # A sustained 429/5xx that outlasts RateLimitedClient's own
+                # retry budget (e.g. from running this alongside another
+                # script also hitting OpenAlex -- confirmed live, two
+                # independent 5/sec limiters can combine past what the
+                # unauthenticated pool tolerates) must not take down the
+                # rest of a multi-thousand-study run. Skip this one study
+                # and keep going; it'll just get picked up again next run.
+                errored += 1
+                logger.warning("auto-fetch failed for %s (%s): %s", study.study_id, study.title, exc)
+                continue
             if _local_pdf_path_for_study(session, study) is not None:
                 fetched += 1
                 print(f"fetched: {study.title or study.study_id}")
@@ -59,7 +75,8 @@ def main() -> None:
     print(f"Already covered (PMCID or existing PDF): {already_covered}")
     print(f"Checked (no PMCID, no PDF):               {checked}")
     print(f"Newly auto-fetched:                        {fetched}")
-    print(f"Still need a manual PDF:                    {checked - fetched}")
+    print(f"Errored (network/rate-limit, safe to re-run): {errored}")
+    print(f"Still need a manual PDF:                    {checked - fetched - errored}")
 
 
 if __name__ == "__main__":
