@@ -19,6 +19,7 @@ data/cache/*
 !data/cache/.gitkeep
 data/exports/*
 !data/exports/.gitkeep
+data/auto_fetched_pdfs/
 
 standards/compiled/*
 !standards/compiled/.gitkeep

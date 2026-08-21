@@ -194,6 +194,22 @@ works exactly as before for a quick one-paper test -- it's checked first
 and wins over `FAIR_OCEAN_LOCAL_PDF_DIR` whenever both are set, so don't
 leave it set by accident in a shell you're about to run a real batch from.
 
+**Automatic fetch for genuinely open-access papers.** Before falling back
+to "no PDF, no route" for a study with no PMCID, `run_discovery.sbatch`
+also tries OpenAlex's own `best_oa_location.pdf_url` (already fetched as
+part of ordinary discovery) and downloads it automatically if OpenAlex
+marks the paper truly open-access -- using this project's own honestly-
+identifying User-Agent, never a spoofed browser one. This works well for
+papers hosted somewhere permissive (PLOS, Frontiers, Nature, preprint
+servers); it does **not** get you out of downloading anything from a
+publisher that blocks plain automated requests even to open-access
+content (confirmed live: Wiley 403s these) -- those still need a manual
+download exactly as before. Nothing to configure: successes are saved
+straight into `FAIR_OCEAN_LOCAL_PDF_DIR` (or `data/auto_fetched_pdfs/` if
+that's not set) using the same DOI-based filename, so a paper it
+auto-fetches is indistinguishable from one you supplied by hand, and one
+you already supplied by hand is never re-fetched.
+
 ## Troubleshooting
 
 - **`pip install vllm` (or anything else) fails with "Disk quota

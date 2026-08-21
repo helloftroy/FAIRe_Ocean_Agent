@@ -12,11 +12,13 @@ import os
 from pathlib import Path
 from typing import Callable
 
+import httpx
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from fair_ocean_agent.clock import utcnow
-from fair_ocean_agent.config import MIN_LLM_MAX_OUTPUT_TOKENS, load_config, load_sources_config
+
+from fair_ocean_agent.config import MIN_LLM_MAX_OUTPUT_TOKENS, REPO_ROOT, load_config, load_sources_config
 from fair_ocean_agent.database.enums import (
     AccessStatus,
     CanonicalStatus,
@@ -890,18 +892,33 @@ def _doi_pdf_filename(doi: str) -> str:
     return doi.strip().lower().replace("/", "_") + ".pdf"
 
 
+_AUTO_FETCH_PDF_DEFAULT_DIR = REPO_ROOT / "data" / "auto_fetched_pdfs"
+
+
+def _pdf_lookup_dir() -> Path:
+    """The one place "where do per-study PDFs live" is decided -- shared by
+    the lookup (_local_pdf_path_for_study) and the auto-fetch save path
+    (_auto_fetch_open_access_pdf) so they can never disagree. LOCAL_PDF_DIR_ENV
+    when set (a real, user-managed directory -- manually-supplied PDFs and
+    auto-fetched ones live side by side there); otherwise a default
+    directory inside the repo's own data/, so auto-fetch works out of the
+    box with no setup even when the user hasn't configured a PDF directory
+    at all."""
+    configured = os.environ.get(LOCAL_PDF_DIR_ENV)
+    return Path(configured) if configured else _AUTO_FETCH_PDF_DEFAULT_DIR
+
+
 def _local_pdf_path_for_study(session: Session, study: Study) -> Path | None:
     """LOCAL_PDF_PATH_ENV (a single global override) always wins when set,
     same one-paper-per-run behavior as before -- a deliberately-set path
     that doesn't exist is a real configuration mistake, not "no PDF
     supplied for this study," so it still raises rather than silently
-    falling through. Otherwise, LOCAL_PDF_DIR_ENV is checked for a file
-    named after this study's own DOI -- see that env var's own comment
-    above for the exact naming convention; NOT finding a match there is
-    the ordinary, expected case for a paper with no supplied PDF, so it
-    quietly returns None rather than raising. Neither env var set, or
-    this study has no DOI: None, callers fall back to their normal Europe
-    PMC fetch."""
+    falling through. Otherwise, _pdf_lookup_dir() is checked for a file
+    named after this study's own DOI -- see LOCAL_PDF_DIR_ENV's own
+    comment above for the exact naming convention; NOT finding a match
+    there is the ordinary, expected case for a paper with no supplied PDF,
+    so it quietly returns None rather than raising. This study has no DOI:
+    None, callers fall back to their normal Europe PMC fetch."""
     global_override = os.environ.get(LOCAL_PDF_PATH_ENV)
     if global_override:
         pdf_path = Path(global_override)
@@ -909,14 +926,77 @@ def _local_pdf_path_for_study(session: Session, study: Study) -> Path | None:
             raise SourceRecordNotFoundError(f"local PDF does not exist: {pdf_path}")
         return pdf_path
 
-    pdf_dir = os.environ.get(LOCAL_PDF_DIR_ENV)
-    if not pdf_dir:
-        return None
     doi = _identifier_value(session, study.study_id, IdentifierType.DOI)
     if not doi:
         return None
-    candidate = Path(pdf_dir) / _doi_pdf_filename(doi)
+    candidate = _pdf_lookup_dir() / _doi_pdf_filename(doi)
     return candidate if candidate.exists() else None
+
+
+def _auto_fetch_open_access_pdf(session: Session, study: Study, adapters: dict[str, SourceAdapter]) -> None:
+    """Per an explicit user request: many papers with no PMCID at all
+    (never deposited in PMC, so no route through the normal discovery
+    path -- see _local_pdf_path_for_study's own docstring) are still
+    genuinely, legitimately open-access -- OpenAlex's own
+    best_oa_location.pdf_url, already fetched as part of ordinary
+    discovery, points straight at a real, freely-downloadable copy for
+    many of them. This downloads and saves those, using this project's own
+    honestly-identifying User-Agent (never a spoofed browser one -- a
+    publisher's bot-detection block is a real, deliberate access control,
+    not a bug to route around, confirmed live: Wiley 403s a plain request
+    even to a paper OpenAlex itself marks fully open-access). Whatever
+    gets blocked or isn't really open just stays exactly as manual as
+    before; this only ever adds coverage, never replaces the working
+    Europe PMC path for a study that already has one.
+
+    Only attempted for a study with no PMCID -- a study that already has
+    working Europe PMC access shouldn't have that (more structured, XML-
+    based) path silently swapped out for a PDF-based one."""
+    if _identifier_value(session, study.study_id, IdentifierType.PMCID) is not None:
+        return
+    if _local_pdf_path_for_study(session, study) is not None:
+        return  # already have one -- manually supplied, or auto-fetched by an earlier run
+    doi = _identifier_value(session, study.study_id, IdentifierType.DOI)
+    if not doi:
+        return
+    openalex = adapters.get("openalex")
+    if not isinstance(openalex, OpenAlexAdapter):
+        return
+
+    try:
+        record = openalex.fetch_record(doi)
+    except SourceRecordNotFoundError:
+        return
+    best_oa = record.raw.get("best_oa_location") or {}
+    pdf_url = best_oa.get("pdf_url")
+    if not (best_oa.get("is_oa") and pdf_url):
+        return
+
+    retrieval_config = load_config().retrieval
+    fetch_client = RateLimitedClient("open_access_pdf_fetch", retrieval_config, rate_limit_per_second=1)
+    try:
+        content, _from_cache = fetch_client.get_binary(pdf_url)
+    except SourceRecordNotFoundError:
+        logger.info("open-access PDF URL for %s 404s: %s", doi, pdf_url)
+        return
+    except httpx.HTTPError as exc:
+        # A publisher's own bot-detection block (confirmed live: Wiley
+        # 403s a plain request to a paper OpenAlex itself marks fully
+        # open-access) -- not retried, not routed around, just skipped;
+        # this paper stays exactly as manual as it would have been anyway.
+        logger.info("open-access PDF fetch for %s was blocked or failed (%s): %s", doi, exc, pdf_url)
+        return
+    finally:
+        fetch_client.close()
+    if not content.startswith(b"%PDF"):
+        logger.info("open-access URL for %s did not return real PDF content (likely an access-denied page): %s", doi, pdf_url)
+        return
+
+    pdf_dir = _pdf_lookup_dir()
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    target_path = pdf_dir / _doi_pdf_filename(doi)
+    target_path.write_bytes(content)
+    logger.info("auto-fetched open-access PDF for %s -> %s", doi, target_path)
 
 
 def _fetch_and_persist_repository_record(
@@ -1072,6 +1152,7 @@ def handle_discover_identifiers(session: Session, task: Task) -> None:
 
     if doi:
         study = _resolve_publication_sources(session, study, doi)
+        _auto_fetch_open_access_pdf(session, study, _build_enabled_adapters())
         study = _discover_identifiers_from_fulltext(session, study, _build_enabled_adapters())
         study = _discover_supplements_from_fulltext(session, study, _build_enabled_adapters())
         study = _discover_publication_metadata_from_sources(session, study, _build_enabled_adapters(), doi)
