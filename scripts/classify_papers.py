@@ -94,6 +94,15 @@ _SEQUENCE_SIGNAL_RE = re.compile(
 )
 MAX_QUOTE_CHARS = 500
 MAX_SEARCH_WINDOW = 2500
+# PDF extraction (garbled/rotated text especially) can surface stray control
+# characters that Python's csv writer refuses to quote at all ("need to
+# escape, but no escapechar set") -- confirmed live, so every quote is
+# sanitized before it's ever put in a row, not just at CSV-write time.
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+def _sanitize(text: str) -> str:
+    return _CONTROL_CHAR_RE.sub("", text)
 
 
 def _extract_data_availability_quote(text: str) -> str | None:
@@ -105,7 +114,7 @@ def _extract_data_availability_quote(text: str) -> str | None:
     quote = (window[: cutoff.start()] if cutoff else window).strip(" .:\n\t")
     if not quote:
         return None
-    return quote[:MAX_QUOTE_CHARS]
+    return _sanitize(quote[:MAX_QUOTE_CHARS])
 
 
 def _fetch_cached_fulltext(session, study: Study, adapters: dict) -> tuple[str | None, bool]:
@@ -181,7 +190,7 @@ def classify(session, adapters: dict) -> tuple[list[dict], list[dict], list[dict
                     {
                         "study_id": study.study_id,
                         "doi": doi or "",
-                        "title": study.title or "",
+                        "title": _sanitize(study.title or ""),
                         "sample_count": sample_count,
                         "reason": "has confirmed sample data but no PMCID and no local/auto-fetched PDF on file",
                     }
@@ -194,7 +203,7 @@ def classify(session, adapters: dict) -> tuple[list[dict], list[dict], list[dict
                 {
                     "study_id": study.study_id,
                     "doi": doi or "",
-                    "title": study.title or "",
+                    "title": _sanitize(study.title or ""),
                     "data_availability_quote": "",
                     "note": "full text never reachable (no PMCID, no local/auto-fetched PDF) -- cannot determine",
                 }
@@ -207,7 +216,7 @@ def classify(session, adapters: dict) -> tuple[list[dict], list[dict], list[dict
                 {
                     "study_id": study.study_id,
                     "doi": doi or "",
-                    "title": study.title or "",
+                    "title": _sanitize(study.title or ""),
                     "data_availability_quote": quote,
                     "note": "mentions sequencing/repository language but the pipeline resolved no samples",
                 }
@@ -217,7 +226,7 @@ def classify(session, adapters: dict) -> tuple[list[dict], list[dict], list[dict
                 {
                     "study_id": study.study_id,
                     "doi": doi or "",
-                    "title": study.title or "",
+                    "title": _sanitize(study.title or ""),
                     "data_availability_quote": quote,
                     "reason": "has a Data Availability statement but it doesn't mention sequence data",
                 }
@@ -227,7 +236,7 @@ def classify(session, adapters: dict) -> tuple[list[dict], list[dict], list[dict
                 {
                     "study_id": study.study_id,
                     "doi": doi or "",
-                    "title": study.title or "",
+                    "title": _sanitize(study.title or ""),
                     "data_availability_quote": "",
                     "reason": "no Data Availability statement found in full text",
                 }

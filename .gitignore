@@ -20,6 +20,7 @@ data/cache/*
 data/exports/*
 !data/exports/.gitkeep
 data/auto_fetched_pdfs/
+data/PDFs/
 data/paper_classification/
 
 standards/compiled/*
