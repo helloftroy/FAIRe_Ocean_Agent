@@ -137,10 +137,11 @@ def ingest_seeds_command(
         results = ingest_seed_file(session, path)
 
     created = sum(1 for r in results if r.created)
-    merged = len(results) - created
+    skipped = sum(1 for r in results if r.skipped)
+    merged = len(results) - created - skipped
     errors = sum(len(r.identifier_errors) for r in results)
 
-    console.print(f"Ingested {len(results)} seed rows: {created} new studies, {merged} merged.")
+    console.print(f"Ingested {len(results)} seed rows: {created} new studies, {merged} merged, {skipped} skipped (excluded DOI).")
     if errors:
         console.print(f"[yellow]{errors} identifier(s) failed normalization (see below).[/yellow]")
         for r in results:

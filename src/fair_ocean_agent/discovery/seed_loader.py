@@ -30,6 +30,7 @@ from fair_ocean_agent.database.enums import (
     TaskType,
 )
 from fair_ocean_agent.database.models import ExternalIdentifier, RawFact, Study
+from fair_ocean_agent.discovery.exclusions import load_excluded_dois
 from fair_ocean_agent.identity.deduplication import find_existing_study_by_any_identifier
 from fair_ocean_agent.identity.identifiers import IdentifierError, normalize_identifier
 from fair_ocean_agent.workflow.task_queue import enqueue_task
@@ -109,9 +110,10 @@ class SeedRow(BaseModel):
 @dataclass
 class SeedIngestResult:
     seed_id: str | None
-    study_id: str
+    study_id: str | None
     created: bool
     identifier_errors: list[str] = field(default_factory=list)
+    skipped: bool = False
 
 
 def load_seed_rows(path: str | Path) -> list[SeedRow]:
@@ -133,6 +135,14 @@ def load_seed_rows(path: str | Path) -> list[SeedRow]:
 
 
 def ingest_seed_row(session: Session, row: SeedRow) -> SeedIngestResult:
+    if row.doi:
+        try:
+            normalized_doi = normalize_identifier(IdentifierType.DOI, row.doi)
+        except IdentifierError:
+            normalized_doi = None
+        if normalized_doi is not None and normalized_doi in load_excluded_dois():
+            return SeedIngestResult(seed_id=row.seed_id, study_id=None, created=False, skipped=True)
+
     candidates = row.identifier_candidates()
     seed_payload = row.model_dump_json()
 
