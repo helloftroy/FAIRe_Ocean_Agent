@@ -2,7 +2,9 @@
 importing this module never touches the filesystem or network."""
 from __future__ import annotations
 
+import shutil
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
@@ -131,3 +133,50 @@ def check_schema_drift() -> dict[str, list[str] | bool]:
         "alembic_version_table_present": "alembic_version" in existing_tables,
         "missing_columns_by_table": missing_by_table,
     }
+
+
+def reset_database(*, backup: bool = True) -> Path | None:
+    """DESTRUCTIVE: drops every table -- including alembic_version -- and
+    rebuilds an empty schema via `alembic upgrade head`, leaving zero
+    studies/entities/facts/tasks. Intended only for active development/
+    debugging, where re-running every seed paper from scratch against
+    current code is more useful than debugging one study's stale state at
+    a time (state accumulated incrementally across many discovery-logic
+    changes is otherwise very hard to reason about in isolation).
+
+    Never touches data/cache/ (the on-disk HTTP response cache) or any
+    local/auto-fetched PDFs -- those hold real upstream API/publisher
+    content, not pipeline-derived state, so there's nothing stale about
+    them to reset; re-ingesting from a fresh database will still be fast
+    because those responses are still cached.
+
+    For a sqlite:// database, copies the on-disk file to a timestamped
+    `<name>.bak.<UTC-timestamp>` sibling before dropping anything, unless
+    backup=False, and returns that path. For any other backend, backup is
+    the caller's own responsibility (e.g. a managed Postgres snapshot) and
+    this always returns None -- there's no single on-disk file to copy."""
+    from alembic import command
+    from alembic.config import Config
+    from sqlalchemy import inspect, text
+
+    from fair_ocean_agent.database.models import Base
+
+    engine = get_engine()
+    backup_path: Path | None = None
+    if backup and engine.url.get_backend_name() == "sqlite" and engine.url.database:
+        db_path = Path(engine.url.database)
+        if db_path.exists():
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            backup_path = db_path.with_name(f"{db_path.name}.bak.{timestamp}")
+            shutil.copy2(db_path, backup_path)
+
+    inspector = inspect(engine)
+    if "alembic_version" in inspector.get_table_names():
+        with engine.begin() as conn:
+            conn.execute(text("DROP TABLE alembic_version"))
+    Base.metadata.drop_all(engine)
+
+    alembic_cfg = Config(str(REPO_ROOT / "alembic.ini"))
+    command.upgrade(alembic_cfg, "head")
+
+    return backup_path

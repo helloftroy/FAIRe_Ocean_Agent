@@ -21,6 +21,7 @@ from fair_ocean_agent.database.enums import TaskType
 from fair_ocean_agent.database.models import ValidationResult, WorkflowRun
 from fair_ocean_agent.database.session import check_schema_drift as _check_schema_drift
 from fair_ocean_agent.database.session import init_db as _init_db
+from fair_ocean_agent.database.session import reset_database as _reset_database
 from fair_ocean_agent.database.session import session_scope
 from fair_ocean_agent.discovery.seed_loader import enqueue_seed_backfill, ingest_seed_file
 from fair_ocean_agent.exports.faire import export_faire
@@ -89,6 +90,43 @@ def check_schema_drift_command() -> None:
         "alembic_version row it will try to CREATE TABLE for tables that already "
         "exist and fail. Report this output before applying a fix."
     )
+
+
+@app.command("reset-database")
+def reset_database_command(
+    yes: bool = typer.Option(
+        False, "--yes", help="Required: confirms permanent erasure of every study/entity/fact/task in this database."
+    ),
+    no_backup: bool = typer.Option(
+        False, "--no-backup", help="Skip the automatic timestamped backup copy (sqlite only)."
+    ),
+) -> None:
+    """DESTRUCTIVE. Drops every table in this database and rebuilds an
+    empty schema via `alembic upgrade head` -- every study, entity, fact,
+    source, and task is gone. For active development/debugging only: lets
+    you re-run every seed paper from scratch against current code instead
+    of debugging one study's state, accumulated across many discovery-logic
+    changes, at a time.
+
+    Does NOT touch data/cache/ (the on-disk HTTP response cache) or any
+    local/auto-fetched PDFs -- re-ingesting afterward stays fast because
+    those upstream responses are still cached; only the derived database
+    state resets. For sqlite, makes a timestamped backup file first unless
+    --no-backup is passed.
+
+    After this completes: `ingest-seeds <file>`, `enqueue-seed-backfill`,
+    `worker --until-empty`, same as any first run."""
+    if not yes:
+        console.print(
+            "[red]Refusing to run without --yes.[/red] This permanently erases every "
+            "study, entity, fact, source, and task in the database."
+        )
+        raise typer.Exit(1)
+    backup_path = _reset_database(backup=not no_backup)
+    if backup_path is not None:
+        console.print(f"[green]Backed up existing database to {backup_path}[/green]")
+    console.print("[green]Database reset: schema rebuilt via alembic upgrade head, all data erased.[/green]")
+    console.print("Next: ingest-seeds <file>, enqueue-seed-backfill, worker --until-empty")
 
 
 @app.command("ingest-seeds")
