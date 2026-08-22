@@ -26,6 +26,46 @@ Both jobs must share the same filesystem (home or scratch directory) for
 this to work -- normal on HPC, since `data/fair_ocean.db` and
 `data/cache/` need to be visible to both.
 
+## Running discovery on your Mac first, then syncing to the cluster
+
+`run_discovery.sbatch` doesn't have to be where discovery happens for the
+first time -- `ingest-seeds`, `enqueue-*-backfill`, and `worker` are all
+idempotent against whatever database they're pointed at (see
+Troubleshooting below), so running the non-LLM stages locally first
+(`python -m fair_ocean_agent.cli worker --until-empty --no-llm`, plus
+`scripts/auto_fetch_missing_pdfs.py` for extra PDF coverage) and then
+copying that database up is equivalent to running `run_discovery.sbatch`
+cold, just with the network calls made from your Mac instead of the
+cluster's service partition.
+
+This matters because your Mac and the cluster are two separate
+filesystems with nothing shared but whatever's in the seed CSV -- without
+syncing the database itself, `run_discovery.sbatch` has no way to know a
+paper's DOI/PDF/samples were already resolved locally, and will
+re-resolve them from scratch, hitting OpenAlex/Crossref/NCBI/ENA a second
+time for the same papers. Syncing first avoids that:
+
+```bash
+# On your Mac, once your local worker/auto-fetch run has finished:
+./cluster/sync_local_db_to_cluster.sh <cluster> /scratch/morrill/users/hmp278/FAIRe_Ocean_Agent
+```
+
+Then submit `run_discovery.sbatch` as usual -- it'll skip every study the
+Mac already resolved and only do network work for what's new or still
+pending (a study added since your last sync, a retry, citation-expansion
+fanout the Mac's own `--no-llm` run already triggered but didn't finish).
+There's no need to also run `ingest-seeds`/`enqueue-seed-backfill`
+manually first; `run_discovery.sbatch` already does both, and both are
+safe to run again against an already-populated database.
+
+If you'd rather not manage a second discovery pass at all, skip this and
+just run `run_discovery.sbatch` cold as in the rest of this doc -- it's
+the simpler default. This is worth it specifically when you want to
+inspect or filter results locally before committing cluster time (e.g.
+`scripts/export_hpc_ready_seeds.py`'s "only studies with confirmed real
+samples and a PMCID/PDF" filter needs the discovery to have actually
+happened somewhere first).
+
 ## One-time setup
 
 ```bash
