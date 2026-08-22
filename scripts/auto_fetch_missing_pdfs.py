@@ -24,6 +24,7 @@ Usage:
 """
 from __future__ import annotations
 
+import argparse
 import logging
 
 from sqlalchemy import select
@@ -32,16 +33,36 @@ from fair_ocean_agent.database.enums import CanonicalStatus, IdentifierType
 from fair_ocean_agent.database.models import Study
 from fair_ocean_agent.database.session import session_scope
 from fair_ocean_agent.workflow.handlers import _auto_fetch_open_access_pdf, _build_enabled_adapters, _local_pdf_path_for_study, _identifier_value
+from fair_ocean_agent.workflow.worker import DEFAULT_MAX_CONSECUTIVE_RATE_LIMIT_FAILURES, is_rate_limit_error
 
 logger = logging.getLogger(__name__)
 
 
 def main() -> None:
+    # Real live incident: this script (and the task-queue worker
+    # separately -- see workflow/worker.py's own circuit breaker) kept
+    # running against a queue thousands deep while OpenAlex was actively
+    # rate-limiting/blocking this machine, one 429 after another, for as
+    # long as the loop had studies left to check. Same fix, same default
+    # threshold, here too: stop the whole run (not just skip one study)
+    # once too many CONSECUTIVE checks in a row failed with 429.
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument(
+        "--max-consecutive-429s",
+        type=int,
+        default=DEFAULT_MAX_CONSECUTIVE_RATE_LIMIT_FAILURES,
+        help="Stop the whole run once this many studies in a row fail with 429 Too Many Requests. "
+        "0 disables this (never stop early).",
+    )
+    args = parser.parse_args()
+
     adapters = _build_enabled_adapters()
     fetched = 0
     already_covered = 0
     checked = 0
     errored = 0
+    consecutive_429s = 0
+    stopped_reason: str | None = None
 
     with session_scope() as session:
         studies = session.scalars(
@@ -66,7 +87,17 @@ def main() -> None:
                 # and keep going; it'll just get picked up again next run.
                 errored += 1
                 logger.warning("auto-fetch failed for %s (%s): %s", study.study_id, study.title, exc)
+                consecutive_429s = consecutive_429s + 1 if is_rate_limit_error(exc) else 0
+                if args.max_consecutive_429s and consecutive_429s >= args.max_consecutive_429s:
+                    stopped_reason = (
+                        f"{consecutive_429s} consecutive studies failed with 429 Too Many Requests -- "
+                        "stopping to avoid hammering a source that's actively rate-limiting/blocking "
+                        "this machine. Wait a while before retrying."
+                    )
+                    logger.warning(stopped_reason)
+                    break
                 continue
+            consecutive_429s = 0
             if _local_pdf_path_for_study(session, study) is not None:
                 fetched += 1
                 print(f"fetched: {study.title or study.study_id}")
@@ -77,6 +108,8 @@ def main() -> None:
     print(f"Newly auto-fetched:                        {fetched}")
     print(f"Errored (network/rate-limit, safe to re-run): {errored}")
     print(f"Still need a manual PDF:                    {checked - fetched - errored}")
+    if stopped_reason:
+        print(f"\nStopped early: {stopped_reason}")
 
 
 if __name__ == "__main__":

@@ -39,7 +39,7 @@ TASK_HANDLERS: dict[TaskType, TaskHandler] = {}
 DEFAULT_MAX_CONSECUTIVE_RATE_LIMIT_FAILURES = 5
 
 
-def _is_rate_limit_error(exc: BaseException) -> bool:
+def is_rate_limit_error(exc: BaseException) -> bool:
     return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429
 
 
@@ -118,7 +118,7 @@ def run_worker(
                 fail_task(session, task, error=str(exc))
                 failed += 1
                 logger.warning("task failed: %s", exc)
-                if _is_rate_limit_error(exc):
+                if is_rate_limit_error(exc):
                     consecutive_rate_limit_failures += 1
                 else:
                     consecutive_rate_limit_failures = 0

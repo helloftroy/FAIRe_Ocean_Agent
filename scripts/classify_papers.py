@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import logging
 import re
 from pathlib import Path
 
@@ -70,6 +71,9 @@ from fair_ocean_agent.discovery.text_identifiers import xml_to_text
 from fair_ocean_agent.sources.base import SourceRecordNotFoundError
 from fair_ocean_agent.sources.europe_pmc import EuropePmcAdapter
 from fair_ocean_agent.workflow.handlers import _build_enabled_adapters, _local_pdf_path_for_study
+from fair_ocean_agent.workflow.worker import DEFAULT_MAX_CONSECUTIVE_RATE_LIMIT_FAILURES, is_rate_limit_error
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_OUT_DIR = REPO_ROOT / "data" / "paper_classification"
 
@@ -166,10 +170,15 @@ def _has_pmcid_or_pdf(session, study: Study) -> bool:
     return pmcid is not None
 
 
-def classify(session, adapters: dict) -> tuple[list[dict], list[dict], list[dict]]:
+def classify(
+    session, adapters: dict, max_consecutive_429s: int = DEFAULT_MAX_CONSECUTIVE_RATE_LIMIT_FAILURES
+) -> tuple[list[dict], list[dict], list[dict], int, str | None]:
     no_sample_rows: list[dict] = []
     ambiguous_rows: list[dict] = []
     needs_pdf_rows: list[dict] = []
+    errored = 0
+    consecutive_429s = 0
+    stopped_reason: str | None = None
 
     studies = session.scalars(
         select(Study).where(Study.canonical_status == CanonicalStatus.CANDIDATE.value)
@@ -197,7 +206,39 @@ def classify(session, adapters: dict) -> tuple[list[dict], list[dict], list[dict
                 )
             continue
 
-        text, reachable = _fetch_cached_fulltext(session, study, adapters)
+        try:
+            text, reachable = _fetch_cached_fulltext(session, study, adapters)
+        except Exception as exc:
+            # _fetch_cached_fulltext only ever caught SourceRecordNotFoundError
+            # (a real "no full text exists" 404) -- a sustained 429/5xx from
+            # Europe PMC (the same class of failure already fixed for the
+            # task-queue worker and auto_fetch_missing_pdfs.py) would
+            # otherwise crash this whole classification run partway through,
+            # losing every study already classified in this pass. Treated as
+            # a distinct "couldn't check, not a real absence" case rather
+            # than folded into the "no full text exists" bucket.
+            errored += 1
+            logger.warning("fulltext fetch failed for %s (%s): %s", study.study_id, study.title, exc)
+            consecutive_429s = consecutive_429s + 1 if is_rate_limit_error(exc) else 0
+            if max_consecutive_429s and consecutive_429s >= max_consecutive_429s:
+                stopped_reason = (
+                    f"{consecutive_429s} consecutive studies failed with 429 Too Many Requests -- "
+                    "stopping to avoid hammering a source that's actively rate-limiting/blocking "
+                    "this machine. Wait a while before retrying."
+                )
+                logger.warning(stopped_reason)
+                break
+            ambiguous_rows.append(
+                {
+                    "study_id": study.study_id,
+                    "doi": doi or "",
+                    "title": _sanitize(study.title or ""),
+                    "data_availability_quote": "",
+                    "note": f"full text fetch errored ({exc.__class__.__name__}) -- re-run to retry, not a real absence",
+                }
+            )
+            continue
+        consecutive_429s = 0
         if not reachable:
             ambiguous_rows.append(
                 {
@@ -242,7 +283,7 @@ def classify(session, adapters: dict) -> tuple[list[dict], list[dict], list[dict
                 }
             )
 
-    return no_sample_rows, ambiguous_rows, needs_pdf_rows
+    return no_sample_rows, ambiguous_rows, needs_pdf_rows, errored, stopped_reason
 
 
 def _write_csv(path: Path, rows: list[dict], fieldnames: list[str]) -> None:
@@ -263,11 +304,20 @@ def main() -> None:
         "so future seed ingestion skips them permanently. Does not touch "
         "studies already in the database -- see the script's own docstring.",
     )
+    parser.add_argument(
+        "--max-consecutive-429s",
+        type=int,
+        default=DEFAULT_MAX_CONSECUTIVE_RATE_LIMIT_FAILURES,
+        help="Stop the whole run once this many studies in a row fail with 429 Too Many Requests "
+        "while fetching full text. 0 disables this (never stop early).",
+    )
     args = parser.parse_args()
 
     adapters = _build_enabled_adapters()
     with session_scope() as session:
-        no_sample_rows, ambiguous_rows, needs_pdf_rows = classify(session, adapters)
+        no_sample_rows, ambiguous_rows, needs_pdf_rows, errored, stopped_reason = classify(
+            session, adapters, max_consecutive_429s=args.max_consecutive_429s
+        )
 
     _write_csv(
         args.out_dir / "no_sample_data.csv",
@@ -288,6 +338,10 @@ def main() -> None:
     print(f"no_sample_data:            {len(no_sample_rows):4d} -> {args.out_dir / 'no_sample_data.csv'}")
     print(f"ambiguous_data_availability: {len(ambiguous_rows):3d} -> {args.out_dir / 'ambiguous_data_availability.csv'}")
     print(f"needs_manual_pdf:           {len(needs_pdf_rows):4d} -> {args.out_dir / 'needs_manual_pdf.csv'}")
+    if errored:
+        print(f"Errored (network/rate-limit, safe to re-run): {errored}")
+    if stopped_reason:
+        print(f"\nStopped early: {stopped_reason}")
 
     if args.write_exclude_list:
         added = 0
