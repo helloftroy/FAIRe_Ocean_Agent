@@ -479,7 +479,7 @@ def test_worker_marks_incomplete_paper_pass_for_retry_not_completed(db_session, 
     )
 
     db_session.refresh(task)
-    assert summary == {"processed": 1, "completed": 0, "failed": 1}
+    assert summary == {"processed": 1, "completed": 0, "failed": 1, "stopped_reason": None}
     assert task.status == TaskStatus.RETRY_PENDING.value
     assert "invalid JSON after retries" in task.last_error
     assert db_session.query(Source).filter_by(

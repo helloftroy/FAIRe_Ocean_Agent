@@ -34,7 +34,7 @@ from fair_ocean_agent.scheduling.weekly import run_weekly_update
 from fair_ocean_agent.sources.base import SearchQuery
 from fair_ocean_agent.standards.registry import write_registry
 from fair_ocean_agent.workflow.task_queue import count_tasks_by_status, release_stale_claims
-from fair_ocean_agent.workflow.worker import run_worker
+from fair_ocean_agent.workflow.worker import DEFAULT_MAX_CONSECUTIVE_RATE_LIMIT_FAILURES, run_worker
 import fair_ocean_agent.workflow.handlers  # noqa: F401 -- side effect: registers TASK_HANDLERS
 import fair_ocean_agent.workflow.mapping_handlers  # noqa: F401 -- side effect: registers TASK_HANDLERS
 import fair_ocean_agent.workflow.refresh_handlers  # noqa: F401 -- side effect: registers TASK_HANDLERS
@@ -363,6 +363,13 @@ def worker_command(
         "with no GPU worth running local extraction on) that should only ever do the CPU-only "
         "discovery/mapping/other-validation work and leave the LLM stage to the cluster.",
     ),
+    max_consecutive_429s: int = typer.Option(
+        DEFAULT_MAX_CONSECUTIVE_RATE_LIMIT_FAILURES,
+        help="Stop the whole run (not just one task) once this many tasks in a row fail with "
+        "429 Too Many Requests -- protects against hammering a source that's actively "
+        "rate-limiting/blocking this machine across a deep queue. Resets on any success or "
+        "non-429 failure. Set to 0 to disable (never stop early).",
+    ),
 ) -> None:
     if task_type and no_llm:
         console.print("[red]--task-type and --no-llm are mutually exclusive -- pick one.[/red]")
@@ -381,7 +388,12 @@ def worker_command(
     try:
         with session_scope() as session:
             summary = run_worker(
-                session, worker_id=worker_id, max_tasks=max_tasks, until_empty=until_empty, task_types=task_types
+                session,
+                worker_id=worker_id,
+                max_tasks=max_tasks,
+                until_empty=until_empty,
+                task_types=task_types,
+                max_consecutive_rate_limit_failures=max_consecutive_429s if max_consecutive_429s > 0 else None,
             )
     finally:
         fair_ocean_agent.workflow.handlers.reset_adapter_cache()
@@ -390,6 +402,8 @@ def worker_command(
         f"Processed {summary['processed']} task(s): "
         f"{summary['completed']} completed, {summary['failed']} failed."
     )
+    if summary["stopped_reason"]:
+        console.print(f"[red]Stopped early:[/red] {summary['stopped_reason']}")
 
 
 @app.command("run-study")
