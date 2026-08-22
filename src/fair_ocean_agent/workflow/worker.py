@@ -29,12 +29,20 @@ def run_worker(
     worker_id: str,
     max_tasks: int | None = None,
     until_empty: bool = False,
+    task_types: list[TaskType] | None = None,
 ) -> dict[str, int]:
     """Process tasks until `max_tasks` is reached, the queue is empty (if
     until_empty), or neither limit is set (processes exactly one task).
     Returns a summary count. Each task is committed individually so a crash
     mid-loop only loses at most the in-flight task's progress, not prior
-    completions."""
+    completions.
+
+    `task_types` restricts claiming to just those types (see
+    claim_next_task) -- per an explicit user request: a machine that can
+    only run the CPU-only discovery stage well (no local GPU worth
+    running EXTRACT_TEXT_FACTS's LLM calls on) needs a way to run a
+    worker that will never claim one, rather than relying on the queue
+    happening to be empty of them."""
     processed = 0
     completed = 0
     failed = 0
@@ -43,7 +51,7 @@ def run_worker(
         if max_tasks is not None and processed >= max_tasks:
             break
 
-        task = claim_next_task(session, worker_id=worker_id)
+        task = claim_next_task(session, worker_id=worker_id, task_types=task_types)
         session.commit()
         if task is None:
             if until_empty or max_tasks is None:

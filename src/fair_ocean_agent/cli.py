@@ -331,15 +331,58 @@ def enqueue_full_text_extraction_backfill_command() -> None:
     console.print(f"Queued EXTRACT_TEXT_FACTS for {count} stud(y/ies) with a known PMCID.")
 
 
+# The only three task types that ever call an LLM backend at all
+# (confirmed by reading every TASK_HANDLERS registration, not guessed):
+# EXTRACT_TEXT_FACTS and EXTRACT_SUPPLEMENT_TEXT_FACTS call the main
+# extraction backend; VALIDATE_EVIDENCE calls the (usually smaller)
+# verifier backend. Every other task type -- DISCOVER_IDENTIFIERS
+# included -- is pure deterministic regex/API work, no model involved at
+# any point. Per an explicit user request: a machine with no GPU worth
+# running local extraction on needs an easy, durable way to guarantee a
+# `worker` invocation never claims one of these three, without having to
+# enumerate every other (and every future) task type by hand.
+_LLM_TASK_TYPES = (TaskType.EXTRACT_TEXT_FACTS, TaskType.EXTRACT_SUPPLEMENT_TEXT_FACTS, TaskType.VALIDATE_EVIDENCE)
+
+
 @app.command("worker")
 def worker_command(
     max_tasks: int | None = typer.Option(None, help="Stop after processing this many tasks"),
     until_empty: bool = typer.Option(False, help="Process tasks until the queue is empty"),
     worker_id: str = typer.Option("local-worker", help="Identifier recorded on claimed tasks"),
+    task_type: list[str] = typer.Option(
+        None,
+        "--task-type",
+        help="Only claim this task type (repeatable, e.g. --task-type DISCOVER_IDENTIFIERS "
+        "--task-type DISCOVER_SUPPLEMENTS). Omit to claim any type.",
+    ),
+    no_llm: bool = typer.Option(
+        False,
+        "--no-llm",
+        help="Never claim EXTRACT_TEXT_FACTS, EXTRACT_SUPPLEMENT_TEXT_FACTS, or VALIDATE_EVIDENCE "
+        "-- the only three task types that call a model at all. For a machine (e.g. a laptop "
+        "with no GPU worth running local extraction on) that should only ever do the CPU-only "
+        "discovery/mapping/other-validation work and leave the LLM stage to the cluster.",
+    ),
 ) -> None:
+    if task_type and no_llm:
+        console.print("[red]--task-type and --no-llm are mutually exclusive -- pick one.[/red]")
+        raise typer.Exit(1)
+    task_types: list[TaskType] | None = None
+    if task_type:
+        try:
+            task_types = [TaskType(t) for t in task_type]
+        except ValueError as exc:
+            valid = ", ".join(t.value for t in TaskType)
+            console.print(f"[red]{exc}[/red]\nValid task types: {valid}")
+            raise typer.Exit(1)
+    elif no_llm:
+        task_types = [t for t in TaskType if t not in _LLM_TASK_TYPES]
+
     try:
         with session_scope() as session:
-            summary = run_worker(session, worker_id=worker_id, max_tasks=max_tasks, until_empty=until_empty)
+            summary = run_worker(
+                session, worker_id=worker_id, max_tasks=max_tasks, until_empty=until_empty, task_types=task_types
+            )
     finally:
         fair_ocean_agent.workflow.handlers.reset_adapter_cache()
         fair_ocean_agent.workflow.handlers.reset_llm_backend_cache()
