@@ -8,7 +8,7 @@ from fair_ocean_agent.seed_discovery.models import EnaRun
 
 
 ENA_READ_RUN_FIELDS = (
-    "study_accession,secondary_study_accession,secondary_project_accession,"
+    "study_accession,secondary_study_accession,"
     "run_accession,experiment_accession,sample_accession,secondary_sample_accession,submission_accession,"
     "study_title,project_name,center_name,first_public,"
     "fastq_ftp,fastq_md5,fastq_bytes,submitted_ftp,submitted_md5,submitted_bytes,submitted_format,"
@@ -17,7 +17,7 @@ ENA_READ_RUN_FIELDS = (
     "instrument_platform,instrument_model,target_gene,"
     "collection_date,lat,lon,depth,country,marine_region,"
     "environment_biome,environment_feature,environment_material,sample_collection,"
-    "extraction_protocol,library_construction_protocol,marine"
+    "extraction_protocol,library_construction_protocol"
 )
 
 
@@ -111,7 +111,7 @@ def parse_read_run(row: dict, *, marine_confidence: str, marine_match_methods: s
         sample_collection=_first_string(row, "sample_collection"),
         extraction_protocol=_first_string(row, "extraction_protocol"),
         library_construction_protocol=_first_string(row, "library_construction_protocol"),
-        marine_tag=_first_string(row, "marine"),
+        marine_tag=None,
         marine_confidence=marine_confidence,
         marine_match_methods=marine_match_methods,
         sequence_accessibility_status=classify_sequence_accessibility(row),
@@ -133,7 +133,6 @@ class EnaPortalClient:
         marine_confidence: str,
         marine_match_methods: str,
         limit: int | None = None,
-        offset: int = 0,
     ) -> list[EnaRun]:
         payload = self.http.get_json(
             self.source,
@@ -144,7 +143,6 @@ class EnaPortalClient:
                 "fields": ENA_READ_RUN_FIELDS,
                 "format": "json",
                 "limit": limit or self.config.ena_page_size,
-                "offset": offset,
             },
         )
         rows = payload if isinstance(payload, list) else payload.get("items", [])
@@ -156,4 +154,3 @@ class EnaPortalClient:
             if parsed is not None:
                 runs.append(parsed)
         return runs
-

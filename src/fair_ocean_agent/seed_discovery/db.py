@@ -419,6 +419,14 @@ class SeedDiscoveryDB:
         row = self.conn.execute("SELECT cursor FROM crawl_state WHERE source = ?", (source,)).fetchone()
         return str(row["cursor"]) if row and row["cursor"] is not None else None
 
+    def crawl_status(self, source: str) -> str | None:
+        row = self.conn.execute("SELECT status FROM crawl_state WHERE source = ?", (source,)).fetchone()
+        return str(row["status"]) if row and row["status"] is not None else None
+
+    def crawl_updated_at(self, source: str) -> str | None:
+        row = self.conn.execute("SELECT updated_at FROM crawl_state WHERE source = ?", (source,)).fetchone()
+        return str(row["updated_at"]) if row and row["updated_at"] is not None else None
+
     def get_cache(self, request_key: str) -> dict | list | None:
         row = self.conn.execute("SELECT response_json FROM api_cache WHERE request_key = ?", (request_key,)).fetchone()
         if row is None:

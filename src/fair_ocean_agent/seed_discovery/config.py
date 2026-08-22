@@ -153,10 +153,12 @@ class SeedDiscoveryConfig:
         "sea-ice",
     )
     ena_page_size: int = 100
+    ena_date_shards_enabled: bool = False
+    ena_date_shard_start_year: int = 2008
 
     def request_interval_for_source(self, source: str) -> float:
         source_intervals = self.source_min_request_interval_seconds or {
-            "openalex": 5.0,
+            "openalex": 10.0,
             "europepmc": 1.0,
             "crossref": 1.0,
             "ncbi": 1.0,

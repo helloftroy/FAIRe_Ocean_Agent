@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from email.utils import parsedate_to_datetime
 import random
 import time
@@ -50,11 +51,13 @@ class CachedHttpClient:
     def _get_json_uncached(self, source: str, url: str, *, params: dict | None = None) -> tuple[dict | list, int]:
         last_exc: Exception | None = None
         for attempt in range(self.config.max_retries + 1):
-            elapsed = time.monotonic() - self._last_request_by_source.get(source, 0.0)
-            wait = self.config.request_interval_for_source(source) - elapsed
+            wait = self._request_interval_wait_seconds(source)
             if wait > 0:
+                if source == "openalex":
+                    logger.info("waiting %.2fs before next OpenAlex request", wait)
                 time.sleep(wait)
             self._last_request_by_source[source] = time.monotonic()
+            self.db.update_crawl_state(source, status="running")
             try:
                 response = self._client.get(url, params=params)
                 if response.status_code not in _RETRY_STATUS:
@@ -72,6 +75,12 @@ class CachedHttpClient:
                     f"retryable status {response.status_code}", request=response.request, response=response
                 )
             except (httpx.TimeoutException, httpx.TransportError, httpx.HTTPStatusError) as exc:
+                if isinstance(exc, httpx.HTTPStatusError):
+                    status_code = exc.response.status_code
+                    if source == "openalex" and status_code == 429:
+                        raise
+                    if status_code not in _RETRY_STATUS:
+                        raise
                 last_exc = exc
                 sleep_seconds = None
             if attempt >= self.config.max_retries:
@@ -82,6 +91,19 @@ class CachedHttpClient:
             time.sleep(sleep_seconds)
         assert last_exc is not None
         raise last_exc
+
+    def _request_interval_wait_seconds(self, source: str) -> float:
+        interval = self.config.request_interval_for_source(source)
+        elapsed = time.monotonic() - self._last_request_by_source.get(source, 0.0)
+        persistent_timestamp = self.db.crawl_updated_at(source)
+        if persistent_timestamp:
+            try:
+                persistent_elapsed = time.time() - datetime.fromisoformat(persistent_timestamp).timestamp()
+            except ValueError:
+                persistent_elapsed = None
+            if persistent_elapsed is not None:
+                elapsed = min(elapsed, persistent_elapsed)
+        return max(0.0, interval - elapsed)
 
 
 def _retry_after_seconds(value: str | None) -> float | None:

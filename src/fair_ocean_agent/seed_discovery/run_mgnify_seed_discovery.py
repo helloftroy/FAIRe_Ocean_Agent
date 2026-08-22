@@ -6,6 +6,7 @@ from pathlib import Path
 
 from fair_ocean_agent.seed_discovery.config import RunLimits, SeedDiscoveryConfig
 from fair_ocean_agent.seed_discovery.mgnify_discovery import MgnifySeedDiscoveryRunner
+from fair_ocean_agent.seed_discovery.publication_resolver import OpenAlexRateLimitError
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -46,6 +47,10 @@ def main(argv: list[str] | None = None) -> int:
     runner.install_signal_handlers()
     try:
         counts = runner.run(limits)
+    except OpenAlexRateLimitError as exc:
+        logging.error("%s", exc)
+        logging.error("paper seed database: %s", config.db_path)
+        return 2
     finally:
         runner.close()
     for key in sorted(counts):

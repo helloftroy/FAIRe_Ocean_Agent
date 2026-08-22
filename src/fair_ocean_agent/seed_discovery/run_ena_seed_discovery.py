@@ -6,6 +6,7 @@ from pathlib import Path
 
 from fair_ocean_agent.seed_discovery.config import RunLimits, SeedDiscoveryConfig
 from fair_ocean_agent.seed_discovery.ena_discovery import EnaSeedDiscoveryRunner
+from fair_ocean_agent.seed_discovery.publication_resolver import OpenAlexRateLimitError
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -15,9 +16,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-resume", action="store_true", help="Start ENA query partitions at offset 0.")
     parser.add_argument("--refresh", action="store_true", help="Refresh API cache and revisit pending/error publication links.")
     parser.add_argument("--phase", choices=("all", "discovery", "publications"), default="all")
-    parser.add_argument("--max-pages", type=int, help="Maximum ENA result pages to scan across all query partitions.")
+    parser.add_argument(
+        "--max-pages",
+        type=int,
+        help="Maximum ENA-sized batches to scan across query partitions; ENA Portal uses limit-based retrieval, not offset paging.",
+    )
     parser.add_argument("--max-studies", type=int, help="Maximum ENA studies to resolve publications for.")
     parser.add_argument("--include-secondary", action="store_true", help="Include low-confidence tags, taxonomy, and keyword searches.")
+    parser.add_argument(
+        "--date-shards",
+        action="store_true",
+        help="Shard ENA discovery by first_public month so repeated resumed runs advance through new ENA windows.",
+    )
+    parser.add_argument("--date-shard-start-year", type=int, default=2008, help="Earliest first_public year for --date-shards.")
     parser.add_argument("--no-openalex", action="store_true", help="Skip OpenAlex; unresolved rows remain queued for later reprocessing.")
     parser.add_argument("--openalex-api-key", help="Optional OpenAlex API key. Email contact is sent by default.")
     parser.add_argument("--log-level", default="INFO")
@@ -31,6 +42,8 @@ def main(argv: list[str] | None = None) -> int:
         db_path=Path(args.db),
         openalex_enabled=not args.no_openalex,
         openalex_api_key=args.openalex_api_key,
+        ena_date_shards_enabled=args.date_shards,
+        ena_date_shard_start_year=args.date_shard_start_year,
     )
     limits = RunLimits(
         max_pages=args.max_pages,
@@ -44,6 +57,10 @@ def main(argv: list[str] | None = None) -> int:
     runner.install_signal_handlers()
     try:
         counts = runner.run(limits)
+    except OpenAlexRateLimitError as exc:
+        logging.error("%s", exc)
+        logging.error("paper seed database: %s", config.db_path)
+        return 2
     finally:
         runner.close()
     for key in sorted(counts):
@@ -54,4 +71,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

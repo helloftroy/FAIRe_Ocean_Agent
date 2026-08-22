@@ -15,7 +15,7 @@ from fair_ocean_agent.seed_discovery.db import SeedDiscoveryDB, choose_primary_c
 from fair_ocean_agent.seed_discovery.ena_discovery import aggregate_ena_study, build_ena_query_partitions
 from fair_ocean_agent.seed_discovery.filters import is_marine_study
 from fair_ocean_agent.seed_discovery.models import EnaRun, MatchConfidence, MgnifyStudy, PublicationCandidate, ResolutionStatus
-from fair_ocean_agent.seed_discovery.publication_resolver import PublicationResolver, title_similarity
+from fair_ocean_agent.seed_discovery.publication_resolver import OpenAlexRateLimitError, PublicationResolver, title_similarity
 
 
 def _db(tmp_path: Path) -> SeedDiscoveryDB:
@@ -27,6 +27,10 @@ def _db(tmp_path: Path) -> SeedDiscoveryDB:
 def test_seed_discovery_doi_normalization():
     assert normalize_doi_for_seed("https://doi.org/10.1234/ABC.") == "10.1234/abc"
     assert normalize_doi_for_seed("DOI: 10.5555/Foo") == "10.5555/foo"
+
+
+def test_seed_discovery_openalex_default_interval_is_conservative():
+    assert SeedDiscoveryConfig().request_interval_for_source("openalex") == 10.0
 
 
 def test_mgnify_parser_extracts_insdc_identifiers_from_payload_text():
@@ -95,11 +99,20 @@ def test_ena_query_partitions_include_primary_tags_and_optional_secondary_routes
     primary = build_ena_query_partitions(SeedDiscoveryConfig(), include_secondary=False)
     secondary = build_ena_query_partitions(SeedDiscoveryConfig(), include_secondary=True)
 
-    assert any(part.query == 'marine="marine:high_confidence"' for part in primary)
-    assert any(part.query == 'marine="coastal_brackish:medium_confidence"' for part in primary)
+    assert any('environment_biome="marine"' in part.query for part in primary)
+    assert any('environment_biome="coral reef"' in part.query for part in primary)
     assert not any(part.query.startswith("tax_tree(") for part in primary)
     assert any(part.query == "tax_tree(408172)" for part in secondary)
     assert any("environment_material" in part.query and "coral reef" in part.query for part in secondary)
+
+
+def test_ena_query_partitions_can_be_date_sharded():
+    config = SeedDiscoveryConfig(ena_date_shards_enabled=True, ena_date_shard_start_year=2026)
+    partitions = build_ena_query_partitions(config, include_secondary=False)
+
+    assert any("first_public_" in part.name for part in partitions)
+    assert any("first_public>=" in part.query and "first_public<=" in part.query for part in partitions)
+    assert all(' marine="' not in f" {part.query}" for part in partitions)
 
 
 def test_ena_portal_run_parsing_and_accessibility_statuses(tmp_path, monkeypatch):
@@ -148,6 +161,7 @@ def test_ena_portal_client_searches_read_runs(tmp_path, monkeypatch):
 
     assert observed["source"] == "ena_portal"
     assert observed["params"]["result"] == "read_run"
+    assert "offset" not in observed["params"]
     assert runs[0].run_accession == "ERR1"
 
 
@@ -444,6 +458,35 @@ def test_http_client_raises_openalex_429_without_retry_after_sleep(tmp_path, mon
     assert 21926 not in sleeps
 
 
+def test_http_client_persists_openalex_interval_across_clients(tmp_path, monkeypatch):
+    db = _db(tmp_path)
+    config = SeedDiscoveryConfig(db_path=tmp_path / "seeds.sqlite")
+    db.update_crawl_state("openalex", status="running")
+    http = CachedHttpClient(config, db)
+    sleeps: list[float] = []
+
+    def fake_sleep(seconds):  # noqa: ANN001
+        sleeps.append(seconds)
+
+    def fake_get(url, params=None):  # noqa: ANN001
+        return httpx.Response(
+            200,
+            request=httpx.Request("GET", url),
+            json={"results": []},
+        )
+
+    monkeypatch.setattr("fair_ocean_agent.seed_discovery.clients.http.time.sleep", fake_sleep)
+    monkeypatch.setattr(http._client, "get", fake_get)
+
+    try:
+        http.get_json("openalex", "https://api.openalex.org/works", params={"search.exact": "PRJDB4107"}, use_cache=False)
+    finally:
+        http.close()
+
+    assert sleeps
+    assert sleeps[0] > 9.0
+
+
 class _EmptyMgnify:
     def publications(self, accession):  # noqa: ANN001
         return []
@@ -536,7 +579,7 @@ def test_publication_resolver_uses_europepmc_title_search_when_accessions_fail(t
     assert seed["publication_match_method"] == "europepmc_title_search"
 
 
-def test_publication_resolver_marks_openalex_429_as_reprocess_after_europepmc_fallback(tmp_path):
+def test_publication_resolver_raises_openalex_429_to_stop_run(tmp_path):
     db = _db(tmp_path)
     study_id = db.upsert_study(
         MgnifyStudy(
@@ -557,11 +600,15 @@ def test_publication_resolver_marks_openalex_429_as_reprocess_after_europepmc_fa
             raise httpx.HTTPStatusError("too many requests", request=response.request, response=response)
 
     row = db.conn.execute("SELECT * FROM mgnify_studies WHERE id = ?", (study_id,)).fetchone()
-    status = _resolver(db, openalex=BlockedOpenAlex()).resolve_study(row)
+    try:
+        _resolver(db, openalex=BlockedOpenAlex()).resolve_study(row)
+    except OpenAlexRateLimitError as exc:
+        assert "OpenAlex returned 429" in str(exc)
+    else:
+        raise AssertionError("expected OpenAlexRateLimitError")
 
-    assert status == ResolutionStatus.OPENALEX_REPROCESS
-    next_rows = db.studies_for_resolution(refresh=False, limit=5)
-    assert any(row["id"] == study_id for row in next_rows)
+    seed = db.conn.execute("SELECT * FROM paper_seeds WHERE mgnify_accession = 'MGYS_BLOCKED'").fetchone()
+    assert seed["publication_resolution_status"] == "not_yet_processed"
 
 
 def test_publication_resolver_can_disable_openalex_and_flag_publication_like_title(tmp_path):

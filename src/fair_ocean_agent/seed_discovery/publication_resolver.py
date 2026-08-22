@@ -35,6 +35,17 @@ _PUBLICATION_LIKE_TITLE_RE = re.compile(
 )
 
 
+class OpenAlexRateLimitError(RuntimeError):
+    """Raised when OpenAlex rate-limits a seed discovery run."""
+
+
+def _openalex_rate_limit_error(exc: httpx.HTTPStatusError) -> OpenAlexRateLimitError:
+    return OpenAlexRateLimitError(
+        "OpenAlex returned 429 Too Many Requests; exiting immediately. "
+        "Rerun later, or use --no-openalex to continue discovery without OpenAlex."
+    )
+
+
 class PublicationResolver:
     def __init__(
         self,
@@ -83,8 +94,7 @@ class PublicationResolver:
                             candidates.extend(self.openalex.accession_search(accession))
                         except httpx.HTTPStatusError as exc:
                             if exc.response.status_code == 429:
-                                openalex_retryable = True
-                                logger.warning("OpenAlex 429 for accession %s; continuing with Europe PMC fallback", accession)
+                                raise _openalex_rate_limit_error(exc) from exc
                             else:
                                 raise
                     else:
@@ -101,8 +111,7 @@ class PublicationResolver:
                             title_candidates.extend(self.openalex.title_search(title))
                         except httpx.HTTPStatusError as exc:
                             if exc.response.status_code == 429:
-                                openalex_retryable = True
-                                logger.warning("OpenAlex 429 for title search %r; continuing with Europe PMC title fallback", title)
+                                raise _openalex_rate_limit_error(exc) from exc
                             else:
                                 raise
                     else:
@@ -120,8 +129,7 @@ class PublicationResolver:
                             candidates.extend(self.openalex.metadata_search(query))
                         except httpx.HTTPStatusError as exc:
                             if exc.response.status_code == 429:
-                                openalex_retryable = True
-                                logger.warning("OpenAlex 429 for metadata search %r", query)
+                                raise _openalex_rate_limit_error(exc) from exc
                             else:
                                 raise
                     else:
@@ -139,6 +147,8 @@ class PublicationResolver:
                 )
             self.db.set_primary(study_id, primary_id, status, reason)
             return status
+        except OpenAlexRateLimitError:
+            raise
         except Exception as exc:
             logger.exception("publication resolution failed for %s", study_row["mgnify_accession"])
             self.db.set_primary(study_id, None, ResolutionStatus.API_ERROR, str(exc))
@@ -181,9 +191,7 @@ class PublicationResolver:
                             candidates.extend(self.openalex.accession_search(accession))
                         except httpx.HTTPStatusError as exc:
                             if exc.response.status_code == 429:
-                                openalex_retryable = True
-                                logger.warning("OpenAlex 429 for ENA accession %s; deferring OpenAlex", accession)
-                                break
+                                raise _openalex_rate_limit_error(exc) from exc
                             raise
                     if not openalex_retryable and self._publication_like_title(title):
                         openalex_attempted = True
@@ -191,8 +199,7 @@ class PublicationResolver:
                             candidates.extend(self._validated_title_candidates(title, self.openalex.title_search(title)))
                         except httpx.HTTPStatusError as exc:
                             if exc.response.status_code == 429:
-                                openalex_retryable = True
-                                logger.warning("OpenAlex 429 for ENA title search %r; deferring OpenAlex", title)
+                                raise _openalex_rate_limit_error(exc) from exc
                             else:
                                 raise
                 else:
@@ -212,6 +219,8 @@ class PublicationResolver:
                 )
             self.db.set_ena_primary(study_id, primary_id, status, reason)
             return status
+        except OpenAlexRateLimitError:
+            raise
         except Exception as exc:
             logger.exception("ENA publication resolution failed for %s", study_row["canonical_dataset_id"])
             self.db.set_ena_primary(study_id, None, ResolutionStatus.API_ERROR, str(exc))

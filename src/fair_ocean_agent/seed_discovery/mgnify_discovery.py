@@ -13,7 +13,7 @@ from fair_ocean_agent.seed_discovery.clients.openalex import OpenAlexSeedClient
 from fair_ocean_agent.seed_discovery.config import RunLimits, SeedDiscoveryConfig
 from fair_ocean_agent.seed_discovery.db import SeedDiscoveryDB
 from fair_ocean_agent.seed_discovery.filters import experiment_type_status, is_marine_study
-from fair_ocean_agent.seed_discovery.publication_resolver import PublicationResolver
+from fair_ocean_agent.seed_discovery.publication_resolver import OpenAlexRateLimitError, PublicationResolver
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +63,9 @@ class MgnifySeedDiscoveryRunner:
                 self._discover_studies(mgnify, limits, counts)
             self._resolve_publications(resolver, limits, counts)
             self.db.update_crawl_state("mgnify_studies", status="completed", completed=True)
+        except OpenAlexRateLimitError as exc:
+            self.db.update_crawl_state("mgnify_studies", status="openalex_rate_limited", error=str(exc))
+            raise
         except Exception as exc:
             self.db.update_crawl_state("mgnify_studies", status="error", error=str(exc))
             raise

@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import logging
 import signal
+from calendar import monthrange
 from collections import Counter
 from dataclasses import dataclass
+from datetime import date
 
 from fair_ocean_agent.seed_discovery.clients.crossref import CrossrefSeedClient
 from fair_ocean_agent.seed_discovery.clients.ena import EnaXrefClient
@@ -17,7 +19,7 @@ from fair_ocean_agent.seed_discovery.clients.openalex import OpenAlexSeedClient
 from fair_ocean_agent.seed_discovery.config import RunLimits, SeedDiscoveryConfig
 from fair_ocean_agent.seed_discovery.db import SeedDiscoveryDB
 from fair_ocean_agent.seed_discovery.models import EnaStudy
-from fair_ocean_agent.seed_discovery.publication_resolver import PublicationResolver
+from fair_ocean_agent.seed_discovery.publication_resolver import OpenAlexRateLimitError, PublicationResolver
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +44,47 @@ _ACCESSIBILITY_RANK = {
     "no_downloadable_reads": 0,
 }
 _MARINE_RANK = {"high": 3, "medium": 2, "low": 1}
+_ENA_MARINE_SEARCH_FIELDS = (
+    "environment_biome",
+    "environment_feature",
+    "environment_material",
+    "isolation_source",
+    "marine_region",
+    "study_title",
+    "sample_title",
+)
+_ENA_PRIMARY_TAG_TERMS = {
+    "marine:high_confidence": ("marine", "ocean", "seawater", "sea water", "marine sediment", "seafloor"),
+    "marine:medium_confidence": ("pelagic", "benthic", "intertidal", "subtidal", "deep sea", "deep-sea", "sea ice", "sea-ice"),
+    "coastal_brackish:high_confidence": ("coastal", "estuary", "estuarine", "brackish"),
+    "coastal_brackish:medium_confidence": ("mangrove", "salt marsh", "coral reef", "reef", "continental shelf"),
+    "marine:low_confidence": ("hydrothermal vent",),
+    "coastal_brackish:low_confidence": ("lagoon", "tidal flat"),
+}
+
+
+def _ena_text_query(terms: tuple[str, ...]) -> str:
+    clauses = []
+    for term in terms:
+        escaped = term.replace('"', " ")
+        clauses.extend(f'{field}="{escaped}"' for field in _ENA_MARINE_SEARCH_FIELDS)
+    return " OR ".join(clauses)
+
+
+def _month_shards(start_year: int) -> list[tuple[str, str, str]]:
+    today = date.today()
+    shards: list[tuple[str, str, str]] = []
+    for year in range(today.year, start_year - 1, -1):
+        last_month = today.month if year == today.year else 12
+        for month in range(last_month, 0, -1):
+            start = date(year, month, 1)
+            end = date(year, month, monthrange(year, month)[1])
+            if start > today:
+                continue
+            if end > today:
+                end = today
+            shards.append((f"{year:04d}_{month:02d}", start.isoformat(), end.isoformat()))
+    return shards
 
 
 def build_ena_query_partitions(config: SeedDiscoveryConfig, *, include_secondary: bool = False) -> list[EnaQueryPartition]:
@@ -57,14 +100,27 @@ def build_ena_query_partitions(config: SeedDiscoveryConfig, *, include_secondary
         else:
             confidence = "low"
         safe = tag.replace(":", "_")
-        partitions.append(
-            EnaQueryPartition(
-                name=f"tag_{safe}",
-                query=f'marine="{tag}"',
-                marine_confidence=confidence,
-                marine_match_methods=f"ena_marine_tag:{tag}",
+        terms = _ENA_PRIMARY_TAG_TERMS.get(tag, (tag,))
+        query = _ena_text_query(terms)
+        if config.ena_date_shards_enabled:
+            for shard_name, start_date, end_date in _month_shards(config.ena_date_shard_start_year):
+                partitions.append(
+                    EnaQueryPartition(
+                        name=f"tag_{safe}:first_public_{shard_name}",
+                        query=f'({query}) AND first_public>="{start_date}" AND first_public<="{end_date}"',
+                        marine_confidence=confidence,
+                        marine_match_methods=f"ena_marine_tag:{tag};first_public:{start_date}..{end_date}",
+                    )
+                )
+        else:
+            partitions.append(
+                EnaQueryPartition(
+                    name=f"tag_{safe}",
+                    query=query,
+                    marine_confidence=confidence,
+                    marine_match_methods=f"ena_marine_tag:{tag}",
+                )
             )
-        )
     if include_secondary:
         for tax_id in config.ena_marine_tax_ids:
             partitions.append(
@@ -81,11 +137,7 @@ def build_ena_query_partitions(config: SeedDiscoveryConfig, *, include_secondary
             partitions.append(
                 EnaQueryPartition(
                     name=f"term_{slug}",
-                    query=(
-                        f'study_title="{escaped}" OR sample_title="{escaped}" OR '
-                        f'isolation_source="{escaped}" OR environment_biome="{escaped}" OR '
-                        f'environment_feature="{escaped}" OR environment_material="{escaped}"'
-                    ),
+                    query=_ena_text_query((escaped,)),
                     marine_confidence="low",
                     marine_match_methods=f"marine_keyword:{term}",
                 )
@@ -244,6 +296,12 @@ class EnaSeedDiscoveryRunner:
             if limits.phase in {"all", "publications"}:
                 self._resolve_publications(limits, counts)
             self.db.update_crawl_state("ena_read_run", status="completed", completed=True)
+        except StopRequested:
+            logger.warning("stop requested; ENA seed discovery halted cleanly")
+            self.db.update_crawl_state("ena_read_run", status="stopped", error=None)
+        except OpenAlexRateLimitError as exc:
+            self.db.update_crawl_state("ena_read_run", status="openalex_rate_limited", error=str(exc))
+            raise
         except Exception as exc:
             self.db.update_crawl_state("ena_read_run", status="error", error=str(exc))
             raise
@@ -254,37 +312,41 @@ class EnaSeedDiscoveryRunner:
         pages_seen = 0
         for partition in build_ena_query_partitions(self.config, include_secondary=limits.include_secondary):
             state_key = f"ena_read_run:{partition.name}"
-            offset = 0
-            cursor = self.db.crawl_cursor(state_key) if limits.resume else None
-            if cursor and str(cursor).isdigit():
-                offset = int(cursor)
-            while True:
-                if self.stop_requested:
-                    raise StopRequested()
-                if limits.max_pages is not None and pages_seen >= limits.max_pages:
-                    return
-                runs = client.search_read_runs(
-                    partition.query,
-                    marine_confidence=partition.marine_confidence,
-                    marine_match_methods=partition.marine_match_methods,
-                    limit=self.config.ena_page_size,
-                    offset=offset,
-                )
-                pages_seen += 1
-                counts["ena_pages_scanned"] += 1
-                counts[f"ena_pages_{partition.name}"] += 1
-                if not runs:
-                    self.db.update_crawl_state(state_key, cursor=str(offset), status="completed", completed=True)
-                    break
-                for run in runs:
-                    self.db.upsert_ena_run(run)
-                    counts["ena_read_runs_scanned"] += 1
-                    counts[f"ena_runs_{run.sequence_accessibility_status}"] += 1
-                offset += len(runs)
-                self.db.update_crawl_state(state_key, cursor=str(offset), status="running")
-                if len(runs) < self.config.ena_page_size:
-                    self.db.update_crawl_state(state_key, cursor=str(offset), status="completed", completed=True)
-                    break
+            if limits.resume and self.db.crawl_status(state_key) in {"completed", "partial_limit_reached"}:
+                counts["ena_partitions_skipped_resume"] += 1
+                continue
+            if self.stop_requested:
+                raise StopRequested()
+            if limits.max_pages is not None and pages_seen >= limits.max_pages:
+                return
+
+            pages_remaining = None if limits.max_pages is None else limits.max_pages - pages_seen
+            limit = 0 if pages_remaining is None else pages_remaining * self.config.ena_page_size
+            runs = client.search_read_runs(
+                partition.query,
+                marine_confidence=partition.marine_confidence,
+                marine_match_methods=partition.marine_match_methods,
+                limit=limit,
+            )
+            pages_for_partition = max(1, (len(runs) + self.config.ena_page_size - 1) // self.config.ena_page_size)
+            if pages_remaining is not None:
+                pages_for_partition = min(pages_for_partition, pages_remaining)
+            pages_seen += pages_for_partition
+            counts["ena_pages_scanned"] += pages_for_partition
+            counts[f"ena_pages_{partition.name}"] += pages_for_partition
+
+            for run in runs:
+                self.db.upsert_ena_run(run)
+                counts["ena_read_runs_scanned"] += 1
+                counts[f"ena_runs_{run.sequence_accessibility_status}"] += 1
+
+            status = "completed" if limit == 0 or len(runs) < limit else "partial_limit_reached"
+            self.db.update_crawl_state(
+                state_key,
+                cursor=f"limit:{limit};runs:{len(runs)}",
+                status=status,
+                completed=status == "completed",
+            )
 
     def _aggregate_studies(self, counts: Counter) -> None:
         for _key, rows in self.db.ena_run_groups().items():
@@ -314,4 +376,3 @@ class EnaSeedDiscoveryRunner:
         counts["ena_studies_total"] = self.db.count("ena_studies")
         counts["ena_runs_total"] = self.db.count("ena_runs")
         counts["publication_candidates_total"] = self.db.count("publication_candidates")
-
