@@ -100,15 +100,25 @@ class MgnifySeedDiscoveryRunner:
                 accepted += 1
                 if limits.max_studies is not None and accepted >= limits.max_studies:
                     break
+            if counts["mgnify_studies_scanned"] % 100 == 0:
+                logger.info(
+                    "MGnify discovery progress scanned=%s accepted=%s current_page=%s",
+                    counts["mgnify_studies_scanned"],
+                    counts["marine_studies_accepted"],
+                    page,
+                )
             self.db.update_crawl_state("mgnify_studies", cursor=str(page), status="running")
 
     def _resolve_publications(self, resolver: PublicationResolver, limits: RunLimits, counts: Counter) -> None:
         rows = self.db.studies_for_resolution(refresh=limits.refresh, limit=limits.max_studies)
-        for row in rows:
+        total = len(rows)
+        for index, row in enumerate(rows, start=1):
             if self.stop_requested:
                 raise StopRequested()
             status = resolver.resolve_study(row)
             counts[f"publication_status_{status.value}"] += 1
             logger.info("resolved %s -> %s", row["mgnify_accession"], status.value)
+            if index % 100 == 0:
+                logger.info("MGnify publication progress resolved=%s/%s", index, total)
         counts["mgnify_studies_total"] = self.db.count("mgnify_studies")
         counts["publication_candidates_total"] = self.db.count("publication_candidates")

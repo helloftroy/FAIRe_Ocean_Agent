@@ -29,7 +29,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Shard ENA discovery by first_public month so repeated resumed runs advance through new ENA windows.",
     )
     parser.add_argument("--date-shard-start-year", type=int, default=2008, help="Earliest first_public year for --date-shards.")
-    parser.add_argument("--no-openalex", action="store_true", help="Skip OpenAlex; unresolved rows remain queued for later reprocessing.")
+    parser.add_argument("--openalex", action="store_true", help="Enable OpenAlex as an explicit final fallback.")
+    parser.add_argument("--no-openalex", action="store_true", help="Deprecated no-op; OpenAlex is disabled unless --openalex is supplied.")
     parser.add_argument("--openalex-api-key", help="Optional OpenAlex API key. Email contact is sent by default.")
     parser.add_argument("--log-level", default="INFO")
     return parser
@@ -40,7 +41,7 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=getattr(logging, args.log_level.upper()), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     config = SeedDiscoveryConfig(
         db_path=Path(args.db),
-        openalex_enabled=not args.no_openalex,
+        openalex_enabled=args.openalex and not args.no_openalex,
         openalex_api_key=args.openalex_api_key,
         ena_date_shards_enabled=args.date_shards,
         ena_date_shard_start_year=args.date_shard_start_year,

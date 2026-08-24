@@ -20,7 +20,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-pages", type=int, help="Maximum MGnify pages to scan.")
     parser.add_argument("--max-studies", type=int, help="Maximum accepted studies to discover/resolve.")
     parser.add_argument("--metadata-search", action="store_true", help="Enable low-confidence OpenAlex metadata fallback.")
-    parser.add_argument("--no-openalex", action="store_true", help="Skip OpenAlex calls and mark unresolved studies for later OpenAlex reprocessing.")
+    parser.add_argument("--openalex", action="store_true", help="Enable OpenAlex as an explicit final fallback.")
+    parser.add_argument("--no-openalex", action="store_true", help="Deprecated no-op; OpenAlex is disabled unless --openalex is supplied.")
     parser.add_argument("--openalex-api-key", help="Optional OpenAlex API key. Email contact is sent by default.")
     parser.add_argument("--log-level", default="INFO")
     return parser
@@ -32,7 +33,7 @@ def main(argv: list[str] | None = None) -> int:
     config = SeedDiscoveryConfig(
         db_path=Path(args.db),
         metadata_search_enabled=args.metadata_search,
-        openalex_enabled=not args.no_openalex,
+        openalex_enabled=args.openalex and not args.no_openalex,
         openalex_api_key=args.openalex_api_key,
     )
     limits = RunLimits(

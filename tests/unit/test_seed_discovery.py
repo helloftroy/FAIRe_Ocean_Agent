@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+import gzip
+import re
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import httpx
+from openpyxl import Workbook
 
 from fair_ocean_agent.seed_discovery.clients.ena import EnaXrefClient
 from fair_ocean_agent.seed_discovery.clients.ena_portal import EnaPortalClient, classify_sequence_accessibility, parse_read_run
@@ -14,8 +18,11 @@ from fair_ocean_agent.seed_discovery.config import SeedDiscoveryConfig
 from fair_ocean_agent.seed_discovery.db import SeedDiscoveryDB, choose_primary_candidate, normalize_doi_for_seed
 from fair_ocean_agent.seed_discovery.ena_discovery import aggregate_ena_study, build_ena_query_partitions
 from fair_ocean_agent.seed_discovery.filters import is_marine_study
+from fair_ocean_agent.seed_discovery.jgi_gold import inspect_gold_snapshot, process_gold_snapshot
+from fair_ocean_agent.seed_discovery.local_epmc import DatasetAccessions, LocalEuropePmcResolver, normalize_epmc_accession
 from fair_ocean_agent.seed_discovery.models import EnaRun, MatchConfidence, MgnifyStudy, PublicationCandidate, ResolutionStatus
 from fair_ocean_agent.seed_discovery.publication_resolver import OpenAlexRateLimitError, PublicationResolver, title_similarity
+from fair_ocean_agent.seed_discovery.update_epmc_accession_index import parse_id_mapping
 
 
 def _db(tmp_path: Path) -> SeedDiscoveryDB:
@@ -31,6 +38,10 @@ def test_seed_discovery_doi_normalization():
 
 def test_seed_discovery_openalex_default_interval_is_conservative():
     assert SeedDiscoveryConfig().request_interval_for_source("openalex") == 10.0
+
+
+def test_seed_discovery_openalex_disabled_by_default():
+    assert SeedDiscoveryConfig().openalex_enabled is False
 
 
 def test_mgnify_parser_extracts_insdc_identifiers_from_payload_text():
@@ -314,6 +325,25 @@ def test_resolution_resume_skips_no_publication_until_refresh(tmp_path):
     assert {row["id"] for row in refresh_rows} >= {no_pub_id, pending_id}
 
 
+def test_resolution_queue_prioritizes_least_recently_checked_reprocess_rows(tmp_path):
+    db = _db(tmp_path)
+    old_id = db.upsert_study(MgnifyStudy(mgnify_accession="MGYS_OLD", biome="Marine"))
+    new_id = db.upsert_study(MgnifyStudy(mgnify_accession="MGYS_NEW", biome="Marine"))
+    db.conn.execute(
+        "UPDATE mgnify_studies SET publication_resolution_status = 'openalex_no_resolve_reprocess', last_checked_at = '2026-08-22T10:00:00+00:00' WHERE id = ?",
+        (old_id,),
+    )
+    db.conn.execute(
+        "UPDATE mgnify_studies SET publication_resolution_status = 'openalex_no_resolve_reprocess', last_checked_at = '2026-08-22T12:00:00+00:00' WHERE id = ?",
+        (new_id,),
+    )
+    db.conn.commit()
+
+    rows = db.studies_for_resolution(refresh=False, limit=2)
+
+    assert [row["mgnify_accession"] for row in rows] == ["MGYS_OLD", "MGYS_NEW"]
+
+
 def test_mgnify_pagination_uses_count_items_shape(tmp_path, monkeypatch):
     db = _db(tmp_path)
     config = SeedDiscoveryConfig(db_path=tmp_path / "seeds.sqlite", page_size=2)
@@ -487,6 +517,259 @@ def test_http_client_persists_openalex_interval_across_clients(tmp_path, monkeyp
     assert sleeps[0] > 9.0
 
 
+def test_local_epmc_accession_index_resolves_direct_bioproject(tmp_path):
+    db = _db(tmp_path)
+    db.upsert_epmc_article_ids(
+        [
+            {
+                "pmid": "30179232",
+                "pmcid": "PMC6122167",
+                "doi": "10.1000/project",
+                "snapshot_date": "2026-08-22",
+                "source_file": "PMID_PMCID_DOI.csv.gz",
+            }
+        ]
+    )
+    db.upsert_epmc_accession_links(
+        [
+            {
+                "database_name": "bioproject",
+                "accession": "PRJNA385854",
+                "normalized_accession": "PRJNA385854",
+                "pmcid": "PMC6122167",
+                "article_source": "MED",
+                "article_external_id": "30179232",
+                "snapshot_date": "2026-08-22",
+                "source_file": "bioproject.csv",
+            }
+        ]
+    )
+
+    candidates = LocalEuropePmcResolver(db).resolve_publication_for_dataset(DatasetAccessions(bioproject="prjna385854."))
+
+    assert candidates[0].doi == "10.1000/project"
+    assert candidates[0].match_confidence == MatchConfidence.VERY_HIGH
+    assert candidates[0].match_method == "europe_pmc_bulk_accessions"
+
+
+def test_local_epmc_accession_index_aggregates_biosample_evidence(tmp_path):
+    db = _db(tmp_path)
+    db.upsert_epmc_article_ids(
+        [
+            {
+                "pmid": "30179232",
+                "pmcid": "PMC6122167",
+                "doi": "10.1000/samples",
+                "snapshot_date": "2026-08-22",
+                "source_file": "PMID_PMCID_DOI.csv.gz",
+            }
+        ]
+    )
+    db.upsert_epmc_accession_links(
+        [
+            {
+                "database_name": "biosample",
+                "accession": accession,
+                "normalized_accession": accession,
+                "pmcid": "PMC6122167",
+                "article_source": "MED",
+                "article_external_id": "30179232",
+                "snapshot_date": "2026-08-22",
+                "source_file": "biosample.csv",
+            }
+            for accession in ("SAMEA111", "SAMEA112", "SAMEA113", "SAMEA114")
+        ]
+    )
+
+    candidates = LocalEuropePmcResolver(db).resolve_publication_for_dataset(
+        DatasetAccessions(biosamples=["SAMEA111", "SAMEA112", "SAMEA113", "SAMEA114"])
+    )
+
+    assert candidates[0].doi == "10.1000/samples"
+    assert candidates[0].match_confidence == MatchConfidence.VERY_HIGH
+    assert candidates[0].match_score == 12.0
+
+
+def test_publication_resolver_uses_ena_run_level_local_epmc_evidence(tmp_path):
+    db = _db(tmp_path)
+    db.upsert_ena_run(
+        EnaRun(
+            run_accession="ERR111",
+            experiment_accession="ERX111",
+            sample_accession="SAMEA111",
+            study_accession="PRJEB_NO_HIT",
+            secondary_study_accession="ERP_NO_HIT",
+            bioproject_accession="PRJEB_NO_HIT",
+            sequence_accessibility_status="fastq_confirmed",
+        )
+    )
+    db.upsert_ena_run(
+        EnaRun(
+            run_accession="ERR112",
+            experiment_accession="ERX112",
+            sample_accession="SAMEA112",
+            study_accession="PRJEB_NO_HIT",
+            secondary_study_accession="ERP_NO_HIT",
+            bioproject_accession="PRJEB_NO_HIT",
+            sequence_accessibility_status="fastq_confirmed",
+        )
+    )
+    ena_study_id = db.upsert_ena_study(
+        aggregate_ena_study(
+            [
+                {
+                    "run_accession": "ERR111",
+                    "study_accession": "PRJEB_NO_HIT",
+                    "secondary_study_accession": "ERP_NO_HIT",
+                    "bioproject_accession": "PRJEB_NO_HIT",
+                    "sample_accession": "SAMEA111",
+                    "secondary_sample_accession": None,
+                    "study_title": "Marine sediment amplicon sequencing",
+                    "project_name": None,
+                    "centre_name": None,
+                    "first_public": None,
+                    "sequence_accessibility_status": "fastq_confirmed",
+                    "fastq_bytes": "1",
+                    "marine_confidence": "high",
+                    "marine_match_methods": "test",
+                    "marine_tag": None,
+                    "collection_date": None,
+                    "lat": None,
+                    "lon": None,
+                    "depth": None,
+                    "environment_biome": None,
+                    "environment_feature": None,
+                    "environment_material": None,
+                    "sample_collection": None,
+                    "target_gene": None,
+                    "extraction_protocol": None,
+                    "library_construction_protocol": None,
+                    "library_strategy": "AMPLICON",
+                    "library_source": None,
+                }
+            ]
+        )
+    )
+    db.upsert_epmc_accession_links(
+        [
+            {
+                "database_name": "gen",
+                "accession": accession,
+                "normalized_accession": accession,
+                "pmcid": "PMC_RUNS",
+                "article_source": "MED",
+                "article_external_id": "12345",
+                "snapshot_date": "2026-08-22",
+                "source_file": "gen.csv",
+            }
+            for accession in ("ERR111", "ERR112")
+        ]
+    )
+
+    row = db.conn.execute("SELECT * FROM ena_studies WHERE id = ?", (ena_study_id,)).fetchone()
+    status = _resolver(db).resolve_ena_study(row)
+    candidate = db.conn.execute(
+        "SELECT * FROM publication_candidates WHERE ena_study_id = ? AND match_method = 'europe_pmc_bulk_accessions'",
+        (ena_study_id,),
+    ).fetchone()
+
+    assert status == ResolutionStatus.RESOLVED
+    assert candidate["pmid"] == "12345"
+    assert candidate["match_confidence"] == MatchConfidence.HIGH.value
+
+
+def test_publication_resolver_keeps_local_epmc_candidate_when_pmid_enrichment_fails(tmp_path):
+    db = _db(tmp_path)
+    ena_study_id = db.upsert_ena_study(
+        aggregate_ena_study(
+            [
+                {
+                    "run_accession": "ERR111",
+                    "study_accession": "PRJEB_NO_HIT",
+                    "secondary_study_accession": "ERP_NO_HIT",
+                    "bioproject_accession": "PRJEB_NO_HIT",
+                    "sample_accession": "SAMEA111",
+                    "secondary_sample_accession": None,
+                    "study_title": "Marine sediment amplicon sequencing",
+                    "project_name": None,
+                    "centre_name": None,
+                    "first_public": None,
+                    "sequence_accessibility_status": "fastq_confirmed",
+                    "fastq_bytes": "1",
+                    "marine_confidence": "high",
+                    "marine_match_methods": "test",
+                    "marine_tag": None,
+                    "collection_date": None,
+                    "lat": None,
+                    "lon": None,
+                    "depth": None,
+                    "environment_biome": None,
+                    "environment_feature": None,
+                    "environment_material": None,
+                    "sample_collection": None,
+                    "target_gene": None,
+                    "extraction_protocol": None,
+                    "library_construction_protocol": None,
+                    "library_strategy": "AMPLICON",
+                    "library_source": None,
+                }
+            ]
+        )
+    )
+    db.upsert_ena_run(
+        EnaRun(
+            run_accession="ERR111",
+            study_accession="PRJEB_NO_HIT",
+            secondary_study_accession="ERP_NO_HIT",
+            bioproject_accession="PRJEB_NO_HIT",
+            sequence_accessibility_status="fastq_confirmed",
+        )
+    )
+    db.upsert_epmc_accession_links(
+        [
+            {
+                "database_name": "gen",
+                "accession": "ERR111",
+                "normalized_accession": "ERR111",
+                "pmcid": None,
+                "article_source": "MED",
+                "article_external_id": "12345",
+                "snapshot_date": "2026-08-22",
+                "source_file": "gen.csv",
+            }
+        ]
+    )
+
+    class BrokenEuropePmc(_EmptyEuropePmc):
+        def resolve_pmid(self, pmid):  # noqa: ANN001
+            raise RuntimeError("network down")
+
+    row = db.conn.execute("SELECT * FROM ena_studies WHERE id = ?", (ena_study_id,)).fetchone()
+    status = _resolver(db, europepmc=BrokenEuropePmc()).resolve_ena_study(row)
+    candidate = db.conn.execute("SELECT * FROM publication_candidates WHERE ena_study_id = ?", (ena_study_id,)).fetchone()
+
+    assert status == ResolutionStatus.RESOLVED
+    assert candidate["pmid"] == "12345"
+    assert candidate["normalized_doi"] is None
+
+
+def test_epmc_accession_normalization_trims_punctuation():
+    assert normalize_epmc_accession("(prjeb12345).") == "PRJEB12345"
+
+
+def test_epmc_id_mapping_rejects_error_payload(tmp_path):
+    path = tmp_path / "PMID_PMCID_DOI.csv.gz"
+    with gzip.open(path, "wt", encoding="utf-8") as handle:
+        handle.write("ERROR:\nORA-12537: TNS:connection closed\n")
+
+    try:
+        list(parse_id_mapping(path, snapshot_date="2026-08-22"))
+    except RuntimeError as exc:
+        assert "error payload" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError")
+
+
 class _EmptyMgnify:
     def publications(self, accession):  # noqa: ANN001
         return []
@@ -601,7 +884,7 @@ def test_publication_resolver_raises_openalex_429_to_stop_run(tmp_path):
 
     row = db.conn.execute("SELECT * FROM mgnify_studies WHERE id = ?", (study_id,)).fetchone()
     try:
-        _resolver(db, openalex=BlockedOpenAlex()).resolve_study(row)
+        _resolver(db, config=SeedDiscoveryConfig(openalex_enabled=True), openalex=BlockedOpenAlex()).resolve_study(row)
     except OpenAlexRateLimitError as exc:
         assert "OpenAlex returned 429" in str(exc)
     else:
@@ -708,3 +991,119 @@ def test_publication_resolver_can_disable_openalex_for_ena_study(tmp_path):
         (ena_study_id,),
     ).fetchone()
     assert candidate["match_method"] == "ena_publication_like_title"
+
+
+def test_jgi_gold_snapshot_inspection_and_ingest(tmp_path):
+    raw_dir = tmp_path / "jgi_gold" / "raw" / "2026-08-22"
+    raw_dir.mkdir(parents=True)
+    (raw_dir / "manifest.json").write_text('{"snapshot": "2026-08-22", "files": []}', encoding="utf-8")
+
+    workbook = Workbook()
+    studies = workbook.active
+    studies.title = "Studies"
+    studies.append(["GOLD Study ID", "Study Name", "Study Description", "NCBI BioProject Accession", "Publication"])
+    studies.append(["Gs0001", "Marine sediment metagenome", "Coastal ocean sediment survey", "PRJNA000001", "doi:10.1234/example"])
+
+    biosamples = workbook.create_sheet("Biosamples")
+    biosamples.append(
+        [
+            "GOLD Biosample ID",
+            "GOLD Study ID",
+            "NCBI Biosample Accession",
+            "Biosample Name",
+            "Sample Collection Date",
+            "Latitude",
+            "Longitude",
+            "Depth",
+            "Ecosystem",
+            "Ecosystem Category",
+            "Ecosystem Type",
+            "Ecosystem Subtype",
+            "Specific Ecosystem",
+            "Environmental Medium",
+            "Sample Collection Method",
+            "Size Fraction",
+        ]
+    )
+    biosamples.append(
+        [
+            "Gb0001",
+            "Gs0001",
+            "SAMN000001",
+            "Marine mud 1",
+            "2020-01-02",
+            "42.1",
+            "-70.2",
+            "15 m",
+            "Environmental",
+            "Aquatic",
+            "Marine",
+            "Marine sediment",
+            "Coastal sediment",
+            "sediment",
+            "box corer",
+            "0.2-3 um",
+        ]
+    )
+
+    projects = workbook.create_sheet("Sequencing Projects")
+    projects.append(
+        [
+            "GOLD Sequencing Project ID",
+            "GOLD Study ID",
+            "GOLD Biosample ID",
+            "NCBI BioProject Accession",
+            "NCBI Biosample Accession",
+            "Sequencing Strategy",
+            "Project Status",
+            "JGI Project ID",
+        ]
+    )
+    projects.append(["Gp0001", "Gs0001", "Gb0001", "PRJNA000001", "SAMN000001", "Metagenome", "Public", "JGI123"])
+
+    analyses = workbook.create_sheet("Analysis Projects")
+    analyses.append(["GOLD Analysis Project ID", "GOLD Project ID", "GOLD Biosample ID", "GOLD Study ID", "Analysis Project Type", "IMG Taxon ID"])
+    analyses.append(["Ga0001", "Gp0001", "Gb0001", "Gs0001", "IMG/M metagenome analysis", "3300000001"])
+
+    workbook.save(raw_dir / "public_studies_biosamples_sps_aps_organisms.xlsx")
+    _force_xlsx_a1_dimensions(raw_dir / "public_studies_biosamples_sps_aps_organisms.xlsx")
+
+    inventory = inspect_gold_snapshot(raw_dir, tmp_path / "jgi_gold" / "processed" / "inspect-only")
+    assert inventory["workbooks"]["public_studies_biosamples_sps_aps_organisms.xlsx"]["sheets"]["Biosamples"]["inferred_entity_type"] == "biosample"
+
+    config = SeedDiscoveryConfig(db_path=tmp_path / "seeds.sqlite", gold_data_dir=tmp_path / "jgi_gold")
+    locations = process_gold_snapshot(config, raw_dir, snapshot="2026-08-22")
+
+    db = SeedDiscoveryDB(config.db_path)
+    try:
+        assert db.conn.execute("SELECT count(*) AS n FROM gold_source_rows").fetchone()["n"] == 4
+        assert db.conn.execute("SELECT primary_bioproject FROM gold_studies WHERE gold_study_id = 'Gs0001'").fetchone()["primary_bioproject"] == "PRJNA000001"
+        sample = db.conn.execute("SELECT * FROM gold_biosamples WHERE gold_biosample_id = 'Gb0001'").fetchone()
+        assert sample["ncbi_biosample_accession"] == "SAMN000001"
+        assert sample["marine_confidence"] == "high"
+        staged = db.conn.execute("SELECT * FROM gold_faire_enrichment WHERE canonical_biosample = 'SAMN000001'").fetchone()
+        assert staged["decimalLatitude"] == "42.1"
+        assert staged["env_medium"] == "sediment"
+        assert db.conn.execute("SELECT jgi_project_id FROM gold_sequencing_projects WHERE gold_project_id = 'Gp0001'").fetchone()["jgi_project_id"] == "JGI123"
+        assert db.conn.execute("SELECT img_identifier FROM gold_analysis_projects WHERE gold_analysis_project_id = 'Ga0001'").fetchone()["img_identifier"] == "3300000001"
+        assert db.conn.execute("SELECT doi FROM gold_study_publications WHERE gold_study_id = 'Gs0001'").fetchone()["doi"] == "10.1234/example"
+        assert db.conn.execute("SELECT availability_status FROM gold_project_jgi_files WHERE gold_project_id = 'Gp0001'").fetchone()["availability_status"] == "metadata_only_auth_required_for_file_listing"
+    finally:
+        db.close()
+
+    assert Path(locations["schema_inventory"]).exists()
+    assert Path(locations["reports"]["faire_mapping_candidates"]).exists()
+    assert Path(locations["jgi_file_manifest"]).exists()
+    assert Path(locations["reports"]["metadata_completeness"]).exists()
+    assert (tmp_path / "jgi_gold" / "OUTPUT_LOCATIONS.json").exists()
+
+
+def _force_xlsx_a1_dimensions(path: Path) -> None:
+    rewritten = path.with_suffix(".rewritten.xlsx")
+    with ZipFile(path, "r") as src, ZipFile(rewritten, "w", ZIP_DEFLATED) as dst:
+        for name in src.namelist():
+            payload = src.read(name)
+            if name.startswith("xl/worksheets/") and name.endswith(".xml"):
+                payload = re.sub(rb'<dimension ref="[^"]+"', b'<dimension ref="A1"', payload, count=1)
+            dst.writestr(name, payload)
+    rewritten.replace(path)

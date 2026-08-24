@@ -107,7 +107,7 @@ class SeedDiscoveryConfig:
     ena_portal_base_url: str = "https://www.ebi.ac.uk/ena/portal/api"
     europepmc_base_url: str = "https://www.ebi.ac.uk/europepmc/webservices/rest"
     crossref_base_url: str = "https://api.crossref.org"
-    openalex_enabled: bool = True
+    openalex_enabled: bool = False
     openalex_base_url: str = "https://api.openalex.org"
     openalex_mailto: str | None = field(default_factory=_contact_email)
     openalex_api_key: str | None = None
@@ -155,6 +155,20 @@ class SeedDiscoveryConfig:
     ena_page_size: int = 100
     ena_date_shards_enabled: bool = False
     ena_date_shard_start_year: int = 2008
+    epmc_accession_bulk_base_url: str = "https://ftp.ebi.ac.uk/pub/databases/pmc/TextMinedTerms"
+    epmc_id_mapping_url: str = "https://ftp.ebi.ac.uk/pub/databases/pmc/DOI/PMID_PMCID_DOI.csv.gz"
+    epmc_bulk_dir: Path = Path("data/seed_discovery/europepmc_bulk")
+    epmc_selected_accession_databases: tuple[str, ...] = (
+        "bioproject",
+        "biosample",
+        "metagenomics",
+        "gca",
+        "gen",
+        "refseq",
+    )
+    gold_downloads_url: str = "https://gold.jgi.doe.gov/downloads"
+    gold_base_url: str = "https://gold.jgi.doe.gov"
+    gold_data_dir: Path = Path("data/jgi_gold")
 
     def request_interval_for_source(self, source: str) -> float:
         source_intervals = self.source_min_request_interval_seconds or {

@@ -335,10 +335,19 @@ class EnaSeedDiscoveryRunner:
             counts["ena_pages_scanned"] += pages_for_partition
             counts[f"ena_pages_{partition.name}"] += pages_for_partition
 
-            for run in runs:
+            for index, run in enumerate(runs, start=1):
                 self.db.upsert_ena_run(run)
                 counts["ena_read_runs_scanned"] += 1
                 counts[f"ena_runs_{run.sequence_accessibility_status}"] += 1
+                if index % 100 == 0:
+                    logger.info(
+                        "ENA discovery progress partition=%s partition_runs=%s/%s total_runs=%s pages_seen=%s",
+                        partition.name,
+                        index,
+                        len(runs),
+                        counts["ena_read_runs_scanned"],
+                        pages_seen,
+                    )
 
             status = "completed" if limit == 0 or len(runs) < limit else "partial_limit_reached"
             self.db.update_crawl_state(
@@ -349,11 +358,14 @@ class EnaSeedDiscoveryRunner:
             )
 
     def _aggregate_studies(self, counts: Counter) -> None:
-        for _key, rows in self.db.ena_run_groups().items():
+        groups = self.db.ena_run_groups()
+        for index, (_key, rows) in enumerate(groups.items(), start=1):
             study = aggregate_ena_study(rows)
             self.db.upsert_ena_study(study)
             counts["ena_candidate_studies"] += 1
             counts[f"ena_studies_{study.sequence_accessibility_status}"] += 1
+            if index % 100 == 0:
+                logger.info("ENA aggregation progress studies=%s/%s", index, len(groups))
 
     def _resolve_publications(self, limits: RunLimits, counts: Counter) -> None:
         resolver = PublicationResolver(
@@ -367,12 +379,15 @@ class EnaSeedDiscoveryRunner:
             crossref=CrossrefSeedClient(self.http, self.config),
         )
         rows = self.db.ena_studies_for_resolution(refresh=limits.refresh, limit=limits.max_studies)
-        for row in rows:
+        total = len(rows)
+        for index, row in enumerate(rows, start=1):
             if self.stop_requested:
                 raise StopRequested()
             status = resolver.resolve_ena_study(row)
             counts[f"ena_publication_status_{status.value}"] += 1
             logger.info("resolved ENA %s -> %s", row["canonical_dataset_id"], status.value)
+            if index % 100 == 0:
+                logger.info("ENA publication progress resolved=%s/%s", index, total)
         counts["ena_studies_total"] = self.db.count("ena_studies")
         counts["ena_runs_total"] = self.db.count("ena_runs")
         counts["publication_candidates_total"] = self.db.count("publication_candidates")

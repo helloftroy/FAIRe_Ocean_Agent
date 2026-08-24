@@ -404,6 +404,13 @@ def worker_command(
     )
     if summary["stopped_reason"]:
         console.print(f"[red]Stopped early:[/red] {summary['stopped_reason']}")
+        # Distinct, non-zero exit so a `worker && next_step` chain (or any
+        # automation) stops here instead of walking straight into the next
+        # network-calling stage right after confirming a source is actively
+        # rate-limiting/blocking this machine -- exit code 2 matches
+        # run_mgnify_seed_discovery.py/run_ena_seed_discovery.py's own
+        # convention for the same "stopped due to sustained 429" case.
+        raise typer.Exit(2)
 
 
 @app.command("run-study")

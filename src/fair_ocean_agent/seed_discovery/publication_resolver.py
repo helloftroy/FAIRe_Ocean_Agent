@@ -16,6 +16,7 @@ from fair_ocean_agent.seed_discovery.clients.openalex import OpenAlexSeedClient
 from fair_ocean_agent.seed_discovery.clients.crossref import CrossrefSeedClient
 from fair_ocean_agent.seed_discovery.config import SeedDiscoveryConfig
 from fair_ocean_agent.seed_discovery.db import SeedDiscoveryDB, choose_primary_candidate, normalize_doi_for_seed
+from fair_ocean_agent.seed_discovery.local_epmc import DatasetAccessions, LocalEuropePmcResolver
 from fair_ocean_agent.seed_discovery.models import MatchConfidence, PublicationCandidate, ResolutionStatus
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,7 @@ class PublicationResolver:
         self.openalex = openalex
         self.europepmc = europepmc
         self.crossref = crossref
+        self.local_epmc = LocalEuropePmcResolver(db)
 
     def resolve_study(self, study_row) -> ResolutionStatus:
         study_id = int(study_row["id"])
@@ -76,6 +78,15 @@ class PublicationResolver:
             openalex_attempted = False
             openalex_retryable = False
             openalex_skipped = False
+            candidates.extend(
+                self.local_epmc.resolve_publication_for_dataset(
+                    DatasetAccessions(
+                        bioproject=study_row["bioproject_accession"],
+                        study_accessions=[study_row["secondary_study_accession"]] if study_row["secondary_study_accession"] else [],
+                        mgnify_accession=study_row["mgnify_accession"],
+                    )
+                )
+            )
             candidates.extend(self.mgnify.publications(study_row["mgnify_accession"]))
 
             for accession in accessions:
@@ -116,9 +127,12 @@ class PublicationResolver:
                                 raise
                     else:
                         openalex_skipped = True
-                        candidates.append(self._title_only_candidate(title, source="mgnify"))
                     title_candidates.extend(self.europepmc.title_search(title))
-                    candidates.extend(self._validated_title_candidates(title, title_candidates))
+                    validated_title_candidates = self._validated_title_candidates(title, title_candidates)
+                    if validated_title_candidates:
+                        candidates.extend(validated_title_candidates)
+                    elif openalex_skipped:
+                        candidates.append(self._title_only_candidate(title, source="mgnify"))
 
             if not candidates and self.config.metadata_search_enabled:
                 query = self._metadata_query(study_row)
@@ -162,6 +176,18 @@ class PublicationResolver:
             openalex_attempted = False
             openalex_retryable = False
             openalex_skipped = False
+            accession_family = self.db.ena_accession_family_for_study(study_row)
+            candidates.extend(
+                self.local_epmc.resolve_publication_for_dataset(
+                    DatasetAccessions(
+                        bioproject=study_row["bioproject_accession"],
+                        study_accessions=accession_family["study_accessions"],
+                        biosamples=accession_family["biosamples"],
+                        experiments=accession_family["experiments"],
+                        runs=accession_family["runs"],
+                    )
+                )
+            )
 
             for accession in accessions:
                 candidates.extend(self.ena.publications_for_accession(accession))
@@ -205,7 +231,9 @@ class PublicationResolver:
                 else:
                     openalex_skipped = True
                     if self._publication_like_title(title):
-                        candidates.append(self._title_only_candidate(title, source="ena"))
+                        existing_title_candidate = any(candidate.title for candidate in candidates)
+                        if not existing_title_candidate:
+                            candidates.append(self._title_only_candidate(title, source="ena"))
 
             candidates = [candidate for candidate in candidates if self._plausible_publication(candidate)]
             for candidate in candidates:
@@ -265,7 +293,11 @@ class PublicationResolver:
         enriched: list[PublicationCandidate] = []
         for candidate in candidates:
             if candidate.pmid and not candidate.doi:
-                resolved = self.europepmc.resolve_pmid(candidate.pmid)
+                try:
+                    resolved = self.europepmc.resolve_pmid(candidate.pmid)
+                except Exception as exc:
+                    logger.warning("PMID enrichment failed for %s; keeping candidate with PMID only (%s)", candidate.pmid, exc)
+                    resolved = None
                 if resolved is not None:
                     candidate = replace(
                         candidate,

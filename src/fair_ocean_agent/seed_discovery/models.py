@@ -13,6 +13,7 @@ class ResolutionStatus(str, Enum):
     OPENALEX_REPROCESS = "openalex_no_resolve_reprocess"
     API_ERROR = "api_error"
     NOT_YET_PROCESSED = "not_yet_processed"
+    LIKELY_REANALYSIS_ONLY = "likely_reanalysis_only"
 
 
 class MatchConfidence(str, Enum):

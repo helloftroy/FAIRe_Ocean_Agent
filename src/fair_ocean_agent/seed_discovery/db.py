@@ -28,8 +28,9 @@ class SeedDiscoveryDB:
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(self.path)
+        self.conn = sqlite3.connect(self.path, timeout=60)
         self.conn.row_factory = sqlite3.Row
+        self.conn.execute("PRAGMA busy_timeout = 60000")
         self.conn.execute("PRAGMA foreign_keys = ON")
 
     def close(self) -> None:
@@ -203,9 +204,257 @@ class SeedDiscoveryDB:
                 updated_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS epmc_accession_links (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                database_name TEXT NOT NULL,
+                accession TEXT NOT NULL,
+                normalized_accession TEXT NOT NULL,
+                pmcid TEXT,
+                article_source TEXT,
+                article_external_id TEXT,
+                snapshot_date TEXT NOT NULL,
+                source_file TEXT NOT NULL,
+                active_in_latest_snapshot INTEGER NOT NULL DEFAULT 1,
+                first_seen_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_epmc_accession_links_identity
+              ON epmc_accession_links(
+                database_name,
+                normalized_accession,
+                COALESCE(pmcid, ''),
+                COALESCE(article_source, ''),
+                COALESCE(article_external_id, '')
+              );
+            CREATE INDEX IF NOT EXISTS idx_epmc_accession_links_norm
+              ON epmc_accession_links(normalized_accession);
+            CREATE INDEX IF NOT EXISTS idx_epmc_accession_links_db_norm
+              ON epmc_accession_links(database_name, normalized_accession);
+            CREATE INDEX IF NOT EXISTS idx_epmc_accession_links_pmcid
+              ON epmc_accession_links(pmcid);
+            CREATE INDEX IF NOT EXISTS idx_epmc_accession_links_article
+              ON epmc_accession_links(article_source, article_external_id);
+
+            CREATE TABLE IF NOT EXISTS epmc_article_ids (
+                pmid TEXT PRIMARY KEY,
+                pmcid TEXT,
+                doi TEXT,
+                normalized_doi TEXT,
+                snapshot_date TEXT NOT NULL,
+                source_file TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_epmc_article_ids_pmcid
+              ON epmc_article_ids(pmcid);
+            CREATE INDEX IF NOT EXISTS idx_epmc_article_ids_norm_doi
+              ON epmc_article_ids(normalized_doi);
+
+            CREATE TABLE IF NOT EXISTS gold_source_rows (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                snapshot_date TEXT NOT NULL,
+                workbook_name TEXT NOT NULL,
+                sheet_name TEXT NOT NULL,
+                row_number INTEGER NOT NULL,
+                entity_type TEXT NOT NULL,
+                source_entity_id TEXT,
+                source_metadata_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(snapshot_date, workbook_name, sheet_name, row_number)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_gold_source_rows_entity
+              ON gold_source_rows(entity_type, source_entity_id);
+
+            CREATE TABLE IF NOT EXISTS gold_studies (
+                gold_study_id TEXT PRIMARY KEY,
+                study_name TEXT,
+                study_description TEXT,
+                marine_confidence TEXT,
+                marine_match_methods TEXT,
+                primary_bioproject TEXT,
+                primary_doi TEXT,
+                primary_doi_status TEXT,
+                primary_doi_selection_reason TEXT,
+                primary_doi_bioproject_fanout INTEGER,
+                source_snapshot_date TEXT,
+                source_metadata_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS gold_biosamples (
+                gold_biosample_id TEXT PRIMARY KEY,
+                gold_study_id TEXT,
+                ncbi_biosample_accession TEXT,
+                biosample_name TEXT,
+                collection_date TEXT,
+                latitude TEXT,
+                longitude TEXT,
+                depth TEXT,
+                ecosystem TEXT,
+                ecosystem_category TEXT,
+                ecosystem_type TEXT,
+                ecosystem_subtype TEXT,
+                specific_ecosystem TEXT,
+                env_broad_scale TEXT,
+                env_local_scale TEXT,
+                env_medium TEXT,
+                marine_confidence TEXT,
+                marine_match_methods TEXT,
+                source_snapshot_date TEXT,
+                source_metadata_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_gold_biosamples_ncbi
+              ON gold_biosamples(ncbi_biosample_accession);
+            CREATE INDEX IF NOT EXISTS idx_gold_biosamples_study
+              ON gold_biosamples(gold_study_id);
+
+            CREATE TABLE IF NOT EXISTS gold_sequencing_projects (
+                gold_project_id TEXT PRIMARY KEY,
+                gold_study_id TEXT,
+                gold_biosample_id TEXT,
+                ncbi_bioproject_accession TEXT,
+                ncbi_biosample_accession TEXT,
+                sequencing_strategy TEXT,
+                project_status TEXT,
+                jgi_project_id TEXT,
+                source_snapshot_date TEXT,
+                source_metadata_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_gold_projects_bioproject
+              ON gold_sequencing_projects(ncbi_bioproject_accession);
+            CREATE INDEX IF NOT EXISTS idx_gold_projects_biosample
+              ON gold_sequencing_projects(ncbi_biosample_accession);
+
+            CREATE TABLE IF NOT EXISTS gold_analysis_projects (
+                gold_analysis_project_id TEXT PRIMARY KEY,
+                gold_project_id TEXT,
+                gold_biosample_id TEXT,
+                gold_study_id TEXT,
+                analysis_project_type TEXT,
+                img_identifier TEXT,
+                source_snapshot_date TEXT,
+                source_metadata_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS gold_study_publications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                gold_study_id TEXT,
+                gold_project_id TEXT,
+                doi TEXT,
+                pmid TEXT,
+                pmcid TEXT,
+                title TEXT,
+                match_method TEXT NOT NULL,
+                matched_identifier TEXT,
+                match_confidence TEXT,
+                match_score REAL DEFAULT 0,
+                is_primary INTEGER NOT NULL DEFAULT 0,
+                source_snapshot_date TEXT,
+                raw_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_gold_publications_identity
+              ON gold_study_publications(
+                COALESCE(gold_study_id, ''),
+                COALESCE(gold_project_id, ''),
+                COALESCE(doi, ''),
+                COALESCE(pmid, ''),
+                COALESCE(pmcid, ''),
+                COALESCE(title, ''),
+                COALESCE(source_snapshot_date, '')
+              );
+            CREATE INDEX IF NOT EXISTS idx_gold_publications_doi
+              ON gold_study_publications(doi);
+            CREATE INDEX IF NOT EXISTS idx_gold_publications_project
+              ON gold_study_publications(gold_project_id);
+
+            CREATE TABLE IF NOT EXISTS gold_bioproject_publication_search (
+                bioproject_accession TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                candidates_found INTEGER NOT NULL DEFAULT 0,
+                error TEXT,
+                checked_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS gold_project_jgi_files (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                gold_project_id TEXT,
+                jgi_project_id TEXT,
+                file_id TEXT,
+                filename TEXT,
+                file_type TEXT,
+                size_bytes INTEGER,
+                checksum TEXT,
+                availability_status TEXT,
+                download_locator TEXT,
+                source_snapshot_date TEXT,
+                raw_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_gold_jgi_files_placeholder
+              ON gold_project_jgi_files(
+                COALESCE(gold_project_id, ''),
+                COALESCE(jgi_project_id, ''),
+                COALESCE(source_snapshot_date, ''),
+                availability_status
+              );
+            CREATE INDEX IF NOT EXISTS idx_gold_jgi_files_project
+              ON gold_project_jgi_files(gold_project_id, jgi_project_id);
+
+            CREATE TABLE IF NOT EXISTS gold_faire_enrichment (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                canonical_biosample TEXT,
+                gold_biosample_id TEXT,
+                gold_study_id TEXT,
+                ncbi_bioproject TEXT,
+                decimalLatitude TEXT,
+                decimalLongitude TEXT,
+                eventDate TEXT,
+                depth TEXT,
+                geo_loc_name TEXT,
+                env_broad_scale TEXT,
+                env_local_scale TEXT,
+                env_medium TEXT,
+                sample_collection_method TEXT,
+                size_fraction TEXT,
+                temperature TEXT,
+                salinity TEXT,
+                ph TEXT,
+                oxygen TEXT,
+                chlorophyll TEXT,
+                source TEXT NOT NULL DEFAULT 'GOLD',
+                source_snapshot_date TEXT,
+                provenance_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_gold_faire_biosample
+              ON gold_faire_enrichment(canonical_biosample);
+
             """
         )
         self._ensure_publication_candidates_schema()
+        self._ensure_gold_studies_primary_doi_columns()
         self._create_paper_seeds_view()
         self.conn.commit()
 
@@ -268,6 +517,24 @@ class SeedDiscoveryDB:
             DROP TABLE publication_candidates_old;
             """
         )
+
+    def _ensure_gold_studies_primary_doi_columns(self) -> None:
+        """CREATE TABLE IF NOT EXISTS gold_studies above only creates these
+        columns on a brand-new database -- an existing gold_studies table
+        (every GOLD sqlite snapshot on disk as of this writing) predates
+        them and needs a plain ADD COLUMN. Unlike
+        _ensure_publication_candidates_schema, these are new nullable
+        columns with no UNIQUE constraint involved, so a rename-and-rebuild
+        isn't needed -- ALTER TABLE ADD COLUMN is safe and instant even on
+        a multi-GB table."""
+        columns = {str(row["name"]) for row in self.conn.execute("PRAGMA table_info(gold_studies)").fetchall()}
+        for column, ddl_type in (
+            ("primary_doi_status", "TEXT"),
+            ("primary_doi_selection_reason", "TEXT"),
+            ("primary_doi_bioproject_fanout", "INTEGER"),
+        ):
+            if column not in columns:
+                self.conn.execute(f"ALTER TABLE gold_studies ADD COLUMN {column} {ddl_type}")
 
     def _create_paper_seeds_view(self) -> None:
         self.conn.executescript(
@@ -447,6 +714,111 @@ class SeedDiscoveryDB:
         )
         self.conn.commit()
 
+    def upsert_epmc_accession_links(self, rows: Iterable[dict]) -> int:
+        now = utc_iso()
+        values = [
+            (
+                row["database_name"],
+                row["accession"],
+                row["normalized_accession"],
+                row.get("pmcid"),
+                row.get("article_source"),
+                row.get("article_external_id"),
+                row["snapshot_date"],
+                row["source_file"],
+                now,
+                now,
+                now,
+                now,
+            )
+            for row in rows
+        ]
+        if not values:
+            return 0
+        self.conn.executemany(
+            """
+            INSERT INTO epmc_accession_links(
+                database_name, accession, normalized_accession, pmcid, article_source, article_external_id,
+                snapshot_date, source_file, active_in_latest_snapshot, first_seen_at, last_seen_at, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+            ON CONFLICT(database_name, normalized_accession, COALESCE(pmcid, ''), COALESCE(article_source, ''), COALESCE(article_external_id, ''))
+            DO UPDATE SET
+              accession=excluded.accession,
+              pmcid=COALESCE(excluded.pmcid, epmc_accession_links.pmcid),
+              article_source=COALESCE(excluded.article_source, epmc_accession_links.article_source),
+              article_external_id=COALESCE(excluded.article_external_id, epmc_accession_links.article_external_id),
+              snapshot_date=excluded.snapshot_date,
+              source_file=excluded.source_file,
+              active_in_latest_snapshot=1,
+              last_seen_at=excluded.last_seen_at,
+              updated_at=excluded.updated_at
+            """,
+            values,
+        )
+        self.conn.commit()
+        return len(values)
+
+    def upsert_epmc_article_ids(self, rows: Iterable[dict]) -> int:
+        now = utc_iso()
+        values = [
+            (
+                row["pmid"],
+                row.get("pmcid"),
+                row.get("doi"),
+                normalize_doi_for_seed(row.get("doi")),
+                row["snapshot_date"],
+                row.get("source_file"),
+                now,
+                now,
+            )
+            for row in rows
+            if row.get("pmid")
+        ]
+        if not values:
+            return 0
+        self.conn.executemany(
+            """
+            INSERT INTO epmc_article_ids(pmid, pmcid, doi, normalized_doi, snapshot_date, source_file, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(pmid) DO UPDATE SET
+              pmcid=COALESCE(excluded.pmcid, epmc_article_ids.pmcid),
+              doi=COALESCE(excluded.doi, epmc_article_ids.doi),
+              normalized_doi=COALESCE(excluded.normalized_doi, epmc_article_ids.normalized_doi),
+              snapshot_date=excluded.snapshot_date,
+              source_file=excluded.source_file,
+              updated_at=excluded.updated_at
+            """,
+            values,
+        )
+        self.conn.commit()
+        return len(values)
+
+    def epmc_links_for_accessions(self, normalized_accessions: Iterable[str]) -> list[sqlite3.Row]:
+        values = sorted({value for value in normalized_accessions if value})
+        if not values:
+            return []
+        placeholders = ",".join("?" for _ in values)
+        return list(
+            self.conn.execute(
+                f"""
+                SELECT
+                  l.*,
+                  ids.pmid AS mapped_pmid,
+                  ids.pmcid AS mapped_pmcid,
+                  ids.doi AS mapped_doi,
+                  ids.normalized_doi AS mapped_normalized_doi
+                FROM epmc_accession_links l
+                LEFT JOIN epmc_article_ids ids
+                  ON (l.article_source = 'MED' AND ids.pmid = l.article_external_id)
+                  OR (l.pmcid IS NOT NULL AND ids.pmcid = l.pmcid)
+                WHERE l.normalized_accession IN ({placeholders})
+                  AND l.active_in_latest_snapshot = 1
+                """,
+                values,
+            )
+        )
+
     def clear_api_cache(self) -> None:
         self.conn.execute("DELETE FROM api_cache")
         self.conn.commit()
@@ -520,6 +892,7 @@ class SeedDiscoveryDB:
             WHEN 'publication_candidates_low_confidence' THEN 4
             ELSE 4
           END,
+          COALESCE(last_checked_at, ''),
           id
         """
         if limit is not None:
@@ -665,6 +1038,60 @@ class SeedDiscoveryDB:
             groups.setdefault(str(key), []).append(row)
         return groups
 
+    def ena_accession_family_for_study(self, study_row: sqlite3.Row, *, sample_limit: int = 500, run_limit: int = 1000) -> dict[str, list[str]]:
+        study_values = {
+            str(value)
+            for value in (
+                study_row["bioproject_accession"],
+                study_row["secondary_study_accession"],
+                study_row["ena_study_accession"],
+                study_row["canonical_dataset_id"],
+            )
+            if value
+        }
+        rows = self.conn.execute(
+            """
+            SELECT sample_accession, secondary_sample_accession, experiment_accession, run_accession
+            FROM ena_runs
+            WHERE bioproject_accession = ?
+               OR secondary_study_accession = ?
+               OR study_accession = ?
+               OR study_accession = ?
+            ORDER BY run_accession
+            """,
+            (
+                study_row["bioproject_accession"],
+                study_row["secondary_study_accession"],
+                study_row["ena_study_accession"],
+                study_row["canonical_dataset_id"],
+            ),
+        ).fetchall()
+        biosamples: list[str] = []
+        experiments: list[str] = []
+        runs: list[str] = []
+        seen_biosamples: set[str] = set()
+        seen_experiments: set[str] = set()
+        seen_runs: set[str] = set()
+        for row in rows:
+            for value in (row["sample_accession"], row["secondary_sample_accession"]):
+                if value and value not in seen_biosamples and len(biosamples) < sample_limit:
+                    seen_biosamples.add(str(value))
+                    biosamples.append(str(value))
+            value = row["experiment_accession"]
+            if value and value not in seen_experiments and len(experiments) < run_limit:
+                seen_experiments.add(str(value))
+                experiments.append(str(value))
+            value = row["run_accession"]
+            if value and value not in seen_runs and len(runs) < run_limit:
+                seen_runs.add(str(value))
+                runs.append(str(value))
+        return {
+            "study_accessions": sorted(study_values),
+            "biosamples": biosamples,
+            "experiments": experiments,
+            "runs": runs,
+        }
+
     def upsert_ena_study(self, study: EnaStudy) -> int:
         now = utc_iso()
         self.conn.execute(
@@ -760,6 +1187,7 @@ class SeedDiscoveryDB:
             WHEN 'publication_candidates_low_confidence' THEN 3
             ELSE 4
           END,
+          COALESCE(last_checked_at, ''),
           id
         """
         if limit is not None:

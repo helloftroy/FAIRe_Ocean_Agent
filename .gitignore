@@ -24,6 +24,10 @@ data/PDFs/
 data/paper_classification/
 data/seed_discovery/*.sqlite
 data/seed_discovery/*.sqlite-*
+data/seed_discovery/europepmc_bulk/
+data/jgi_gold/
+
+logs/
 
 standards/compiled/*
 !standards/compiled/.gitkeep
