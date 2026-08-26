@@ -1016,7 +1016,17 @@ class CncbGsaDiscoveryRunner:
                 if max_projects is not None and len(seen_projects) >= max_projects:
                     self.db.commit()
                     return
-                cache_path = raw_dir / "_search" / f"{re.sub(r'[^a-zA-Z0-9]+', '_', query).strip('_')}_{start}.json"
+                # "bioproject" subdir (not the old flat "_search/") is
+                # deliberate: real live bug found 2026-08-26 -- a cache key
+                # of query+start alone survived the db=gsa -> db=bioproject
+                # fix below unchanged, so a re-run against an existing raw_
+                # dir kept silently replaying the OLD db=gsa responses
+                # cached under the old path instead of ever re-querying the
+                # live API. Namespacing the cache path by which index is
+                # being searched means any future change to what's being
+                # asked for automatically busts stale cache instead of
+                # silently masking itself as "no new results found."
+                cache_path = raw_dir / "_search" / "bioproject" / f"{re.sub(r'[^a-zA-Z0-9]+', '_', query).strip('_')}_{start}.json"
                 cache_path.parent.mkdir(parents=True, exist_ok=True)
                 if cache_path.exists() and not refresh:
                     payload = json.loads(cache_path.read_text(encoding="utf-8"))

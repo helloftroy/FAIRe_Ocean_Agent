@@ -264,6 +264,42 @@ def test_one_discovery_querys_persistent_failure_does_not_crash_the_whole_discov
     assert stored == {"PRJCA0001", "PRJCA0002"}
 
 
+def test_stale_search_cache_from_before_the_db_bioproject_fix_is_not_reused(tmp_path, monkeypatch):
+    """Regression test for a real live bug reported after the db=gsa ->
+    db=bioproject fix shipped: re-running against an existing data-dir
+    (the normal, intentional resume/caching behavior) kept finding only 9
+    projects again, identical to before the fix. Root cause: the search
+    response cache key was only query+start, with no marker for which
+    index was actually searched, so a raw_dir populated by the OLD (buggy)
+    db=gsa code kept getting replayed verbatim -- the live API was never
+    actually re-queried post-fix. Cache path is now namespaced under
+    raw_dir/_search/bioproject/, so a stale file left at the old flat
+    raw_dir/_search/ path (simulated here) must never be read."""
+    monkeypatch.setattr(cncb_gsa_discovery, "DISCOVERY_QUERIES", ("marine",))
+    config = _fast_config(tmp_path)
+    raw_dir = config.data_dir / "raw"
+    stale_cache_path = raw_dir / "_search" / "marine_0.json"
+    stale_cache_path.parent.mkdir(parents=True, exist_ok=True)
+    stale_cache_path.write_text(json.dumps(_search_payload([])), encoding="utf-8")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        item = {"id": "PRJCA9999", "type": "BioProject", "title": "t", "attrs": {"Accession": "PRJCA9999", "Center": "GSA", "CrasAcc": ["CRA9999"]}}
+        return httpx.Response(200, json=_search_payload([item]))
+
+    runner = CncbGsaDiscoveryRunner(config, transport=httpx.MockTransport(handler))
+    try:
+        result = runner.run(phase="discovery")
+    finally:
+        runner.close()
+
+    assert result["counts"]["native_projects_seen"] == 1
+    conn = sqlite3.connect(config.db_path)
+    stored = {row[0] for row in conn.execute("SELECT cncb_bioproject FROM cncb_projects")}
+    conn.close()
+    assert stored == {"PRJCA9999"}
+    assert (raw_dir / "_search" / "bioproject" / "marine_0.json").exists()
+
+
 def test_one_projects_gsa_page_persistent_failure_does_not_crash_the_whole_metadata_phase(tmp_path):
     """Same failure shape as the discovery-phase regression test above, but
     for _metadata's per-project GSA HTML page fetch -- previously
