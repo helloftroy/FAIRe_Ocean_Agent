@@ -66,6 +66,39 @@ inspect or filter results locally before committing cluster time (e.g.
 samples and a PMCID/PDF" filter needs the discovery to have actually
 happened somewhere first).
 
+### Moving GOLD/seed-discovery work to the cluster too
+
+Everything above only moves the main pipeline database. If you've also
+been running the GOLD BioProject publication search
+(`run_gold_bioproject_publication_search.py`) or the MGnify/ENA seed
+discovery marathon (`scripts/run_seed_discovery_marathon.sh`) on your
+Mac -- both are long, network-bound, and don't need a GPU, so they're
+good candidates to move to the cluster's service partition instead of
+relying on your Mac staying online for days:
+
+```bash
+# Stop every Mac-side worker/discovery process first -- sync_local_db_to_cluster.sh
+# refuses to copy a database another process still has open for writing.
+./cluster/sync_local_db_to_cluster.sh <cluster> /scratch/morrill/users/hmp278/FAIRe_Ocean_Agent
+```
+
+This now also syncs `data/jgi_gold/gold_sharded.sqlite` and
+`data/seed_discovery/mgnify_paper_seeds.sqlite` (plus the bulk Europe PMC
+accession index those seed-discovery runners read from locally) if
+they're present. Then on the cluster:
+
+```bash
+sbatch --account=191001-364393 cluster/run_gold_bioproject_search.sbatch
+sbatch --account=191001-364393 cluster/run_seed_discovery_marathon.sbatch
+```
+
+Both are fully resumable (every accession/study's outcome is recorded as
+it's checked), so if either hits its walltime before finishing, just
+resubmit the same command -- it picks up exactly where it left off. Both
+deliberately never touch OpenAlex (see each script's own docstring), so
+they're safe to run alongside `run_discovery.sbatch` without doubling
+load on it.
+
 ## One-time setup
 
 ```bash
