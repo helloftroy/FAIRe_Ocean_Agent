@@ -7,10 +7,11 @@
 # explicit for clarity). Exports the current seed CSV once resolution
 # finishes.
 #
-# NEVER run this at the same time as run_ena_publication_resolution.sbatch
-# or run_seed_discovery_marathon.sbatch -- all three write to the same
-# mgnify_paper_seeds.sqlite file, and SQLite only allows one writer at a
-# time. Run them one at a time; each is independently resumable.
+# NEVER run this at the same time as run_ena_publication_resolution.sbatch,
+# run_seed_discovery_marathon.sbatch, or run_ena_discovery.sbatch -- all
+# four write to the same mgnify_paper_seeds.sqlite file, and SQLite only
+# allows one writer at a time. Run them one at a time; each is
+# independently resumable.
 #
 # Override knobs, for example:
 #   sbatch --export=ALL,MGNIFY_RESOLVE_MAX_STUDIES=50000 cluster/run_mgnify_publication_resolution.sbatch

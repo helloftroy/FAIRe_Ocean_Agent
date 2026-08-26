@@ -8,11 +8,11 @@
 # disabled, so this is safe to run alongside run_discovery.sbatch and
 # run_gold_bioproject_search.sbatch without adding OpenAlex load.
 #
-# NEVER run this at the same time as run_ena_publication_resolution.sbatch
-# or run_mgnify_publication_resolution.sbatch -- this script's own
-# mgnify_publications/ena_publications steps write to the exact same
-# mgnify_paper_seeds.sqlite file those two jobs do, and SQLite only
-# allows one writer at a time.
+# NEVER run this at the same time as run_ena_publication_resolution.sbatch,
+# run_mgnify_publication_resolution.sbatch, or run_ena_discovery.sbatch --
+# this script's own mgnify_publications/ena_publications/ena_discovery
+# steps write to the exact same mgnify_paper_seeds.sqlite file those jobs
+# do, and SQLite only allows one writer at a time.
 #SBATCH --job-name=seed_discovery_marathon
 #SBATCH --partition=service
 #SBATCH --cpus-per-task=2
