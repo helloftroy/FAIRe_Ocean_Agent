@@ -13,13 +13,18 @@
 # unresolvable) are skipped on a re-run, so if this hits its walltime
 # before finishing, just resubmit the same command.
 #
+# NEVER run this at the same time as run_mgnify_publication_resolution.sbatch
+# or run_seed_discovery_marathon.sbatch -- all three write to the same
+# mgnify_paper_seeds.sqlite file, and SQLite only allows one writer at a
+# time. Run them one at a time.
+#
 # Override knobs, for example:
 #   sbatch --export=ALL,ENA_PUBLICATION_MAX_STUDIES=50000 cluster/run_ena_publication_resolution.sbatch
 #SBATCH --job-name=ena_publication_resolution
 #SBATCH --partition=service
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=8G
-#SBATCH --time=24:00:00
+#SBATCH --time=48:00:00
 #SBATCH --output=logs/ena_publication_resolution_%j.out
 #SBATCH --error=logs/ena_publication_resolution_%j.err
 

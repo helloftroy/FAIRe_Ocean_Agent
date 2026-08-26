@@ -14,7 +14,7 @@
 #SBATCH --partition=service
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
-#SBATCH --time=12:00:00
+#SBATCH --time=48:00:00
 #SBATCH --output=logs/discovery_%j.out
 #SBATCH --error=logs/discovery_%j.err
 
@@ -56,13 +56,19 @@ echo "Seed file: ${SEED_FILE}"
 python -m alembic -c alembic.ini upgrade head
 python -m fair_ocean_agent.cli ingest-seeds "${SEED_FILE}"
 python -m fair_ocean_agent.cli enqueue-seed-backfill
-python -m fair_ocean_agent.cli worker --until-empty
+# --no-llm is belt-and-suspenders here: none of the three LLM task types
+# (EXTRACT_TEXT_FACTS/EXTRACT_SUPPLEMENT_TEXT_FACTS/VALIDATE_EVIDENCE)
+# ever get enqueued by anything this script calls -- each is strictly
+# behind its own explicit enqueue-*-backfill command, none of which are
+# run here -- but the flag costs nothing and guarantees it even if that
+# ever changes.
+python -m fair_ocean_agent.cli worker --until-empty --no-llm
 
 echo "=== identifiers/full-text discovery done -- warming supplement cache ==="
 python -m fair_ocean_agent.cli enqueue-supplement-discovery-backfill
-python -m fair_ocean_agent.cli worker --until-empty
+python -m fair_ocean_agent.cli worker --until-empty --no-llm
 python -m fair_ocean_agent.cli enqueue-supplement-retrieval-backfill
-python -m fair_ocean_agent.cli worker --until-empty
+python -m fair_ocean_agent.cli worker --until-empty --no-llm
 
 echo "=== discovery stage complete ==="
 python -m fair_ocean_agent.cli status

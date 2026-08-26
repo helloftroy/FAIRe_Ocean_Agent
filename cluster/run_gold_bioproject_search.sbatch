@@ -16,7 +16,7 @@
 #SBATCH --partition=service
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=8G
-#SBATCH --time=24:00:00
+#SBATCH --time=48:00:00
 #SBATCH --output=logs/gold_bioproject_search_%j.out
 #SBATCH --error=logs/gold_bioproject_search_%j.err
 

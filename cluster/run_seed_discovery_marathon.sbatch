@@ -7,11 +7,17 @@
 # The marathon script itself already runs everything with OpenAlex
 # disabled, so this is safe to run alongside run_discovery.sbatch and
 # run_gold_bioproject_search.sbatch without adding OpenAlex load.
+#
+# NEVER run this at the same time as run_ena_publication_resolution.sbatch
+# or run_mgnify_publication_resolution.sbatch -- this script's own
+# mgnify_publications/ena_publications steps write to the exact same
+# mgnify_paper_seeds.sqlite file those two jobs do, and SQLite only
+# allows one writer at a time.
 #SBATCH --job-name=seed_discovery_marathon
 #SBATCH --partition=service
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=8G
-#SBATCH --time=24:00:00
+#SBATCH --time=48:00:00
 #SBATCH --output=logs/seed_discovery_marathon_%j.out
 #SBATCH --error=logs/seed_discovery_marathon_%j.err
 
