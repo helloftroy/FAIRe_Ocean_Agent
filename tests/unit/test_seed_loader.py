@@ -109,6 +109,16 @@ def test_qiita_repository_uses_qiita_study_id_identifier_type(db_session):
     assert identifier.identifier_value == "12345"
 
 
+def test_cncb_gsa_repository_uses_native_cncb_identifier_type(db_session):
+    row = SeedRow(seed_id="cncb", dataset_id="CRA047138", repository="cncb_gsa")
+    result = ingest_seed_row(db_session, row)
+    db_session.commit()
+
+    identifier = db_session.query(ExternalIdentifier).filter_by(study_id=result.study_id).one()
+    assert identifier.identifier_type == IdentifierType.CNCB_STUDY_ACCESSION.value
+    assert identifier.identifier_value == "CRA047138"
+
+
 def test_dataset_doi_without_repository_is_typed_as_dataset_doi(db_session):
     row = SeedRow(seed_id="dataset-doi", dataset_id="https://doi.org/10.1594/PANGAEA.923577")
     result = ingest_seed_row(db_session, row)

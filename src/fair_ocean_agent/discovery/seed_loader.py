@@ -32,7 +32,14 @@ from fair_ocean_agent.database.enums import (
 from fair_ocean_agent.database.models import ExternalIdentifier, RawFact, Study
 from fair_ocean_agent.discovery.exclusions import load_excluded_dois
 from fair_ocean_agent.identity.deduplication import find_existing_study_by_any_identifier
-from fair_ocean_agent.identity.identifiers import IdentifierError, normalize_identifier
+from fair_ocean_agent.identity.identifiers import (
+    CNCB_EXPERIMENT_PATTERN,
+    CNCB_PROJECT_PATTERN,
+    CNCB_RUN_PATTERN,
+    CNCB_STUDY_PATTERN,
+    IdentifierError,
+    normalize_identifier,
+)
 from fair_ocean_agent.workflow.task_queue import enqueue_task
 
 SEED_COLUMNS = (
@@ -84,6 +91,16 @@ def _dataset_identifier_type(repository: str | None, dataset_id: str) -> Identif
         return IdentifierType.DATASET_DOI
     if "qiita" in repo:
         return IdentifierType.QIITA_STUDY_ID
+    if "cncb" in repo or "gsa" in repo or "ngdc" in repo:
+        value = dataset_id.strip()
+        if CNCB_PROJECT_PATTERN.match(value):
+            return IdentifierType.CNCB_PROJECT_ACCESSION
+        if CNCB_STUDY_PATTERN.match(value):
+            return IdentifierType.CNCB_STUDY_ACCESSION
+        if CNCB_EXPERIMENT_PATTERN.match(value):
+            return IdentifierType.CNCB_EXPERIMENT_ACCESSION
+        if CNCB_RUN_PATTERN.match(value):
+            return IdentifierType.CNCB_RUN_ACCESSION
     if dataset_id.strip().lower().startswith(("10.", "doi:", "https://doi.org/")):
         return IdentifierType.DATASET_DOI
     return IdentifierType.OTHER

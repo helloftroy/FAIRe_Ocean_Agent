@@ -1,0 +1,294 @@
+import csv
+import json
+import sqlite3
+
+import httpx
+import pytest
+
+from fair_ocean_agent.seed_discovery.cncb_gsa_discovery import (
+    CncbClient,
+    CncbConfig,
+    CncbDB,
+    CncbGsaDiscoveryRunner,
+    extract_search_items,
+    item_to_project_seed,
+    parse_biosample_html,
+    parse_gsa_html,
+    project_row_from_gsa,
+    project_row_from_seed,
+    sample_row_to_db,
+)
+import fair_ocean_agent.seed_discovery.cncb_gsa_discovery as cncb_gsa_discovery
+from scripts.cncb_gsa_seeds_to_csv import convert
+
+
+def _fast_config(tmp_path) -> CncbConfig:
+    return CncbConfig(
+        db_path=tmp_path / "cncb.sqlite",
+        data_dir=tmp_path / "cncb_data",
+        mgnify_db_path=tmp_path / "mgnify.sqlite",
+        qiita_db_path=tmp_path / "qiita.sqlite",
+        gold_db_path=tmp_path / "gold.sqlite",
+        min_request_interval_seconds=0.0,
+        max_retries=2,
+        retry_base_seconds=0.001,
+        page_size=50,
+        max_pages_per_query=1,
+    )
+
+
+def test_cncb_search_parsing_keeps_only_native_gsa_project_records():
+    payload = {
+        "code": "200",
+        "result": {
+            "data": {
+                "recordsTotal": 2,
+                "data": [
+                    {
+                        "id": "CRA047138",
+                        "type": "GSA",
+                        "title": "Marine sediment amplicon reads",
+                        "attrs": {"Accession": "CRA047138", "BioProject": "PRJCA070101"},
+                    },
+                    {
+                        "id": "SRR1",
+                        "type": "Run",
+                        "title": "Imported run",
+                        "attrs": {"Accession": "SRR1", "BioProject": "PRJNA1"},
+                    },
+                ],
+            }
+        },
+    }
+
+    total, items = extract_search_items(payload)
+    seeds = [item_to_project_seed(item) for item in items]
+
+    assert total == 2
+    assert seeds[0]["cncb_bioproject"] == "PRJCA070101"
+    assert seeds[0]["cra_accession"] == "CRA047138"
+    assert seeds[1] is None
+
+
+def test_cncb_gsa_html_parser_extracts_hierarchy_and_files():
+    raw_html = """
+    <div><b>标题:</b> Raw sequencing reads of marine sediment samples (16S V4 amplicon sequencing)</div>
+    <div><b>项目编号:</b><a href="/bioproject/browse/PRJCA070101"> PRJCA070101 </a></div>
+    <span>HTTPS：<a href="https://download.cncb.ac.cn/gsa5/CRA047138">https://download.cncb.ac.cn/gsa5/CRA047138</a></span>
+    <tr class="experiment">
+      <td class="experiments"><a href="browse/CRA047138/CRX3152623">CRX3152623</a></td>
+      <td>MJG_43.338F_806R_V4</td>
+      <td>marine sediment metagenome</td>
+      <td>Illumina MiSeq</td>
+      <td><a href="/biosample/browse/SAMC8161050">SAMC8161050</a></td>
+    </tr>
+    <tr class="runTr">
+      <td class="runs"><a href="browse/CRA047138/CRR3346370">CRR3346370</a></td>
+      <td colspan="2">SAMC8161050</td>
+      <td colspan="2"><strong>File: </strong>CRR3346370_r1.fastq.gz<br/><strong>File: </strong>CRR3346370_r2.fastq.gz</td>
+    </tr>
+    """
+
+    parsed = parse_gsa_html("CRA047138", raw_html)
+    experiment = parsed["experiments"][0]
+
+    assert parsed["cncb_bioproject"] == "PRJCA070101"
+    assert parsed["sample_accessions"] == ["SAMC8161050"]
+    assert experiment["crx_accession"] == "CRX3152623"
+    assert json.loads(experiment["crr_accessions_json"]) == ["CRR3346370"]
+    assert experiment["layout"] == "paired end"
+    assert experiment["target_gene"] == "16S rRNA"
+    assert "https://download.cncb.ac.cn/gsa5/CRA047138/CRR3346370_r1.fastq.gz" in json.loads(experiment["download_urls_json"])
+
+
+def test_cncb_biosample_parser_promotes_common_environment_fields():
+    raw_html = """
+    <table>
+      <tr><th>Sample name</th><td>Station A</td></tr>
+      <tr><th>collection date</th><td>2024-01-02</td></tr>
+      <tr><th>latitude</th><td>10.1</td></tr>
+      <tr><th>longitude</th><td>120.2</td></tr>
+      <tr><th>isolation source</th><td>seawater</td></tr>
+      <tr><th>salinity</th><td>34 PSU</td></tr>
+      <tr><th>nitrate</th><td>1.2 umol/L</td></tr>
+    </table>
+    """
+
+    parsed = parse_biosample_html("SAMC1", raw_html)
+    row = sample_row_to_db("PRJCA1", "CRA1", parsed)
+
+    assert row["sample_name"] == "Station A"
+    assert row["collection_date"] == "2024-01-02"
+    assert row["latitude"] == "10.1"
+    assert row["longitude"] == "120.2"
+    assert row["env_medium"] == "seawater"
+    assert row["salinity"] == "34 PSU"
+    assert row["nitrate"] == "1.2 umol/L"
+    assert json.loads(row["other_environmental_measurements_json"])["nitrate"] == "1.2 umol/L"
+
+
+def test_cncb_db_uses_three_physical_tables_and_views(tmp_path):
+    db = CncbDB(tmp_path / "cncb.sqlite")
+    try:
+        db.initialize()
+        tables = {
+            row["name"]
+            for row in db.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'cncb_%'"
+            )
+        }
+        views = {
+            row["name"]
+            for row in db.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'view' AND name IN "
+                "('paper_seeds', 'cncb_faire_sample_enrichment', 'cncb_faire_experiment_enrichment')"
+            )
+        }
+
+        assert tables == {"cncb_projects", "cncb_samples", "cncb_experiments"}
+        assert views == {"paper_seeds", "cncb_faire_sample_enrichment", "cncb_faire_experiment_enrichment"}
+    finally:
+        db.close()
+
+
+def test_cncb_csv_export_uses_standard_seed_shape(tmp_path):
+    db = CncbDB(tmp_path / "cncb.sqlite")
+    try:
+        db.initialize()
+        db.upsert_project(
+            project_row_from_gsa(
+                {
+                    "cra_accession": "CRA047138",
+                    "cncb_bioproject": "PRJCA070101",
+                    "cra_accessions": ["CRA047138"],
+                    "title": "Marine sediment amplicon reads",
+                    "description": None,
+                    "download_roots": ["https://download.cncb.ac.cn/gsa5/CRA047138"],
+                    "publication_dois": ["10.1234/example"],
+                    "pmids": ["123456"],
+                    "sample_accessions": ["SAMC1"],
+                    "experiments": [],
+                    "sequencing_strategy": ["16S rRNA"],
+                    "insdc_bioprojects": [],
+                    "source": {},
+                }
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    out = tmp_path / "seeds.csv"
+    written, no_doi = convert(tmp_path / "cncb.sqlite", out)
+    rows = list(csv.DictReader(out.open()))
+
+    assert written == 1
+    assert no_doi == 0
+    assert rows[0]["seed_id"] == "cncb_gsa-CRA047138"
+    assert rows[0]["doi"] == "10.1234/example"
+    assert rows[0]["dataset_id"] == "CRA047138"
+    assert rows[0]["repository"] == "cncb_gsa"
+
+
+def test_cncb_client_retries_transient_timeout_then_succeeds(tmp_path):
+    calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        if calls["count"] < 2:
+            raise httpx.ReadTimeout("simulated timeout", request=request)
+        return httpx.Response(200, text="ok")
+
+    client = CncbClient(_fast_config(tmp_path), transport=httpx.MockTransport(handler))
+    response = client.get("https://ngdc.cncb.ac.cn/gsa/browse/CRA1")
+    assert response.text == "ok"
+    assert calls["count"] == 2
+
+
+def test_cncb_client_raises_after_exhausting_retries(tmp_path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("simulated persistent timeout", request=request)
+
+    client = CncbClient(_fast_config(tmp_path), transport=httpx.MockTransport(handler))
+    with pytest.raises(httpx.ReadTimeout):
+        client.get("https://ngdc.cncb.ac.cn/gsa/browse/CRA1")
+
+
+def _search_payload(items: list[dict]) -> dict:
+    return {"code": "200", "result": {"data": {"recordsTotal": len(items), "recordsFiltered": len(items), "data": items}}}
+
+
+def test_one_discovery_querys_persistent_failure_does_not_crash_the_whole_discovery_phase(tmp_path, monkeypatch):
+    """Regression test mirroring the real live Qiita ReadTimeout crash
+    (see test_qiita_discovery.py's own version of this test): before this
+    fix, CncbGsaDiscoveryRunner._discover had no try/except around its
+    search_gsa call, so one query term persistently failing (after
+    CncbClient's own retries were exhausted) would propagate straight out
+    of run() and kill the entire job, even though other query terms would
+    have found real projects in the same run."""
+    monkeypatch.setattr(cncb_gsa_discovery, "DISCOVERY_QUERIES", ("good1", "bad", "good2"))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        query = request.url.params.get("q")
+        if query == "bad":
+            raise httpx.ReadTimeout("simulated persistent timeout for query=bad", request=request)
+        accession = "CRA0001" if query == "good1" else "CRA0002"
+        bioproject = "PRJCA0001" if query == "good1" else "PRJCA0002"
+        item = {"id": accession, "type": "GSA", "title": "t", "attrs": {"Accession": accession, "BioProject": bioproject}}
+        return httpx.Response(200, json=_search_payload([item]))
+
+    config = _fast_config(tmp_path)
+    runner = CncbGsaDiscoveryRunner(config, transport=httpx.MockTransport(handler))
+    try:
+        result = runner.run(phase="discovery")
+    finally:
+        runner.close()
+
+    assert result["counts"]["discover_query_errors"] == 1
+    assert result["counts"]["native_projects_seen"] == 2
+
+    conn = sqlite3.connect(config.db_path)
+    stored = {row[0] for row in conn.execute("SELECT cncb_bioproject FROM cncb_projects")}
+    conn.close()
+    assert stored == {"PRJCA0001", "PRJCA0002"}
+
+
+def test_one_projects_gsa_page_persistent_failure_does_not_crash_the_whole_metadata_phase(tmp_path):
+    """Same failure shape as the discovery-phase regression test above, but
+    for _metadata's per-project GSA HTML page fetch -- previously
+    unprotected even though the neighboring per-sample BioSample HTML fetch
+    already had this exact try/except."""
+    good_html = """
+    <div><b>Title:</b> Marine sediment amplicon reads</div>
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if "CRA0001" in url:
+            raise httpx.ReadTimeout("simulated persistent timeout for CRA0001", request=request)
+        if "CRA0002" in url:
+            return httpx.Response(200, text=good_html)
+        raise AssertionError(f"unexpected request: {url}")
+
+    config = _fast_config(tmp_path)
+    db = CncbDB(config.db_path)
+    db.initialize()
+    db.upsert_project(project_row_from_seed({"cncb_bioproject": "PRJCA0001", "cra_accession": "CRA0001", "title": "p1", "description": None}))
+    db.upsert_project(project_row_from_seed({"cncb_bioproject": "PRJCA0002", "cra_accession": "CRA0002", "title": "p2", "description": None}))
+    db.commit()
+    db.close()
+
+    runner = CncbGsaDiscoveryRunner(config, transport=httpx.MockTransport(handler))
+    try:
+        result = runner.run(phase="metadata")
+    finally:
+        runner.close()
+
+    assert result["counts"]["metadata_cra_errors"] == 1
+
+    conn = sqlite3.connect(config.db_path)
+    conn.row_factory = sqlite3.Row
+    rows = {row["cncb_bioproject"]: row["sequence_accessibility_status"] for row in conn.execute("SELECT cncb_bioproject, sequence_accessibility_status FROM cncb_projects")}
+    conn.close()
+    assert rows["PRJCA0001"] == "not_yet_checked"  # never merged -- the fetch failed before parsing
+    assert rows["PRJCA0002"] != "not_yet_checked"  # successfully merged

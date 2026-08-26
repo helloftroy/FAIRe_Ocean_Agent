@@ -28,6 +28,7 @@ data/seed_discovery/*.sqlite
 data/seed_discovery/*.sqlite-*
 data/seed_discovery/europepmc_bulk/
 data/jgi_gold/
+data/cncb_gsa/
 
 logs/
 
