@@ -30,11 +30,21 @@ source cluster/env_activate.sh
 echo "Job started: $(date)"
 echo "Host: $(hostname)"
 
+# run_seed_discovery_marathon.sh defaults PYTHON_BIN to .venv/bin/python3
+# -- the Mac dev convention (a local virtualenv). The cluster activates a
+# conda env instead (cluster/env_activate.sh, above), which has no
+# .venv/ at all -- point the marathon script at whatever python3
+# env_activate.sh just put on PATH instead of its own Mac-oriented default.
+PYTHON_BIN="$(command -v python3)"
+: "${PYTHON_BIN:?python3 not found on PATH after sourcing cluster/env_activate.sh -- check your conda env activated correctly.}"
+echo "PYTHON_BIN: ${PYTHON_BIN}"
+
 # EPMC_MODE=no-download by default here -- the bulk snapshot is large and
 # should already have been synced from the Mac (see
 # sync_local_db_to_cluster.sh); only re-bootstrap it if you know the
 # cluster doesn't have data/seed_discovery/europepmc_bulk/ yet.
-EPMC_MODE="${EPMC_MODE:-no-download}" \
+PYTHON_BIN="${PYTHON_BIN}" \
+  EPMC_MODE="${EPMC_MODE:-no-download}" \
   bash scripts/run_seed_discovery_marathon.sh
 
 echo "Job finished: $(date)"
