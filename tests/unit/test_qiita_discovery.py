@@ -1,8 +1,14 @@
 import json
 import sqlite3
 
+import httpx
+import pytest
+
 from fair_ocean_agent.seed_discovery.qiita_discovery import (
+    QiitaClient,
+    QiitaConfig,
     QiitaDB,
+    QiitaSeedDiscoveryRunner,
     build_study_db_row,
     classify_marine,
     extract_public_study_ids_from_stats_html,
@@ -210,3 +216,79 @@ def test_qiita_mgnify_overlap_by_bioproject_and_doi(tmp_path):
         assert matches == {"10": ["MGYS1"], "11": ["MGYS2"]}
     finally:
         db.close()
+
+
+def _fast_config(tmp_path, transport=None) -> QiitaConfig:
+    return QiitaConfig(
+        db_path=tmp_path / "qiita.sqlite",
+        data_dir=tmp_path / "qiita_data",
+        mgnify_db_path=tmp_path / "mgnify.sqlite",
+        min_request_interval_seconds=0.0,
+        max_retries=2,
+        retry_base_seconds=0.001,
+    )
+
+
+def test_qiita_client_retries_transient_timeout_then_succeeds(tmp_path):
+    calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        if calls["count"] < 2:
+            raise httpx.ReadTimeout("simulated timeout", request=request)
+        return httpx.Response(200, text="ok")
+
+    client = QiitaClient(_fast_config(tmp_path), transport=httpx.MockTransport(handler))
+    response = client.get("https://qiita.ucsd.edu/public/?study_id=1")
+    assert response.text == "ok"
+    assert calls["count"] == 2
+
+
+def test_qiita_client_raises_after_exhausting_retries(tmp_path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("simulated persistent timeout", request=request)
+
+    client = QiitaClient(_fast_config(tmp_path), transport=httpx.MockTransport(handler))
+    with pytest.raises(httpx.ReadTimeout):
+        client.get("https://qiita.ucsd.edu/public/?study_id=1")
+
+
+def test_one_studys_persistent_timeout_does_not_crash_the_whole_enumeration(tmp_path):
+    """Regression test for a real failure hit live on the cluster: study 10317
+    (or any single study) timing out crashed run_qiita_seed_discovery.py's
+    entire job outright, even though two other studies had already been
+    scanned successfully in the same run. Confirmed live before this fix
+    existed -- an unhandled httpx.ReadTimeout propagated straight out of
+    QiitaSeedDiscoveryRunner.run()."""
+    stats_html = """
+    <script>
+    _generate_iconFeature(1, 1.0, 2.0);
+    _generate_iconFeature(2, 1.0, 2.0);
+    _generate_iconFeature(3, 1.0, 2.0);
+    </script>
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/stats/" in str(request.url):
+            return httpx.Response(200, text=stats_html)
+        if "study_id=2" in str(request.url):
+            raise httpx.ReadTimeout("simulated persistent timeout for study 2", request=request)
+        return httpx.Response(200, text="<html><h1>A study - ID 1</h1></html>")
+
+    config = _fast_config(tmp_path)
+    runner = QiitaSeedDiscoveryRunner(config)
+    runner.client.close()
+    runner.client = QiitaClient(config, transport=httpx.MockTransport(handler))
+    try:
+        result = runner.run(phase="enumerate")
+    finally:
+        runner.close()
+
+    assert result["counts"]["public_studies_scanned"] == 3
+    assert result["counts"]["studies_stored"] == 2
+    assert result["counts"]["studies_errored"] == 1
+
+    conn = sqlite3.connect(config.db_path)
+    stored_ids = {row[0] for row in conn.execute("SELECT qiita_study_id FROM qiita_studies")}
+    conn.close()
+    assert stored_ids == {"1", "3"}

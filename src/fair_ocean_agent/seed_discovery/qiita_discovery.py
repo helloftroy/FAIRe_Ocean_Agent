@@ -160,7 +160,13 @@ class QiitaConfig:
     mgnify_db_path: Path = DEFAULT_MGNIFY_DB
     base_url: str = QIITA_BASE_URL
     min_request_interval_seconds: float = 2.0
-    request_timeout_seconds: float = 30.0
+    # 30s was too tight -- confirmed live, a large study's own sample_information
+    # download (e.g. study 10317's 42,223-sample export) can genuinely take
+    # well over a minute, and that's not even the failure case this was
+    # bumped for (a plain page load timed out under normal Qiita server load).
+    request_timeout_seconds: float = 120.0
+    max_retries: int = 3
+    retry_base_seconds: float = 2.0
 
 
 class QiitaDB:
@@ -371,29 +377,57 @@ class QiitaDB:
 
 
 class QiitaClient:
-    def __init__(self, config: QiitaConfig):
+    def __init__(self, config: QiitaConfig, transport: httpx.BaseTransport | None = None):
         self.config = config
         self.last_request_at = 0.0
-        self.client = httpx.Client(timeout=config.request_timeout_seconds, follow_redirects=True)
+        self.client = httpx.Client(timeout=config.request_timeout_seconds, follow_redirects=True, transport=transport)
 
     def close(self) -> None:
         self.client.close()
 
     def get(self, url: str) -> httpx.Response:
-        elapsed = time.monotonic() - self.last_request_at
-        wait = self.config.min_request_interval_seconds - elapsed
-        if wait > 0:
-            time.sleep(wait)
-        response = self.client.get(url)
-        self.last_request_at = time.monotonic()
-        if response.status_code == 429:
-            retry_after = response.headers.get("Retry-After")
-            if retry_after and retry_after.isdigit():
-                time.sleep(int(retry_after))
+        # Real live failure this needed: a plain read timeout on one slow
+        # study's page (Qiita's own infra, not this pipeline, under load --
+        # confirmed live, a large study's own page can genuinely take a
+        # while) crashed the entire discovery job outright, since neither
+        # this method nor any caller retried or caught a transport-level
+        # error at all -- only HTTP status errors were ever handled. Retries
+        # a bounded number of times for exactly the failure classes that are
+        # worth retrying (timeouts, connection errors, 5xx); a 4xx (other
+        # than 429, handled separately below) means asking again won't help,
+        # so it's raised immediately same as before.
+        last_exc: Exception | None = None
+        for attempt in range(self.config.max_retries + 1):
+            elapsed = time.monotonic() - self.last_request_at
+            wait = self.config.min_request_interval_seconds - elapsed
+            if wait > 0:
+                time.sleep(wait)
+            try:
                 response = self.client.get(url)
+            except (httpx.TimeoutException, httpx.TransportError) as exc:
                 self.last_request_at = time.monotonic()
-        response.raise_for_status()
-        return response
+                last_exc = exc
+            else:
+                self.last_request_at = time.monotonic()
+                if response.status_code == 429:
+                    retry_after = response.headers.get("Retry-After")
+                    if retry_after and retry_after.isdigit():
+                        time.sleep(int(retry_after))
+                        response = self.client.get(url)
+                        self.last_request_at = time.monotonic()
+                if response.status_code not in (500, 502, 503, 504):
+                    response.raise_for_status()
+                    return response
+                last_exc = httpx.HTTPStatusError(
+                    f"retryable status {response.status_code}", request=response.request, response=response
+                )
+            if attempt >= self.config.max_retries:
+                break
+            backoff = self.config.retry_base_seconds * (2 ** attempt)
+            logger.warning("Qiita request failed (%s), retrying in %.1fs: %s", url, backoff, last_exc)
+            time.sleep(backoff)
+        assert last_exc is not None
+        raise last_exc
 
     def get_text(self, url: str) -> str:
         return self.get(url).text
@@ -705,14 +739,30 @@ class QiitaSeedDiscoveryRunner:
                 study_raw_dir = raw_dir / study_id
                 study_raw_dir.mkdir(parents=True, exist_ok=True)
                 html_path = study_raw_dir / "study.html"
-                if html_path.exists() and not refresh:
-                    html = html_path.read_text(encoding="utf-8")
-                else:
-                    html = self.client.public_study_html(study_id)
-                    html_path.write_text(html, encoding="utf-8")
-                study = parse_study_html(study_id, html)
-                (study_raw_dir / "study.json").write_text(json_dumps(study), encoding="utf-8")
-                self.db.upsert_study(build_study_db_row(study))
+                try:
+                    if html_path.exists() and not refresh:
+                        html = html_path.read_text(encoding="utf-8")
+                    else:
+                        html = self.client.public_study_html(study_id)
+                        html_path.write_text(html, encoding="utf-8")
+                    study = parse_study_html(study_id, html)
+                    (study_raw_dir / "study.json").write_text(json_dumps(study), encoding="utf-8")
+                    self.db.upsert_study(build_study_db_row(study))
+                except Exception as exc:
+                    # A real live failure this needed: one study's page
+                    # timing out (Qiita's own infra under load, not this
+                    # pipeline) previously crashed the ENTIRE job outright,
+                    # even after QiitaClient.get()'s own retries were
+                    # exhausted -- thousands of already-scanned studies'
+                    # progress was still safe (incremental commits below),
+                    # but the job itself died and needed manual resubmission
+                    # every time any single study had a bad response. Now
+                    # skipped and retried on the next run instead (this
+                    # study's html_path was never written on failure, so a
+                    # re-run naturally retries it, not skips it).
+                    counts["studies_errored"] += 1
+                    logger.warning("Qiita enumeration failed for study %s, skipping: %s", study_id, exc)
+                    continue
                 # Commit after every study, not once after the whole loop --
                 # this can be thousands of studies against a walltime-limited
                 # job; a kill mid-loop previously lost every upsert since the
@@ -748,32 +798,43 @@ class QiitaSeedDiscoveryRunner:
             study_id = study_row["qiita_study_id"]
             study_raw_dir = raw_dir / study_id
             study_raw_dir.mkdir(parents=True, exist_ok=True)
-            sample_rows = self._download_sample_metadata(study_id, study_raw_dir, refresh=refresh)
-            for sample in sample_rows:
-                self.db.upsert_sample(sample_row_to_db(study_id, sample))
-            prep_ids = self.prep_ids_for_study(study_row)
-            prep_count = 0
-            for prep_id in prep_ids:
-                prep_rows, manifest = self._download_prep_metadata(study_id, prep_id, study_raw_dir, manifests_dir, refresh=refresh)
-                if prep_rows or manifest:
-                    self.db.upsert_preparation(prep_rows_to_db(study_id, prep_id, prep_rows, manifest))
-                    prep_count += 1
-            confidence, methods = classify_marine(dict(study_row), sample_rows)
-            self.db.conn.execute(
-                """
-                UPDATE qiita_studies
-                SET sample_count = ?, prep_count = ?, marine_confidence = ?, marine_match_methods_json = ?,
-                    sequence_accessibility_status = CASE
-                      WHEN sequence_accessibility_status = 'no_sequence_locator_found' AND ? > 0 THEN 'raw_artifact_present_download_unverified'
-                      ELSE sequence_accessibility_status
-                    END,
-                    last_checked_at = ?
-                WHERE qiita_study_id = ?
-                """,
-                (len(sample_rows), prep_count, confidence, json_dumps(methods), prep_count, utc_iso(), study_id),
-            )
-            counts["sample_rows"] += len(sample_rows)
-            counts["prep_rows"] += prep_count
+            try:
+                sample_rows = self._download_sample_metadata(study_id, study_raw_dir, refresh=refresh)
+                for sample in sample_rows:
+                    self.db.upsert_sample(sample_row_to_db(study_id, sample))
+                prep_ids = self.prep_ids_for_study(study_row)
+                prep_count = 0
+                for prep_id in prep_ids:
+                    prep_rows, manifest = self._download_prep_metadata(study_id, prep_id, study_raw_dir, manifests_dir, refresh=refresh)
+                    if prep_rows or manifest:
+                        self.db.upsert_preparation(prep_rows_to_db(study_id, prep_id, prep_rows, manifest))
+                        prep_count += 1
+                confidence, methods = classify_marine(dict(study_row), sample_rows)
+                self.db.conn.execute(
+                    """
+                    UPDATE qiita_studies
+                    SET sample_count = ?, prep_count = ?, marine_confidence = ?, marine_match_methods_json = ?,
+                        sequence_accessibility_status = CASE
+                          WHEN sequence_accessibility_status = 'no_sequence_locator_found' AND ? > 0 THEN 'raw_artifact_present_download_unverified'
+                          ELSE sequence_accessibility_status
+                        END,
+                        last_checked_at = ?
+                    WHERE qiita_study_id = ?
+                    """,
+                    (len(sample_rows), prep_count, confidence, json_dumps(methods), prep_count, utc_iso(), study_id),
+                )
+                counts["sample_rows"] += len(sample_rows)
+                counts["prep_rows"] += prep_count
+            except Exception as exc:
+                # Same real live failure class as the enumeration loop above
+                # (a slow/erroring study's network response must not take
+                # down the whole job) -- skip this study's metadata for now,
+                # it's naturally retried on the next run since neither its
+                # sample_information.tsv nor its prep TSVs get written to
+                # disk until a fetch actually succeeds.
+                counts["studies_errored"] += 1
+                logger.warning("Qiita metadata download failed for study %s, skipping: %s", study_id, exc)
+                continue
             # Commit after every study for the same reason as the
             # enumeration loop above -- this loop does real network I/O
             # per study (sample + every prep's metadata), so it's both the
