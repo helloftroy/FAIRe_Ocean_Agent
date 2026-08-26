@@ -30,12 +30,15 @@ Three cases per study, in priority order:
      either just insufficiently discovered, OR genuinely new sequence
      data that was only ever deposited at Qiita and never mirrored to
      ENA/SRA at all. Seeded as a repository-only "qiita" dataset
-     (dataset_id/repository/url) so the study and its DOI aren't lost --
-     but note in the docstring below: there is no sources/qiita.py
-     adapter yet, so DISCOVER_IDENTIFIERS can't independently verify or
-     pull real sample data for this case today. It still gets whatever
-     the normal DOI-driven full-text-mining path can find (Pass 1/2/3 in
-     discovery/text_identifiers.py), same as any DOI-only paper.
+     (dataset_id/repository/url) so the study and its DOI aren't lost.
+     sources/qiita.py (added after this script was first written -- if
+     you're reading an old copy of this docstring, it lied) now resolves
+     this case too: one real SAMPLE + EXPERIMENT_RUN per actual Qiita
+     sample name, marked as real data available for download at Qiita's
+     own study page. Deliberately light (see that adapter's own
+     docstring) -- it doesn't verify individual files or resolve a real
+     BioSample/run accession the way the ENA/BioProject path does, but
+     "how many samples, and is there real data" is answered.
 
 Usage:
     python scripts/qiita_seeds_to_csv.py
@@ -146,7 +149,7 @@ def main() -> None:
     print(f"Wrote {written} seed rows to {args.out}")
     print(f"  via BioProject accession: {bioproject_seeded}")
     print(f"  via ENA study accession:  {ena_seeded}")
-    print(f"  Qiita-only (no BioProject/ENA found -- flagged repository=qiita, no adapter yet): {qiita_only_seeded}")
+    print(f"  Qiita-only (no BioProject/ENA found -- resolved via sources/qiita.py, real samples + data-availability marker): {qiita_only_seeded}")
 
 
 if __name__ == "__main__":
