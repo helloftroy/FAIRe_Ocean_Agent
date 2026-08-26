@@ -117,6 +117,12 @@ sources:
     rate_limit_per_second: 3
     priority: 16
 
+  qiita:
+    enabled: true
+    base_url: "https://qiita.ucsd.edu"
+    rate_limit_per_second: 0.5
+    priority: 17
+
 # Keyword search terms for later broad discovery (section 7). Not executed
 # until discovery.keyword_search_enabled is true and a keyword-search command
 # is run explicitly.

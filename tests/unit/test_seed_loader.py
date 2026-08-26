@@ -99,6 +99,16 @@ def test_dataset_id_uses_repository_specific_identifier_type(db_session):
     assert identifier.identifier_value == "923577"
 
 
+def test_qiita_repository_uses_qiita_study_id_identifier_type(db_session):
+    row = SeedRow(seed_id="qiita", dataset_id="12345", repository="qiita")
+    result = ingest_seed_row(db_session, row)
+    db_session.commit()
+
+    identifier = db_session.query(ExternalIdentifier).filter_by(study_id=result.study_id).one()
+    assert identifier.identifier_type == IdentifierType.QIITA_STUDY_ID.value
+    assert identifier.identifier_value == "12345"
+
+
 def test_dataset_doi_without_repository_is_typed_as_dataset_doi(db_session):
     row = SeedRow(seed_id="dataset-doi", dataset_id="https://doi.org/10.1594/PANGAEA.923577")
     result = ingest_seed_row(db_session, row)

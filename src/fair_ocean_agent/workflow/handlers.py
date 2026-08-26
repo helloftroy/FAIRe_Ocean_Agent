@@ -128,6 +128,7 @@ from fair_ocean_agent.sources.obis import ObisAdapter
 from fair_ocean_agent.sources.openalex import OpenAlexAdapter
 from fair_ocean_agent.sources.osf import OsfAdapter
 from fair_ocean_agent.sources.pangaea import PangaeaAdapter
+from fair_ocean_agent.sources.qiita import QiitaAdapter
 from fair_ocean_agent.sources.sequence_file_heuristics import SequenceDataStatus
 from fair_ocean_agent.sources.zenodo import ZenodoAdapter
 from fair_ocean_agent.workflow.worker import TASK_HANDLERS
@@ -169,6 +170,7 @@ _REPOSITORY_ADAPTER_CLASSES: dict[str, type[SourceAdapter]] = {
     "dryad": DryadAdapter,
     "figshare": FigshareAdapter,
     "osf": OsfAdapter,
+    "qiita": QiitaAdapter,
 }
 
 # Process-lifetime cache: rate limiting is per-adapter-instance state
@@ -222,7 +224,7 @@ def _build_enabled_adapters() -> dict[str, SourceAdapter]:
     if is_enabled("ena"):
         adapters["ena"] = EnaAdapter(make_config("ena"), retrieval_config)
 
-    for name in ("bcodmo", "pangaea", "datacite", "obis", "gbif", "zenodo", "dryad", "figshare", "osf"):
+    for name in ("bcodmo", "pangaea", "datacite", "obis", "gbif", "zenodo", "dryad", "figshare", "osf", "qiita"):
         if is_enabled(name):
             adapters[name] = _REPOSITORY_ADAPTER_CLASSES[name](make_config(name), retrieval_config)
 
@@ -1076,6 +1078,7 @@ def _resolve_dataset_sources(
     pangaea_id: str | None,
     obis_uuid: str | None,
     gbif_key: str | None,
+    qiita_id: str | None = None,
     persist_fn: PersistFn = _persist_source_and_facts,
 ) -> Study:
     adapters = _build_enabled_adapters()
@@ -1106,6 +1109,8 @@ def _resolve_dataset_sources(
         study = _fetch_and_persist_repository_record(session, study, adapters, "obis", obis_uuid, persist_fn)
     if gbif_key:
         study = _fetch_and_persist_repository_record(session, study, adapters, "gbif", gbif_key, persist_fn)
+    if qiita_id:
+        study = _fetch_and_persist_repository_record(session, study, adapters, "qiita", qiita_id, persist_fn)
 
     return study
 
@@ -1175,14 +1180,15 @@ def handle_discover_identifiers(session: Session, task: Task) -> None:
     pangaea_ids = _identifier_values(session, study.study_id, IdentifierType.PANGAEA_ID)
     obis_uuids = _identifier_values(session, study.study_id, IdentifierType.OBIS_DATASET_UUID)
     gbif_keys = _identifier_values(session, study.study_id, IdentifierType.GBIF_DATASET_KEY)
+    qiita_ids = _identifier_values(session, study.study_id, IdentifierType.QIITA_STUDY_ID)
 
-    if not any((doi, dataset_dois, bioproject_accessions, ena_accessions, sra_accessions, sequence_source_accessions, bcodmo_ids, pangaea_ids, obis_uuids, gbif_keys)):
+    if not any((doi, dataset_dois, bioproject_accessions, ena_accessions, sra_accessions, sequence_source_accessions, bcodmo_ids, pangaea_ids, obis_uuids, gbif_keys, qiita_ids)):
         raise NotImplementedError(
             "DISCOVER_IDENTIFIERS currently resolves studies with a DOI "
             "(crossref/europe_pmc/openalex), a dataset DOI "
             "(datacite plus native repository adapters where recognized), "
             "a BioProject/ENA study/source sequence accession (ncbi_bioproject/ncbi_biosample/ena), "
-            "or a BCO-DMO/PANGAEA/OBIS/GBIF dataset identifier. This study has none of those."
+            "or a BCO-DMO/PANGAEA/OBIS/GBIF/Qiita dataset identifier. This study has none of those."
         )
 
     if not _build_enabled_adapters():
@@ -1207,6 +1213,7 @@ def handle_discover_identifiers(session: Session, task: Task) -> None:
     pangaea_ids = _identifier_values(session, study.study_id, IdentifierType.PANGAEA_ID)
     obis_uuids = _identifier_values(session, study.study_id, IdentifierType.OBIS_DATASET_UUID)
     gbif_keys = _identifier_values(session, study.study_id, IdentifierType.GBIF_DATASET_KEY)
+    qiita_ids = _identifier_values(session, study.study_id, IdentifierType.QIITA_STUDY_ID)
 
     for bioproject_accession in bioproject_accessions:
         study = _resolve_repository_sources(session, study, bioproject_accession, None)
@@ -1282,6 +1289,17 @@ def handle_discover_identifiers(session: Session, task: Task) -> None:
             pangaea_id=None,
             obis_uuid=None,
             gbif_key=gbif_key,
+        )
+    for qiita_id in qiita_ids:
+        study = _resolve_dataset_sources(
+            session,
+            study,
+            dataset_doi=None,
+            bcodmo_id=None,
+            pangaea_id=None,
+            obis_uuid=None,
+            gbif_key=None,
+            qiita_id=qiita_id,
         )
 
     # Node-adding discovery hook: for every BioProject and BioSample

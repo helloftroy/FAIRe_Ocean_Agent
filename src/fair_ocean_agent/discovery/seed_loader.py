@@ -82,6 +82,8 @@ def _dataset_identifier_type(repository: str | None, dataset_id: str) -> Identif
         return IdentifierType.GBIF_DATASET_KEY
     if "datacite" in repo:
         return IdentifierType.DATASET_DOI
+    if "qiita" in repo:
+        return IdentifierType.QIITA_STUDY_ID
     if dataset_id.strip().lower().startswith(("10.", "doi:", "https://doi.org/")):
         return IdentifierType.DATASET_DOI
     return IdentifierType.OTHER
