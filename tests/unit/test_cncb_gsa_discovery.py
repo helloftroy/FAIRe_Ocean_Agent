@@ -37,7 +37,18 @@ def _fast_config(tmp_path) -> CncbConfig:
     )
 
 
-def test_cncb_search_parsing_keeps_only_native_gsa_project_records():
+def test_cncb_search_parsing_keeps_only_native_bioproject_records():
+    """Regression test for a real live bug (confirmed 2026-08-26 by
+    directly querying the CNCB API): searching db=gsa returns an index
+    where >99% of hits for any generic environmental term are INSDC-
+    mirrored Run/Experiment records, not native type=="GSA" project
+    records -- a live test found ZERO native hits within 3000 results for
+    "amplicon" (18M total hits), "seawater", and "coral". db=bioproject is
+    CNCB's own dedicated, much smaller BioProject index; a native
+    submission there is identified by attrs.Center == "GSA" (a mirrored
+    one is typically "SRA") and already carries its own CrasAcc/SamplesAcc
+    cross-references, confirmed live against a real record
+    (PRJCA070101/CRA047138)."""
     payload = {
         "code": "200",
         "result": {
@@ -45,16 +56,16 @@ def test_cncb_search_parsing_keeps_only_native_gsa_project_records():
                 "recordsTotal": 2,
                 "data": [
                     {
-                        "id": "CRA047138",
-                        "type": "GSA",
+                        "id": "PRJCA070101",
+                        "type": "BioProject",
                         "title": "Marine sediment amplicon reads",
-                        "attrs": {"Accession": "CRA047138", "BioProject": "PRJCA070101"},
+                        "attrs": {"Accession": "PRJCA070101", "Center": "GSA", "CrasAcc": ["CRA047138"]},
                     },
                     {
-                        "id": "SRR1",
-                        "type": "Run",
-                        "title": "Imported run",
-                        "attrs": {"Accession": "SRR1", "BioProject": "PRJNA1"},
+                        "id": "PRJNA1",
+                        "type": "BioProject",
+                        "title": "Imported project",
+                        "attrs": {"Accession": "PRJNA1", "Center": "SRA"},
                     },
                 ],
             }
@@ -66,7 +77,7 @@ def test_cncb_search_parsing_keeps_only_native_gsa_project_records():
 
     assert total == 2
     assert seeds[0]["cncb_bioproject"] == "PRJCA070101"
-    assert seeds[0]["cra_accession"] == "CRA047138"
+    assert seeds[0]["cra_accessions"] == ["CRA047138"]
     assert seeds[1] is None
 
 
@@ -232,9 +243,9 @@ def test_one_discovery_querys_persistent_failure_does_not_crash_the_whole_discov
         query = request.url.params.get("q")
         if query == "bad":
             raise httpx.ReadTimeout("simulated persistent timeout for query=bad", request=request)
-        accession = "CRA0001" if query == "good1" else "CRA0002"
         bioproject = "PRJCA0001" if query == "good1" else "PRJCA0002"
-        item = {"id": accession, "type": "GSA", "title": "t", "attrs": {"Accession": accession, "BioProject": bioproject}}
+        cra = "CRA0001" if query == "good1" else "CRA0002"
+        item = {"id": bioproject, "type": "BioProject", "title": "t", "attrs": {"Accession": bioproject, "Center": "GSA", "CrasAcc": [cra]}}
         return httpx.Response(200, json=_search_payload([item]))
 
     config = _fast_config(tmp_path)
@@ -273,8 +284,8 @@ def test_one_projects_gsa_page_persistent_failure_does_not_crash_the_whole_metad
     config = _fast_config(tmp_path)
     db = CncbDB(config.db_path)
     db.initialize()
-    db.upsert_project(project_row_from_seed({"cncb_bioproject": "PRJCA0001", "cra_accession": "CRA0001", "title": "p1", "description": None}))
-    db.upsert_project(project_row_from_seed({"cncb_bioproject": "PRJCA0002", "cra_accession": "CRA0002", "title": "p2", "description": None}))
+    db.upsert_project(project_row_from_seed({"cncb_bioproject": "PRJCA0001", "cra_accessions": ["CRA0001"], "title": "p1", "description": None}))
+    db.upsert_project(project_row_from_seed({"cncb_bioproject": "PRJCA0002", "cra_accessions": ["CRA0002"], "title": "p2", "description": None}))
     db.commit()
     db.close()
 

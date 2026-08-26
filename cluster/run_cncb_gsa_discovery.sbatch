@@ -45,7 +45,7 @@ CNCB_DB="${CNCB_DB:-data/seed_discovery/cncb_gsa_paper_seeds.sqlite}"
 CNCB_DATA_DIR="${CNCB_DATA_DIR:-data/cncb_gsa}"
 CNCB_OUT_CSV="${CNCB_OUT_CSV:-cluster/seeds_cncb_gsa.csv}"
 CNCB_MIN_REQUEST_INTERVAL_SECONDS="${CNCB_MIN_REQUEST_INTERVAL_SECONDS:-2}"
-CNCB_MAX_PAGES_PER_QUERY="${CNCB_MAX_PAGES_PER_QUERY:-50}"
+CNCB_MAX_PAGES_PER_QUERY="${CNCB_MAX_PAGES_PER_QUERY:-300}"
 
 echo "CNCB database: ${CNCB_DB}"
 echo "CNCB data dir: ${CNCB_DATA_DIR}"

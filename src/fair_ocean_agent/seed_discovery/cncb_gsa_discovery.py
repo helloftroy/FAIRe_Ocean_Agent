@@ -257,7 +257,14 @@ class CncbConfig:
     min_request_interval_seconds: float = 2.0
     request_timeout_seconds: float = 120.0
     page_size: int = 50
-    max_pages_per_query: int = 50
+    # db=bioproject's per-query totals run in the thousands (confirmed live
+    # across all 28 DISCOVERY_QUERIES: max observed was "metagenome" at
+    # ~65K, most terms far smaller), not the millions db=gsa's own mixed
+    # INSDC-mirror index returns for the same terms -- a full scan to
+    # exhaustion is tractable at this default, unlike the old 50-page cap
+    # (2500 records) which found real native hits for the tested terms 0%
+    # of the time against db=gsa's noise.
+    max_pages_per_query: int = 300
     max_retries: int = 3
     retry_base_seconds: float = 2.0
 
@@ -558,10 +565,21 @@ class CncbClient:
                 time.sleep(sleep_for)
         raise RuntimeError("unreachable retry loop")
 
-    def search_gsa(self, query: str, *, start: int, size: int) -> dict:
+    def search_bioprojects(self, query: str, *, start: int, size: int) -> dict:
+        # Confirmed live (2026-08-26): db=gsa's own index is >99% INSDC-
+        # mirrored Run/Experiment records -- a generic environmental term
+        # like "amplicon" returns 18M total hits there, and a real
+        # type=="GSA" (native project) record never surfaces within any
+        # practical page budget (tested 3000 records deep for
+        # amplicon/seawater/coral: zero found). db=bioproject is CNCB's own
+        # dedicated BioProject index -- orders of magnitude smaller per
+        # query (thousands, not millions) and each native record's own
+        # attrs already carries Center=="GSA" plus its CrasAcc/SamplesAcc
+        # cross-references directly, no HTML scrape needed just to find
+        # them. See item_to_project_seed for the corresponding filter.
         response = self.get(
             urljoin(self.config.base_url, "/search/api/specific"),
-            params={"q": query, "db": "gsa", "size": size, "start": start},
+            params={"q": query, "db": "bioproject", "size": size, "start": start},
         )
         return response.json()
 
@@ -580,16 +598,20 @@ def extract_search_items(payload: dict) -> tuple[int, list[dict]]:
 
 
 def item_to_project_seed(item: dict) -> dict | None:
-    accession = (item.get("id") or item.get("attrs", {}).get("Accession") or "").strip().upper()
     attrs = item.get("attrs") or {}
-    bioproject = (attrs.get("BioProject") or "").strip().upper()
-    if item.get("type") != "GSA" or not CRA_RE.match(accession) or not PRJCA_RE.match(bioproject):
+    bioproject = (item.get("id") or attrs.get("Accession") or "").strip().upper()
+    # attrs.Center distinguishes a native CNCB/GSA submission ("GSA") from
+    # an INSDC-mirrored one (typically "SRA") within db=bioproject's mixed
+    # index -- confirmed live against real records of both kinds. The
+    # PRJCA_RE check is a belt-and-suspenders match on the accession's own
+    # prefix, same defensive-double-check style as the old GSA-typed path.
+    if item.get("type") != "BioProject" or attrs.get("Center") != "GSA" or not PRJCA_RE.match(bioproject):
         return None
     return {
         "cncb_bioproject": bioproject,
-        "cra_accession": accession,
-        "title": item.get("title") or item.get("description"),
-        "description": item.get("description"),
+        "cra_accessions": unique(attrs.get("CrasAcc") or []),
+        "title": item.get("title") or attrs.get("Title") or item.get("description"),
+        "description": item.get("description") or attrs.get("Description"),
         "source": item,
     }
 
@@ -770,9 +792,10 @@ def parse_biosample_html(samc_accession: str, raw_html: str) -> dict:
 
 def project_row_from_seed(seed: dict) -> dict:
     confidence, methods = classify_marine(seed)
+    cra_accessions = seed.get("cra_accessions") or []
     return {
         "cncb_bioproject": seed["cncb_bioproject"],
-        "cra_accessions_json": json_dumps([seed["cra_accession"]]),
+        "cra_accessions_json": json_dumps(cra_accessions),
         "title": seed.get("title"),
         "description": seed.get("description"),
         "project_type": None,
@@ -784,7 +807,11 @@ def project_row_from_seed(seed: dict) -> dict:
         "sample_count": 0,
         "experiment_count": 0,
         "run_count": 0,
-        "sequence_accessibility_status": "not_yet_checked",
+        # A native BioProject with no CrasAcc at all (e.g. a metabolome-only
+        # submission, confirmed live) has nothing for the metadata phase to
+        # ever scrape -- known upfront rather than left "not_yet_checked"
+        # forever.
+        "sequence_accessibility_status": "not_yet_checked" if cra_accessions else "no_downloadable_raw_data",
         "marine_confidence": confidence,
         "marine_match_methods_json": json_dumps(methods),
         "insdc_bioprojects_json": "[]",
@@ -995,7 +1022,7 @@ class CncbGsaDiscoveryRunner:
                     payload = json.loads(cache_path.read_text(encoding="utf-8"))
                 else:
                     try:
-                        payload = self.client.search_gsa(query, start=start, size=self.config.page_size)
+                        payload = self.client.search_bioprojects(query, start=start, size=self.config.page_size)
                     except httpx.HTTPError as exc:
                         counts["discover_query_errors"] += 1
                         logger.warning("CNCB search failed for query=%s start=%s, moving to next query: %s", query, start, exc)
@@ -1228,7 +1255,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--refresh", action="store_true")
     parser.add_argument("--max-projects", type=int)
     parser.add_argument("--page-size", type=int, default=50)
-    parser.add_argument("--max-pages-per-query", type=int, default=int(os.environ.get("CNCB_MAX_PAGES_PER_QUERY", "50")))
+    parser.add_argument("--max-pages-per-query", type=int, default=int(os.environ.get("CNCB_MAX_PAGES_PER_QUERY", "300")))
     parser.add_argument("--cncb-min-request-interval-seconds", type=float, default=float(os.environ.get("CNCB_MIN_REQUEST_INTERVAL_SECONDS", "2.0")))
     parser.add_argument("--log-level", default="INFO")
     return parser
