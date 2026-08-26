@@ -70,6 +70,21 @@ python -m fair_ocean_agent.cli worker --until-empty --no-llm
 python -m fair_ocean_agent.cli enqueue-supplement-retrieval-backfill
 python -m fair_ocean_agent.cli worker --until-empty --no-llm
 
+# Auto-fetch is a no-op (skips before any network call) for anything that
+# already has a PMCID or PDF, so it's safe and cheap to always run here --
+# it only ever fills in the gap for a study whose only route to a real
+# open-access PDF is this OpenAlex-driven lookup, not the PMCID path
+# already tried during discovery above.
+echo "=== auto-fetching open-access PDFs for anything discovery didn't already grab ==="
+python scripts/auto_fetch_missing_pdfs.py
+
+# The actual answer to "which papers have confirmed samples vs. still
+# need a manually-supplied PDF vs. have no sample data at all" -- this is
+# the file worth checking after a run, not just the task-queue counts
+# below. Lands in data/paper_classification/*.csv on the cluster.
+echo "=== classifying: confirmed samples / needs a manual PDF / no sample data ==="
+python scripts/classify_papers.py
+
 echo "=== discovery stage complete ==="
 python -m fair_ocean_agent.cli status
 
