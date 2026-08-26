@@ -480,6 +480,18 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
                 MappingMethod.EXACT_LABEL.value),
     MappingRule("ph", EntityLevel.SAMPLE.value, "sampleMetadata", "ph",
                 MappingMethod.EXACT_LABEL.value),
+    # chlorophyll/diss_oxygen: real FAIRe sampleMetadata fields
+    # (faire:chlorophyll mixs:0000177, faire:diss_oxygen) that had no
+    # MappingRule at any level before -- the LLM-extraction path only ever
+    # bundled them into x_env_var_block's own catch-all STUDY-level field,
+    # never gave them a real per-column mapping. Added alongside
+    # scripts/apply_gold_physicochemical_enrichment.py, whose structured,
+    # per-BioSample GOLD data needs a real target column, not a bundled
+    # free-text one.
+    MappingRule("chlorophyll", EntityLevel.SAMPLE.value, "sampleMetadata", "chlorophyll",
+                MappingMethod.EXACT_LABEL.value),
+    MappingRule("diss_oxygen", EntityLevel.SAMPLE.value, "sampleMetadata", "diss_oxygen",
+                MappingMethod.EXACT_LABEL.value),
     # in_situ_temp/in_situ_salinity: a real paper's own
     # methods text describing conditions measured at the time/site of
     # sample collection (search_flags.py's own LLMJudgedSearchField
