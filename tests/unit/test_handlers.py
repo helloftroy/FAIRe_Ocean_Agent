@@ -19,6 +19,7 @@ from fair_ocean_agent.database.enums import (
 from fair_ocean_agent.database.models import DataAsset, ExternalIdentifier, RawFact, Source, Study, StudySource
 from fair_ocean_agent.identity.identifiers import normalize_doi
 from fair_ocean_agent.sources.base import RawFactCandidate, RelatedIdentifier, SourceRecord, SourceRecordNotFoundError
+from fair_ocean_agent.sources.datacite import DataCiteAdapter
 from fair_ocean_agent.sources.europe_pmc import EuropePmcAdapter
 from fair_ocean_agent.workflow import handlers
 from fair_ocean_agent.workflow.task_queue import enqueue_task
@@ -399,6 +400,52 @@ def _seeded_study_with_pmcid_for_fulltext_scan(session, pmcid="PMC9999999") -> S
     session.add(ExternalIdentifier(study_id=study.study_id, identifier_type=IdentifierType.PMCID.value, identifier_value=pmcid))
     session.flush()
     return study
+
+
+class FakeDataCiteAdapter(DataCiteAdapter):
+    """DATASET_DOI isn't in verify_deterministic_identifier's
+    STRUCTURED_SEQUENCE_IDENTIFIER_TYPES short-circuit set, so a Pass-3 hit
+    still goes through a real fetch_record verification call -- override
+    both, rather than only find_datasets_citing, to stand in for the real
+    HTTP-backed adapter."""
+
+    def __init__(self, citing_dois: list[str]):
+        self._citing_dois = citing_dois
+
+    def find_datasets_citing(self, article_doi: str) -> list[str]:
+        return self._citing_dois
+
+    def fetch_record(self, identifier: str) -> SourceRecord:
+        return _make_record("datacite")
+
+
+def test_discover_identifiers_from_fulltext_tries_pass3_datacite_when_pass1_and_pass2_find_nothing(db_session):
+    """Regression test: handlers.py used RelationshipType.IS_DATASET_FOR to
+    build the Pass 3 RelatedIdentifier without importing RelationshipType
+    at all -- confirmed live on a real cluster run (NameError: name
+    'RelationshipType' is not defined), never caught by
+    test_datacite.py's own tests since those only exercise
+    DataCiteAdapter.find_datasets_citing in isolation, not this
+    integration point."""
+    study = _seeded_study_with_pmcid_for_fulltext_scan(db_session)
+    db_session.add(ExternalIdentifier(study_id=study.study_id, identifier_type=IdentifierType.DOI.value, identifier_value="10.1371/journal.pone.0109118"))
+    db_session.flush()
+
+    europe_pmc_adapter = FakeEuropePmcFullTextAdapter(
+        "<article><sec><title>Data Availability</title><p>No accessions or dataset links mentioned here.</p></sec></article>"
+    )
+    datacite_adapter = FakeDataCiteAdapter(citing_dois=["10.5281/zenodo.99999999"])
+
+    handlers._discover_identifiers_from_fulltext(
+        db_session, study, {"europe_pmc": europe_pmc_adapter, "datacite": datacite_adapter}
+    )
+    db_session.commit()
+
+    identifiers = {
+        (ei.identifier_type, ei.identifier_value, ei.source)
+        for ei in db_session.query(ExternalIdentifier).filter_by(study_id=study.study_id).all()
+    }
+    assert (IdentifierType.DATASET_DOI.value, "10.5281/zenodo.99999999", "datacite_related_identifiers") in identifiers
 
 
 def test_discover_identifiers_from_fulltext_skips_pass2_when_pass1_already_found_something(db_session):

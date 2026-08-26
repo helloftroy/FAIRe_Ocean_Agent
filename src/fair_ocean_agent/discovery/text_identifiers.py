@@ -20,7 +20,7 @@ from fair_ocean_agent.identity.identifiers import IdentifierError, guess_identif
 from fair_ocean_agent.sources.base import RelatedIdentifier, SourceAdapter, SourceRecordNotFoundError
 from fair_ocean_agent.sources.ena import EnaAdapter
 
-_BIOPROJECT_PATTERN = re.compile(r"\bPRJ(?:NA|EB|DB)\d+\b", re.IGNORECASE)
+_BIOPROJECT_PATTERN = re.compile(r"\bPRJ(?:NA|EB|DB|DA|EA)\d+\b", re.IGNORECASE)
 _SRA_STUDY_PATTERN = re.compile(r"\b(?:SRP|ERP|DRP)\d+\b", re.IGNORECASE)
 _PANGAEA_DOI_PATTERN = re.compile(r"\b10\.1594/PANGAEA\.\d+\b", re.IGNORECASE)
 _BCODMO_DOI_PATTERN = re.compile(

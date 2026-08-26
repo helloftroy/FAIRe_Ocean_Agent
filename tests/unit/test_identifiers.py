@@ -44,6 +44,18 @@ def test_normalize_bioproject_accession():
         normalize_bioproject_accession("PRJXX123")
 
 
+def test_normalize_bioproject_accession_accepts_retired_pre_2012_prefixes():
+    """Real failure, confirmed live: GOLD-linked BioProjects from ~2007-era
+    genome papers (e.g. PRJDA18267) use DDBJ's and EBI's retired
+    pre-~2012 prefixes (PRJDA/PRJEA, before each switched to PRJDB/PRJEB)
+    -- these still resolve as real, distinct accessions today, not
+    renamed to their current-prefix equivalent, so ingest-seeds rejected
+    8 real GOLD seed rows outright with "Not a valid BioProject
+    accession"."""
+    assert normalize_bioproject_accession("prjda18267") == "PRJDA18267"
+    assert normalize_bioproject_accession("PRJEA71363") == "PRJEA71363"
+
+
 def test_normalize_biosample_accession():
     assert normalize_biosample_accession("samn12345678") == "SAMN12345678"
     with pytest.raises(IdentifierError):

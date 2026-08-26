@@ -29,6 +29,7 @@ from fair_ocean_agent.database.enums import (
     IdentifierType,
     InspectionLevel,
     InspectionStatus,
+    RelationshipType,
     ReviewStatus,
     SourceType,
     SupportType,

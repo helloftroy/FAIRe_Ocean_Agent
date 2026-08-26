@@ -45,7 +45,7 @@ class ResolvedSequenceRecord:
 
 _ACCESSION_PATTERNS: tuple[tuple[IdentifierType, str], ...] = (
     (IdentifierType.CNCB_PROJECT_ACCESSION, r"\bPRJCA\d+\b"),
-    (IdentifierType.BIOPROJECT_ACCESSION, r"\bPRJ(?:NA|EB|DB)\d+\b"),
+    (IdentifierType.BIOPROJECT_ACCESSION, r"\bPRJ(?:NA|EB|DB|DA|EA)\d+\b"),
     (IdentifierType.CNCB_BIOSAMPLE_ACCESSION, r"\bSAMC\d+\b"),
     (IdentifierType.BIOSAMPLE_ACCESSION, r"\bSAM(?:N|D|EA)\d+\b"),
     (IdentifierType.SRA_SUBMISSION_ACCESSION, r"\b(?:SRA|ERA|DRA)\d+\b"),

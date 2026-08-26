@@ -30,8 +30,13 @@ DOI_TRAILING_ARTIFACT_PATTERN = re.compile(
 PMID_PATTERN = re.compile(r"^\d+$")
 PMCID_PATTERN = re.compile(r"^PMC\d+$", re.IGNORECASE)
 
-# NCBI BioProject: PRJNA (NCBI), PRJEB (ENA), PRJDB (DDBJ)
-BIOPROJECT_PATTERN = re.compile(r"^PRJ(NA|EB|DB)\d+$", re.IGNORECASE)
+# NCBI BioProject: PRJNA (NCBI), PRJEB (ENA), PRJDB (DDBJ), plus the
+# retired pre-~2012 prefixes DDBJ (PRJDA) and EBI (PRJEA) used before each
+# switched to their current one -- confirmed live, these still resolve as
+# real, distinct BioProject accessions today (e.g. PRJDA18267), not
+# renamed to their newer-prefix equivalent, so they need to keep matching
+# forever, not just get normalized away.
+BIOPROJECT_PATTERN = re.compile(r"^PRJ(NA|EB|DB|DA|EA)\d+$", re.IGNORECASE)
 # NCBI BioSample: SAMN (NCBI), SAME (ENA), SAMD (DDBJ)
 BIOSAMPLE_PATTERN = re.compile(r"^SAM(N|E|D)[A-Z]?\d+$", re.IGNORECASE)
 # SRA/ENA/DDBJ accession hierarchy
