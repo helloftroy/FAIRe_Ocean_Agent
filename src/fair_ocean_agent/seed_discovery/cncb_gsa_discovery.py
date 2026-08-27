@@ -257,15 +257,23 @@ class CncbConfig:
     base_url: str = CNCB_BASE_URL
     min_request_interval_seconds: float = 2.0
     request_timeout_seconds: float = 120.0
+    # Requested but not honored by the live API -- confirmed live
+    # (2026-08-26) that size=5/20/50/100/200 all come back with exactly 10
+    # items per page regardless. Kept as a config field (still sent on the
+    # request in case the API ever starts honoring it) but _discover's own
+    # pagination no longer assumes it controls the actual page length.
     page_size: int = 50
     # db=bioproject's per-query totals run in the thousands (confirmed live
     # across all 28 DISCOVERY_QUERIES: max observed was "metagenome" at
     # ~65K, most terms far smaller), not the millions db=gsa's own mixed
-    # INSDC-mirror index returns for the same terms -- a full scan to
-    # exhaustion is tractable at this default, unlike the old 50-page cap
-    # (2500 records) which found real native hits for the tested terms 0%
-    # of the time against db=gsa's noise.
-    max_pages_per_query: int = 300
+    # INSDC-mirror index returns for the same terms. This is a page COUNT,
+    # not a record count -- given the real, fixed 10-items-per-page
+    # behavior above, 5000 pages covers up to 50,000 records/term (full
+    # exhaustion for every one of the 28 terms except "metagenome", the one
+    # observed outlier at ~65K) while keeping worst-case runtime around
+    # 7-8 hours at the default 2s/request pace, well inside the 48-hour
+    # cluster time limit.
+    max_pages_per_query: int = 5000
     max_retries: int = 3
     retry_base_seconds: float = 2.0
 
@@ -1052,9 +1060,22 @@ class CncbGsaDiscoveryRunner:
                     counts["native_projects_seen"] += 1
                 self.db.commit()
                 pages += 1
-                if len(items) < self.config.page_size or start + self.config.page_size >= total or pages >= self.config.max_pages_per_query:
+                # Real live bug (confirmed 2026-08-26): the API silently
+                # ignores the requested `size` param and always returns
+                # exactly 10 items per page regardless -- requesting
+                # size=5/20/50/100/200 all came back with len(items)==10.
+                # The old stopping condition (`len(items) < page_size`) was
+                # therefore true on page 0 for every single query term
+                # (10 < 50), and the old `start += page_size` increment
+                # would have skipped straight past the next 40 real,
+                # unseen records even if the loop had continued. Advancing
+                # by the page's own actual size is the only correct way to
+                # paginate this API; `not items` (rather than comparing
+                # against a page_size that isn't honored) is what actually
+                # signals "no more results."
+                if not items or start + len(items) >= total or pages >= self.config.max_pages_per_query:
                     break
-                start += self.config.page_size
+                start += len(items)
             logger.info("CNCB discovery query=%s projects=%s", query, len(seen_projects))
 
     def _metadata(self, raw_dir: Path, manifests_dir: Path, counts: Counter, *, max_projects: int | None, refresh: bool) -> None:
@@ -1266,7 +1287,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--refresh", action="store_true")
     parser.add_argument("--max-projects", type=int)
     parser.add_argument("--page-size", type=int, default=50)
-    parser.add_argument("--max-pages-per-query", type=int, default=int(os.environ.get("CNCB_MAX_PAGES_PER_QUERY", "300")))
+    parser.add_argument("--max-pages-per-query", type=int, default=int(os.environ.get("CNCB_MAX_PAGES_PER_QUERY", "5000")))
     parser.add_argument("--cncb-min-request-interval-seconds", type=float, default=float(os.environ.get("CNCB_MIN_REQUEST_INTERVAL_SECONDS", "2.0")))
     parser.add_argument("--log-level", default="INFO")
     return parser

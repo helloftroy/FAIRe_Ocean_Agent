@@ -22,7 +22,7 @@ import fair_ocean_agent.seed_discovery.cncb_gsa_discovery as cncb_gsa_discovery
 from scripts.cncb_gsa_seeds_to_csv import convert
 
 
-def _fast_config(tmp_path) -> CncbConfig:
+def _fast_config(tmp_path, *, max_pages_per_query: int = 1) -> CncbConfig:
     return CncbConfig(
         db_path=tmp_path / "cncb.sqlite",
         data_dir=tmp_path / "cncb_data",
@@ -33,7 +33,7 @@ def _fast_config(tmp_path) -> CncbConfig:
         max_retries=2,
         retry_base_seconds=0.001,
         page_size=50,
-        max_pages_per_query=1,
+        max_pages_per_query=max_pages_per_query,
     )
 
 
@@ -339,3 +339,48 @@ def test_one_projects_gsa_page_persistent_failure_does_not_crash_the_whole_metad
     conn.close()
     assert rows["PRJCA0001"] == "not_yet_checked"  # never merged -- the fetch failed before parsing
     assert rows["PRJCA0002"] != "not_yet_checked"  # successfully merged
+
+
+def test_discovery_paginates_past_page_zero_even_though_the_api_ignores_size(tmp_path, monkeypatch):
+    """Regression test for the real root cause behind a live-reported
+    22-native-projects result that should have been much higher: the CNCB
+    search API silently ignores the requested `size` param and always
+    returns exactly 10 items per page (confirmed live 2026-08-26 --
+    size=5/20/50/100/200 all came back with len(items)==10). The old
+    stopping condition (`len(items) < page_size`) and `start` increment
+    (`+= page_size`) both assumed the request controlled the actual page
+    length, so every query term's loop broke after page 0 regardless of
+    how many total records existed -- exactly 29 live search requests were
+    made for 28 query terms in the real run that produced this bug report.
+    This response always returns a fixed 10-item page (mirroring the real
+    API) for a term with recordsTotal=25, spread across 3 pages."""
+    monkeypatch.setattr(cncb_gsa_discovery, "DISCOVERY_QUERIES", ("multipage",))
+    total = 25
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        start = int(request.url.params.get("start", "0"))
+        page_items = [
+            {
+                "id": f"PRJCA{i:04d}",
+                "type": "BioProject",
+                "title": "t",
+                "attrs": {"Accession": f"PRJCA{i:04d}", "Center": "GSA", "CrasAcc": []},
+            }
+            for i in range(start, min(start + 10, total))
+        ]
+        return httpx.Response(200, json={"code": "200", "result": {"data": {"recordsTotal": total, "recordsFiltered": total, "data": page_items}}})
+
+    config = _fast_config(tmp_path, max_pages_per_query=10)
+    runner = CncbGsaDiscoveryRunner(config, transport=httpx.MockTransport(handler))
+    try:
+        result = runner.run(phase="discovery")
+    finally:
+        runner.close()
+
+    assert result["counts"]["search_pages"] == 3  # start=0, 10, 20
+    assert result["counts"]["native_projects_seen"] == 25
+
+    conn = sqlite3.connect(config.db_path)
+    stored = {row[0] for row in conn.execute("SELECT cncb_bioproject FROM cncb_projects")}
+    conn.close()
+    assert stored == {f"PRJCA{i:04d}" for i in range(total)}

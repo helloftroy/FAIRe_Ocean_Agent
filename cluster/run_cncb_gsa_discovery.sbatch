@@ -12,7 +12,7 @@
 # Override knobs, for example:
 #   sbatch --export=ALL,CNCB_MIN_REQUEST_INTERVAL_SECONDS=5 cluster/run_cncb_gsa_discovery.sbatch
 #   sbatch --export=ALL,CNCB_MAX_PROJECTS=100 cluster/run_cncb_gsa_discovery.sbatch
-#   sbatch --export=ALL,CNCB_MAX_PAGES_PER_QUERY=200 cluster/run_cncb_gsa_discovery.sbatch
+#   sbatch --export=ALL,CNCB_MAX_PAGES_PER_QUERY=50 cluster/run_cncb_gsa_discovery.sbatch  # quick/shallow test run; each page is a fixed 10 records regardless of size requested
 #   sbatch --export=ALL,CNCB_REFRESH=1 cluster/run_cncb_gsa_discovery.sbatch
 #SBATCH --job-name=cncb_gsa_discovery
 #SBATCH --partition=service
@@ -45,7 +45,7 @@ CNCB_DB="${CNCB_DB:-data/seed_discovery/cncb_gsa_paper_seeds.sqlite}"
 CNCB_DATA_DIR="${CNCB_DATA_DIR:-data/cncb_gsa}"
 CNCB_OUT_CSV="${CNCB_OUT_CSV:-cluster/seeds_cncb_gsa.csv}"
 CNCB_MIN_REQUEST_INTERVAL_SECONDS="${CNCB_MIN_REQUEST_INTERVAL_SECONDS:-2}"
-CNCB_MAX_PAGES_PER_QUERY="${CNCB_MAX_PAGES_PER_QUERY:-300}"
+CNCB_MAX_PAGES_PER_QUERY="${CNCB_MAX_PAGES_PER_QUERY:-5000}"
 
 echo "CNCB database: ${CNCB_DB}"
 echo "CNCB data dir: ${CNCB_DATA_DIR}"
