@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import sqlite3
+import sys
 import time
 from collections import Counter
 from dataclasses import dataclass
@@ -1273,7 +1274,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    logging.basicConfig(level=getattr(logging, args.log_level.upper()), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    # stream=sys.stdout, not the logging module's own stderr default: the
+    # sbatch wrapper redirects stdout/stderr to SEPARATE .out/.err files,
+    # and every "===" report section in this script already prints to
+    # stdout -- found live that the per-query/per-project progress lines
+    # below (query=... projects=..., discovery/metadata error warnings)
+    # were landing unseen in the .err file instead, right when they were
+    # needed most to diagnose a real discovery-yield question.
+    logging.basicConfig(
+        level=getattr(logging, args.log_level.upper()),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        stream=sys.stdout,
+    )
     config = CncbConfig(
         db_path=Path(args.db),
         data_dir=Path(args.data_dir),
@@ -1286,7 +1298,20 @@ def main(argv: list[str] | None = None) -> int:
     )
     runner = CncbGsaDiscoveryRunner(config)
     try:
-        runner.run(phase=args.phase, max_projects=args.max_projects, refresh=args.refresh)
+        result = runner.run(phase=args.phase, max_projects=args.max_projects, refresh=args.refresh)
     finally:
         runner.close()
+
+    # Printed to stdout deliberately (not just logged): the per-query
+    # logger.info/logger.warning lines already emitted during the run go to
+    # stderr by default, which the sbatch wrapper redirects to a SEPARATE
+    # .err file from the .out file this script's own "===" report sections
+    # already print to -- a real source of confusion found live (these
+    # run-level counts, including discover_query_errors/metadata_cra_errors,
+    # were previously computed by run() and then silently discarded here,
+    # invisible in either file).
+    print("\n=== CNCB/GSA discovery run counts ===")
+    for key, value in sorted(result["counts"].items()):
+        print(f"  {key}: {value}")
+
     return 0
