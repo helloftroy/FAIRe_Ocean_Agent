@@ -872,11 +872,20 @@ def sample_row_to_db(cncb_bioproject: str, cra_accession: str | None, sample: di
         "sample_type", "habitat", "sampling_method", "sample_collection_method", "filter_type", "filter_pore_size",
         "size_fraction", "storage_method", "preservation_method", "temperature", "salinity", "ph", "oxygen",
         "dissolved_oxygen", "chlorophyll", "nitrate", "nitrite", "ammonium", "phosphate", "pressure",
-        "other_environmental_measurements_json", "source_metadata_json",
     ]:
         row[field] = sample.get(field)
-    row.setdefault("other_environmental_measurements_json", "{}")
-    row.setdefault("source_metadata_json", json_dumps(sample))
+    # Real live crash (confirmed 2026-08-27): these two columns are
+    # NOT NULL DEFAULT '{}' in the schema, but were previously included in
+    # the blind for-loop above too, which set them to None (via
+    # sample.get(field) on a sample dict lacking the key -- exactly the
+    # {"samc_accession": samc} fallback used below when a BioSample fetch
+    # fails). The row.setdefault(...) calls that used to follow the loop
+    # were then no-ops, since setdefault only fills in a MISSING key, and
+    # the loop had already set both keys to None. A NULL value for either
+    # then violated the NOT NULL constraint on INSERT, crashing the whole
+    # job on the very next transient 503/429 from CNCB's own server.
+    row["other_environmental_measurements_json"] = sample.get("other_environmental_measurements_json") or "{}"
+    row["source_metadata_json"] = sample.get("source_metadata_json") or json_dumps(sample)
     return row
 
 
@@ -1133,7 +1142,19 @@ class CncbGsaDiscoveryRunner:
                         except httpx.HTTPError as exc:
                             logger.info("no CNCB BioSample page for %s: %s", samc, exc)
                             sample_html = ""
-                        sample_html_path.write_text(sample_html, encoding="utf-8")
+                        # Only cache a real, successful fetch (mirrors the
+                        # GSA-page fetch just above, which already gets this
+                        # right via its own `continue`). Real bug found live
+                        # (2026-08-27): writing the empty string here
+                        # unconditionally meant a transient 503/429 got
+                        # permanently cached as "no BioSample data" --
+                        # sample_html_path.exists() looks identical to a
+                        # real cache hit on the next resubmit, so a purely
+                        # transient rate-limit failure would never be
+                        # retried, silently degrading data completeness on
+                        # every resume rather than just skipping this once.
+                        if sample_html:
+                            sample_html_path.write_text(sample_html, encoding="utf-8")
                     sample = parse_biosample_html(samc, sample_html) if sample_html else {"samc_accession": samc}
                     self.db.upsert_sample(sample_row_to_db(merged_row["cncb_bioproject"], cra, sample))
                     all_samples.append(sample)

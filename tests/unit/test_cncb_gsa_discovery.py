@@ -384,3 +384,100 @@ def test_discovery_paginates_past_page_zero_even_though_the_api_ignores_size(tmp
     stored = {row[0] for row in conn.execute("SELECT cncb_bioproject FROM cncb_projects")}
     conn.close()
     assert stored == {f"PRJCA{i:04d}" for i in range(total)}
+
+
+def test_sample_row_to_db_never_produces_a_null_json_column(tmp_path):
+    """Regression test for a real live crash: a BioSample fetch that fails
+    (503/429 exhausting retries) falls back to the bare
+    {"samc_accession": samc} dict. sample_row_to_db's own for-loop
+    included other_environmental_measurements_json/source_metadata_json in
+    its blind sample.get(field) pass, setting both to None on that bare
+    dict -- the row.setdefault(...) calls that used to follow were then
+    no-ops (setdefault only fills in an absent key, and the loop had
+    already set both present-but-None), so a None got bound straight into
+    a NOT NULL DEFAULT '{}' column, raising sqlite3.IntegrityError on
+    upsert. Confirmed via temporary revert that this crashes without the
+    fix and passes with it."""
+    row = sample_row_to_db("PRJCA1", "CRA1", {"samc_accession": "SAMC1"})
+    assert row["other_environmental_measurements_json"] == "{}"
+    assert row["source_metadata_json"] is not None
+    assert json.loads(row["source_metadata_json"]) == {"samc_accession": "SAMC1"}
+
+    db = CncbDB(tmp_path / "cncb.sqlite")
+    try:
+        db.initialize()
+        db.upsert_sample(row)  # must not raise sqlite3.IntegrityError
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_failed_biosample_fetch_is_retried_on_the_next_run_not_cached_as_empty(tmp_path):
+    """Regression test for a real live resumability bug found alongside
+    the crash above: the old code wrote sample_html_path unconditionally,
+    even when the fetch failed and sample_html was "". On a resubmit,
+    sample_html_path.exists() looks identical to a real cache hit, so a
+    purely transient rate-limit failure would be silently treated as
+    "permanently no data" forever, rather than retried -- the exact
+    opposite of what a resumable, "re-submit after walltime" job is
+    supposed to do."""
+    gsa_html = """
+    <div><b>Title:</b> t</div>
+    <tr class="experiment">
+      <td class="experiments"><a href="browse/CRA1/CRX1">CRX1</a></td>
+      <td>t</td><td>t</td><td>t</td>
+      <td><a href="/biosample/browse/SAMC1">SAMC1</a></td>
+    </tr>
+    """
+    biosample_html = "<table><tr><th>Sample name</th><td>Station A</td></tr></table>"
+
+    state = {"biosample_should_fail": True}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if "/gsa/browse/" in url:
+            return httpx.Response(200, text=gsa_html)
+        if "/biosample/browse/" in url:
+            if state["biosample_should_fail"]:
+                return httpx.Response(503, text="unavailable")
+            return httpx.Response(200, text=biosample_html)
+        raise AssertionError(f"unexpected request: {url}")
+
+    config = _fast_config(tmp_path, max_pages_per_query=1)
+    db = CncbDB(config.db_path)
+    db.initialize()
+    db.upsert_project(project_row_from_seed({"cncb_bioproject": "PRJCA1", "cra_accessions": ["CRA1"], "title": "t", "description": None}))
+    db.commit()
+    db.close()
+
+    # First run: BioSample fetch persistently fails.
+    runner = CncbGsaDiscoveryRunner(config, transport=httpx.MockTransport(handler))
+    try:
+        runner.run(phase="metadata")
+    finally:
+        runner.close()
+
+    project_dir = config.data_dir / "raw" / "PRJCA1"
+    assert not (project_dir / "SAMC1.html").exists()  # not cached as if it had succeeded
+    conn = sqlite3.connect(config.db_path)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT sample_name, other_environmental_measurements_json FROM cncb_samples WHERE samc_accession = 'SAMC1'").fetchone()
+    conn.close()
+    assert row["sample_name"] is None
+    assert row["other_environmental_measurements_json"] == "{}"
+
+    # Second run (simulating a resubmit): BioSample fetch now succeeds --
+    # must actually be retried, not skipped as "already cached."
+    state["biosample_should_fail"] = False
+    runner = CncbGsaDiscoveryRunner(config, transport=httpx.MockTransport(handler))
+    try:
+        runner.run(phase="metadata")
+    finally:
+        runner.close()
+
+    assert (project_dir / "SAMC1.html").exists()
+    conn = sqlite3.connect(config.db_path)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT sample_name FROM cncb_samples WHERE samc_accession = 'SAMC1'").fetchone()
+    conn.close()
+    assert row["sample_name"] == "Station A"
