@@ -91,6 +91,8 @@ def _dataset_identifier_type(repository: str | None, dataset_id: str) -> Identif
         return IdentifierType.DATASET_DOI
     if "qiita" in repo:
         return IdentifierType.QIITA_STUDY_ID
+    if "mgrast" in repo or "mg-rast" in repo:
+        return IdentifierType.MGRAST_PROJECT_ID
     if "cncb" in repo or "gsa" in repo or "ngdc" in repo:
         value = dataset_id.strip()
         if CNCB_PROJECT_PATTERN.match(value):

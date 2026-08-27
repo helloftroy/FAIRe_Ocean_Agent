@@ -72,6 +72,7 @@ class IdentifierType(str, enum.Enum):
     BCODMO_DATASET_ID = "bcodmo_dataset_id"
     PANGAEA_ID = "pangaea_id"
     QIITA_STUDY_ID = "qiita_study_id"
+    MGRAST_PROJECT_ID = "mgrast_project_id"
     NCEI_ACCESSION = "ncei_accession"
     CRUISE_ID = "cruise_id"
     URL = "url"
