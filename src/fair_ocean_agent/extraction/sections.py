@@ -97,6 +97,11 @@ _CITATION_XREF_REF_TYPES = frozenset({"bibr"})
 # cosmetic (an LLM has no reason to ever quote "( )" as a real value), but
 # cleaned up anyway rather than leaving visible noise in extracted text.
 _EMPTY_PARENTHETICAL_RE = re.compile(r"\(\s*\)")
+# Same gap, square brackets -- confirmed live (10.3390/microorganisms10030558's
+# own methods text: "amplified with primers 338F and 806R [ ]" and
+# "primers cbbL_K2f and cbbL_V2r [ ]", both real citation markers stripped
+# down to an empty bracket pair immediately after the primer names).
+_EMPTY_BRACKET_RE = re.compile(r"\[\s*\]")
 
 
 def _itertext_excluding_citations(element: ET.Element) -> Iterable[str]:
@@ -218,6 +223,7 @@ def select_relevant_sections(fulltext_xml: str, max_chars: int = 40000) -> list[
 
         text = " ".join(t.strip() for t in _itertext_excluding_citations(sec) if t.strip())
         text = " ".join(_EMPTY_PARENTHETICAL_RE.sub(" ", text).split())
+        text = " ".join(_EMPTY_BRACKET_RE.sub(" ", text).split())
         if not text:
             continue
 

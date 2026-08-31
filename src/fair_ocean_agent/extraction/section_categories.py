@@ -235,10 +235,21 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
                 "L of water were collected", "liters of water were collected",
                 "g of sediment were collected", "total volume collected",
                 "mass of sediment collected", "volume of water sampled", "kg of sediment",
+                # Real gap found live (10.3390/microorganisms10030558): water
+                # samples are routinely reported as "X liters of seawater was/
+                # were filtered" -- filtration IS the collection/concentration
+                # step for a water sample, not a separate later step, so this
+                # phrasing is at least as common as "were collected" for
+                # marine/aquatic eDNA papers specifically.
+                "liters of seawater was filtered", "liters of seawater were filtered",
+                "L of seawater was filtered", "L of seawater were filtered",
+                "liters of water was filtered", "liters of water were filtered",
+                "L of water was filtered", "L of water were filtered",
             ), definition='The total amount of environmental material originally collected for that sample, such as 10 L of water or 500 g of sediment. Do not confuse with the smaller amount later used for DNA extraction.'),
             CategoryTerm("samp_size_unit", (
                 "L of water", "mL of water", "g of sediment", "mg of sediment", "kg of sediment",
                 "cm2 of surface", "cm² of surface",
+                "L of seawater", "mL of seawater",
             ), definition='The unit associated with `samp_size`, such as L, mL, g, mg, cm², or another explicitly reported unit.'),
             CategoryTerm("sample_composed_of", (
                 "pooled from", "combined from", "composite sample", "composed of",

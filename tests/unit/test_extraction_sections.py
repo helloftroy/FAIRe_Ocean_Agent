@@ -67,6 +67,31 @@ def test_strips_dangling_empty_parenthetical_left_by_a_removed_citation_number()
     assert "Sediment traps based on decantation" in text
 
 
+EMPTY_BRACKET_XML = """<article>
+  <body>
+    <sec>
+      <title>Methods</title>
+      <p>They were amplified with primers cbbL_K2f and cbbL_V2r [<xref rid="CR25" ref-type="bibr">25</xref>]
+following the PCR progress described below.</p>
+    </sec>
+  </body>
+</article>
+"""
+
+
+def test_strips_dangling_empty_bracket_left_by_a_removed_citation_number():
+    """Regression guard for a real gap found live
+    (10.3390/microorganisms10030558): same shape as the empty-parenthetical
+    gap above, but with a citation number inside literal square brackets
+    (a real, common in-text citation style) instead of parentheses --
+    confirmed live this paper's own real text leaves "primers cbbL_K2f and
+    cbbL_V2r [ ]" once the citation number itself is stripped."""
+    sections = select_relevant_sections(EMPTY_BRACKET_XML)
+    text = sections[0]["text"]
+    assert "[ ]" not in text
+    assert "cbbL_K2f and cbbL_V2r" in text
+
+
 def test_strips_bibliography_citation_reference_numbers_from_section_text():
     """Regression guard for a real bug found live (10.1038/s42003-024-06136-2's
     real JATS XML): a naive itertext() call flattens a superscript

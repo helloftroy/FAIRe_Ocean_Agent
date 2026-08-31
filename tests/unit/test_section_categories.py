@@ -167,6 +167,19 @@ def test_samp_store_temp_cues_match_stored_in_medium_at_temperature():
     assert _term_cues_match("samp_store_temp", "Samples were stored at -80°C until extraction.")
 
 
+def test_samp_size_cues_match_liters_of_seawater_was_filtered():
+    """Real gap found live (10.3390/microorganisms10030558): "Two liters
+    of seawater was filtered onto 0.22 µm membrane filter..." never
+    matched any samp_size cue -- the original cues only covered "were
+    collected" phrasing, but filtration IS the collection/concentration
+    step for a water sample, so "was/were filtered" is at least as common
+    a way to report sample volume for marine/aquatic eDNA papers."""
+    assert _term_cues_match("samp_size", "Two liters of seawater was filtered onto 0.22 µm membrane filter for DNA extraction.")
+    assert _term_cues_match("samp_size", "Three liters of seawater were filtered through a 0.2 µm filter.")
+    # the original "were collected" phrasing must keep matching too
+    assert _term_cues_match("samp_size", "10 L of water were collected at each station.")
+
+
 def test_candidate_categories_for_paragraph_finds_sample_prep_in_dense_text():
     """Real evidence: this dense supplementary-methods paragraph's own
     opening sentence ("DNA for amplicon sequencing and qPCR was extracted
