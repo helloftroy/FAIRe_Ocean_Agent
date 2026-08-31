@@ -31,10 +31,26 @@ Two independent, deliberately conservative signals:
      consecutive-letters check: a lone A/B pair never groups, and
      non-consecutive letters (e.g. only A and F) never group either.
 
-Bare trailing digits without a separator (e.g. "Sample1" vs "Sample12" vs
-"Sample2") are never treated as a replicate signal -- they're the single
-most common false-positive shape (arbitrary/incrementing sample numbering,
-not same-site replication) and match neither regex below.
+Bare trailing digits without a separator on a full-word base (e.g.
+"Sample1" vs "Sample12" vs "Sample2") are never treated as a replicate
+signal -- they're the single most common false-positive shape (arbitrary/
+incrementing sample numbering, not same-site replication).
+
+  4. SHORT_PREFIX_NUMBER_SUFFIX -- opt-in only (include_short_prefix_signal,
+     default off), a bare digit directly after a base of only 1-2 LETTERS
+     (e.g. "E2"/"E3", "AS1"/"AS2"). Real gap found live (PMC10988111): a
+     developmental-stage time series named samples by a short stage-code
+     prefix (P polyp, ES early strobila, AS advanced strobila, E ephyra)
+     plus a bare replicate number, no separator at all. Confirmed live
+     this is NOT safe to enable unconditionally, though: "S1"/"S2" is a
+     real, common generic sequential sample-ID convention in supplement
+     tables (a real, already-tested exclusion this signal would otherwise
+     silently reopen) -- "S" is excluded from this signal's own base
+     regardless of caller, and the caller (sources/ncbi.py only, for
+     BioSample sample_name/title text specifically -- never
+     supplement_parsing.py's own table-row IDs, an entirely different and
+     much more collision-prone namespace) opts in explicitly rather than
+     this being on by default for every consumer of this module.
 """
 from __future__ import annotations
 
@@ -47,6 +63,7 @@ class ReplicateSignal(str, Enum):
     EXPLICIT_REP_MARKER = "explicit_rep_marker"
     TRAILING_NUMBER_SUFFIX = "trailing_number_suffix"
     TRAILING_LETTER_SUFFIX = "trailing_letter_suffix"
+    SHORT_PREFIX_NUMBER_SUFFIX = "short_prefix_number_suffix"
 
 
 @dataclass(frozen=True)
@@ -71,6 +88,16 @@ _GENERIC_NUMBERED_SAMPLE_BASE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Matches "E2"/"E3", "AS1"/"AS2" -- a bare digit directly after a SHORT
+# (1-2 letter) base, no separator. Capped at 2 letters so a genuine word
+# base ("Sample", "Isolate", ...) can never match; "S" alone is excluded
+# below regardless, since "S1"/"S2" is itself a common generic sequential
+# sample-ID convention, not a replicate signal -- see module docstring's
+# SHORT_PREFIX_NUMBER_SUFFIX section.
+_SHORT_PREFIX_NUMBER_RE = re.compile(r"^(?P<base>[A-Za-z]{1,2})(?P<num>\d+)$")
+_SHORT_PREFIX_EXCLUDED_BASES = frozenset({"S"})
+_MIN_SHORT_PREFIX_GROUP_SIZE = 2
+
 # Matches "Site_A", "Site-b" -- exactly one letter directly after a
 # separator at the end of the string. Does NOT match "Station_Alpha" (the
 # trailing token is "Alpha", not a single character).
@@ -86,6 +113,7 @@ def detect_replicate_groups(
     sample_names_by_id: dict[str, str],
     *,
     include_letter_suffix_signal: bool = True,
+    include_short_prefix_signal: bool = False,
 ) -> list[ReplicateGroup]:
     """`sample_names_by_id` maps each sample's own identifier (a supplement
     table's raw sample-id cell string, or a BioSample accession) to the
@@ -93,6 +121,12 @@ def detect_replicate_groups(
     supplement tables the identifier IS the name; for NCBI BioSample the
     identifier is the accession and the name is the `sample_name` attribute
     or BioSample title.
+
+    include_short_prefix_signal defaults to False: confirmed live it isn't
+    safe for every caller (supplement_parsing.py's own table-row IDs are a
+    much more collision-prone namespace, e.g. real "S1"/"S2" sequential
+    IDs) -- only sources/ncbi.py's real BioSample sample_name/title text
+    opts in.
 
     Returns disjoint groups (an id matched by the explicit-marker signal is
     never re-considered for the letter-suffix signal). A group of size 1
@@ -132,6 +166,23 @@ def detect_replicate_groups(
         ordered = tuple(sample_id for sample_id, _ in sorted(members, key=lambda pair: pair[1]))
         groups.append(ReplicateGroup(members=ordered, signal=ReplicateSignal.TRAILING_NUMBER_SUFFIX))
         consumed.update(ordered)
+
+    if include_short_prefix_signal:
+        short_prefix_buckets: dict[str, list[tuple[str, int]]] = {}
+        for sample_id, name in sample_names_by_id.items():
+            if sample_id in consumed:
+                continue
+            match = _SHORT_PREFIX_NUMBER_RE.match(name.strip())
+            if match and match.group("base").upper() not in _SHORT_PREFIX_EXCLUDED_BASES:
+                short_prefix_buckets.setdefault(match.group("base"), []).append(
+                    (sample_id, int(match.group("num")))
+                )
+        for members in short_prefix_buckets.values():
+            if len(members) < _MIN_SHORT_PREFIX_GROUP_SIZE:
+                continue
+            ordered = tuple(sample_id for sample_id, _ in sorted(members, key=lambda pair: pair[1]))
+            groups.append(ReplicateGroup(members=ordered, signal=ReplicateSignal.SHORT_PREFIX_NUMBER_SUFFIX))
+            consumed.update(ordered)
 
     if include_letter_suffix_signal:
         letter_buckets: dict[str, list[tuple[str, str]]] = {}

@@ -256,6 +256,8 @@ _GENERIC_BIOSAMPLE_TITLE_RE = re.compile(
 _SOURCE_MATERIAL_SAMPLE_NAME_RE = re.compile(
     r"^[A-Za-z0-9]+[-_][A-Za-z]+\d+[-_]\d+$"
 )
+_HOST_SPECIES_ATTRIBUTE_NAMES = ("host_species", "host species", "host", "cultivar")
+_ABSENT_ATTRIBUTE_VALUE_RE = re.compile(r"^(?:not\s+applicable|not\s+available|not\s+collected|unknown|missing|n/?a|na)$", re.IGNORECASE)
 
 
 def _source_material_id_sample_name(value: str | None) -> str | None:
@@ -383,6 +385,24 @@ def _get_attribute(attributes: dict, name: str) -> str | None:
     for key, value in attributes.items():
         if _normalize_attribute_name(key) == target:
             return value
+    return None
+
+
+def _present_attribute_value(value: str | None) -> str | None:
+    cleaned = _clean_text(value)
+    if not cleaned or _ABSENT_ATTRIBUTE_VALUE_RE.match(cleaned):
+        return None
+    return cleaned
+
+
+def _host_species_from_attributes(attributes: dict[str, str]) -> tuple[str, str] | None:
+    for attr_name in _HOST_SPECIES_ATTRIBUTE_NAMES:
+        value = _present_attribute_value(_get_attribute(attributes, attr_name))
+        if value:
+            return attr_name, value
+    isolate = _present_attribute_value(_get_attribute(attributes, "isolate"))
+    if isolate:
+        return "isolate", isolate
     return None
 
 
@@ -797,8 +817,10 @@ class NcbiBioSampleAdapter(SourceAdapter):
                 canonical_attr_name = _canonical_biosample_attribute_name(attr_name)
                 if canonical_attr_name != attr_name:
                     normalized_attrs[canonical_attr_name] = str(attr_value)
-                if attr_name.casefold() == "cultivar":
-                    normalized_attrs["host_species"] = str(attr_value)
+            host_species = _host_species_from_attributes(normalized_attrs)
+            if host_species:
+                host_attr_name, host_attr_value = host_species
+                normalized_attrs["host_species"] = host_attr_value
             organism = sample.get("organism") or {}
             organism_name = organism.get("taxonomy_name") or organism.get("taxonomy_id")
             if organism_name:
@@ -1058,7 +1080,15 @@ class NcbiBioSampleAdapter(SourceAdapter):
         replicate_group_by_accession = {
             member: group
             for group in detect_replicate_groups(
-                {accession: name for accession, (name, _field) in name_and_field_by_accession.items()}
+                {accession: name for accession, (name, _field) in name_and_field_by_accession.items()},
+                # Real BioSample sample_name/title text only -- confirmed
+                # live this signal is unsafe for supplement_parsing.py's
+                # own table-row IDs (a much more collision-prone
+                # namespace), so it's opted into here specifically, not
+                # made the shared default. See replicate_grouping.py's own
+                # module docstring for the real gap this covers (a
+                # developmental-stage series named "E2"/"E3"/"AS1"/"AS2").
+                include_short_prefix_signal=True,
             )
             for member in group.members
         }

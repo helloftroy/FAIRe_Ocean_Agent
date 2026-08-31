@@ -24,6 +24,43 @@ def test_bare_trailing_digit_suffix_is_not_treated_as_replicate():
     assert detect_replicate_groups(names) == []
 
 
+def test_short_prefix_signal_is_off_by_default():
+    """The signal exists but is opt-in only -- confirmed live it isn't
+    safe as a shared default (supplement_parsing.py's own table-row IDs
+    are a much more collision-prone namespace)."""
+    names = {"S1": "E2", "S2": "E3", "S3": "E4"}
+    assert detect_replicate_groups(names) == []
+
+
+def test_short_prefix_signal_groups_developmental_stage_replicates_when_enabled():
+    """Real gap found live (PMC10988111): a developmental-stage time
+    series named samples by a short stage-code prefix (P polyp, ES early
+    strobila, AS advanced strobila, E ephyra) plus a bare replicate
+    number, no separator at all -- e.g. "E2"/"E3". Only sources/ncbi.py
+    opts into this, for real BioSample sample_name/title text."""
+    names = {"S1": "E2", "S2": "E3", "S3": "E4", "S4": "AS1", "S5": "AS2"}
+    groups = detect_replicate_groups(names, include_short_prefix_signal=True)
+    by_members = {group.members: group.signal for group in groups}
+    assert by_members == {
+        ("S1", "S2", "S3"): ReplicateSignal.SHORT_PREFIX_NUMBER_SUFFIX,
+        ("S4", "S5"): ReplicateSignal.SHORT_PREFIX_NUMBER_SUFFIX,
+    }
+
+
+def test_short_prefix_signal_still_excludes_s_prefix_even_when_enabled():
+    """"S1"/"S2" is a real, common generic sequential sample-ID convention
+    (already a tested exclusion for the default/table-parsing path) -- it
+    must stay excluded even for a caller that opts into the short-prefix
+    signal, not just when the signal is off."""
+    names = {"S1": "S1", "S2": "S2"}
+    assert detect_replicate_groups(names, include_short_prefix_signal=True) == []
+
+
+def test_short_prefix_signal_still_excludes_full_word_bases_when_enabled():
+    names = {"S1": "Sample1", "S2": "Sample12"}
+    assert detect_replicate_groups(names, include_short_prefix_signal=True) == []
+
+
 def test_detects_trailing_number_suffix_after_space_or_underscore_by_exact_prefix():
     names = {"S1": "LM_2", "S2": "LM 1", "S3": "LMM 2", "S4": "LMM 1"}
     groups = detect_replicate_groups(names)
