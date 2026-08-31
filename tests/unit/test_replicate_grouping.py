@@ -47,6 +47,20 @@ def test_short_prefix_signal_groups_developmental_stage_replicates_when_enabled(
     }
 
 
+def test_short_prefix_signal_groups_descriptive_prefix_replicates_when_enabled():
+    """Real gap found live (another gold paper): a biofilm sample series
+    named by a descriptive, non-generic prefix with no separator at all
+    before the bare replicate number -- "PB_Biofilm1"/"PB_Biofilm2"/
+    "PB_Biofilm3" -- was missed entirely because the signal's base was
+    originally capped at 1-2 letters. The base has no length cap now, only
+    the "S"/generic-filler-word exclusions."""
+    names = {"S1": "PB_Biofilm1", "S2": "PB_Biofilm2", "S3": "PB_Biofilm3"}
+    groups = detect_replicate_groups(names, include_short_prefix_signal=True)
+    assert len(groups) == 1
+    assert groups[0].signal is ReplicateSignal.SHORT_PREFIX_NUMBER_SUFFIX
+    assert groups[0].members == ("S1", "S2", "S3")
+
+
 def test_short_prefix_signal_still_excludes_s_prefix_even_when_enabled():
     """"S1"/"S2" is a real, common generic sequential sample-ID convention
     (already a tested exclusion for the default/table-parsing path) -- it

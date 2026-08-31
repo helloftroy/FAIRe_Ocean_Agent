@@ -31,26 +31,33 @@ Two independent, deliberately conservative signals:
      consecutive-letters check: a lone A/B pair never groups, and
      non-consecutive letters (e.g. only A and F) never group either.
 
-Bare trailing digits without a separator on a full-word base (e.g.
+Bare trailing digits without a separator on a GENERIC full-word base (e.g.
 "Sample1" vs "Sample12" vs "Sample2") are never treated as a replicate
 signal -- they're the single most common false-positive shape (arbitrary/
-incrementing sample numbering, not same-site replication).
+incrementing sample numbering, not same-site replication); see
+_GENERIC_NUMBERED_SAMPLE_BASE_RE.
 
   4. SHORT_PREFIX_NUMBER_SUFFIX -- opt-in only (include_short_prefix_signal,
-     default off), a bare digit directly after a base of only 1-2 LETTERS
-     (e.g. "E2"/"E3", "AS1"/"AS2"). Real gap found live (PMC10988111): a
-     developmental-stage time series named samples by a short stage-code
-     prefix (P polyp, ES early strobila, AS advanced strobila, E ephyra)
-     plus a bare replicate number, no separator at all. Confirmed live
-     this is NOT safe to enable unconditionally, though: "S1"/"S2" is a
-     real, common generic sequential sample-ID convention in supplement
-     tables (a real, already-tested exclusion this signal would otherwise
-     silently reopen) -- "S" is excluded from this signal's own base
-     regardless of caller, and the caller (sources/ncbi.py only, for
-     BioSample sample_name/title text specifically -- never
-     supplement_parsing.py's own table-row IDs, an entirely different and
-     much more collision-prone namespace) opts in explicitly rather than
-     this being on by default for every consumer of this module.
+     default off), a bare digit directly after a letter/underscore base of
+     any length, no separator (e.g. "E2"/"E3", "AS1"/"AS2",
+     "PB_Biofilm1"/"PB_Biofilm2"/"PB_Biofilm3"). Real gap found live
+     (PMC10988111): a developmental-stage time series named samples by a
+     short stage-code prefix (P polyp, ES early strobila, AS advanced
+     strobila, E ephyra) plus a bare replicate number, no separator at
+     all. A second real gap (another gold paper) needed the same
+     no-separator matching for a much longer, descriptive base
+     ("PB_Biofilm") -- so despite the name, this signal's base is no
+     longer length-capped, just excluded when it's "S" (a real, common
+     generic sequential sample-ID convention in supplement tables) or one
+     of the same generic filler words TRAILING_NUMBER_SUFFIX already
+     excludes ("Sample"/"Isolate"/... -- what keeps "Sample1"/"Sample12"
+     excluded even now that the length cap is gone). Confirmed live this
+     signal is still NOT safe to enable unconditionally: the caller
+     (sources/ncbi.py only, for BioSample sample_name/title text
+     specifically -- never supplement_parsing.py's own table-row IDs, an
+     entirely different and much more collision-prone namespace) opts in
+     explicitly rather than this being on by default for every consumer
+     of this module.
 """
 from __future__ import annotations
 
@@ -88,13 +95,19 @@ _GENERIC_NUMBERED_SAMPLE_BASE_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Matches "E2"/"E3", "AS1"/"AS2" -- a bare digit directly after a SHORT
-# (1-2 letter) base, no separator. Capped at 2 letters so a genuine word
-# base ("Sample", "Isolate", ...) can never match; "S" alone is excluded
-# below regardless, since "S1"/"S2" is itself a common generic sequential
-# sample-ID convention, not a replicate signal -- see module docstring's
-# SHORT_PREFIX_NUMBER_SUFFIX section.
-_SHORT_PREFIX_NUMBER_RE = re.compile(r"^(?P<base>[A-Za-z]{1,2})(?P<num>\d+)$")
+# Matches "E2"/"E3", "AS1"/"AS2", and (real gap found live, another gold
+# paper) "PB_Biofilm1"/"PB_Biofilm2"/"PB_Biofilm3" -- a bare digit directly
+# after a letter/underscore base of ANY length, no separator. Originally
+# capped at 1-2 letters, relaxed to any length once a real descriptive
+# multi-word base ("PB_Biofilm") turned up needing the same treatment --
+# the base can never contain a digit itself (so "Sample1" splits cleanly
+# as base="Sample", not swallowed into a longer base), which is what keeps
+# this from re-admitting the "Sample1"/"Sample12" false-positive shape:
+# that base still gets caught by _GENERIC_NUMBERED_SAMPLE_BASE_RE below.
+# "S" alone is excluded regardless, since "S1"/"S2" is itself a common
+# generic sequential sample-ID convention, not a replicate signal -- see
+# module docstring's SHORT_PREFIX_NUMBER_SUFFIX section.
+_SHORT_PREFIX_NUMBER_RE = re.compile(r"^(?P<base>[A-Za-z][A-Za-z_]*)(?P<num>\d+)$")
 _SHORT_PREFIX_EXCLUDED_BASES = frozenset({"S"})
 _MIN_SHORT_PREFIX_GROUP_SIZE = 2
 
@@ -173,10 +186,12 @@ def detect_replicate_groups(
             if sample_id in consumed:
                 continue
             match = _SHORT_PREFIX_NUMBER_RE.match(name.strip())
-            if match and match.group("base").upper() not in _SHORT_PREFIX_EXCLUDED_BASES:
-                short_prefix_buckets.setdefault(match.group("base"), []).append(
-                    (sample_id, int(match.group("num")))
-                )
+            if not match:
+                continue
+            base = match.group("base")
+            if base.upper() in _SHORT_PREFIX_EXCLUDED_BASES or _GENERIC_NUMBERED_SAMPLE_BASE_RE.match(base):
+                continue
+            short_prefix_buckets.setdefault(base, []).append((sample_id, int(match.group("num"))))
         for members in short_prefix_buckets.values():
             if len(members) < _MIN_SHORT_PREFIX_GROUP_SIZE:
                 continue

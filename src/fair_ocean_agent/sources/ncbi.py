@@ -1121,8 +1121,10 @@ class NcbiBioSampleAdapter(SourceAdapter):
                 # own table-row IDs (a much more collision-prone
                 # namespace), so it's opted into here specifically, not
                 # made the shared default. See replicate_grouping.py's own
-                # module docstring for the real gap this covers (a
-                # developmental-stage series named "E2"/"E3"/"AS1"/"AS2").
+                # module docstring for the real gaps this covers (a
+                # developmental-stage series named "E2"/"E3"/"AS1"/"AS2",
+                # and a descriptive-prefix series named
+                # "PB_Biofilm1"/"PB_Biofilm2"/"PB_Biofilm3").
                 include_short_prefix_signal=True,
             )
             for member in group.members
