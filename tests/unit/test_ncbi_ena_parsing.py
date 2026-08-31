@@ -887,6 +887,7 @@ def test_biosample_extract_structured_facts_mag_with_full_environmental_attribut
             {
                 "accession": "SAMN42764696",
                 "title": "MIMAG Metagenome-assembled Genome sample from Candidatus Scalindua sp.",
+                "submitted": "2024-01-22",
                 "package": "MIMAG.sediment.6.0",
                 "model": "MIMAG.sediment",
                 "organism": {"taxonomy_name": "Candidatus Scalindua sp."},
@@ -908,6 +909,7 @@ def test_biosample_extract_structured_facts_mag_with_full_environmental_attribut
     facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw, "PRJNA529480"))
     by_type = {f.fact_type_candidate: f.raw_value for f in facts if f.entity_external_id == "SAMN42764696"}
     assert by_type == {
+        "eventDate_submitted": "2024-01-22",
         "collection_date": "2014-07-22",
         "depth": "2.5",
         "elev": "-2476",
@@ -920,6 +922,43 @@ def test_biosample_extract_structured_facts_mag_with_full_environmental_attribut
     }
     assert "isolate" not in by_type
     assert "organism" not in by_type
+    assert "host_species" not in by_type
+
+
+def test_biosample_extract_structured_facts_host_associated_mag_keeps_submission_date_and_isolate_host(
+    biosample_adapter,
+):
+    raw = {
+        "bioproject_accession": "PRJNA1067395",
+        "total_linked_samples": 1,
+        "truncated": False,
+        "samples": [
+            {
+                "accession": "SAMN39525748",
+                "title": "MIMAG Metagenome-assembled Genome sample from Vibrio sp.",
+                "submitted": "2024-01-22T03:00:12.820",
+                "package": "MIMAG.host-associated.6.0",
+                "model": "MIMAG.host-associated",
+                "organism": {"taxonomy_name": "Vibrio sp."},
+                "attributes": {
+                    "isolate": "Aurelia coerulea",
+                    "collection_date": "not provided",
+                    "env_broad_scale": "ENVO:00000428",
+                    "env_local_scale": "ENVO:00000486",
+                    "env_medium": "ENVO:00010483",
+                    "geo_loc_name": "China: Yantai",
+                    "isolation_source": "Strobilation process",
+                    "lat_lon": "37.52 N 121.45 E",
+                },
+            }
+        ],
+    }
+    facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw, "PRJNA1067395"))
+    by_type = {f.fact_type_candidate: f for f in facts if f.entity_external_id == "SAMN39525748"}
+
+    assert by_type["eventDate_submitted"].raw_value == "2024-01-22T03:00:12.820"
+    assert by_type["host_species"].raw_value == "Aurelia coerulea"
+    assert by_type["host_species"].raw_field_name == "isolate"
 
 
 def test_biosample_extract_structured_facts_mag_derived_from_extracts_parent_accession(biosample_adapter):

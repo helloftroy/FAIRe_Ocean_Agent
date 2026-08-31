@@ -172,6 +172,12 @@ def _is_mag_biosample(sample: dict) -> bool:
     return bool(_MAG_TITLE_RE.search(sample.get("title") or ""))
 
 
+def _is_host_associated_mag_biosample(sample: dict) -> bool:
+    package = (sample.get("package") or "").casefold()
+    model = (sample.get("model") or "").casefold()
+    return _is_mag_biosample(sample) and ("host-associated" in package or "host-associated" in model)
+
+
 # See extract_structured_facts' own MAG-safe-attribute loop for why this
 # exists: a curated allowlist of attribute names that describe the real
 # physical environment a MAG was assembled from, not the assembled genome
@@ -891,6 +897,35 @@ class NcbiBioSampleAdapter(SourceAdapter):
             if not _is_mag_biosample(sample):
                 continue
             accession = sample["accession"]
+            submitted = _clean_text(sample.get("submitted"))
+            if submitted:
+                facts.append(
+                    RawFactCandidate(
+                        entity_level=EntityLevel.SAMPLE,
+                        fact_type_candidate="eventDate_submitted",
+                        raw_field_name="submission_date",
+                        raw_value=submitted,
+                        source_locator=f"ncbi_biosample.{accession}.submission_date",
+                        entity_external_id=accession,
+                        entity_label=sample.get("title"),
+                    )
+                )
+            host_species = _host_species_from_attributes(sample.get("attributes", {}))
+            if host_species and host_species[0] == "isolate" and not _is_host_associated_mag_biosample(sample):
+                host_species = None
+            if host_species:
+                host_attr_name, host_attr_value = host_species
+                facts.append(
+                    RawFactCandidate(
+                        entity_level=EntityLevel.SAMPLE,
+                        fact_type_candidate="host_species",
+                        raw_field_name=host_attr_name,
+                        raw_value=host_attr_value,
+                        source_locator=f"ncbi_biosample.{accession}.Attributes.{host_attr_name}",
+                        entity_external_id=accession,
+                        entity_label=sample.get("title"),
+                    )
+                )
             for attr_name, attr_value in sample.get("attributes", {}).items():
                 if attr_value in (None, ""):
                     continue
