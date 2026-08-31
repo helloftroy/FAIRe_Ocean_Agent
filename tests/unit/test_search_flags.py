@@ -1719,3 +1719,29 @@ def test_quote_candidates_for_in_situ_temp_are_targeted_to_collection_time_conte
         )
     )
     assert any("in_situ_temp" in c.field_names for c in candidates)
+
+
+def test_quote_candidates_for_in_situ_temp_reach_llm_when_collection_sentence_is_the_next_one_over():
+    """Real gap found live (10.3390/microorganisms10030558, STUDY-
+    0049c7972ece): the paper states site temperature as its own sentence
+    immediately before the collection sentence, with neither "in situ"
+    nor "at the time of collection" anywhere -- "Seawater temperature was
+    28.1 C. Seawater samples were collected at the surface layer...".
+    _SAMPLING_TIME_CONTEXT_RE alone can't see this (no qualifying phrase
+    exists at all), so this also needs the plain "samples were
+    collected" phrase treated as sufficient context, checked across the
+    +/-1-sentence window rather than the bare temperature sentence alone."""
+    candidates = quote_candidates_for_llm_judged_search(
+        (
+            (
+                "Methods",
+                "Water depth of each sample site was measured using a depth sounder. "
+                "Seawater temperature was 28.1 ± 0.2 °C. Seawater samples were collected "
+                "at the surface layer (0.5 m depth) and the bottom layer.",
+            ),
+        )
+    )
+    matching = [c for c in candidates if "in_situ_temp" in c.field_names]
+    assert len(matching) == 1
+    assert "28.1" in matching[0].text
+    assert "collected" in matching[0].text

@@ -2244,7 +2244,15 @@ def _match_controlled_field(
 _SAMPLING_TIME_CONTEXT_RE = re.compile(
     r"\bin[\s-]situ\b|at\s+the\s+time\s+of\s+(?:collection|sampling)|"
     r"at\s+the\s+sampling\s+site|upon\s+collection|prior\s+to\s+sampling|"
-    r"at\s+collection|on\s+the\s+day\s+of\s+(?:collection|sampling)",
+    r"at\s+collection|on\s+the\s+day\s+of\s+(?:collection|sampling)|"
+    # Real gap found live (10.3390/microorganisms10030558): "Seawater
+    # temperature was 28.1 C. Seawater samples were collected at the
+    # surface layer..." states a plain collection sentence right next to
+    # the measurement, with none of the above explicit qualifiers --
+    # common enough on its own (paired with the new +/-1-sentence window
+    # in _SAMPLING_TIME_WINDOW_FIELDS) to treat as equivalent in-situ
+    # evidence, without needing "in situ"/"at the time of" spelled out.
+    r"\bsamples?\s+(?:were|was)\s+collected\b",
     re.IGNORECASE,
 )
 _OTU_CLUSTER_TOOL_CONTEXT_RE = re.compile(
@@ -2327,11 +2335,27 @@ _TARGET_TAXONOMIC_SCOPE_CONTEXT_RE = re.compile(
 )
 
 
-def _llm_judged_field_matches_snippet(field: LLMJudgedSearchField, snippet: str) -> bool:
+# Real gap found live (10.3390/microorganisms10030558, STUDY-0049c7972ece):
+# "Seawater temperature was 28.1 ± 0.2 °C. Seawater samples were
+# collected at the surface layer (0.5 m depth) and the bottom..." states
+# site temperature as its own sentence immediately before the collection
+# sentence, never combining "in situ"/"at collection" wording with the
+# measurement itself in one sentence -- a real, common Methods phrasing
+# _SAMPLING_TIME_CONTEXT_RE's single-sentence check can't see, since the
+# collection-time context sits in the NEXT sentence over. in_situ_temp/
+# in_situ_salinity are the only two fields checked against a small
+# +/-1-sentence window instead of the bare snippet, specifically because
+# their own context regex was built to require explicit wording a
+# same-sentence check can miss when a paper simply states conditions and
+# then immediately describes collection right after.
+_SAMPLING_TIME_WINDOW_FIELDS = frozenset({"in_situ_temp", "in_situ_salinity"})
+
+
+def _llm_judged_field_matches_snippet(field: LLMJudgedSearchField, snippet: str, window: str | None = None) -> bool:
     if not any(_term_pattern(term).search(snippet) for term in field.search_terms):
         return False
-    if field.term_name in ("in_situ_temp", "in_situ_salinity"):
-        return bool(_SAMPLING_TIME_CONTEXT_RE.search(snippet))
+    if field.term_name in _SAMPLING_TIME_WINDOW_FIELDS:
+        return bool(_SAMPLING_TIME_CONTEXT_RE.search(window or snippet))
     if field.term_name == "otu_clust_tool":
         return bool(_OTU_CLUSTER_TOOL_CONTEXT_RE.search(snippet))
     if field.term_name == "otu_db":
@@ -2345,14 +2369,24 @@ def _llm_judged_field_matches_snippet(field: LLMJudgedSearchField, snippet: str)
     return True
 
 
-def _candidate_fields_for_snippet(snippet: str, exclude_field_names: frozenset[str] = frozenset()) -> tuple[str, ...]:
+def _candidate_fields_for_snippet(
+    snippet: str, exclude_field_names: frozenset[str] = frozenset(), window: str | None = None
+) -> tuple[str, ...]:
     field_names: list[str] = []
     for field in LLM_JUDGED_SEARCH_FIELDS:
         if field.term_name in exclude_field_names:
             continue
-        if _llm_judged_field_matches_snippet(field, snippet):
+        if _llm_judged_field_matches_snippet(field, snippet, window):
             field_names.append(field.term_name)
     return tuple(field_names)
+
+
+def _neighboring_sentences_window(snippets_list: list[tuple[int, str]], position: int) -> str:
+    """+/-1 sentence around snippets_list[position], joined -- see
+    _SAMPLING_TIME_WINDOW_FIELDS's own comment for why this exists."""
+    lo = max(0, position - 1)
+    hi = min(len(snippets_list), position + 2)
+    return " ".join(text for _, text in snippets_list[lo:hi])
 
 
 def quote_candidates_for_llm_judged_search(
@@ -2364,24 +2398,31 @@ def quote_candidates_for_llm_judged_search(
     """Candidate source sentences for the small library-prep judgement LLM.
 
     The LLM never receives whole sections for these fields: only sentences
-    that hit the user-supplied search terms. Final facts are accepted only
+    that hit the user-supplied search terms (or, for
+    _SAMPLING_TIME_WINDOW_FIELDS specifically, a small window around them --
+    see that constant's own comment) -- final facts are accepted only
     when the model cites one of these quote IDs.
     """
     candidates: list[QuoteCandidate] = []
     seen_text: set[str] = set()
     for title, text in texts:
-        for snippet_index, snippet in _snippets(text):
-            field_names = _candidate_fields_for_snippet(snippet, exclude_field_names)
-            if not field_names or snippet in seen_text:
+        snippets_list = list(_snippets(text))
+        for position, (snippet_index, snippet) in enumerate(snippets_list):
+            window = _neighboring_sentences_window(snippets_list, position)
+            field_names = _candidate_fields_for_snippet(snippet, exclude_field_names, window)
+            if not field_names:
                 continue
-            seen_text.add(snippet)
+            candidate_text = window if _SAMPLING_TIME_WINDOW_FIELDS & set(field_names) else snippet
+            if candidate_text in seen_text:
+                continue
+            seen_text.add(candidate_text)
             candidates.append(
                 QuoteCandidate(
                     quote_id=f"Q{len(candidates) + 1:03d}",
                     field_names=field_names,
                     title=title,
                     snippet_index=snippet_index,
-                    text=snippet,
+                    text=candidate_text,
                 )
             )
             if len(candidates) >= max_candidates:
