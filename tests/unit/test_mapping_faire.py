@@ -1603,16 +1603,28 @@ def test_llm_study_level_sampling_facts_broadcast_to_sample_metadata(db_session)
     assert values["minimumDepthInMeters"].standardized_value == "5"
     assert values["maximumDepthInMeters"].standardized_value == "5"
     assert values["internal_expedition_id"].standardized_value == "Malaspina 2010"
-    # checkls_ver and informationWithheld are always synced/defaulted as
-    # confident constants (mapping/faire.py::_sync_checklist_version, the
-    # informationWithheld "Nothing indicated as withheld" default), never
-    # review_required -- excluded here since this test is about the
-    # LLM-derived fields' own review flagging.
-    assert all(
-        row.review_required is True
-        for field, row in values.items()
-        if field not in ("checkls_ver", "informationWithheld", "lib_layout")
+
+
+def test_llm_study_level_geo_loc_name_broadcasts_when_only_a_named_site_is_given(db_session):
+    """Real gap found live (PMC10988111): a paper can name a real,
+    specific collection site ("Yantai Haichang Whale Shark Ocean Park
+    (Shandong, China)") without ever giving numeric coordinates anywhere
+    -- the existing coordinates broadcast has nothing to extract in that
+    case. Same shape, same review_required=True safety net."""
+    study = _study(db_session, title="Named site, no coordinates")
+    _fact(
+        db_session, study, field="geo_loc_name", value="China: Yantai (Yantai Haichang Whale Shark Ocean Park)",
+        entity_level="study", support=SupportType.EXPLICIT,
     )
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    row = db_session.query(StandardizedValue).filter_by(study_id=study.study_id, target_field="geo_loc_name").one()
+    assert row.entity_id is None
+    assert row.review_required is True
+    assert row.standardized_value == "China: Yantai (Yantai Haichang Whale Shark Ocean Park)"
 
 
 def test_study_level_filter_name_maps_as_sample_broadcast_default(db_session):

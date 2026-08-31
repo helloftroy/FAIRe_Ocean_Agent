@@ -180,6 +180,23 @@ FIELD_GROUPS: dict[str, tuple[FaireExtractionField, ...]] = {
             "upper few millimeters",
         ),
         FaireExtractionField("coordinates", "sampling latitude/longitude or coordinate pair", "decimalLatitude", "38.03 N, 122.15 W"),
+        # Real gap found live (PMC10988111): a paper can name a real,
+        # specific collection site ("Yantai Haichang Whale Shark Ocean
+        # Park (Shandong, China)") without ever giving numeric coordinates
+        # anywhere -- coordinates' own field above has nothing to extract
+        # in that case, and lat/lon/depth/date are the highest-priority
+        # facts this whole pipeline exists to capture, so a named site is
+        # still worth capturing on its own rather than left blank just
+        # because it isn't a coordinate pair.
+        FaireExtractionField(
+            "geo_loc_name",
+            "the named geographic location where samples were collected -- a specific site, facility, "
+            "city, region, or country (e.g. a named park, station, or city), NOT a coordinate pair "
+            "(that's the separate coordinates field above) and not a lab/institution address unrelated "
+            "to where the actual samples were collected",
+            "geo_loc_name",
+            "China: Yantai",
+        ),
         FaireExtractionField("sample_collection_method", "how samples were physically collected", "samp_collect_method"),
         FaireExtractionField("sample_storage_conditions", "how samples were stored or preserved after collection", "samp_store_method_additional"),
         FaireExtractionField(
