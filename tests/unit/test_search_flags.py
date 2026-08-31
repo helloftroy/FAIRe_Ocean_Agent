@@ -644,6 +644,31 @@ def test_detect_controlled_search_facts_classifies_assay_type_and_keeps_evidence
     )
 
 
+def test_detect_controlled_search_facts_classifies_shotgun_metagenomics_alongside_a_false_metabarcoding_cue():
+    """Real gap found live (PMC10988111 / ISME Communications
+    10.1093/ismeco/ycae036, "Metagenomic insights into jellyfish-associated
+    microbiome dynamics"): a pure shotgun-metagenomics paper's own
+    Introduction separately contrasts its method against "16S rRNA
+    amplicon sequencing" used by *other* studies -- that sentence still
+    (correctly, given this classifier can't attribute "we did X" vs
+    "others did X") trips the metabarcoding bucket. Per explicit user
+    direction, list both rather than have the false metabarcoding cue
+    crowd out the real metagenomics signal."""
+    text = (
+        "We used shotgun metagenomic sequencing to provide a detailed characterization of microbiome "
+        "succession over strobilation. However, the typical marker gene (e.g. 16S rRNA) amplicon "
+        "sequencing applied in existing studies cannot offer phylogenetic resolution."
+    )
+    controlled = detect_controlled_search_facts(
+        (("Introduction", text),),
+        locator_prefix="paper:PMC1",
+        active_flags=frozenset(),
+    )
+
+    by_type = {fact.fact_type_candidate: fact for fact in controlled}
+    assert by_type["assay_type"].raw_value == "other:metagenomics | metabarcoding"
+
+
 def test_detect_controlled_search_facts_extracts_trimmomatic_minlen_parameter():
     text = (
         "Raw paired-end reads were processed with Trimmomatic using the parameters "

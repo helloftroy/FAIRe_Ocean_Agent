@@ -1422,6 +1422,36 @@ _ASSAY_TYPE_CUES: tuple[tuple[str, tuple[re.Pattern[str], ...]], ...] = (
             re.compile(r"\bHTS\b"),
         ),
     ),
+    (
+        # Real gap found live (PMC10988111, ISME Communications
+        # 10.1093/ismeco/ycae036, "Metagenomic insights into
+        # jellyfish-associated microbiome dynamics"): a shotgun
+        # metagenomics paper's own assay_type was left blank because
+        # neither existing bucket has anything for it, while its
+        # Introduction/Discussion sections separately mention "16S rRNA
+        # amplicon sequencing" and "16S rRNA gene sequencing" only to
+        # contrast this paper's own method against *other* studies'
+        # marker-gene approach -- those mentions still (correctly, per
+        # this same bucket design) trip the "metabarcoding" bucket above,
+        # since a bare-word/no-attribution regex classifier can't tell
+        # "we did X" from "other studies did X" apart. Per explicit user
+        # direction, that's an acceptable tradeoff here: list both rather
+        # than have one crowd out the other (pipe-joined further down the
+        # pipeline). assay_type_enum has no dedicated "metagenomic" member
+        # (only targeted | metabarcoding | other:) -- "other:metagenomics"
+        # follows the same "other:<free label>" convention as every other
+        # FAIRe "other:" field, self-descriptive since there's no
+        # companion assay_type_additional field to carry it separately.
+        "other:metagenomics",
+        (
+            re.compile(r"\bshotgun\s+metagenomic(?:s)?\b", re.IGNORECASE),
+            re.compile(r"\bmetagenomic\s+sequencing\b", re.IGNORECASE),
+            re.compile(r"\bmetagenome\s+(?:assembly|assemblies|librar(?:y|ies))\b", re.IGNORECASE),
+            re.compile(r"\bmetagenome-assembled\s+genomes?\b", re.IGNORECASE),
+            re.compile(r"\bwhole[-\s]genome\s+shotgun\b", re.IGNORECASE),
+            re.compile(r"\bshotgun\s+sequencing\b", re.IGNORECASE),
+        ),
+    ),
 )
 _SEQUENCING_KIT_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bMiSeq\s+Reagent\s+Kit(?:\s+v\d+)?\b", re.IGNORECASE),
