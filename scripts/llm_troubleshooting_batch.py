@@ -171,18 +171,27 @@ def report_study(session, study_id: str) -> None:
     print(f"  DOI:   {_identifier(session, study_id, IdentifierType.DOI)}")
     print(f"  PMCID: {_identifier(session, study_id, IdentifierType.PMCID)}")
 
-    fulltext_source_ids = list(
+    fulltext_source_ids = set(
         session.scalars(
             select(Source.source_id).where(Source.study_id == study_id, Source.source_type == SourceType.ARTICLE_FULLTEXT.value)
         ).all()
     )
-    facts = (
-        session.scalars(select(RawFact).where(RawFact.source_id.in_(fulltext_source_ids))).all()
-        if fulltext_source_ids
-        else []
-    )
-    print(f"\n  RawFacts from EXTRACT_TEXT_FACTS ({len(facts)}):")
-    for fact in facts:
+    all_facts = session.scalars(select(RawFact).where(RawFact.study_id == study_id)).all()
+    llm_facts = [f for f in all_facts if f.source_id in fulltext_source_ids]
+    structured_facts = [f for f in all_facts if f.source_id not in fulltext_source_ids]
+
+    # Printed separately and BEFORE the LLM facts: "why didn't X show up"
+    # is often actually "was the structured API data (BioProject/
+    # BioSample resolution, run before EXTRACT_TEXT_FACTS and completely
+    # unaffected by it) even fetched in the first place" -- a question the
+    # old version of this report couldn't answer at all, since it only
+    # ever looked at facts from the article_fulltext source.
+    print(f"\n  Structured (API-derived) RawFacts ({len(structured_facts)}):")
+    for fact in structured_facts:
+        print(f"    [{fact.entity_level}] {fact.fact_type_candidate} = {fact.raw_value!r}  (source_locator={fact.source_locator})")
+
+    print(f"\n  RawFacts from EXTRACT_TEXT_FACTS ({len(llm_facts)}):")
+    for fact in llm_facts:
         print(f"    [{fact.entity_level}] {fact.fact_type_candidate} = {fact.raw_value!r}  (via {fact.extraction_method})")
 
     values = session.scalars(select(StandardizedValue).where(StandardizedValue.study_id == study_id)).all()

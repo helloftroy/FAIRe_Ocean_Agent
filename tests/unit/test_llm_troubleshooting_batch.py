@@ -25,7 +25,7 @@ from fair_ocean_agent.database.models import (
 from fair_ocean_agent.workflow.task_queue import enqueue_task
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
-from llm_troubleshooting_batch import reset_study, select_candidates  # noqa: E402
+from llm_troubleshooting_batch import report_study, reset_study, select_candidates  # noqa: E402
 
 
 def _study(session, study_id: str, *, title: str = "t") -> Study:
@@ -132,3 +132,33 @@ def test_reset_then_reenqueue_creates_a_fresh_pending_task(db_session):
 
     assert second_task.task_id != first_task.task_id
     assert second_task.status == TaskStatus.PENDING.value
+
+
+def test_report_study_shows_structured_facts_separately_from_llm_facts(db_session, capsys):
+    """Regression test for a real gap found live: the original report only
+    ever looked at facts from the article_fulltext Source, so a user
+    troubleshooting "why didn't a BioSample-derived field show up" had no
+    way to see whether the structured (API-derived) RawFact even existed
+    in the first place."""
+    _study(db_session, "STUDY-7")
+    structured_source = Source(study_id="STUDY-7", source_type=SourceType.REPOSITORY_API.value, source_name="ncbi_biosample")
+    fulltext_source = Source(study_id="STUDY-7", source_type=SourceType.ARTICLE_FULLTEXT.value, source_name="europe_pmc")
+    db_session.add_all([structured_source, fulltext_source])
+    db_session.flush()
+    db_session.add(RawFact(
+        study_id="STUDY-7", source_id=structured_source.source_id, fact_type_candidate="lat_lon", raw_value="21.9 N 114 E",
+        extraction_method="ncbi_biosample_api", support_type=SupportType.STRUCTURED_SOURCE.value,
+    ))
+    db_session.add(RawFact(
+        study_id="STUDY-7", source_id=fulltext_source.source_id, fact_type_candidate="temp", raw_value="26 C",
+        extraction_method="llm_text_extraction", support_type=SupportType.INFERRED.value,
+    ))
+    db_session.commit()
+
+    report_study(db_session, "STUDY-7")
+
+    output = capsys.readouterr().out
+    assert "Structured (API-derived) RawFacts (1):" in output
+    assert "lat_lon = '21.9 N 114 E'" in output
+    assert "RawFacts from EXTRACT_TEXT_FACTS (1):" in output
+    assert "temp = '26 C'" in output
