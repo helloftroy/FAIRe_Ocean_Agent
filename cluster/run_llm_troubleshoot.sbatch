@@ -23,7 +23,7 @@
 #
 # Other knobs:
 #   sbatch --account=<acct> --export=ALL,LLM_TEST_COUNT=5 cluster/run_llm_troubleshoot.sbatch
-#   sbatch --account=<acct> --export=ALL,LLM_BACKEND=vllm cluster/run_llm_troubleshoot.sbatch
+#   sbatch --account=<acct> --export=ALL,LLM_BACKEND=ollama cluster/run_llm_troubleshoot.sbatch  # vllm is the default; ollama has not worked on this cluster
 #SBATCH --job-name=llm_troubleshoot
 #SBATCH --partition=gpu-a100
 #SBATCH --gres=gpu:1
@@ -95,7 +95,11 @@ echo "Database (isolated copy, NOT the main pipeline database): ${FAIR_OCEAN_DAT
 python -m alembic -c alembic.ini upgrade head
 
 # --- Start a local LLM server for this job (same logic as run_extraction.sbatch). ---
-LLM_BACKEND="${LLM_BACKEND:-ollama}"
+# vllm, not ollama: confirmed live this cluster can't get ollama working
+# at all -- vllm is the actual working backend here (see the vllm branch
+# below's own comments for the cluster-specific fixes already needed to
+# get it running: flashinfer sampler / LD_LIBRARY_PATH).
+LLM_BACKEND="${LLM_BACKEND:-vllm}"
 SERVER_PID=""
 
 if [ "${LLM_BACKEND}" = "ollama" ]; then

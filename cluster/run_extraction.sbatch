@@ -52,10 +52,11 @@ if [ ! -f config/local.yaml ]; then
 fi
 
 # --- Start a local LLM server for this job. ---
-# LLM_BACKEND=ollama (default), vllm, or external (config/local.yaml
-# already points at a persistent, separately-managed endpoint you're
-# starting/managing some other way -- this script starts nothing).
-LLM_BACKEND="${LLM_BACKEND:-ollama}"
+# LLM_BACKEND=vllm (default -- confirmed live this cluster can't get
+# ollama working at all), ollama, or external (config/local.yaml already
+# points at a persistent, separately-managed endpoint you're starting/
+# managing some other way -- this script starts nothing).
+LLM_BACKEND="${LLM_BACKEND:-vllm}"
 SERVER_PID=""
 
 if [ "${LLM_BACKEND}" = "ollama" ]; then
