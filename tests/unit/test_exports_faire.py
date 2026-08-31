@@ -112,6 +112,54 @@ def test_export_faire_writes_expected_files_and_rows(db_session, tmp_path):
     assert rows[0]["input_read_count"] == "1000"
 
 
+def _minimal_mapped_study(session, *, bioproject: str, biosample: str, run_accession: str) -> Study:
+    study = Study(title=f"Study {bioproject}")
+    session.add(study)
+    session.flush()
+    session.add(ExternalIdentifier(study_id=study.study_id, identifier_type=IdentifierType.BIOPROJECT_ACCESSION.value, identifier_value=bioproject))
+    sample = Entity(study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier=biosample)
+    run = Entity(study_id=study.study_id, entity_level=EntityLevel.SEQUENCING_RUN.value, external_identifier=run_accession)
+    session.add_all([sample, run])
+    session.flush()
+    session.add(
+        RawFact(
+            study_id=study.study_id, entity_id=run.entity_id, raw_field_name="run_accession",
+            raw_value=run_accession, fact_type_candidate="run_accession", entity_level="sequencing_run",
+            support_type=SupportType.STRUCTURED_SOURCE.value,
+        )
+    )
+    session.add(
+        RawFact(
+            study_id=study.study_id, entity_id=run.entity_id, raw_field_name="sample_accession",
+            raw_value=biosample, fact_type_candidate="sample_accession", entity_level="sequencing_run",
+            support_type=SupportType.STRUCTURED_SOURCE.value,
+        )
+    )
+    session.commit()
+    map_study_to_faire(session, study.study_id)
+    session.commit()
+    return study
+
+
+def test_export_faire_study_ids_filter_scopes_to_just_those_studies(db_session, tmp_path):
+    """A scoped export (e.g. a small LLM troubleshooting batch's own
+    manifest) should only ever include the requested studies, even though
+    the database has others."""
+    kept = _minimal_mapped_study(db_session, bioproject="PRJNA100", biosample="SAMN100", run_accession="SRR100")
+    _minimal_mapped_study(db_session, bioproject="PRJNA200", biosample="SAMN200", run_accession="SRR200")
+
+    counts = export_faire(db_session, tmp_path, study_ids=[kept.study_id])
+
+    assert counts["projectMetadata"] == 1
+    with (tmp_path / "projectMetadata.csv").open() as f:
+        rows = list(csv.DictReader(f))
+    assert [row["project_id"] for row in rows] == ["PRJNA100"]
+
+    with (tmp_path / "experimentRunMetadata.csv").open() as f:
+        rows = list(csv.DictReader(f))
+    assert [row["seq_run_id"] for row in rows] == ["SRR100"]
+
+
 def test_export_faire_internal_study_id_traces_rows_across_two_studies(db_session, tmp_path):
     """export_faire() merges every study in the database into one shared
     set of output CSVs with no per-study filter -- internal_study_id is the

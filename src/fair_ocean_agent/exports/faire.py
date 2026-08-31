@@ -687,7 +687,7 @@ def _write_api_paper_corrections(session: Session, output_dir: Path) -> int:
     )
 
 
-def export_faire(session: Session, output_dir: str | Path) -> dict[str, int]:
+def export_faire(session: Session, output_dir: str | Path, *, study_ids: list[str] | None = None) -> dict[str, int]:
     output_dir = Path(output_dir)
     counts: dict[str, int] = {}
     for class_name in OMITTED_EMPTY_CLASSES:
@@ -695,7 +695,13 @@ def export_faire(session: Session, output_dir: str | Path) -> dict[str, int]:
         if stale_path.exists():
             stale_path.unlink()
 
-    studies = list(session.scalars(select(Study)))
+    # study_ids: scope the export to a specific batch (e.g. a small LLM
+    # troubleshooting run's own manifest) instead of every study in the
+    # database. Every downstream section (projectMetadata/sampleMetadata/
+    # experimentRunMetadata) iterates this same `studies` list, so
+    # filtering it here is sufficient to scope the whole export.
+    studies_query = select(Study).where(Study.study_id.in_(study_ids)) if study_ids is not None else select(Study)
+    studies = list(session.scalars(studies_query))
 
     project_columns = _exportable_project_columns()
     project_rows = []

@@ -62,18 +62,27 @@ full sequence including starting the LLM server):
           the resulting StandardizedValues -- the actual thing worth
           reading to judge whether the extraction is working.
 
+  export  Writes the real FAIRe CSVs (exports.faire.export_faire, the
+          same format `export-faire` produces for the whole database,
+          one CSV per FAIRe class matching the FULLtemplate.xlsx sheet
+          layout) scoped to just the manifest's study_ids, to
+          --output-dir -- meant to be scp'd back and opened directly,
+          rather than read off the .out log.
+
 Usage:
     python scripts/llm_troubleshooting_batch.py select --count 10
     python scripts/llm_troubleshooting_batch.py enqueue
     # ... run the worker ...
     python scripts/llm_troubleshooting_batch.py remap
     python scripts/llm_troubleshooting_batch.py report
+    python scripts/llm_troubleshooting_batch.py export --output-dir data/exports/llm_troubleshooting_batch
     # tweak extraction code, then re-run without re-selecting:
     python scripts/llm_troubleshooting_batch.py reset
     python scripts/llm_troubleshooting_batch.py enqueue
     # ... run the worker again ...
     python scripts/llm_troubleshooting_batch.py remap
     python scripts/llm_troubleshooting_batch.py report
+    python scripts/llm_troubleshooting_batch.py export --output-dir data/exports/llm_troubleshooting_batch
 """
 from __future__ import annotations
 
@@ -95,10 +104,12 @@ from fair_ocean_agent.database.models import (
     Task,
 )
 from fair_ocean_agent.database.session import session_scope
+from fair_ocean_agent.exports.faire import export_faire
 from fair_ocean_agent.mapping.faire import map_study_to_faire
 from fair_ocean_agent.workflow.task_queue import enqueue_task
 
 DEFAULT_MANIFEST = Path("data/llm_troubleshooting_manifest.json")
+DEFAULT_EXPORT_DIR = Path("data/exports/llm_troubleshooting_batch")
 
 
 def _load_manifest(path: Path) -> list[str]:
@@ -182,9 +193,10 @@ def report_study(session, study_id: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("phase", choices=("select", "reset", "enqueue", "remap", "report"))
+    parser.add_argument("phase", choices=("select", "reset", "enqueue", "remap", "report", "export"))
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--count", type=int, default=10, help="select phase only: how many studies to pick")
+    parser.add_argument("--output-dir", type=Path, default=DEFAULT_EXPORT_DIR, help="export phase only: where to write the FAIRe CSVs")
     args = parser.parse_args()
 
     with session_scope() as session:
@@ -222,6 +234,11 @@ def main() -> None:
         elif args.phase == "report":
             for study_id in study_ids:
                 report_study(session, study_id)
+        elif args.phase == "export":
+            counts = export_faire(session, args.output_dir, study_ids=study_ids)
+            print(f"Wrote FAIRe CSVs for {len(study_ids)} studies to {args.output_dir}:")
+            for class_name, count in counts.items():
+                print(f"  {class_name}.csv: {count} row(s)")
 
 
 if __name__ == "__main__":

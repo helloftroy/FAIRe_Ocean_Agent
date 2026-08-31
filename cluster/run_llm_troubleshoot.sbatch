@@ -13,10 +13,10 @@
 # fresh candidate studies into data/llm_troubleshooting_manifest.json.
 #
 # Iterating after a code change (same studies, re-run the LLM step):
-#   sbatch --account=<acct> --export=ALL,LLM_TEST_PHASES="reset enqueue worker remap report" cluster/run_llm_troubleshoot.sbatch
+#   sbatch --account=<acct> --export=ALL,LLM_TEST_PHASES="reset enqueue worker remap report export" cluster/run_llm_troubleshoot.sbatch
 #
 # Picking a fresh batch of studies from the current test DB (no re-copy):
-#   sbatch --account=<acct> --export=ALL,LLM_TEST_PHASES="select enqueue worker remap report" cluster/run_llm_troubleshoot.sbatch
+#   sbatch --account=<acct> --export=ALL,LLM_TEST_PHASES="select enqueue worker remap report export" cluster/run_llm_troubleshoot.sbatch
 #
 # Starting over completely (re-copy from the real, current main database):
 #   sbatch --account=<acct> --export=ALL,LLM_TEST_DB_REFRESH=1 cluster/run_llm_troubleshoot.sbatch
@@ -59,7 +59,8 @@ MAIN_DB="${MAIN_DB:-data/fair_ocean.db}"
 LLM_TEST_DB="${LLM_TEST_DB:-data/fair_ocean_llm_test.db}"
 LLM_TEST_COUNT="${LLM_TEST_COUNT:-10}"
 LLM_TEST_MANIFEST="${LLM_TEST_MANIFEST:-data/llm_troubleshooting_manifest.json}"
-LLM_TEST_PHASES="${LLM_TEST_PHASES:-select enqueue worker remap report}"
+LLM_TEST_EXPORT_DIR="${LLM_TEST_EXPORT_DIR:-data/exports/llm_troubleshooting_batch}"
+LLM_TEST_PHASES="${LLM_TEST_PHASES:-select enqueue worker remap report export}"
 
 if [ "${LLM_TEST_DB_REFRESH:-0}" = "1" ] && [ -f "${LLM_TEST_DB}" ]; then
   echo "LLM_TEST_DB_REFRESH=1: removing existing ${LLM_TEST_DB} to re-copy fresh."
@@ -194,8 +195,11 @@ for phase in ${LLM_TEST_PHASES}; do
     report)
       python scripts/llm_troubleshooting_batch.py report --manifest "${LLM_TEST_MANIFEST}"
       ;;
+    export)
+      python scripts/llm_troubleshooting_batch.py export --manifest "${LLM_TEST_MANIFEST}" --output-dir "${LLM_TEST_EXPORT_DIR}"
+      ;;
     *)
-      echo "Unknown phase '${phase}' in LLM_TEST_PHASES -- valid: select reset enqueue worker remap report" >&2
+      echo "Unknown phase '${phase}' in LLM_TEST_PHASES -- valid: select reset enqueue worker remap report export" >&2
       exit 2
       ;;
   esac
@@ -203,5 +207,7 @@ done
 
 echo
 echo "Job finished: $(date)"
+echo "FAIRe CSVs (if the export phase ran): ${LLM_TEST_EXPORT_DIR} -- scp that directory back, e.g.:"
+echo "  scp -r <cluster>:$(pwd)/${LLM_TEST_EXPORT_DIR} ./"
 echo "Isolated test database: ${LLM_TEST_DB} (main pipeline database untouched: ${MAIN_DB})"
 echo "Manifest: ${LLM_TEST_MANIFEST}"
