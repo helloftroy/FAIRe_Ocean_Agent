@@ -1260,6 +1260,32 @@ def test_pipe_joins_conflicting_project_wide_platforms_with_review(db_session):
     assert len(run_rows) == 0  # platform is project metadata, never a library/run-row field
 
 
+def test_pipe_joins_two_assays_target_gene_and_primers_instead_of_dropping_the_second(db_session):
+    """Real gap found live via the LLM troubleshooting batch: a real study
+    (10.3390/microorganisms10030558) ran two genuinely separate assays --
+    a 16S-V3V4 amplicon assay and a separate cbbL-gene assay, each with its
+    own primers -- but before target_gene/target_subfragment/primer_forward/
+    primer_reverse/assay_name/assay_type were added to
+    _PIPE_UNION_TARGET_FIELDS, whichever assay's facts were processed
+    first simply won the broadcast target_field outright, silently
+    dropping the second assay's target gene and primers entirely. Per an
+    explicit user request, both should show up pipe-joined instead."""
+    study = _study(db_session, title="Two assays, one study")
+    _fact(db_session, study, field="target_gene", value="16S rRNA", entity_level="project")
+    _fact(db_session, study, field="target_gene", value="cbbL", entity_level="project")
+    _fact(db_session, study, field="pcr_primer_name_forward", value="338F", entity_level="project")
+    _fact(db_session, study, field="pcr_primer_name_forward", value="cbbL_K2f", entity_level="project")
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    target_gene = db_session.query(StandardizedValue).filter_by(study_id=study.study_id, target_field="target_gene").one()
+    primer_name_forward = db_session.query(StandardizedValue).filter_by(study_id=study.study_id, target_field="pcr_primer_name_forward").one()
+    assert target_gene.standardized_value == "16S rRNA | cbbL"
+    assert primer_name_forward.standardized_value == "338F | cbbL_K2f"
+
+
 def test_pipe_joins_conflicting_project_wide_instruments_with_review(db_session):
     study = _study(db_session, title="Two sequencing instruments")
     run_a = Entity(study_id=study.study_id, entity_level=EntityLevel.SEQUENCING_RUN.value, external_identifier="SRR_A")

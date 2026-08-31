@@ -153,10 +153,26 @@ def _resolve_entity_id(session: Session, study_id: str, fact: RawFact, rule: Map
 # have more than one structured supplement file (e.g. one sample-metadata
 # table, one separate environmental-data table), and each file's own
 # header row should show up, not just the first file's.
+# assay_name/assay_type/target_gene/target_subfragment/pcr_primer_*: a
+# real live gap found via the LLM troubleshooting batch -- a study can
+# genuinely run more than one assay (e.g. a 16S-V3V4 amplicon assay AND a
+# separate cbbL-gene assay in the same paper, each with its own primers),
+# and without these in the union set the first assay's values simply won
+# a "first wins" race, silently dropping the second assay's target_gene/
+# primers/assay_name entirely rather than pipe-joining them. The proper
+# high-fidelity fix (real per-assay ASSAY entities, one projectMetadata
+# row per assay -- see exports/faire.py's own "one row per assay_name"
+# comment) needs the extraction pipeline to actually tag distinct ASSAY
+# entities, a bigger lift; per an explicit user request, pipe-joining
+# into one broadcast value is an accepted, simpler stopgap that at least
+# keeps both assays' data from being lost.
 _PIPE_UNION_TARGET_FIELDS = frozenset(
     {
         "targetTaxonomicAssay", "targetTaxonomicScope", "platform", "instrument", "samp_mat_process", "otu_db",
         "size_frac", "x_env_var_block", "spreadsheet_headers",
+        "assay_name", "assay_type", "target_gene", "target_subfragment",
+        "pcr_primer_forward", "pcr_primer_reverse", "pcr_primer_name_forward", "pcr_primer_name_reverse",
+        "pcr_primer_reference_forward", "pcr_primer_reference_reverse",
     }
 )
 _PIPE_UNION_REVIEW_ON_MULTIPLE_FIELDS = frozenset({"platform", "instrument"})
