@@ -561,10 +561,84 @@ class NcbiBioSampleAdapter(SourceAdapter):
             )
         sample_uids = sample_uids[:MAX_SAMPLES_PER_PROJECT]
 
+        samples, combined_xml_for_hash = self._fetch_and_parse_biosamples(sample_uids)
+
+        raw = {
+            "bioproject_accession": identifier,
+            "total_linked_samples": total_linked_samples,
+            "truncated": truncated,
+            "samples": samples,
+            "uid_resolution_ambiguous": resolution.ambiguous,
+            "uid_resolution_candidates": resolution.candidate_accessions,
+            "reverse_elink_verified": reverse_elink_verified,
+        }
+
+        return SourceRecord(
+            source_name=self.name,
+            external_identifier=identifier,
+            url=None,
+            raw=raw,
+            retrieved_at=utcnow(),
+            content_hash=_hash_text("".join(combined_xml_for_hash)),
+        )
+
+    def fetch_record_by_accessions(self, bioproject_accession: str, accessions: list[str]) -> SourceRecord:
+        """Fallback for when fetch_record's own bioproject<->biosample
+        elink cross-reference comes back empty even though real, already-
+        known BioSample accessions exist for this study (typically
+        discovered independently via ENA's own sample_accession
+        cross-reference, not NCBI's). Confirmed live (2026-08-31, a real
+        study -- PRJNA762627): NCBI's elink index has no bioproject<->
+        biosample link at all for this project, yet its real BioSamples
+        (e.g. SAMN21399411) are perfectly fetchable directly by accession
+        -- efetch accepts a real accession string exactly like a numeric
+        UID, no separate esearch/UID-resolution step needed. Skips the
+        reverse-elink cross-check fetch_record does (nothing to reverse-
+        check against when we never resolved a project UID in the first
+        place) -- already knowing these specific accessions belong to
+        this study via an independent source is itself the trust signal.
+        Raises SourceRecordNotFoundError if none of the given accessions
+        are real, live BioSample records."""
+        truncated = len(accessions) > MAX_SAMPLES_PER_PROJECT
+        if truncated:
+            logger.warning(
+                "%d known BioSample accessions for BioProject %s; processing only the first %d "
+                "(MAX_SAMPLES_PER_PROJECT)",
+                len(accessions), bioproject_accession, MAX_SAMPLES_PER_PROJECT,
+            )
+        accessions = accessions[:MAX_SAMPLES_PER_PROJECT]
+
+        samples, combined_xml_for_hash = self._fetch_and_parse_biosamples(accessions)
+        if not samples:
+            raise SourceRecordNotFoundError(
+                f"None of {len(accessions)} known BioSample accession(s) resolved for BioProject {bioproject_accession}"
+            )
+
+        raw = {
+            "bioproject_accession": bioproject_accession,
+            "total_linked_samples": len(accessions),
+            "truncated": truncated,
+            "samples": samples,
+            "fetched_via": "known_biosample_accessions_fallback",
+        }
+
+        return SourceRecord(
+            source_name=self.name,
+            external_identifier=bioproject_accession,
+            url=None,
+            raw=raw,
+            retrieved_at=utcnow(),
+            content_hash=_hash_text("".join(combined_xml_for_hash)),
+        )
+
+    def _fetch_and_parse_biosamples(self, ids: list[str]) -> tuple[list[dict], list[str]]:
+        """Shared by fetch_record (numeric UIDs from elink) and
+        fetch_record_by_accessions (real accession strings) -- efetch's
+        own id= param accepts either interchangeably, confirmed live."""
         samples: list[dict] = []
         combined_xml_for_hash: list[str] = []
-        for i in range(0, len(sample_uids), EFETCH_BATCH_SIZE):
-            batch = sample_uids[i : i + EFETCH_BATCH_SIZE]
+        for i in range(0, len(ids), EFETCH_BATCH_SIZE):
+            batch = ids[i : i + EFETCH_BATCH_SIZE]
             xml_text, _ = self.http.get_text(
                 f"{self.config.base_url}/efetch.fcgi",
                 params={"db": "biosample", "id": ",".join(batch), "rettype": "full", "retmode": "xml"},
@@ -637,25 +711,7 @@ class NcbiBioSampleAdapter(SourceAdapter):
                         },
                     }
                 )
-
-        raw = {
-            "bioproject_accession": identifier,
-            "total_linked_samples": total_linked_samples,
-            "truncated": truncated,
-            "samples": samples,
-            "uid_resolution_ambiguous": resolution.ambiguous,
-            "uid_resolution_candidates": resolution.candidate_accessions,
-            "reverse_elink_verified": reverse_elink_verified,
-        }
-
-        return SourceRecord(
-            source_name=self.name,
-            external_identifier=identifier,
-            url=None,
-            raw=raw,
-            retrieved_at=utcnow(),
-            content_hash=_hash_text("".join(combined_xml_for_hash)),
-        )
+        return samples, combined_xml_for_hash
 
     def search(self, query: SearchQuery) -> SearchPage:
         # BioSample has no free-text "search" use case in this pipeline --

@@ -177,6 +177,52 @@ def test_biosample_fetch_record_not_found_when_no_linked_samples(retrieval_confi
     adapter.close()
 
 
+def test_biosample_fetch_record_by_accessions_fetches_directly_no_elink(retrieval_config):
+    """Regression test for a real live gap (confirmed 2026-08-31 against a
+    real BioProject, PRJNA762627): NCBI's own bioproject<->biosample elink
+    cross-reference can be completely empty for a real, valid project even
+    though its real BioSamples are perfectly fetchable directly by
+    accession -- efetch accepts a real accession string exactly like a
+    numeric UID. This is the fallback path handlers.py's
+    _fetch_ncbi_record_with_biosample_fallback uses when fetch_record's
+    own elink-based discovery comes up empty. No esearch/elink calls at
+    all -- efetch is the only request made."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        params = dict(request.url.params)
+        if path.endswith("efetch.fcgi") and params.get("db") == "biosample":
+            assert params.get("id") == "SAMN1,SAMN2"
+            return httpx.Response(200, text=BIOSAMPLE_XML)
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    adapter = NcbiBioSampleAdapter(
+        SourceConfig(name="ncbi_biosample", enabled=True, base_url="https://eutils.ncbi.nlm.nih.gov/entrez/eutils", rate_limit_per_second=1000),
+        retrieval_config,
+        transport=httpx.MockTransport(handler),
+    )
+    record = adapter.fetch_record_by_accessions("PRJNA1425045", ["SAMN1", "SAMN2"])
+
+    assert record.raw["bioproject_accession"] == "PRJNA1425045"
+    assert record.raw["fetched_via"] == "known_biosample_accessions_fallback"
+    accessions = {s["accession"] for s in record.raw["samples"]}
+    assert accessions == {"SAMN1", "SAMN2"}
+    adapter.close()
+
+
+def test_biosample_fetch_record_by_accessions_not_found_when_none_resolve(retrieval_config):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text='<?xml version="1.0" ?><BioSampleSet></BioSampleSet>')
+
+    adapter = NcbiBioSampleAdapter(
+        SourceConfig(name="ncbi_biosample", enabled=True, base_url="https://eutils.ncbi.nlm.nih.gov/entrez/eutils", rate_limit_per_second=1000),
+        retrieval_config,
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(SourceRecordNotFoundError):
+        adapter.fetch_record_by_accessions("PRJNA1425045", ["SAMN999999"])
+    adapter.close()
+
+
 def _ncbi_transport_discriminating(
     *,
     esearch_bioproject_ids=("1425045",),

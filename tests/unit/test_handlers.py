@@ -54,6 +54,24 @@ class FakeAdapter:
         self.closed = True
 
 
+class FakeNcbiBioSampleAdapter(FakeAdapter):
+    """Adds fetch_record_by_accessions on top of FakeAdapter's plain
+    fetch_record, for testing _fetch_ncbi_record_with_biosample_fallback's
+    fallback path without touching the real NCBI adapter/network."""
+
+    def __init__(self, *, fallback_record=None, fallback_not_found=False, **kwargs):
+        super().__init__(**kwargs)
+        self._fallback_record = fallback_record
+        self._fallback_not_found = fallback_not_found
+        self.fallback_calls: list[tuple[str, list[str]]] = []
+
+    def fetch_record_by_accessions(self, bioproject_accession, accessions):
+        self.fallback_calls.append((bioproject_accession, list(accessions)))
+        if self._fallback_not_found:
+            raise SourceRecordNotFoundError("no fallback record")
+        return self._fallback_record
+
+
 class FakeEuropePmcFullTextAdapter(EuropePmcAdapter):
     name = "europe_pmc"
 
@@ -599,3 +617,80 @@ def test_handler_raises_runtime_error_when_no_adapters_enabled(db_session, monke
 
     with pytest.raises(RuntimeError):
         handlers.handle_discover_identifiers(db_session, task)
+
+
+def test_ncbi_biosample_fallback_not_used_when_elink_succeeds(db_session):
+    """The common case: fetch_record itself succeeds, so the fallback
+    (and its BIOSAMPLE_ACCESSION lookup) is never even attempted."""
+    study = Study(title="Elink succeeds")
+    db_session.add(study)
+    db_session.flush()
+    real_record = _make_record("ncbi_biosample")
+    adapter = FakeNcbiBioSampleAdapter(name="ncbi_biosample", record=real_record)
+
+    result = handlers._fetch_ncbi_record_with_biosample_fallback(db_session, study, "ncbi_biosample", adapter, "PRJNA1")
+
+    assert result is real_record
+    assert adapter.fallback_calls == []
+
+
+def test_ncbi_biosample_fallback_used_when_elink_empty_and_accessions_known(db_session):
+    """Regression test for a real live gap (confirmed 2026-08-31 against a
+    real BioProject, PRJNA762627): NCBI's own bioproject<->biosample elink
+    cross-reference can be empty even though real BioSamples exist and
+    were already discovered independently (e.g. via ENA). When
+    fetch_record raises SourceRecordNotFoundError, the fallback should
+    fire using whatever BIOSAMPLE_ACCESSION identifiers are already
+    attached to the study."""
+    study = Study(title="Elink empty, accessions known")
+    db_session.add(study)
+    db_session.flush()
+    db_session.add(ExternalIdentifier(study_id=study.study_id, identifier_type=IdentifierType.BIOSAMPLE_ACCESSION.value, identifier_value="SAMN1"))
+    db_session.add(ExternalIdentifier(study_id=study.study_id, identifier_type=IdentifierType.BIOSAMPLE_ACCESSION.value, identifier_value="SAMN2"))
+    db_session.commit()
+    fallback_record = _make_record("ncbi_biosample")
+    adapter = FakeNcbiBioSampleAdapter(name="ncbi_biosample", not_found=True, fallback_record=fallback_record)
+
+    result = handlers._fetch_ncbi_record_with_biosample_fallback(db_session, study, "ncbi_biosample", adapter, "PRJNA1")
+
+    assert result is fallback_record
+    assert adapter.fallback_calls == [("PRJNA1", ["SAMN1", "SAMN2"])]
+
+
+def test_ncbi_biosample_fallback_skipped_when_no_accessions_known(db_session):
+    study = Study(title="Elink empty, nothing to fall back to")
+    db_session.add(study)
+    db_session.flush()
+    adapter = FakeNcbiBioSampleAdapter(name="ncbi_biosample", not_found=True)
+
+    result = handlers._fetch_ncbi_record_with_biosample_fallback(db_session, study, "ncbi_biosample", adapter, "PRJNA1")
+
+    assert result is None
+    assert adapter.fallback_calls == []
+
+
+def test_ncbi_biosample_fallback_returns_none_when_fallback_also_fails(db_session):
+    study = Study(title="Elink empty, fallback also empty")
+    db_session.add(study)
+    db_session.flush()
+    db_session.add(ExternalIdentifier(study_id=study.study_id, identifier_type=IdentifierType.BIOSAMPLE_ACCESSION.value, identifier_value="SAMN1"))
+    db_session.commit()
+    adapter = FakeNcbiBioSampleAdapter(name="ncbi_biosample", not_found=True, fallback_not_found=True)
+
+    result = handlers._fetch_ncbi_record_with_biosample_fallback(db_session, study, "ncbi_biosample", adapter, "PRJNA1")
+
+    assert result is None
+    assert adapter.fallback_calls == [("PRJNA1", ["SAMN1"])]
+
+
+def test_ncbi_bioproject_never_uses_fallback_even_when_not_found(db_session):
+    """The fallback is ncbi_biosample-specific -- ncbi_bioproject has no
+    fetch_record_by_accessions method at all and shouldn't be expected to."""
+    study = Study(title="ncbi_bioproject not found")
+    db_session.add(study)
+    db_session.flush()
+    adapter = FakeAdapter(name="ncbi_bioproject", not_found=True)
+
+    result = handlers._fetch_ncbi_record_with_biosample_fallback(db_session, study, "ncbi_bioproject", adapter, "PRJNA1")
+
+    assert result is None

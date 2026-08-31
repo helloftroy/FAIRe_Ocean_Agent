@@ -813,6 +813,47 @@ def _discover_publication_metadata_from_sources(
     return study
 
 
+def _fetch_ncbi_record_with_biosample_fallback(
+    session: Session, study: Study, name: str, adapter: SourceAdapter, bioproject_accession: str
+) -> SourceRecord | None:
+    """Wraps adapter.fetch_record(bioproject_accession) with a fallback,
+    ncbi_biosample only: when NCBI's own bioproject<->biosample elink
+    cross-reference comes back empty, try fetching any BIOSAMPLE_ACCESSION
+    identifiers already known for this study directly instead of giving up.
+
+    Confirmed live (2026-08-31) this is a real, non-hypothetical gap: a
+    real, valid BioProject (PRJNA762627) whose real BioSamples (e.g.
+    SAMN21399411, independently discovered via ENA's own sample_accession
+    cross-reference) NCBI's own elink index has no bioproject<->biosample
+    link for at all -- efetch fetches them fine directly by accession, but
+    fetch_record's own elink-based discovery had nothing to find. Without
+    this fallback, a study resolved primarily through ENA (rather than
+    NCBI BioProject enumeration) silently never gets any of its real
+    samples' environmental attributes (lat_lon, collection_date, host,
+    isolation_source, geo_loc_name, ...), even though every one of those
+    fields is present and correctly named on the live record."""
+    try:
+        return adapter.fetch_record(bioproject_accession)
+    except SourceRecordNotFoundError:
+        if name != "ncbi_biosample":
+            logger.info("no %s record for %s", name, bioproject_accession)
+            return None
+        known_accessions = _identifier_values(session, study.study_id, IdentifierType.BIOSAMPLE_ACCESSION)
+        if not known_accessions:
+            logger.info("no %s record for %s (and no already-known BioSample accessions to fall back to)", name, bioproject_accession)
+            return None
+        try:
+            record = adapter.fetch_record_by_accessions(bioproject_accession, known_accessions)
+        except SourceRecordNotFoundError:
+            logger.info("no %s record for %s, and none of %d known BioSample accession(s) resolved either", name, bioproject_accession, len(known_accessions))
+            return None
+        logger.info(
+            "ncbi_biosample elink empty for %s -- recovered %d sample(s) via %d already-known BioSample accession(s) instead",
+            bioproject_accession, len(record.raw.get("samples", [])), len(known_accessions),
+        )
+        return record
+
+
 def _resolve_repository_sources(
     session: Session,
     study: Study,
@@ -835,10 +876,8 @@ def _resolve_repository_sources(
             adapter = adapters.get(name)
             if adapter is None:
                 continue
-            try:
-                record = adapter.fetch_record(bioproject_accession)
-            except SourceRecordNotFoundError:
-                logger.info("no %s record for %s", name, bioproject_accession)
+            record = _fetch_ncbi_record_with_biosample_fallback(session, study, name, adapter, bioproject_accession)
+            if record is None:
                 continue
             _created, source = persist_fn(session, study, adapter, SourceType.REPOSITORY_API, bioproject_accession, record)
             study = _apply_related_identifiers(session, study, adapter.find_related(record), name, source)
@@ -1231,10 +1270,8 @@ def handle_discover_identifiers(session: Session, task: Task) -> None:
             adapter = _build_enabled_adapters().get(name)
             if adapter is None:
                 continue
-            try:
-                record = adapter.fetch_record(bioproject_accession)
-            except SourceRecordNotFoundError:
-                logger.info("no %s record for %s", name, bioproject_accession)
+            record = _fetch_ncbi_record_with_biosample_fallback(session, study, name, adapter, bioproject_accession)
+            if record is None:
                 continue
             _created, source = _persist_source_and_facts(
                 session, study, adapter, SourceType.REPOSITORY_API, bioproject_accession, record
