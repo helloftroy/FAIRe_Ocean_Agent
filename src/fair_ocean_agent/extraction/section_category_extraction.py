@@ -896,6 +896,9 @@ def _split_pipe_values(value: str) -> list[str]:
     return [part.strip() for part in value.split("|") if part.strip()]
 
 
+_LEAKED_PLACEHOLDER_RE = re.compile(r"<[^<>]*>")
+
+
 def _normalization_parts(value: object) -> list[str]:
     if isinstance(value, list):
         pieces = [str(piece).strip() for piece in value]
@@ -906,6 +909,16 @@ def _normalization_parts(value: object) -> list[str]:
     for piece in pieces:
         piece = piece.strip(" ;,.")
         if not piece or piece.casefold() in {"none", "not found", "n/a", "not applicable"}:
+            continue
+        # Real gap found live (PMC10988111): several of these fields' own
+        # normalization prompts instruct "Use other:<short literal
+        # technique/device/method>" as a FORMAT template for the model to
+        # fill in -- a weak/confused model can echo that placeholder back
+        # verbatim ("other:<short literal technique>") instead of actually
+        # substituting a real value. A real extracted term never contains
+        # literal angle brackets, so this is an unambiguous leak signal,
+        # not a real value worth keeping under any interpretation.
+        if _LEAKED_PLACEHOLDER_RE.search(piece):
             continue
         key = piece.casefold()
         if key in seen:

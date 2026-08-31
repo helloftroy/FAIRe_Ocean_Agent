@@ -8,6 +8,7 @@ import pytest
 from fair_ocean_agent.database.enums import EntityLevel, SupportType
 from fair_ocean_agent.extraction.section_categories import SECTION_CATEGORIES
 from fair_ocean_agent.extraction.section_category_extraction import (
+    _normalization_parts,
     categorize_paragraphs,
     extract_category_terms,
     extract_pulled_env_var_facts,
@@ -19,6 +20,22 @@ from fair_ocean_agent.llm.mock import MockLLMBackend
 from fair_ocean_agent.sources.base import RawFactCandidate
 
 _SAMPLE_PREP_CATEGORY = next(c for c in SECTION_CATEGORIES if c.name == "sample_prep")
+
+
+def test_normalization_parts_drops_leaked_prompt_placeholder():
+    """Real gap found live (PMC10988111): several fields' own
+    normalization prompts instruct "Use other:<short literal technique>"
+    as a format template for the model to fill in -- a weak/confused
+    model echoed that placeholder back verbatim instead of substituting a
+    real value, producing a stored value of literally
+    "other:<short literal technique>". A real extracted term never
+    contains literal angle brackets, so this is dropped outright rather
+    than kept as if it were real content."""
+    assert _normalization_parts("other:<short literal technique>") == []
+    assert _normalization_parts("other:<short literal technique> | bead beating") == ["bead beating"]
+    assert _normalization_parts(["other:<short literal device>", "Niskin bottle"]) == ["Niskin bottle"]
+    # legitimate values with no placeholder syntax are unaffected
+    assert _normalization_parts("bead beating | sonication") == ["bead beating", "sonication"]
 
 
 def test_categorize_paragraphs_empty_input_makes_no_llm_call():
