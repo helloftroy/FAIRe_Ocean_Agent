@@ -369,6 +369,35 @@ def test_detect_controlled_search_facts_extracts_library_index_kit_not_extractio
     assert "PowerLyze" not in by_type["seq_kit"].raw_value
 
 
+def test_detect_controlled_search_facts_extracts_nextflex_rapid_dna_seq_kit():
+    text = (
+        "Libraries were prepared with the NEXTflex™ Rapid DNA-Seq kit "
+        "according to the manufacturer's protocol."
+    )
+
+    controlled = detect_controlled_search_facts(
+        (("Methods", text),),
+        locator_prefix="paper:PMC1",
+        active_flags=frozenset(),
+    )
+
+    by_type = {fact.fact_type_candidate: fact for fact in controlled}
+    assert by_type["seq_kit"].raw_value == "NEXTflex™ Rapid DNA-Seq kit"
+
+
+def test_detect_controlled_search_facts_extracts_plain_nextflex_dna_seq_kit():
+    text = "Sequencing libraries were generated using a NEXTflex Rapid DNA-Seq kit."
+
+    controlled = detect_controlled_search_facts(
+        (("Methods", text),),
+        locator_prefix="paper:PMC1",
+        active_flags=frozenset(),
+    )
+
+    by_type = {fact.fact_type_candidate: fact for fact in controlled}
+    assert by_type["seq_kit"].raw_value == "NEXTflex Rapid DNA-Seq kit"
+
+
 def test_detect_controlled_search_facts_extracts_directional_primer_names_and_sequences():
     text = (
         "Each PCR contained 0.1 uM of the universal Btn-SPR-F forward primer "

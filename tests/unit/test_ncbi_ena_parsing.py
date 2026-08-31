@@ -158,6 +158,55 @@ def test_biosample_extract_structured_facts_normalizes_location_and_host_aliases
     assert values["isolation_source"].source_locator.endswith("Attributes.isolation_source")
 
 
+def test_biosample_extract_structured_facts_uses_isolate_as_host_species_fallback(biosample_adapter):
+    raw = {
+        "bioproject_accession": "PRJNA999999",
+        "total_linked_samples": 1,
+        "truncated": False,
+        "samples": [
+            {
+                "accession": "SAMN39525774",
+                "title": "Aurelia microbiome sample",
+                "organism": {"taxonomy_name": "metagenome", "taxonomy_id": "256318"},
+                "attributes": {
+                    "isolate": "Aurelia coerulea",
+                    "isolation source": "Aurelia coerulea microbiome",
+                },
+            },
+        ],
+    }
+
+    facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw))
+    values = {fact.fact_type_candidate: fact for fact in facts}
+
+    assert values["isolate"].raw_value == "Aurelia coerulea"
+    assert values["host_species"].raw_value == "Aurelia coerulea"
+
+
+def test_biosample_extract_structured_facts_host_beats_isolate_for_host_species(biosample_adapter):
+    raw = {
+        "bioproject_accession": "PRJNA999999",
+        "total_linked_samples": 1,
+        "truncated": False,
+        "samples": [
+            {
+                "accession": "SAMN1",
+                "title": "host-associated sample",
+                "organism": {"taxonomy_name": "metagenome", "taxonomy_id": "256318"},
+                "attributes": {
+                    "host": "Aurelia aurita",
+                    "isolate": "Aurelia coerulea",
+                },
+            },
+        ],
+    }
+
+    facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw))
+    values = {fact.fact_type_candidate: fact for fact in facts}
+
+    assert values["host_species"].raw_value == "Aurelia aurita"
+
+
 def test_biosample_extract_structured_facts_maps_owner_contact_to_recorded_by(biosample_adapter):
     """recordedBy comes from the real per-sample submitter PERSON
     (Owner/Contacts/Contact/Name), confirmed against real cached BioSample

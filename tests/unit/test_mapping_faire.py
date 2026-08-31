@@ -15,6 +15,7 @@ from fair_ocean_agent.database.models import (
     Study,
 )
 from fair_ocean_agent.extraction.faire_fields import assay_scoped_field_names, native_name_to_faire_hint
+from fair_ocean_agent.mapping.envo import expand_envo_terms
 from fair_ocean_agent.mapping.faire import map_study_to_faire, resolve_project_id
 from fair_ocean_agent.mapping.rules import _ADDITIONAL_ENVIRONMENTAL_SAMPLE_ATTRIBUTES, RULES, rules_for
 
@@ -59,6 +60,16 @@ def _fact(session, study, *, entity=None, field, value, entity_level, support=Su
     session.add(fact)
     session.flush()
     return fact
+
+
+def test_expands_bare_envo_ids_to_label_pipe_accession():
+    assert expand_envo_terms("ENVO:00000428") == "biome | ENVO:00000428"
+    assert expand_envo_terms("http://purl.obolibrary.org/obo/ENVO_00000486") == "shoreline | ENVO:00000486"
+    assert expand_envo_terms("ENVO:00010483") == "environmental material | ENVO:00010483"
+
+
+def test_expands_labelled_envo_values_to_pipe_format():
+    assert expand_envo_terms("marine sediment [ENVO:00002164]") == "marine sediment | ENVO:00002164"
 
 
 def test_filter_passive_active_defaults_from_broad_checklist_evidence(db_session):
@@ -142,6 +153,8 @@ def test_maps_sample_level_structured_facts(db_session):
     _fact(db_session, study, entity=sample, field="eventDate_submitted", value="2024-02-03", entity_level="sample")
     _fact(db_session, study, entity=sample, field="depth", value="5 meters", entity_level="sample")
     _fact(db_session, study, entity=sample, field="env_broad_scale", value="http://purl.obolibrary.org/obo/ENVO_00000447", entity_level="sample")
+    _fact(db_session, study, entity=sample, field="env_local_scale", value="ENVO:00000486", entity_level="sample")
+    _fact(db_session, study, entity=sample, field="env_medium", value="ENVO:00010483", entity_level="sample")
     _fact(db_session, study, entity=sample, field="geo_loc_name", value="USA: California", entity_level="sample")
     _fact(db_session, study, entity=sample, field="lat_lon", value="38.03 N 122.151667 W", entity_level="sample")
     db_session.commit()
@@ -158,7 +171,9 @@ def test_maps_sample_level_structured_facts(db_session):
     assert "verbatimEventDate" not in values
     assert values["minimumDepthInMeters"].standardized_value == "5"
     assert values["maximumDepthInMeters"].standardized_value == "5"
-    assert values["env_broad_scale"].standardized_value == "http://purl.obolibrary.org/obo/ENVO_00000447"
+    assert values["env_broad_scale"].standardized_value == "marine biome | ENVO:00000447"
+    assert values["env_local_scale"].standardized_value == "shoreline | ENVO:00000486"
+    assert values["env_medium"].standardized_value == "environmental material | ENVO:00010483"
     assert not values["env_broad_scale"].review_required
     assert values["geo_loc_name"].standardized_value == "USA: California"
     assert values["geo_loc_name"].missingness_status == "present"

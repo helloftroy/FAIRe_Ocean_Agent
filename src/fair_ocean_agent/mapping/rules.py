@@ -102,6 +102,7 @@ from typing import Callable
 
 from fair_ocean_agent.database.enums import EntityLevel, MappingMethod
 from fair_ocean_agent.extraction.faire_fields import assay_scoped_field_names, native_name_to_faire_hint
+from fair_ocean_agent.mapping.envo import expand_envo_terms
 from fair_ocean_agent.mapping.units import (
     to_decimal_latitude,
     to_decimal_longitude,
@@ -391,13 +392,13 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
                 MappingMethod.DETERMINISTIC_SYNONYM.value, transform=_positive_control_flag,
                 enum_name="pos_cont_0_1_enum"),
     MappingRule("env_broad_scale", EntityLevel.SAMPLE.value, "sampleMetadata", "env_broad_scale",
-                MappingMethod.EXACT_LABEL.value, enum_name="env_broad_scale_enum"),
+                MappingMethod.EXACT_LABEL.value, transform=expand_envo_terms, enum_name="env_broad_scale_enum"),
     MappingRule("env_local_scale", EntityLevel.SAMPLE.value, "sampleMetadata", "env_local_scale",
-                MappingMethod.EXACT_LABEL.value, enum_name="env_local_scale_enum"),
+                MappingMethod.EXACT_LABEL.value, transform=expand_envo_terms, enum_name="env_local_scale_enum"),
     MappingRule("env_medium", EntityLevel.SAMPLE.value, "sampleMetadata", "env_medium",
-                MappingMethod.EXACT_LABEL.value, enum_name="env_medium_enum"),
+                MappingMethod.EXACT_LABEL.value, transform=expand_envo_terms, enum_name="env_medium_enum"),
     MappingRule("isolation_source", EntityLevel.SAMPLE.value, "sampleMetadata", "env_medium",
-                MappingMethod.DETERMINISTIC_SYNONYM.value, enum_name="env_medium_enum"),
+                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=expand_envo_terms, enum_name="env_medium_enum"),
     MappingRule("geo_loc_name", EntityLevel.SAMPLE.value, "sampleMetadata", "geo_loc_name",
                 MappingMethod.EXACT_LABEL.value),
     MappingRule("cruise", EntityLevel.SAMPLE.value, "sampleMetadata", "internal_expedition_id",
@@ -777,6 +778,15 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
                 MappingMethod.SUGGESTED_SEMANTIC.value, transform=_lat_only, review_required=True),
     MappingRule("coordinates", EntityLevel.STUDY.value, "sampleMetadata", "decimalLongitude",
                 MappingMethod.SUGGESTED_SEMANTIC.value, transform=_lon_only, review_required=True),
+    # Same shape as coordinates above, for when a paper names a real
+    # collection site without ever giving numeric coordinates (real gap
+    # found live, PMC10988111: "Yantai Haichang Whale Shark Ocean Park
+    # (Shandong, China)") -- broadcasts to every sample lacking its own
+    # structured geo_loc_name (from the real API-derived SAMPLE-level rule
+    # above), same review_required=True safety net as every other
+    # LLM-inferred study-wide broadcast in this section.
+    MappingRule("geo_loc_name", EntityLevel.STUDY.value, "sampleMetadata", "geo_loc_name",
+                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("sample_collection_method", EntityLevel.STUDY.value, "sampleMetadata", "samp_collect_method",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("sediment_sampling_method", EntityLevel.STUDY.value, "sampleMetadata", "samp_collect_method",

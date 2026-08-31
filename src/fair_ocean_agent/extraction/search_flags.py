@@ -913,6 +913,9 @@ CONTROLLED_SEARCH_FIELDS: tuple[ControlledSearchField, ...] = (
         search_terms=(
             "MiSeq Reagent Kit v3",
             "MiSeq Reagent Kit",
+            "NEXTflex Rapid DNA-Seq kit",
+            "NEXTflex DNA-Seq kit",
+            "DNA-Seq kit",
             "Titanium chemistry",
             "NovaSeq kit",
             "ligation sequencing kit",
@@ -1423,6 +1426,10 @@ _ASSAY_TYPE_CUES: tuple[tuple[str, tuple[re.Pattern[str], ...]], ...] = (
 _SEQUENCING_KIT_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bMiSeq\s+Reagent\s+Kit(?:\s+v\d+)?\b", re.IGNORECASE),
     re.compile(r"\bNextera\s+XT\s+Index\s+Kit(?:\s*\([^)]+\))?", re.IGNORECASE),
+    re.compile(
+        r"\bNEXTflex(?:\W+|\s+)(?:Rapid\s+)?DNA[-\s]+Seq\s+[Kk]it(?:\s*\([^)]+\))?",
+        re.IGNORECASE,
+    ),
     re.compile(r"\bTitanium\s+chemistry\b", re.IGNORECASE),
     re.compile(r"\b(?:v2|v3)\s+chemistry\b", re.IGNORECASE),
     # TruSeq is a whole family of Illumina library prep kits (Stranded
