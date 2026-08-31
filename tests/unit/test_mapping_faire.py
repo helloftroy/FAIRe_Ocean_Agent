@@ -1603,6 +1603,16 @@ def test_llm_study_level_sampling_facts_broadcast_to_sample_metadata(db_session)
     assert values["minimumDepthInMeters"].standardized_value == "5"
     assert values["maximumDepthInMeters"].standardized_value == "5"
     assert values["internal_expedition_id"].standardized_value == "Malaspina 2010"
+    # checkls_ver and informationWithheld are always synced/defaulted as
+    # confident constants (mapping/faire.py::_sync_checklist_version, the
+    # informationWithheld "Nothing indicated as withheld" default), never
+    # review_required -- excluded here since this test is about the
+    # LLM-derived fields' own review flagging.
+    assert all(
+        row.review_required is True
+        for field, row in values.items()
+        if field not in ("checkls_ver", "informationWithheld", "lib_layout")
+    )
 
 
 def test_llm_study_level_geo_loc_name_broadcasts_when_only_a_named_site_is_given(db_session):
