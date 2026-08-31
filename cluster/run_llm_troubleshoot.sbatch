@@ -72,7 +72,20 @@ if [ ! -f "${LLM_TEST_DB}" ]; then
     exit 2
   fi
   echo "Creating isolated test database ${LLM_TEST_DB} from ${MAIN_DB} (sqlite3 .backup, safe against a live writer)..."
-  sqlite3 "${MAIN_DB}" ".backup '${LLM_TEST_DB}'"
+  # The `sqlite3` CLI binary isn't guaranteed to be on PATH in this conda
+  # env (confirmed live: "sqlite3: command not found") even though the
+  # Python sqlite3 module obviously is -- used throughout this whole
+  # pipeline. Its own .backup() method uses the same SQLite Online Backup
+  # API as the CLI's .backup command, equally safe against a live writer.
+  python3 -c "
+import sqlite3
+src = sqlite3.connect('${MAIN_DB}')
+dst = sqlite3.connect('${LLM_TEST_DB}')
+with dst:
+    src.backup(dst)
+src.close()
+dst.close()
+"
 else
   echo "Reusing existing isolated test database ${LLM_TEST_DB} (set LLM_TEST_DB_REFRESH=1 to re-copy from ${MAIN_DB})."
 fi
