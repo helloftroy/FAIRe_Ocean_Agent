@@ -44,7 +44,10 @@ from fair_ocean_agent.extraction.section_categories import (
     paragraphs_before_next_section_heading,
 )
 from fair_ocean_agent.llm.base import LLMBackend, LLMBackendError
+from fair_ocean_agent.logging_setup import get_logger
 from fair_ocean_agent.sources.base import RawFactCandidate
+
+logger = get_logger(__name__)
 
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 _SENTENCE_ID_RE = re.compile(r"^S(\d+)\.(\d+)$")
@@ -797,16 +800,38 @@ def extract_category_terms(
         for batch_start in range(0, len(candidates), _MAX_CANDIDATES_PER_TERM_EXTRACTION_CALL):
             batch = candidates[batch_start : batch_start + _MAX_CANDIDATES_PER_TERM_EXTRACTION_CALL]
             prompt = _build_term_extraction_prompt(category.label, phase_terms, batch)
-            parsed, _response = backend.generate_json(
-                prompt,
-                system=f'You extract FAIRe "{category.label}" ({phase_name}) facts from supplied quote IDs only.',
-                temperature=0,
-                max_tokens=max_output_tokens,
-            )
-            if parsed is None:
-                raise LLMBackendError(
-                    f"{backend.label}: {category.name}:{phase_name} term extraction returned invalid JSON after retries"
+            try:
+                parsed, _response = backend.generate_json(
+                    prompt,
+                    system=f'You extract FAIRe "{category.label}" ({phase_name}) facts from supplied quote IDs only.',
+                    temperature=0,
+                    max_tokens=max_output_tokens,
                 )
+            except LLMBackendError:
+                # A failure in ONE phase's own call (bad JSON, timeout, ...)
+                # must not lose every OTHER phase's already-succeeded facts
+                # -- splitting one category-wide call into several smaller,
+                # independent phase calls (per an explicit user request)
+                # otherwise multiplies the odds that *something* fails while
+                # making that failure's blast radius the same "lose
+                # everything" as before splitting. Confirmed live this was a
+                # real regression: a single phase failing on a real cluster
+                # run silently zeroed out sample_prep facts (samp_size,
+                # pool_dna_num, concentration, x_env_var_block, ...) that
+                # used to survive under the old, unsplit single-call design.
+                logger.warning(
+                    "%s: %s:%s term extraction failed for one batch -- skipping this phase, "
+                    "other phases' facts are unaffected",
+                    backend.label, category.name, phase_name,
+                )
+                break
+            if parsed is None:
+                logger.warning(
+                    "%s: %s:%s term extraction returned invalid JSON after retries -- "
+                    "skipping this phase, other phases' facts are unaffected",
+                    backend.label, category.name, phase_name,
+                )
+                break
             if not isinstance(parsed, list):
                 continue
             for item in parsed:

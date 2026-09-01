@@ -488,11 +488,42 @@ def test_extract_category_terms_dedups_identical_values_across_quotes():
     assert facts[0].raw_value == "-80C"
 
 
-def test_extract_category_terms_raises_on_invalid_json_after_retries():
-    run_text = "DNA was extracted using the DNeasy PowerSoil kit."
+def test_extract_category_terms_skips_a_phase_with_invalid_json_without_raising():
+    """Real regression found live: with Stage 3 split into one call per
+    workflow phase, a single phase's own call returning invalid JSON used
+    to raise LLMBackendError and abort the WHOLE category -- including
+    every OTHER phase's already-succeeded facts -- since splitting one
+    call into several independent ones otherwise multiplies the odds
+    that *something* fails while keeping the same "lose everything" blast
+    radius. A failing phase is now logged and skipped; other phases'
+    facts still come through."""
+    run_text = (
+        "DNA was extracted using the DNeasy PowerSoil kit. "
+        "Samples were stored at -80C prior to extraction."
+    )
     backend = MockLLMBackend(responses=["not json"])
-    with pytest.raises(LLMBackendError):
-        extract_category_terms(backend, _SAMPLE_PREP_CATEGORY, run_text, locator_prefix="test")
+    facts = extract_category_terms(backend, _SAMPLE_PREP_CATEGORY, run_text, locator_prefix="test")
+    assert facts == []
+
+
+def test_extract_category_terms_one_failing_phase_does_not_lose_another_phases_facts():
+    run_text = (
+        "Sterile 10-mL cutoff syringes were used for subsampling. "
+        "DNA was extracted using the DNeasy PowerSoil kit."
+    )
+
+    def respond(prompt: str) -> str:
+        if "nucl_acid_ext_kit" in prompt:
+            return "not json"
+        return json.dumps(
+            [{"field": "sterilise_method", "raw_value": "Sterile 10-mL cutoff syringes", "quote_id": "Q001"}]
+        )
+
+    backend = MockLLMBackend(responses=respond)
+    facts = extract_category_terms(backend, _SAMPLE_PREP_CATEGORY, run_text, locator_prefix="test")
+    by_field = {f.fact_type_candidate: f.raw_value for f in facts}
+    assert by_field["sterilise_method"] == "Sterile 10-mL cutoff syringes"
+    assert "nucl_acid_ext_kit" not in by_field
 
 
 def test_extract_section_category_facts_sample_prep_category_on_real_paper_text():
