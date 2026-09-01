@@ -803,6 +803,83 @@ def _apply_biological_rep_from_relations(
     return 1
 
 
+# Strips a common taxonomic-marker suffix so "16S rRNA" and "16S-V3V4"
+# are recognized as covering the same gene, while a bare functional gene
+# name like "cbbL" is left as-is (it has no such suffix to strip).
+_GENE_SUFFIX_RE = re.compile(r"\s*(?:rRNA|gene|marker|locus|region)\s*$", re.IGNORECASE)
+
+
+def _apply_assay_name_fallback_from_target_gene(
+    session: Session,
+    study_id: str,
+    seen: dict[tuple[str, str, str | None], StandardizedValue],
+) -> int:
+    """Real gap found live (10.3390/microorganisms10030558): a paper
+    running two parallel amplicon assays (16S rRNA for community
+    composition, cbbL -- a functional carbon-fixation gene -- for the
+    same, no paper-given short name of its own) only ever got assay_name
+    = "16S-V3V4"; cbbL's own assay never got named at all, even though
+    target_gene already correctly resolves "16S rRNA | cbbL". assay_name's
+    own extraction path (search_flags.py's LLMJudgedSearchField) is
+    explicitly told never to invent a bare functional-gene name -- correct
+    for THAT mechanism, since a hallucinated "official" name would be
+    worse than none -- so this is a separate, deterministic fallback:
+    per an explicit user request, any already-resolved target_gene entry
+    NOT already reflected in assay_name gets a plain "<gene> assay" label
+    (e.g. "cbbL assay") appended, flagged for review since it's a
+    synthesized label, not one the paper actually gives."""
+    target_gene_value = session.scalars(
+        select(StandardizedValue).where(
+            StandardizedValue.study_id == study_id,
+            StandardizedValue.entity_id.is_(None),
+            StandardizedValue.target_schema == TARGET_SCHEMA,
+            StandardizedValue.target_field == "target_gene",
+            StandardizedValue.missingness_status == MissingnessStatus.PRESENT.value,
+        )
+    ).first()
+    if target_gene_value is None or not target_gene_value.standardized_value:
+        return 0
+    genes = _split_pipe_values(target_gene_value.standardized_value)
+    if not genes:
+        return 0
+
+    key = ("projectMetadata", "assay_name", None)
+    existing = seen.get(key)
+    existing_value = existing.standardized_value if existing else ""
+    existing_folded = existing_value.casefold()
+
+    missing = [
+        gene for gene in genes
+        if _GENE_SUFFIX_RE.sub("", gene).strip().casefold() not in existing_folded
+    ]
+    if not missing:
+        return 0
+
+    fallback_parts = [f"{gene} assay" for gene in missing]
+    merged_value = " | ".join([*_split_pipe_values(existing_value), *fallback_parts])
+
+    if existing is not None:
+        existing.standardized_value = merged_value
+        existing.review_required = True
+        return 0
+
+    standardized_value = StandardizedValue(
+        study_id=study_id,
+        entity_id=None,
+        target_schema=TARGET_SCHEMA,
+        target_schema_version=TARGET_SCHEMA_VERSION,
+        target_field="assay_name",
+        standardized_value=merged_value,
+        mapping_method=MappingMethod.DETERMINISTIC_SYNONYM.value,
+        review_required=True,
+        missingness_status=MissingnessStatus.PRESENT.value,
+    )
+    session.add(standardized_value)
+    session.flush()
+    seen[key] = standardized_value
+    return 1
+
+
 def _apply_sample_type_routed_facts(
     session: Session,
     study_id: str,
@@ -1296,6 +1373,7 @@ def map_study_to_faire(session: Session, study_id: str) -> int:
 
     created += _apply_biological_rep_relations_from_sample_categories(session, study_id, seen)
     created += _apply_biological_rep_from_relations(session, study_id, seen)
+    created += _apply_assay_name_fallback_from_target_gene(session, study_id, seen)
 
     for entity in session.scalars(select(Entity).where(Entity.study_id == study_id)):
         if not entity.external_identifier:

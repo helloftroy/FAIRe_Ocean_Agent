@@ -1331,6 +1331,61 @@ def test_pipe_joins_two_assays_target_gene_and_primers_instead_of_dropping_the_s
     assert primer_name_forward.standardized_value == "338F | cbbL_K2f"
 
 
+def test_assay_name_gets_a_gene_assay_fallback_for_an_unnamed_second_target_gene(db_session):
+    """Same real study (10.3390/microorganisms10030558): the paper gives
+    its 16S assay a real short name ("V3V4 region of 16S rRNA genes",
+    resolved as "16S-V3V4"), but never names its cbbL assay at all --
+    target_gene already correctly resolves both genes, but assay_name
+    used to only ever show "16S-V3V4", leaving cbbL's own assay unnamed.
+    Per an explicit user request, an unnamed target_gene entry gets a
+    plain "<gene> assay" fallback label instead of staying silently
+    uncovered."""
+    study = _study(db_session, title="Named and unnamed assay")
+    _fact(db_session, study, field="target_gene", value="16S rRNA", entity_level="project")
+    _fact(db_session, study, field="target_gene", value="cbbL", entity_level="project")
+    _fact(db_session, study, field="assay_name", value="16S-V3V4", entity_level="project")
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    assay_name = db_session.query(StandardizedValue).filter_by(study_id=study.study_id, target_field="assay_name").one()
+    assert assay_name.standardized_value == "16S-V3V4 | cbbL assay"
+    assert assay_name.review_required is True
+
+
+def test_assay_name_fallback_does_not_duplicate_an_already_covered_gene(db_session):
+    """A gene already reflected in the paper's own real assay name (16S
+    covered by "16S-V3V4") must not also get a redundant "16S rRNA
+    assay" fallback appended alongside it."""
+    study = _study(db_session, title="Single named assay, no fallback needed")
+    _fact(db_session, study, field="target_gene", value="16S rRNA", entity_level="project")
+    _fact(db_session, study, field="assay_name", value="16S-V3V4", entity_level="project")
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    assay_name = db_session.query(StandardizedValue).filter_by(study_id=study.study_id, target_field="assay_name").one()
+    assert assay_name.standardized_value == "16S-V3V4"
+    assert assay_name.review_required is False
+
+
+def test_assay_name_fallback_creates_a_new_row_when_no_assay_name_was_ever_given(db_session):
+    """A study whose paper never names ANY assay at all should still get
+    a fallback rather than staying entirely blank."""
+    study = _study(db_session, title="No assay name given at all")
+    _fact(db_session, study, field="target_gene", value="nifH", entity_level="project")
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    assay_name = db_session.query(StandardizedValue).filter_by(study_id=study.study_id, target_field="assay_name").one()
+    assert assay_name.standardized_value == "nifH assay"
+    assert assay_name.review_required is True
+
+
 def test_pipe_joins_conflicting_project_wide_instruments_with_review(db_session):
     study = _study(db_session, title="Two sequencing instruments")
     run_a = Entity(study_id=study.study_id, entity_level=EntityLevel.SEQUENCING_RUN.value, external_identifier="SRR_A")
