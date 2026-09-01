@@ -180,6 +180,18 @@ def test_samp_size_cues_match_liters_of_seawater_was_filtered():
     assert _term_cues_match("samp_size", "10 L of water were collected at each station.")
 
 
+def test_concentration_cues_match_spelled_out_template_amount():
+    """Real gap found live (10.3390/microorganisms10030558): "Fifty
+    nanograms of DNA was used as a template for PCR amplification"
+    reports the DNA input amount as a spelled-out number with a bare
+    mass unit (no "/uL"), which none of the original ng/uL-style cues
+    matched -- confirmed live via the user this value was never
+    hallucinated, just never reached by any existing cue."""
+    assert _term_cues_match("concentration", "Fifty nanograms of DNA was used as a template for PCR amplification.")
+    # the original ng/uL phrasing must keep matching too
+    assert _term_cues_match("concentration", "Final DNA concentration was 12.4 ng/uL.")
+
+
 def test_candidate_categories_for_paragraph_finds_sample_prep_in_dense_text():
     """Real evidence: this dense supplementary-methods paragraph's own
     opening sentence ("DNA for amplicon sequencing and qPCR was extracted

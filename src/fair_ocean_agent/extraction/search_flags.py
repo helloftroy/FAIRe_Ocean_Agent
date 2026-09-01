@@ -1420,6 +1420,21 @@ _ASSAY_TYPE_CUES: tuple[tuple[str, tuple[re.Pattern[str], ...]], ...] = (
             re.compile(r"\bmultiple\s+taxa\b", re.IGNORECASE),
             re.compile(r"\buniversal\s+primers\b", re.IGNORECASE),
             re.compile(r"\bHTS\b"),
+            # Real gap found live (10.3390/microorganisms10030558): this
+            # paper's own explicit "amplicon sequencing of 16S rRNA and
+            # cbbL gene" framing sentence lives in the Introduction, which
+            # select_relevant_sections excludes entirely (Methods-only
+            # scoping) -- so the classifier never saw it in the real
+            # pipeline, even though the *Methods* section alone still
+            # describes unmistakably metabarcoding-shaped methodology for
+            # BOTH its 16S marker AND its cbbL functional-gene marker:
+            # OTU clustering and "gene amplicons" sequencing, neither
+            # tied to a specific single-species/qPCR detection use. These
+            # two cues are common Methods-section phrasing independent of
+            # whether the paper ever uses the word "amplicon sequencing"
+            # itself.
+            re.compile(r"\boperational\s+taxonomic\s+units?\b", re.IGNORECASE),
+            re.compile(r"\bgene\s+amplicons?\b", re.IGNORECASE),
         ),
     ),
     (

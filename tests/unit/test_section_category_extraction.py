@@ -274,6 +274,30 @@ def test_extract_category_terms_pool_dna_num_rejects_library_pooling_without_sam
     assert facts == []
 
 
+def test_extract_category_terms_pool_dna_num_accepts_replicates_as_sample_context():
+    """Real gap found live (10.3390/microorganisms10030558): "Three
+    replicates were pooled and purified using the QIAquick Gel Extraction
+    Kits" names what got pooled as "replicates" -- a real, common way of
+    describing multiple parallel PCR reactions/aliquots being combined
+    before cleanup, missed entirely since _POOLING_SAMPLE_CONTEXT_RE's
+    original word list didn't include it."""
+    run_text = "Three replicates were pooled and purified using the QIAquick Gel Extraction Kits (QIAGEN GmbH)."
+    response = json.dumps(
+        [
+            {
+                "field": "pool_dna_num",
+                "raw_value": "Three replicates were pooled and purified using the QIAquick Gel Extraction Kits (QIAGEN GmbH)",
+                "quote_id": "Q001",
+            }
+        ]
+    )
+    backend = MockLLMBackend(responses=[response])
+    facts = extract_category_terms(backend, _SAMPLE_PREP_CATEGORY, run_text, locator_prefix="test")
+
+    assert len(facts) == 1
+    assert facts[0].fact_type_candidate == "pool_dna_num"
+
+
 def test_extract_category_terms_boolean_field_accepts_1_with_no_digit_in_its_own_quote():
     """Real bug found live (10.1371/journal.pone.0303937): the generic
     verbatim-substring guard is meaningless (and actively harmful) for a

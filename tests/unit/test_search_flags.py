@@ -669,6 +669,32 @@ def test_detect_controlled_search_facts_classifies_shotgun_metagenomics_alongsid
     assert by_type["assay_type"].raw_value == "other:metagenomics | metabarcoding"
 
 
+def test_detect_controlled_search_facts_classifies_metabarcoding_from_otu_and_gene_amplicon_phrasing():
+    """Real gap found live (10.3390/microorganisms10030558): this paper's
+    own explicit "amplicon sequencing of 16S rRNA and cbbL gene" framing
+    sentence lives in the Introduction, which select_relevant_sections
+    excludes entirely (Methods-only scoping) -- so the classifier never
+    saw it in the real pipeline. The *Methods* section alone still
+    describes unmistakably metabarcoding-shaped methodology for both its
+    16S marker and its cbbL functional-gene marker -- OTU clustering and
+    "gene amplicons" sequencing -- without ever using the words "amplicon
+    sequencing" together."""
+    text = (
+        "The resulting sequences were clustered as operational taxonomic units (OTUs) at 97% sequence "
+        "identity. Sequenced using an Illumina HiSeq platform with 2 x 250 bp paired-end reads for 16S "
+        "rRNA gene amplicons, and Illumina MiSeq platform with 2 x 300 bp paired-end reads for cbbL "
+        "gene amplicons."
+    )
+    controlled = detect_controlled_search_facts(
+        (("Methods", text),),
+        locator_prefix="paper:PMC1",
+        active_flags=frozenset(),
+    )
+
+    by_type = {fact.fact_type_candidate: fact for fact in controlled}
+    assert by_type["assay_type"].raw_value == "metabarcoding"
+
+
 def test_detect_controlled_search_facts_extracts_trimmomatic_minlen_parameter():
     text = (
         "Raw paired-end reads were processed with Trimmomatic using the parameters "

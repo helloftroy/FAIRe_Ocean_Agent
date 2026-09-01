@@ -496,7 +496,23 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
                 "DNA concentration was", "concentration of the extracted DNA", "concentration of DNA",
                 "concentration was measured", "final DNA concentration", "ng/µL", "ng/mL", "µg/mL",
                 "ng per µL", "ng/uL", "ng per uL",
-            ), definition='Concentration of total DNA after extraction, preserving both the numeric value and unit in the same value when reported, e.g. "12.4 ng/uL". Do not return only the unit.'),
+                # Real gap found live (10.3390/microorganisms10030558):
+                # "Fifty nanograms of DNA was used as a template for PCR
+                # amplification" reports the DNA input amount as a
+                # spelled-out number with a bare mass unit (no "/µL"),
+                # not a numeral-with-per-volume-unit phrasing any cue
+                # above matches at all -- confirmed live the value was
+                # never missing/hallucinated, just never reached by any
+                # existing cue. Deliberately NOT asking for "Fifty" ->
+                # "50" numeral normalization here: extract_category_terms'
+                # own master prompt already tells the model to copy values
+                # WORD FOR WORD, and its verbatim-quote guard (section_
+                # category_extraction.py) discards any value that doesn't
+                # literally appear in its own quote -- a normalized "50
+                # ng" would never match "Fifty nanograms..." and get
+                # silently dropped, worse than just keeping "Fifty".
+                "nanograms of DNA", "ng of DNA", "used as a template",
+            ), definition='Concentration of total DNA after extraction, preserving both the numeric value and unit in the same value when reported, e.g. "12.4 ng/uL". Also accept the amount of DNA reported as PCR template input (e.g. "Fifty nanograms of DNA was used as a template") when no separate extract concentration is given, keeping the number exactly as the source states it (spelled out or numeral). Do not return only the unit.'),
             CategoryTerm("samp_vol_we_dna_ext", (
                 "used for DNA extraction", "used for extraction", "processed for DNA extraction",
                 "used for RNA extraction", "used for nucleic acid extraction",

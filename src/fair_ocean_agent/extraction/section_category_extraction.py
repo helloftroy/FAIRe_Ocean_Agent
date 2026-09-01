@@ -62,8 +62,13 @@ _SAMPLE_SIZE_CONTEXT_RE = re.compile(
     re.IGNORECASE,
 )
 _POOLING_ACTION_RE = re.compile(r"\b(?:pool(?:ed|ing)?|combin(?:ed|ing))\b", re.IGNORECASE)
+# Real gap found live (10.3390/microorganisms10030558): "Three replicates
+# were pooled and purified..." names what got pooled as "replicates", not
+# any of the original words below -- a real, common way of describing
+# multiple parallel PCR reactions/aliquots from the same sample being
+# combined before cleanup, missed entirely before this was added.
 _POOLING_SAMPLE_CONTEXT_RE = re.compile(
-    r"\b(?:DNA|RNA|nucleic\s+acids?|extracts?|samples?|subsamples?)\b",
+    r"\b(?:DNA|RNA|nucleic\s+acids?|extracts?|samples?|subsamples?|replicates?|aliquots?|reactions?|amplicons?)\b",
     re.IGNORECASE,
 )
 _SIZE_FRAC_FIELD = "size_frac"
