@@ -192,6 +192,22 @@ def test_concentration_cues_match_spelled_out_template_amount():
     assert _term_cues_match("concentration", "Final DNA concentration was 12.4 ng/uL.")
 
 
+def test_sterilise_method_cues_match_sanitised_field_equipment_wording():
+    """Real gap found live: "The water sampler was sanitised and rinsed
+    in the water body between samples to avoid contamination from
+    previous sites" -- the original cues covered "sterilized"/
+    "sterilised" but not the real, common "sanitised" wording, so this
+    sentence fell through entirely to screen_contam_method's own bare
+    "contamination" match instead of sterilise_method."""
+    assert _term_cues_match(
+        "sterilise_method",
+        "The water sampler was sanitised and rinsed in the water body between samples to avoid "
+        "contamination from previous sites.",
+    )
+    # the original "sterilized"/"sterilised" phrasing must keep matching too
+    assert _term_cues_match("sterilise_method", "Sampling equipment was sterilized between sites using 10% bleach.")
+
+
 def test_candidate_categories_for_paragraph_finds_sample_prep_in_dense_text():
     """Real evidence: this dense supplementary-methods paragraph's own
     opening sentence ("DNA for amplicon sequencing and qPCR was extracted

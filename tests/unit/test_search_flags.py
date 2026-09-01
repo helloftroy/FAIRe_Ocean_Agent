@@ -1812,3 +1812,55 @@ def test_quote_candidates_for_in_situ_temp_reach_llm_when_collection_sentence_is
     assert len(matching) == 1
     assert "28.1" in matching[0].text
     assert "collected" in matching[0].text
+
+
+def test_quote_candidates_for_screen_contam_method_excludes_checkm_bin_qc_mention():
+    """Real bad extraction found live: a paper's CheckM/CANU description
+    ("CheckM (version 1.07) was used to assess genome completeness and
+    contamination... CANU (version 1.8) was used for assembly...") got
+    merged into a bogus screen_contam_method value even though this is
+    metagenome-assembled-genome bin QC, not sequence/OTU/ASV contaminant
+    screening -- a bare "contamination" mention was previously sufficient
+    on its own to become a candidate."""
+    candidates = quote_candidates_for_llm_judged_search(
+        (
+            (
+                "Methods",
+                "CheckM (version 1.07) was used to assess genome completeness and contamination using "
+                "the default set of bacterial marker genes, and CANU (version 1.8) was used for "
+                "assembly with default parameters.",
+            ),
+        )
+    )
+    assert not any("screen_contam_method" in c.field_names for c in candidates)
+
+
+def test_quote_candidates_for_screen_contam_method_excludes_field_equipment_sterilization():
+    """Real bad extraction found live: "The water sampler was sanitised
+    and rinsed in the water body between samples to avoid contamination
+    from previous sites" describes field EQUIPMENT sterilization
+    (sterilise_method's own concept), not sequence-level decontamination,
+    but got captured as screen_contam_method instead."""
+    candidates = quote_candidates_for_llm_judged_search(
+        (
+            (
+                "Methods",
+                "The water sampler was sanitised and rinsed in the water body between samples to "
+                "avoid contamination from previous sites.",
+            ),
+        )
+    )
+    assert not any("screen_contam_method" in c.field_names for c in candidates)
+
+
+def test_quote_candidates_for_screen_contam_method_still_matches_real_decontam_language():
+    candidates = quote_candidates_for_llm_judged_search(
+        (
+            (
+                "Bioinformatics",
+                "ASVs present in the extraction blanks and PCR negative controls were flagged as "
+                "contaminants and removed using the decontam R package with default settings.",
+            ),
+        )
+    )
+    assert any("screen_contam_method" in c.field_names for c in candidates)

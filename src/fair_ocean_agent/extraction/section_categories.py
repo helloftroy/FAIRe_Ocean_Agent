@@ -224,6 +224,16 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
                 "RNase-free", "DNase-free",
                 "flame sterilised", "decontamination", "decontaminate", "clean room", "DNAZap",
                 "single-use equipment",
+                # Real gap found live: "The water sampler was sanitised and
+                # rinsed in the water body between samples to avoid
+                # contamination from previous sites" -- a real, common
+                # British-spelling wording ("sanitised") this cue list
+                # never covered at all, so the sentence fell through
+                # entirely to screen_contam_method's own bare "contamination"
+                # match instead (a separate bug, see search_flags.py's
+                # _SCREEN_CONTAM_METHOD_CONTEXT_RE).
+                "sanitised", "sanitized", "sanitise", "sanitize", "rinsed between samples",
+                "rinsed in the water body between samples",
             ), definition=(
                 'Extract the method used to sterilize or decontaminate sampling, laboratory, or '
                 'processing equipment/materials to prevent cross-sample contamination before or between '

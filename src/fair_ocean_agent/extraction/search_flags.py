@@ -2358,6 +2358,31 @@ _TARGET_TAXONOMIC_SCOPE_CONTEXT_RE = re.compile(
     r")\b",
     re.IGNORECASE,
 )
+# screen_contam_method's own search_terms deliberately include bare
+# "contaminant"/"contamination" (real papers phrase this many ways), but
+# that alone is far too broad a gate on its own -- confirmed live via two
+# real misses on the same paper: (1) CheckM's own standard output
+# description ("assess genome completeness and contamination... using
+# default bacterial marker genes") is about METAGENOME-ASSEMBLED-GENOME
+# bin QC, not sequence/OTU/ASV contaminant screening, yet got merged with
+# an unrelated CANU assembler mention into one bogus screen_contam_method
+# value; (2) "The water sampler was sanitised and rinsed... to avoid
+# contamination from previous sites" describes FIELD EQUIPMENT
+# sterilization (sterilise_method's own concept), not sequence-level
+# decontamination, yet got captured here instead, leaving
+# sterilise_method blank. Requires one of the field's own real
+# distinguishing signals (comparison against blanks/negative controls, a
+# decontam-style statistical method, or an explicit contaminant sequence/
+# OTU/ASV/taxon/read) rather than a bare "contaminant"/"contamination"
+# mention anywhere.
+_SCREEN_CONTAM_METHOD_CONTEXT_RE = re.compile(
+    r"\bblank(?:s)?\b|\bnegative\s+control(?:s)?\b|\bcontrol\s+sample(?:s)?\b|\bdecontam|"
+    r"\bprevalence\b|\bfrequency[-\s]based\b|"
+    r"\bcontaminant\s+(?:sequences?|OTUs?|ASVs?|taxa|taxon|reads?)\b|"
+    r"\b(?:sequences?|OTUs?|ASVs?|reads?|taxa|taxon)\s+(?:considered|flagged|identified|removed)\s+as\s+"
+    r"(?:a\s+)?contaminant",
+    re.IGNORECASE,
+)
 
 
 # Real gap found live (10.3390/microorganisms10030558, STUDY-0049c7972ece):
@@ -2387,6 +2412,8 @@ def _llm_judged_field_matches_snippet(field: LLMJudgedSearchField, snippet: str,
         return bool(_OTU_DB_CONTEXT_RE.search(snippet))
     if field.term_name == "assay_name":
         return bool(_ASSAY_NAME_CONTEXT_RE.search(snippet))
+    if field.term_name == "screen_contam_method":
+        return bool(_SCREEN_CONTAM_METHOD_CONTEXT_RE.search(snippet))
     if field.term_name == "assay_target_taxa":
         return bool(_TARGET_TAXONOMIC_ASSAY_CONTEXT_RE.search(snippet))
     if field.term_name == "study_target_taxonomic_scope":
