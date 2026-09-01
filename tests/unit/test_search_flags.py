@@ -947,6 +947,20 @@ def test_quote_candidates_for_llm_judged_otu_db_search_includes_freshtrain():
     assert "otu_db" in candidates[0].field_names
 
 
+def test_quote_candidates_for_llm_judged_otu_db_search_includes_parallel_meta3():
+    candidates = quote_candidates_for_llm_judged_search(
+        (
+            (
+                "Bioinformatics",
+                "Taxonomy was assigned with Parallel-META3 using its bundled prokaryotic database.",
+            ),
+        )
+    )
+
+    assert len(candidates) == 1
+    assert "otu_db" in candidates[0].field_names
+
+
 def test_quote_candidates_for_llm_judged_otu_db_search_includes_ncbi_nr_database():
     candidates = quote_candidates_for_llm_judged_search(
         (
@@ -1592,6 +1606,33 @@ def test_detect_llm_judged_otu_db_keeps_multiple_databases():
 
     by_type = {fact.fact_type_candidate: fact for fact in facts}
     assert by_type["otu_db"].raw_value == "SILVA_132 | FreshTrain"
+
+
+def test_detect_llm_judged_otu_db_keeps_parallel_meta3_with_named_database():
+    backend = MockLLMBackend(
+        responses=[
+            json.dumps(
+                [
+                    {"field": "otu_db", "raw_value": "Parallel-META3", "quote_id": "Q001"},
+                    {"field": "otu_db", "raw_value": "SILVA release 138", "quote_id": "Q001"},
+                ]
+            )
+        ]
+    )
+
+    facts = detect_llm_judged_search_facts(
+        backend,
+        (
+            (
+                "Bioinformatics",
+                "Taxonomic classification was performed with Parallel-META3 and SILVA release 138.",
+            ),
+        ),
+        locator_prefix="paper:PMC1",
+    )
+
+    by_type = {fact.fact_type_candidate: fact for fact in facts}
+    assert by_type["otu_db"].raw_value == "Parallel-META3 | SILVA release 138"
 
 
 def test_detect_llm_judged_otu_db_keeps_ncbi_nr_database_value():

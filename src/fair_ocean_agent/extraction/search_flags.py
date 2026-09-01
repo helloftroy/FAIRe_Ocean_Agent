@@ -540,19 +540,27 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
         section="Bioinformatics",
         description=(
             "Reference sequence database, including version/release/date when reported, used to assign "
-            "taxonomy to OTUs or ASVs. If authors built their own database, record custom."
+            "taxonomy to OTUs or ASVs. If authors built their own database, record custom. "
+            "Parallel-META3 and spelling variants count as otu_db because the pipeline carries a "
+            "prepackaged taxonomy database even when a separate database such as SILVA is not named."
         ),
         output_instructions=(
             "Return the database name plus version/release/download/access date when stated. If multiple "
             "databases are used, return one value per database. Return custom plus a short description for a "
             "custom/in-house/local/curated database. Do not return assignment software alone, such as BLAST, "
-            "RDP Classifier, QIIME 2, or naive Bayes, unless a reference database is also named."
+            "RDP Classifier, QIIME 2, or naive Bayes, unless a reference database is also named. "
+            "Exception: return Parallel-META3/Parallel META 3 as a database value when named, because it has "
+            "a bundled taxonomy database. If another database is also named, return both as separate values."
         ),
         search_terms=(
             "reference database",
             "taxonomy database",
             "taxonomic database",
             "sequence database",
+            "Parallel-META3",
+            "Parallel META3",
+            "Parallel META 3",
+            "Parallel-META 3",
             "SILVA",
             "SILVA database",
             "SILVA_132",
@@ -2282,7 +2290,8 @@ _OTU_CLUSTER_TOOL_CONTEXT_RE = re.compile(
 _OTU_DB_CONTEXT_RE = re.compile(
     r"\b(?:"
     r"(?:reference|taxonomy|taxonomic|sequence|barcode)\s+(?:database|library)|"
-    r"SILVA(?:[_\s.-]?\d+(?:\.\d+)?)?|FreshTrain|PR2|Protist\s+Ribosomal\s+Reference|GenBank|"
+    r"SILVA(?:[_\s.-]?\d+(?:\.\d+)?)?|FreshTrain|Parallel[-\s]?META[-\s]?3|"
+    r"PR2|Protist\s+Ribosomal\s+Reference|GenBank|"
     r"NCBI\s+(?:nucleotide|nt|nr|database)|non[-\s]?redundant\s+(?:\(?nr\)?\s+)?NCBI\s+database|"
     r"nt\s+database|BOLD|Barcode\s+of\s+Life|UNITE|Ribosomal\s+Database\s+Project|"
     r"Greengenes2?|MIDORI2?|MitoFish|MetaZooGene|Diat\.?Barcode|PhytoREF|"
@@ -2295,7 +2304,8 @@ _OTU_DB_CONTEXT_RE = re.compile(
 )
 _OTU_DB_VALUE_RE = re.compile(
     r"\b(?:"
-    r"SILVA(?:[_\s.-]?\d+(?:\.\d+)?)?|FreshTrain|PR2|Protist\s+Ribosomal\s+Reference|GenBank|"
+    r"SILVA(?:[_\s.-]?\d+(?:\.\d+)?)?|FreshTrain|Parallel[-\s]?META[-\s]?3|"
+    r"PR2|Protist\s+Ribosomal\s+Reference|GenBank|"
     r"NCBI\s+(?:nucleotide|nt|nr|database)|non[-\s]?redundant\s+(?:\(?nr\)?\s+)?NCBI\s+database|"
     r"nt\s+database|BOLD|Barcode\s+of\s+Life|UNITE|Ribosomal\s+Database\s+Project|"
     r"Greengenes2?|MIDORI2?|MitoFish|MetaZooGene|Diat\.?Barcode|PhytoREF|"
