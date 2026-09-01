@@ -166,6 +166,58 @@ def test_biosample_fetch_record_parses_sample_name_from_ids_element(retrieval_co
     adapter.close()
 
 
+BIOSAMPLE_WITH_LEGACY_ENV_ATTRIBUTE_NAMES_XML = """<?xml version="1.0" ?>
+<BioSampleSet><BioSample accession="SAMN08449373">
+    <Description><Title>MIMARKS Specimen sample from sponge metagenome</Title></Description>
+    <Attributes>
+        <Attribute attribute_name="env_biome" harmonized_name="env_broad_scale" display_name="broad-scale environmental context">coral reef</Attribute>
+        <Attribute attribute_name="env_feature" harmonized_name="env_local_scale" display_name="local-scale environmental context">marine benthic feature</Attribute>
+        <Attribute attribute_name="env_material" harmonized_name="env_medium" display_name="environmental medium">seawater</Attribute>
+        <Attribute attribute_name="TankReplicate">E</Attribute>
+    </Attributes>
+</BioSample></BioSampleSet>"""
+
+
+def test_biosample_fetch_record_prefers_harmonized_name_over_legacy_attribute_name(retrieval_config):
+    """Real gap found live (SAMN08449373): the submitter used legacy
+    pre-MIxS-5 attribute names ("env_biome"/"env_feature"/"env_material")
+    for what are now env_broad_scale/env_local_scale/env_medium -- NCBI's
+    own XML already carries the harmonized/canonical name right alongside
+    the submitter's raw one, but this used to be discarded entirely, so
+    env_broad_scale/env_local_scale/env_medium's own MappingRules (which
+    match on that exact literal fact_type_candidate) never found these
+    real values. A custom attribute with no harmonized_name at all
+    (TankReplicate) still falls back to its own attribute_name."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        params = dict(request.url.params)
+        if path.endswith("esearch.fcgi") and params.get("db") == "bioproject":
+            return httpx.Response(200, json={"esearchresult": {"idlist": ["432116"]}})
+        if path.endswith("elink.fcgi"):
+            return httpx.Response(
+                200,
+                json={"linksets": [{"linksetdbs": [{"linkname": "bioproject_biosample", "links": ["111"]}]}]},
+            )
+        if path.endswith("efetch.fcgi") and params.get("db") == "biosample":
+            return httpx.Response(200, text=BIOSAMPLE_WITH_LEGACY_ENV_ATTRIBUTE_NAMES_XML)
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    adapter = NcbiBioSampleAdapter(
+        SourceConfig(name="ncbi_biosample", enabled=True, base_url="https://eutils.ncbi.nlm.nih.gov/entrez/eutils", rate_limit_per_second=1000),
+        retrieval_config,
+        transport=httpx.MockTransport(handler),
+    )
+    record = adapter.fetch_record("PRJNA432116")
+
+    attributes = record.raw["samples"][0]["attributes"]
+    assert attributes["env_broad_scale"] == "coral reef"
+    assert attributes["env_local_scale"] == "marine benthic feature"
+    assert attributes["env_medium"] == "seawater"
+    assert "env_biome" not in attributes
+    assert attributes["TankReplicate"] == "E"
+    adapter.close()
+
+
 def test_biosample_fetch_record_not_found_when_no_linked_samples(retrieval_config):
     adapter = NcbiBioSampleAdapter(
         SourceConfig(name="ncbi_biosample", enabled=True, base_url="https://eutils.ncbi.nlm.nih.gov/entrez/eutils", rate_limit_per_second=1000),

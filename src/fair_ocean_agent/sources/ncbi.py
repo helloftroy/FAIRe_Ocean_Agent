@@ -720,8 +720,25 @@ class NcbiBioSampleAdapter(SourceAdapter):
                 contact_first = _clean_text(contact_name_el.findtext("First") if contact_name_el is not None else None)
                 contact_last = _clean_text(contact_name_el.findtext("Last") if contact_name_el is not None else None)
                 contact_name = " ".join(part for part in (contact_first, contact_last) if part)
+                # Real gap found live (SAMN08449373): the submitter used
+                # legacy pre-MIxS-5 attribute names ("env_biome"/
+                # "env_feature"/"env_material" for what are now
+                # env_broad_scale/env_local_scale/env_medium) -- NCBI's own
+                # XML already carries the harmonized/canonical name right
+                # alongside the submitter's raw one
+                # (harmonized_name="env_broad_scale" on an
+                # attribute_name="env_biome" element), but this dict used
+                # to be keyed by the raw name only, so env_broad_scale's
+                # own MappingRule (which matches on this exact literal
+                # fact_type_candidate) never found it. Preferring
+                # harmonized_name when NCBI provides one -- falling back to
+                # attribute_name for the many custom/non-MIxS attributes
+                # that have no harmonized_name at all -- fixes this
+                # specific gap and any other current/future MIxS synonym
+                # NCBI already knows how to harmonize, without needing to
+                # separately hardcode each one here.
                 attributes = {
-                    attr.get("attribute_name"): attr.text
+                    (attr.get("harmonized_name") or attr.get("attribute_name")): attr.text
                     for attr in bs.findall("Attributes/Attribute")
                     if attr.get("attribute_name")
                 }
