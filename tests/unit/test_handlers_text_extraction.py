@@ -6,7 +6,15 @@ import json
 
 import pytest
 
-from fair_ocean_agent.database.enums import EntityLevel, IdentifierType, ReviewStatus, SupportType, TaskStatus, TaskType
+from fair_ocean_agent.database.enums import (
+    EntityLevel,
+    IdentifierType,
+    ReviewStatus,
+    SourceType,
+    SupportType,
+    TaskStatus,
+    TaskType,
+)
 from fair_ocean_agent.database.models import Entity, ExternalIdentifier, RawFact, Source, Study
 from fair_ocean_agent.llm.base import LLMBackendError
 from fair_ocean_agent.llm.disabled import DisabledLLMBackend
@@ -305,6 +313,41 @@ def test_handler_materializes_a_real_entity_per_assay_tag(db_session, monkeypatc
     }
     assert facts["55C"].entity_id == assay_entities["16S-V3V4"].entity_id
     assert facts["60C"].entity_id == assay_entities["18S-V9"].entity_id
+
+
+def test_resolve_and_seed_primer_references_runs_generic_context_without_primer_names(db_session):
+    study = Study(title="Generic primer reference")
+    db_session.add(study)
+    db_session.flush()
+    source = Source(
+        study_id=study.study_id,
+        source_type=SourceType.ARTICLE_FULLTEXT.value,
+        source_name="europe_pmc_fulltext",
+        external_identifier="PMC1234567",
+    )
+    db_session.add(source)
+    db_session.flush()
+    xml = """<article>
+<body><sec><title>Methods</title>
+<p>The V4 region was amplified using a universal primer pair as previously described
+<xref ref-type="bibr" rid="ref3">3</xref>.</p>
+</sec></body>
+<back><ref-list><ref id="ref3"><element-citation>
+<pub-id pub-id-type="doi">10.1000/primer-pair</pub-id>
+</element-citation></ref></ref-list></back>
+</article>"""
+
+    handlers._resolve_and_seed_primer_references(db_session, study, source, xml, locator_prefix="test")
+
+    facts = {
+        fact.fact_type_candidate: fact
+        for fact in db_session.query(RawFact).filter_by(
+            study_id=study.study_id,
+            extraction_method="primer_reference_citation",
+        )
+    }
+    assert facts["pcr_primer_reference_forward"].raw_value == "doi: 10.1000/primer-pair"
+    assert facts["pcr_primer_reference_reverse"].raw_value == "doi: 10.1000/primer-pair"
 
 
 def test_handler_drops_facts_with_fabricated_evidence(db_session, monkeypatch):

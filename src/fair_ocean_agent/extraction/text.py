@@ -1040,6 +1040,29 @@ _PRIMER_SEQUENCE_FACT_TYPES = frozenset({"forward_primer_sequence", "reverse_pri
 # IUPAC nucleotide codes (standard + degenerate bases), the only characters
 # a real primer sequence is ever reported in.
 _NUCLEOTIDE_SEQUENCE_RE = re.compile(r"^[ACGTURYSWKMBDHVN]{6,}$", re.IGNORECASE)
+_PCR_ASSAY_FACT_TYPES = frozenset(
+    {
+        "target_gene",
+        "target_subfragment",
+        "forward_primer_sequence",
+        "reverse_primer_sequence",
+        "forward_primer_name",
+        "reverse_primer_name",
+        "amplicon_size",
+        "annealing_temperature",
+        "pcr_cycle_count",
+        "commercial_master_mix",
+        "custom_master_mix",
+    }
+)
+_NON_SEQUENCING_QC_PCR_CONTEXT_RE = re.compile(
+    r"\b(?:"
+    r"absence\s+of\s+bands?|lack\s+of\s+(?:bacterial\s+)?growth|confirmation\s+of\s+a\s+sterile\s+state|"
+    r"confirm(?:ed|ation)?\s+(?:of\s+)?steril(?:e|ity)|sterility\s+(?:check|test|confirmation)|"
+    r"checked\s+for\s+steril(?:e|ity)"
+    r")\b",
+    re.IGNORECASE,
+)
 
 
 def _looks_like_nucleotide_sequence(value: str) -> bool:
@@ -1047,6 +1070,8 @@ def _looks_like_nucleotide_sequence(value: str) -> bool:
 
 
 def _candidate_value_is_supported_by_quote(fact_type: str, raw_value: object, quote: str) -> bool:
+    if fact_type in _PCR_ASSAY_FACT_TYPES and _NON_SEQUENCING_QC_PCR_CONTEXT_RE.search(quote):
+        return False
     if fact_type in _PRIMER_SEQUENCE_FACT_TYPES:
         # A real bug found live (10.1002/ece3.6071): when a paper only
         # states a primer's NAME in the main text (its actual sequence

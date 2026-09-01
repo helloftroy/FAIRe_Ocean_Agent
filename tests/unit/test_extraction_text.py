@@ -419,6 +419,34 @@ def test_recall_missing_fact_types_skips_primer_sequences_without_nucleotide_tex
     assert "reverse_primer_sequence" in sequence_missing
 
 
+def test_rejects_pcr_assay_facts_from_sterility_check_sentence():
+    response = json.dumps(
+        [
+            {
+                "fact_type_candidate": "amplicon_size",
+                "raw_value": "441",
+                "evidence_id": "PCR.P001",
+            },
+            {
+                "fact_type_candidate": "forward_primer_name",
+                "raw_value": "27F",
+                "evidence_id": "PCR.P001",
+            },
+        ]
+    )
+    backend = MockLLMBackend(responses=[response, response])
+    text = (
+        "A lack of bacterial growth on 2216E plates after 3 days of incubation in 19C "
+        "and the absence of bands under 16S rRNA gene PCR amplification with primers "
+        "27F (5'-AGAGTTTGATCMTGGCTCAG-3') and 1492R "
+        "(5'-GGTTACCTTGTTACGACTT-3') were considered confirmation of a sterile state."
+    )
+
+    facts, _ = extract_facts_from_section(backend, "PCR", text, active_flags=frozenset({"pcr_0_1"}))
+
+    assert facts == []
+
+
 # --- FAIRe-aware taxonomy regression tests (Milestone 8, corrected in v3) ---
 # Before extraction/faire_fields.py existed, this prompt was fully open-
 # vocabulary -- nothing forced the model's fact_type_candidate choices to

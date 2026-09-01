@@ -408,8 +408,6 @@ def _resolve_and_seed_primer_references(
         name_field: study_primer_name(session, study.study_id, name_field)
         for name_field in PRIMER_NAME_TO_SEQUENCE_FIELD
     }
-    if not any(primer_names.values()):
-        return
     if fulltext_xml is not None:
         reference_facts = extract_primer_reference_citations(fulltext_xml, primer_names, locator_prefix=locator_prefix)
     elif source_text is not None:
