@@ -53,6 +53,22 @@ across water-column and sediment samples from the deep sea.</p>
 </sec>
 </body></article>"""
 
+# Real gap found live (10.7717/peerj.17091): the word "metabarcoding" never
+# appears anywhere in this paper's own Methods-scoped text (select_relevant_
+# sections excludes the Abstract/Results, where the paper actually states
+# it), so the deterministic assay_type classifier found nothing there --
+# leaving only the separate free-form LLM path's own (wrong) "targeted"
+# judgement to stand alone.
+ABSTRACT_ASSAY_TYPE_XML = """<article><front><article-meta><abstract>
+<p>We compare the sensitivity of two eDNA metabarcoding primers (MiFish 12S and Valsecchi 16S)
+for detecting marine vertebrate species.</p>
+</abstract></article-meta></front><body>
+<sec><title>Materials and Methods</title>
+<sec><title>eDNA analysis</title><p>Primer pairs were the MiFish 12S loci and the Valsecchi 16S loci.
+The PCR mixture had a final volume of 8 microliters.</p></sec>
+</sec>
+</body></article>"""
+
 
 class FakeEuropePmcAdapter:
     name = "europe_pmc"
@@ -213,6 +229,44 @@ def test_handler_persists_deterministic_text_search_flags(db_session, monkeypatc
     )
     assert facts["probe_based_qPCR_ddPCR_assay_0_1"].support_type == "deterministically_derived"
     assert facts["probe_based_qPCR_ddPCR_assay_0_1"].prompt_version == handlers.PROMPT_VERSION
+
+
+def test_handler_classifies_assay_type_from_abstract_when_methods_never_says_it(db_session, monkeypatch):
+    """Real gap found live (10.7717/peerj.17091): the paper's own abstract
+    says "eDNA metabarcoding primers (MiFish 12S and Valsecchi 16S)", but
+    the word "metabarcoding" never appears anywhere in the Methods-scoped
+    text this pipeline actually classifies from -- so assay_type was left
+    to the free-form LLM path alone, which got it wrong ("targeted").
+    Scanning the abstract as a second, narrowly-scoped source (filtered to
+    assay_type only) should surface "metabarcoding" even though the
+    Methods section alone supports nothing for this field."""
+    study = _seeded_study_with_pmcid(db_session)
+    task = _task_for(db_session, study)
+
+    handlers._llm_backend_cache = MockLLMBackend(
+        label="mock-model",
+        responses=[
+            json.dumps({"study_factor": "Comparing two eDNA metabarcoding primer sets for marine species detection."}),
+            json.dumps({"study_target_taxonomic_scope": "marine vertebrate species"}),
+            "[]",
+        ],
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_build_enabled_adapters",
+        lambda: {"europe_pmc": FakeEuropePmcAdapter(fulltext_xml=ABSTRACT_ASSAY_TYPE_XML)},
+    )
+
+    handlers.handle_extract_text_facts(db_session, task)
+    db_session.commit()
+
+    fact = (
+        db_session.query(RawFact)
+        .filter_by(study_id=study.study_id, fact_type_candidate="assay_type")
+        .one()
+    )
+    assert fact.raw_value == "metabarcoding"
+    assert "eDNA metabarcoding primers" in fact.evidence_quote
 
 
 def test_handler_persists_abstract_generated_target_taxonomic_scope(db_session, monkeypatch):

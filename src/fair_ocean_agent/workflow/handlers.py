@@ -78,6 +78,7 @@ from fair_ocean_agent.extraction.section_category_extraction import (
     normalize_controlled_sample_prep_facts,
 )
 from fair_ocean_agent.extraction.study_factor import (
+    _abstract_from_article_text,
     generate_study_factor,
     generate_study_target_taxonomic_scope,
 )
@@ -1875,6 +1876,38 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
         locator_prefix=locator_prefix,
         active_flags=active_flags,
     )
+    # Real gap found live (10.7717/peerj.17091): the paper's own abstract
+    # says "compare the sensitivity of two eDNA metabarcoding primers
+    # (MiFish 12S and Valsecchi 16S)", and the Results section separately
+    # says "Metabarcoding using the MiFish 12S primers detected..." -- but
+    # the word "metabarcoding" never appears anywhere in this pipeline's
+    # own Methods-only section scope (select_relevant_sections), so the
+    # deterministic assay_type classifier found nothing there at all,
+    # leaving only the free-form LLM's own (here, wrong) "targeted"
+    # judgement to stand alone. A paper's abstract routinely states this
+    # kind of high-level self-description explicitly and concisely, even
+    # when its dry Methods protocol text never repeats the word -- the
+    # same real gap already confirmed twice before for this exact field
+    # (PMC10988111's shotgun-metagenomics framing, the coral paper's cbbL
+    # assay). Reuses study_factor.py's own abstract isolation (already
+    # computed for study_factor/study_target_taxonomic_scope) as a second,
+    # narrowly-scoped source -- filtered to assay_type only, so an
+    # abstract accidentally matching some OTHER controlled field's cue
+    # doesn't introduce a fact this pass was never meant to also cover.
+    abstract_text = _abstract_from_article_text(source_text_for_metadata)
+    if abstract_text:
+        controlled_search_facts = [
+            *controlled_search_facts,
+            *(
+                fact
+                for fact in detect_controlled_search_facts(
+                    (("Abstract", abstract_text),),
+                    locator_prefix=f"{locator_prefix}:abstract",
+                    active_flags=active_flags,
+                )
+                if fact.fact_type_candidate == "assay_type"
+            ),
+        ]
     _persist_candidate_facts(
         session,
         study.study_id,
