@@ -56,6 +56,57 @@ def test_permissions_gives_license_accessrights_rightsholder(real_fulltext_xml):
     assert "rightsHolder" not in facts
 
 
+def test_permissions_finds_license_nested_under_license_group():
+    xml = """
+    <article xmlns:xlink="http://www.w3.org/1999/xlink">
+      <front>
+        <article-meta>
+          <permissions>
+            <license-group>
+              <license xlink:href="https://creativecommons.org/licenses/by/4.0/">
+                <license-p>This is an open-access article distributed under CC BY.</license-p>
+              </license>
+            </license-group>
+          </permissions>
+        </article-meta>
+      </front>
+    </article>
+    """
+
+    facts = {f.fact_type_candidate: f for f in extract_from_jats_permissions(xml, locator_prefix="t")}
+
+    assert facts["license"].raw_value == "https://creativecommons.org/licenses/by/4.0/"
+    assert facts["accessRights"].raw_value == "open access"
+
+
+def test_permissions_finds_license_in_frontiers_style_plain_rights_text():
+    text = """
+    Copyright
+    © 2017 Hoshino, Toki, Ijiri, Morono, Machiyama, Ashi, Okamura and Inagaki.
+    This is an open-access article distributed under the terms of the Creative Commons
+    Attribution License (CC BY). The use, distribution or reproduction in other forums
+    is permitted, provided the original author(s) or licensor are credited.
+    """
+
+    facts = {f.fact_type_candidate: f for f in extract_from_jats_permissions(text, locator_prefix="t")}
+
+    assert facts["license"].raw_value == "https://creativecommons.org/licenses/by/4.0/"
+    assert facts["accessRights"].raw_value == "open access"
+
+
+def test_permissions_finds_creative_commons_url_in_htmlish_text():
+    text = """
+    <html><body>This is an open-access article distributed under the terms of the
+    <a href="https://creativecommons.org/licenses/by/4.0/">Creative Commons Attribution License</a>.
+    </body></html>
+    """
+
+    facts = {f.fact_type_candidate: f for f in extract_from_jats_permissions(text, locator_prefix="t")}
+
+    assert facts["license"].raw_value == "https://creativecommons.org/licenses/by/4.0/"
+    assert facts["accessRights"].raw_value == "open access"
+
+
 def test_authors_includes_paper_authors_excludes_editor(real_fulltext_xml):
     """paper_authors_list (not recordedBy directly -- see
     extract_from_jats_authors's own docstring) still carries every real
@@ -142,6 +193,51 @@ def test_code_repo_captures_non_github_code_url_from_availability_sentence():
     assert len(facts) == 1
     assert facts[0].raw_value == "https://example.org/projects/pipeline-code"
     assert "Analysis code is available" in facts[0].evidence_quote
+
+
+def test_code_repo_falls_back_to_supplementary_material_caption_naming_code():
+    """Real gap found live (10.7717/peerj.17091, PMC11067900): a
+    <supplementary-material> element's own <caption><title>Code for all
+    analysis carried out</title></caption>, with an attached .r file, has
+    no GitHub/GitLab/Bitbucket URL and no prose "available"/"deposited"
+    sentence anywhere in the main text at all -- the flat-text
+    availability regex requires exactly that wording and silently missed
+    this real, common shape (a supplementary file caption is a short
+    label, not a full sentence)."""
+    xml = (
+        '<article><body><p>DNA was extracted and sequenced using standard protocols.</p></body>'
+        '<back><sec><supplementary-material id="supp-10" position="float">'
+        "<object-id pub-id-type=\"doi\">10.7717/peerj.17091/supp-10</object-id>"
+        "<label>Supplemental Information 10</label>"
+        "<caption><title>Code for all analysis carried out</title></caption>"
+        '<media xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="peerj-12-17091-s010.r" '
+        'position="float"/></supplementary-material></sec></back></article>'
+    )
+    facts = extract_code_repo_from_text(xml, locator_prefix="t")
+    assert len(facts) == 1
+    assert facts[0].raw_value == "Code for all analysis carried out (peerj-12-17091-s010.r)"
+    assert facts[0].evidence_quote == "Code for all analysis carried out"
+    assert facts[0].support_type == SupportType.DETERMINISTICALLY_DERIVED
+
+
+def test_code_repo_prefers_prose_availability_sentence_over_supplementary_caption():
+    """When the main text ALREADY has a real, human-composed availability
+    sentence pointing at the same supplementary resource, that sentence
+    wins over the raw <caption> -- a naturally-readable sentence a human
+    wrote is preferable to a bare file-listing caption when both describe
+    the same code."""
+    xml = (
+        "<article><body><p>Custom scripts are available in Supplemental Information 1.</p></body>"
+        '<back><sec><supplementary-material id="supp-1" position="float">'
+        "<label>Supplemental Information 1</label>"
+        "<caption><title>Rarefaction analysis and results</title>"
+        "<p>SI_cca_rarefaction.pl: Perl script that completes rarefaction analysis of sequence data.</p></caption>"
+        '<media xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="supp-1.zip" '
+        'position="float"/></supplementary-material></sec></back></article>'
+    )
+    facts = extract_code_repo_from_text(xml, locator_prefix="t")
+    assert len(facts) == 1
+    assert facts[0].raw_value == "Custom scripts are available in Supplemental Information 1."
 
 
 def test_method_section_citations_prefer_reference_doi_and_group_by_heading():

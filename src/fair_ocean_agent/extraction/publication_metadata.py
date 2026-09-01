@@ -52,6 +52,14 @@ from fair_ocean_agent.llm.base import LLMBackend, LLMBackendError
 from fair_ocean_agent.sources.base import RawFactCandidate
 
 _XLINK_HREF = "{http://www.w3.org/1999/xlink}href"
+_OPEN_ACCESS_LICENSE_RE = re.compile(
+    r"creativecommons\.org/(?:licenses|publicdomain)/",
+    re.IGNORECASE,
+)
+_CREATIVE_COMMONS_LICENSE_URL_RE = re.compile(
+    r"https?://creativecommons\.org/(?:licenses|publicdomain)/[^\s<>()\[\]{}\"']+/?",
+    re.IGNORECASE,
+)
 
 _CODE_REPO_PATTERN = re.compile(
     r"https?://(?:www\.)?(?:github|gitlab|bitbucket)\.(?:com|org)/[^\s<>()\[\]{}\"']+",
@@ -765,22 +773,48 @@ def extract_from_jats_permissions(xml: str, *, locator_prefix: str) -> list[RawF
     try:
         root = ET.fromstring(xml)
     except ET.ParseError:
-        return []
-    permissions = root.find(".//permissions")
-    if permissions is None:
-        return []
+        return extract_license_from_text(xml, locator_prefix=locator_prefix)
+    permissions = _iter_elements(root, "permissions")
+    if not permissions:
+        return extract_license_from_text(xml, locator_prefix=locator_prefix)
 
     facts: list[RawFactCandidate] = []
-    license_el = permissions.find("license")
-    if license_el is not None:
-        href = license_el.get(_XLINK_HREF)
-        if href:
-            facts.append(_candidate("license", href, f"{locator_prefix}:permissions/license/@xlink:href"))
-        license_type = license_el.get("license-type")
-        if license_type:
-            access = "open access" if license_type == "open-access" else license_type
-            facts.append(_candidate("accessRights", access, f"{locator_prefix}:permissions/license/@license-type"))
+    seen: set[tuple[str, str]] = set()
+    for permissions_el in permissions:
+        license_els = [el for el in permissions_el.iter() if _local_name(el.tag) == "license"]
+        for license_el in license_els:
+            href = license_el.get(_XLINK_HREF) or license_el.get("href")
+            if href and ("license", href) not in seen:
+                seen.add(("license", href))
+                facts.append(_candidate("license", href, f"{locator_prefix}:permissions/license/@xlink:href"))
+            license_type = license_el.get("license-type")
+            if license_type:
+                access = "open access" if license_type == "open-access" else license_type
+                if ("accessRights", access) not in seen:
+                    seen.add(("accessRights", access))
+                    facts.append(_candidate("accessRights", access, f"{locator_prefix}:permissions/license/@license-type"))
+            elif href and _OPEN_ACCESS_LICENSE_RE.search(href) and ("accessRights", "open access") not in seen:
+                seen.add(("accessRights", "open access"))
+                facts.append(_candidate("accessRights", "open access", f"{locator_prefix}:permissions/license/@xlink:href"))
 
+    if facts:
+        return facts
+    return extract_license_from_text(xml, locator_prefix=locator_prefix)
+
+
+def extract_license_from_text(text: str, *, locator_prefix: str) -> list[RawFactCandidate]:
+    """Fallback for HTML/PDF-ish text where the rights block is readable
+    but not represented as a JATS `<license>` element."""
+    facts: list[RawFactCandidate] = []
+    plain = xml_to_text(text)
+    for match in _CREATIVE_COMMONS_LICENSE_URL_RE.finditer(text):
+        url = match.group(0).rstrip(".,;")
+        facts.append(_candidate("license", url, f"{locator_prefix}:license_text:creativecommons_url"))
+        facts.append(_candidate("accessRights", "open access", f"{locator_prefix}:license_text:creativecommons_url"))
+        return facts
+    if re.search(r"\bCreative Commons Attribution License\b|\bCC BY\b", plain, re.IGNORECASE):
+        facts.append(_candidate("license", "https://creativecommons.org/licenses/by/4.0/", f"{locator_prefix}:license_text:cc_by"))
+        facts.append(_candidate("accessRights", "open access", f"{locator_prefix}:license_text:cc_by"))
     return facts
 
 
@@ -853,13 +887,68 @@ def extract_from_jats_authors(xml: str, *, locator_prefix: str) -> list[RawFactC
     return facts
 
 
+_XLINK_HREF_ATTR = "{http://www.w3.org/1999/xlink}href"
+# A supplementary file's own <caption>/<title> is a real, structured JATS
+# element that commonly names its content directly ("Code for all analysis
+# carried out") without ever using prose "availability" language (available/
+# deposited/provided/...) that _CODE_AVAILABILITY_KEYWORDS_RE requires --
+# confirmed missed live (10.7717/peerj.17091, PMC11067900): a "Code for all
+# analysis carried out" caption on an attached .r file was dropped entirely,
+# even though the paper clearly named and attached its own analysis code --
+# it just wasn't on GitHub/GitLab/Bitbucket and never phrased it as prose.
+_SUPPLEMENTARY_CODE_CAPTION_RE = re.compile(
+    r"\b(?:code|scripts?|software|analysis\s+pipeline|R\s+script|python\s+script)\b",
+    re.IGNORECASE,
+)
+
+
+def _code_repo_from_supplementary_caption(xml: str) -> tuple[str, str] | None:
+    """Returns (value, evidence_quote) for the first <supplementary-material>
+    element whose own <caption> mentions code/script/software, or None.
+    value includes the attached file's own name (from <media xlink:href>)
+    when present, since that's the concrete, useful pointer a reviewer
+    wants -- not just "yes, there is code somewhere in the supplement"."""
+    try:
+        root = ET.fromstring(xml)
+    except ET.ParseError:
+        return None
+    for supp in root.iter():
+        if _local_name(supp.tag) != "supplementary-material":
+            continue
+        caption = next((child for child in list(supp) if _local_name(child.tag) == "caption"), None)
+        if caption is None:
+            continue
+        caption_text = _element_text(caption)
+        if not caption_text or not _SUPPLEMENTARY_CODE_CAPTION_RE.search(caption_text):
+            continue
+        filename = next(
+            (
+                media.get(_XLINK_HREF_ATTR)
+                for media in supp.iter()
+                if _local_name(media.tag) == "media" and media.get(_XLINK_HREF_ATTR)
+            ),
+            None,
+        )
+        value = f"{caption_text} ({filename})" if filename else caption_text
+        return value, caption_text
+    return None
+
+
 def extract_code_repo_from_text(xml: str, *, locator_prefix: str) -> list[RawFactCandidate]:
     """`code_repo` via a flat-text regex -- the one field in this module
     without a reliable structured JATS element to read instead. Prefers a
-    real public-repository URL (GitHub/GitLab/Bitbucket); falls back to a
-    code-availability sentence, including non-GitHub URLs or supplementary
-    code, and finally emits the explicit FAIRe value requested when no code
-    source is published."""
+    real public-repository URL (GitHub/GitLab/Bitbucket), then a prose
+    code-availability sentence in the main text (including non-GitHub
+    URLs) when one exists -- a real, already-composed sentence a human
+    wrote to point readers at the code is preferable to a raw
+    supplementary-material caption when both describe the same resource.
+    Falls back to that structured supplementary-material caption only when
+    the main text never explicitly says the code is available anywhere
+    (real gap found live, 10.7717/peerj.17091/PMC11067900: a "Code for all
+    analysis carried out" caption on an attached .r file, with no prose
+    availability sentence anywhere in the main text at all, was dropped
+    entirely). Finally emits the explicit FAIRe value requested when no
+    code source is published anywhere."""
     text = xml_to_text(xml)
     url_match = _CODE_REPO_PATTERN.search(text)
     if url_match:
@@ -874,6 +963,18 @@ def extract_code_repo_from_text(xml: str, *, locator_prefix: str) -> list[RawFac
         ]
     sentence = _find_code_availability_sentence(text)
     if not sentence:
+        supplementary_code = _code_repo_from_supplementary_caption(xml)
+        if supplementary_code:
+            value, evidence_quote = supplementary_code
+            return [
+                _candidate(
+                    "code_repo",
+                    value,
+                    f"{locator_prefix}:supplementary_material_caption",
+                    support_type=SupportType.DETERMINISTICALLY_DERIVED,
+                    evidence_quote=evidence_quote,
+                )
+            ]
         return [
             _candidate(
                 "code_repo",
