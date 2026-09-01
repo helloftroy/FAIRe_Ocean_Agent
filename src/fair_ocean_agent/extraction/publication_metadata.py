@@ -998,6 +998,20 @@ _PRIMER_NAME_TO_REFERENCE_FIELD = {
     "pcr_primer_name_forward": "pcr_primer_reference_forward",
     "pcr_primer_name_reverse": "pcr_primer_reference_reverse",
 }
+_PRIMER_REFERENCE_CONTEXT_RE = re.compile(
+    r"\b(?:"
+    r"primers?|primer\s+(?:pair|pairs|set|sets)|forward\s+primer|reverse\s+primer|"
+    r"oligonucleotides?|amplicon\s+primers?|PCR\s+primers?|universal\s+primers?"
+    r")\b",
+    re.IGNORECASE,
+)
+_FORWARD_PRIMER_CONTEXT_RE = re.compile(r"\bforward\s+primer\b|\bforward\b|\bF\b", re.IGNORECASE)
+_REVERSE_PRIMER_CONTEXT_RE = re.compile(r"\breverse\s+primer\b|\breverse\b|\bR\b", re.IGNORECASE)
+_BOTH_PRIMER_CONTEXT_RE = re.compile(
+    r"\b(?:primers|primer\s+(?:pair|pairs|set|sets)|forward\s+and\s+reverse|"
+    r"forward/reverse|F/R|oligonucleotides?)\b|[A-Za-z0-9_-]+F\s*/\s*[A-Za-z0-9_-]+R",
+    re.IGNORECASE,
+)
 
 
 def _first_primer_reference_fact(
@@ -1052,18 +1066,115 @@ def _first_primer_reference_fact(
     return None
 
 
+def _nearest_bibliography_resource(
+    bibliography: dict[str, dict[str, str]],
+    marked_text: str,
+    anchor_pos: int,
+) -> tuple[str, dict[str, str]] | None:
+    markers = list(_CITATION_MARKER_RE.finditer(marked_text))
+    if not markers:
+        return None
+    markers.sort(key=lambda marker: abs(marker.start() - anchor_pos))
+    for marker in markers:
+        ref_id = marker.group(1)
+        resource = bibliography.get(ref_id)
+        if resource is not None:
+            return ref_id, resource
+    return None
+
+
+def _primer_reference_direction_fields(marked_text: str, primer_names: dict[str, str]) -> set[str]:
+    clean_text = _CITATION_MARKER_RE.sub("", marked_text)
+    fields: set[str] = set()
+    forward_name = (primer_names.get("pcr_primer_name_forward") or "").strip()
+    reverse_name = (primer_names.get("pcr_primer_name_reverse") or "").strip()
+    if forward_name and re.search(r"\b" + re.escape(forward_name) + r"\b", clean_text, re.IGNORECASE):
+        fields.add("pcr_primer_reference_forward")
+    if reverse_name and re.search(r"\b" + re.escape(reverse_name) + r"\b", clean_text, re.IGNORECASE):
+        fields.add("pcr_primer_reference_reverse")
+    if _BOTH_PRIMER_CONTEXT_RE.search(clean_text):
+        fields.update(("pcr_primer_reference_forward", "pcr_primer_reference_reverse"))
+    elif _FORWARD_PRIMER_CONTEXT_RE.search(clean_text):
+        fields.add("pcr_primer_reference_forward")
+    elif _REVERSE_PRIMER_CONTEXT_RE.search(clean_text):
+        fields.add("pcr_primer_reference_reverse")
+    return fields
+
+
+def _primer_reference_fallback_facts(
+    root: ET.Element,
+    bibliography: dict[str, dict[str, str]],
+    primer_names: dict[str, str],
+    locator_prefix: str,
+    existing_fields: set[str],
+) -> list[RawFactCandidate]:
+    """Fallback for primer-set citation sentences where exact extracted
+    primer names are absent or not adjacent to the citation marker.
+
+    This intentionally reuses the same JATS citation graph as
+    associated_resource, but requires strong primer language in a
+    Methods-like paragraph so ordinary methods citations do not all become
+    primer references.
+    """
+    facts: list[RawFactCandidate] = []
+    for section, titles in _iter_leaf_sections(root):
+        if not _is_method_leaf(titles):
+            continue
+        for node in _paragraph_like_nodes(section):
+            marked_text = _text_with_citation_markers(node)
+            context_match = _PRIMER_REFERENCE_CONTEXT_RE.search(marked_text)
+            if context_match is None or not _CITATION_MARKER_RE.search(marked_text):
+                continue
+            nearest = _nearest_bibliography_resource(bibliography, marked_text, context_match.end())
+            if nearest is None:
+                continue
+            ref_id, resource = nearest
+            clean_snippet = _clean_text(_CITATION_MARKER_RE.sub("", marked_text))
+            for reference_field in sorted(_primer_reference_direction_fields(marked_text, primer_names)):
+                if reference_field in existing_fields:
+                    continue
+                name_field = (
+                    "pcr_primer_name_forward"
+                    if reference_field == "pcr_primer_reference_forward"
+                    else "pcr_primer_name_reverse"
+                )
+                if (primer_names.get(name_field) or "").strip():
+                    continue
+                facts.append(
+                    RawFactCandidate(
+                        entity_level=EntityLevel.STUDY,
+                        fact_type_candidate=reference_field,
+                        raw_field_name=reference_field,
+                        raw_value=resource["resource"],
+                        source_locator=f"{locator_prefix}:primer_reference_citation:{reference_field}:primer_context_fallback",
+                        support_type=SupportType.DETERMINISTICALLY_DERIVED,
+                        evidence_quote=clean_snippet,
+                        confidence_metadata={
+                            "detector": "primer_reference_citation_context_fallback",
+                            "primer_name": primer_names.get("pcr_primer_name_forward")
+                            if reference_field.endswith("_forward")
+                            else primer_names.get("pcr_primer_name_reverse"),
+                            "ref_id": ref_id,
+                            "citation_text": resource["citation_text"],
+                            "section_title": " > ".join(titles),
+                        },
+                    )
+                )
+                existing_fields.add(reference_field)
+            if {"pcr_primer_reference_forward", "pcr_primer_reference_reverse"} <= existing_fields:
+                return facts
+    return facts
+
+
 def extract_primer_reference_citations(
     xml: str, primer_names: dict[str, str], *, locator_prefix: str
 ) -> list[RawFactCandidate]:
     """`primer_names` maps {"pcr_primer_name_forward": <name found for this
-    paper, if any>, "pcr_primer_name_reverse": <...>} -- only names this
-    paper's own broad-checklist extraction actually found are searched
-    for, never guessed. Returns at most one pcr_primer_reference_forward
-    and one pcr_primer_reference_reverse fact (the first real citation
-    found sitting alongside that primer's own name in a Methods-like
-    paragraph)."""
-    if not primer_names:
-        return []
+    paper, if any>, "pcr_primer_name_reverse": <...>}. Exact primer-name
+    matches are tried first. If name extraction missed a paper, a second
+    pass still accepts strong primer-pair/forward/reverse language linked
+    to a real JATS bibliography citation in Methods. Returns at most one
+    pcr_primer_reference_forward and one pcr_primer_reference_reverse fact."""
     try:
         root = ET.fromstring(xml)
     except ET.ParseError:
@@ -1074,6 +1185,7 @@ def extract_primer_reference_citations(
         return []
 
     facts: list[RawFactCandidate] = []
+    existing_fields: set[str] = set()
     for name_field, reference_field in _PRIMER_NAME_TO_REFERENCE_FIELD.items():
         primer_name = (primer_names.get(name_field) or "").strip()
         if not primer_name:
@@ -1081,6 +1193,8 @@ def extract_primer_reference_citations(
         fact = _first_primer_reference_fact(root, bibliography, primer_name, reference_field, locator_prefix)
         if fact is not None:
             facts.append(fact)
+            existing_fields.add(reference_field)
+    facts.extend(_primer_reference_fallback_facts(root, bibliography, primer_names, locator_prefix, existing_fields))
     return facts
 
 

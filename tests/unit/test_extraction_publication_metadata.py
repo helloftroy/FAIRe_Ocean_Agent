@@ -368,9 +368,12 @@ def test_primer_reference_citations_prefers_the_citation_nearest_the_primer_name
     facts = extract_primer_reference_citations(
         xml, {"pcr_primer_name_forward": "Uni519F", "pcr_primer_name_reverse": ""}, locator_prefix="t"
     )
-    assert len(facts) == 1
-    assert facts[0].raw_value == "doi: 10.1000/right-reference"
-    assert facts[0].confidence_metadata["ref_id"] == "ref38"
+    assert {fact.fact_type_candidate for fact in facts} == {
+        "pcr_primer_reference_forward",
+        "pcr_primer_reference_reverse",
+    }
+    assert {fact.raw_value for fact in facts} == {"doi: 10.1000/right-reference"}
+    assert {fact.confidence_metadata["ref_id"] for fact in facts} == {"ref38"}
 
 
 def test_primer_reference_citations_falls_back_to_reference_title_without_doi():
@@ -402,6 +405,87 @@ def test_primer_reference_citations_falls_back_to_reference_title_without_doi():
     assert not facts[0].raw_value.startswith("doi: ")
 
 
+def test_primer_reference_citations_fallback_extracts_generic_primer_pair_reference():
+    xml = """
+    <article>
+      <body>
+        <sec>
+          <title>Methods</title>
+          <p>The V4 region was amplified using a universal primer pair as previously described
+          <xref ref-type="bibr" rid="ref3">3</xref>.</p>
+        </sec>
+      </body>
+      <back>
+        <ref-list>
+          <ref id="ref3">
+            <element-citation><pub-id pub-id-type="doi">10.1000/primer-pair</pub-id></element-citation>
+          </ref>
+        </ref-list>
+      </back>
+    </article>
+    """
+
+    facts = extract_primer_reference_citations(xml, {}, locator_prefix="t")
+    by_type = {fact.fact_type_candidate: fact for fact in facts}
+
+    assert by_type["pcr_primer_reference_forward"].raw_value == "doi: 10.1000/primer-pair"
+    assert by_type["pcr_primer_reference_reverse"].raw_value == "doi: 10.1000/primer-pair"
+    assert by_type["pcr_primer_reference_forward"].confidence_metadata["detector"] == "primer_reference_citation_context_fallback"
+
+
+def test_primer_reference_citations_fallback_extracts_slash_primer_pair_reference():
+    xml = """
+    <article>
+      <body>
+        <sec>
+          <title>Methods</title>
+          <p>Amplicons were generated with 515F/806R primers
+          <xref ref-type="bibr" rid="ref4">4</xref>.</p>
+        </sec>
+      </body>
+      <back>
+        <ref-list>
+          <ref id="ref4">
+            <element-citation><article-title>Primer pair source paper</article-title></element-citation>
+          </ref>
+        </ref-list>
+      </back>
+    </article>
+    """
+
+    facts = extract_primer_reference_citations(xml, {}, locator_prefix="t")
+    assert {fact.fact_type_candidate for fact in facts} == {
+        "pcr_primer_reference_forward",
+        "pcr_primer_reference_reverse",
+    }
+    assert {fact.raw_value for fact in facts} == {"Primer pair source paper"}
+
+
+def test_primer_reference_citations_fallback_respects_single_forward_direction():
+    xml = """
+    <article>
+      <body>
+        <sec>
+          <title>Methods</title>
+          <p>The forward primer was used as described by Smith et al.
+          <xref ref-type="bibr" rid="ref5">5</xref>.</p>
+        </sec>
+      </body>
+      <back>
+        <ref-list>
+          <ref id="ref5">
+            <element-citation><pub-id pub-id-type="doi">10.1000/forward-only</pub-id></element-citation>
+          </ref>
+        </ref-list>
+      </back>
+    </article>
+    """
+
+    facts = extract_primer_reference_citations(xml, {}, locator_prefix="t")
+    assert [fact.fact_type_candidate for fact in facts] == ["pcr_primer_reference_forward"]
+    assert facts[0].raw_value == "doi: 10.1000/forward-only"
+
+
 def test_primer_reference_citations_no_match_when_primer_name_not_mentioned():
     facts = extract_primer_reference_citations(
         _PRIMER_XML, {"pcr_primer_name_forward": "806R", "pcr_primer_name_reverse": ""}, locator_prefix="t"
@@ -409,9 +493,10 @@ def test_primer_reference_citations_no_match_when_primer_name_not_mentioned():
     assert facts == []
 
 
-def test_primer_reference_citations_empty_primer_names_short_circuits():
+def test_primer_reference_citations_empty_primer_names_still_use_directional_context():
     facts = extract_primer_reference_citations(_PRIMER_XML, {}, locator_prefix="t")
-    assert facts == []
+    assert [fact.fact_type_candidate for fact in facts] == ["pcr_primer_reference_forward"]
+    assert facts[0].raw_value == "doi: 10.1038/ismej.2012.8"
 
 
 def test_primer_reference_citations_ignores_a_sentence_with_no_citation_marker():
