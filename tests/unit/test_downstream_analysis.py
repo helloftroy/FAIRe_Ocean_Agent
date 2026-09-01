@@ -24,6 +24,26 @@ def test_detect_downstream_analysis_techniques_from_methods_sequence_context():
     assert "ASV abundances were converted" in (facts[0].evidence_quote or "")
 
 
+def test_detect_downstream_analysis_techniques_from_multivariate_methods_paragraph():
+    facts = detect_downstream_analysis_techniques(
+        [
+            (
+                "Statistical analyses",
+                "Multivariate statistical approaches including Analysis of Similarity "
+                "(ANOSIM, 'vegan package'), Permutation Multivariate Analysis of Variance "
+                "(PERMANOVA, 'vegan package'), Multivariate Homogeneity of Group "
+                "Dispersion/variance ('vegan package') and Non-metric Multidimensional "
+                "Scaling (NMDS, 'phyloseq package') were based on Bray Curtis dissimilarities.",
+            )
+        ],
+        locator_prefix="test",
+    )
+
+    assert len(facts) == 1
+    assert facts[0].raw_value == "ANOSIM | PERMANOVA | PERMDISP | NMDS | Bray-Curtis"
+    assert "Multivariate statistical approaches" in (facts[0].evidence_quote or "")
+
+
 def test_detect_downstream_analysis_techniques_ignores_non_methods_sections():
     facts = detect_downstream_analysis_techniques(
         [

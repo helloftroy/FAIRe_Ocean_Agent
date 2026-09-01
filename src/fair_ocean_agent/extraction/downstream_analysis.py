@@ -18,7 +18,7 @@ FIELD_NAME = "internal_downstream_analysis_techniques"
 _METHODS_TITLE_RE = re.compile(
     r"\b(?:methods?|materials?\s+and\s+methods?|methodology|experimental\s+(?:procedures?|design)|"
     r"sample\s+(?:collection|preparation)|sampling|dna\s+extraction|rna\s+extraction|"
-    r"molecular\s+methods?|statistical\s+(?:analysis|methods?)|data\s+analys(?:is|es)|"
+    r"molecular\s+methods?|statistical\s+(?:analysis|analyses|methods?)|statistics|data\s+analys(?:is|es)|"
     r"bioinformatics?|community\s+analysis|multivariate\s+analysis|machine\s+learning|"
     r"supplementary\s+methods?)\b",
     re.IGNORECASE,
@@ -34,7 +34,9 @@ _SEQUENCE_DATA_CONTEXT_RE = re.compile(
     r"relative\s+abundance|abundance\s+(?:table|matrix|data)|feature\s+table|"
     r"biom\s+table|community\s+(?:matrix|composition|structure|profiles?|data)|"
     r"microbial\s+communities|microbiome|metabarcod|metagenom|gene\s+abundance|"
-    r"functional\s+abundance|sequence-derived|sequencing\s+data|reads?)\b",
+    r"functional\s+abundance|sequence-derived|sequencing\s+data|reads?|"
+    r"taxonomic\s+groups?|phyloseq|bray[-\s]+curtis\s+dissimilarit(?:y|ies)|"
+    r"multivariate\s+statistical\s+approaches?)\b",
     re.IGNORECASE,
 )
 _ENV_ONLY_CONTEXT_RE = re.compile(
@@ -124,9 +126,9 @@ _TECHNIQUE_PATTERNS: tuple[_TechniquePattern, ...] = (
     _TechniquePattern("Faith phylogenetic diversity", _rx(r"\bfaith(?:'s)?\s+phylogenetic\s+diversity\b")),
     _TechniquePattern("Hill numbers", _rx(r"\bhill\s+numbers?\b")),
     _TechniquePattern("rarefaction curve", _rx(r"\brarefaction\s+curves?\b")),
-    _TechniquePattern("PERMANOVA", _rx(r"\b(?:permutational\s+multivariate\s+analysis\s+of\s+variance|permanova)\b")),
-    _TechniquePattern("ANOSIM", _rx(r"\banosim\b")),
-    _TechniquePattern("PERMDISP", _rx(r"\bpermdisp\b")),
+    _TechniquePattern("PERMANOVA", _rx(r"\b(?:(?:permutation|permutational)\s+multivariate\s+analysis\s+of\s+variance|permanova)\b")),
+    _TechniquePattern("ANOSIM", _rx(r"\b(?:analysis\s+of\s+similarit(?:y|ies)|anosim)\b")),
+    _TechniquePattern("PERMDISP", _rx(r"\b(?:multivariate\s+homogeneity\s+of\s+group\s+dispersion(?:s)?(?:/variance)?|permdisp)\b")),
     _TechniquePattern("partial Mantel test", _rx(r"\bpartial\s+mantel\s+tests?\b")),
     _TechniquePattern("Mantel test", _rx(r"(?<!partial\s)\bmantel\s+tests?\b")),
     _TechniquePattern("Procrustes analysis", _rx(r"\bprocrustes\s+analysis\b")),
