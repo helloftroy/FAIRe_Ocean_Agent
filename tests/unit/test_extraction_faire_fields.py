@@ -350,10 +350,15 @@ def test_low_value_optional_fields_are_excluded_from_llm_only():
         assert field not in rendered
     assert "sequencing_location" not in rendered
     assert "sequencing_location" not in allowed_names
+    # PCR_amplification_conditions is no longer in the exclusion set below
+    # (it moved into the "PCR / assay setup" FIELD_GROUP, gated on
+    # pcr_0_1, per an explicit user request -- see faire_fields.py's own
+    # comment) -- it's absent from this default, no-active-flags render
+    # for that gating reason now, not because it's excluded outright.
     assert "PCR_amplification_conditions" not in rendered
     assert "PCR_amplification_conditions" not in allowed_names
     assert LLM_EXCLUDED_OPTIONAL_NATIVE_FIELDS == frozenset(
-        {"PCR_amplification_conditions", "collection_method", "storage_conditions", "environmental_context"}
+        {"collection_method", "storage_conditions", "environmental_context"}
     )
 
 

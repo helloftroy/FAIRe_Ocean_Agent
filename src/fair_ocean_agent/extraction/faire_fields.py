@@ -131,9 +131,7 @@ LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS = frozenset(
 )
 
 # Narrative fallbacks do not carry a FAIRe hint, so target-field filtering
-# cannot remove them. "PCR_amplification_conditions" maps only to the
-# excluded free-text pcr_method_additional field (atomic PCR facts remain
-# in the checklist). "collection_method"/"storage_conditions" are the
+# cannot remove them. "collection_method"/"storage_conditions" are the
 # fallback-narrative counterparts of the now-excluded
 # sample_collection_method/sample_storage_conditions atomic fields (same
 # samp_collect_method/samp_store_method_additional targets -- see
@@ -142,9 +140,16 @@ LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS = frozenset(
 # (genuinely ambiguous among env_broad_scale/env_local_scale/env_medium)
 # and, being a sample-level narrative concept outside the now-narrow
 # sampleMetadata checklist, is excluded too.
+# "PCR_amplification_conditions" is no longer excluded here -- per an
+# explicit user request it moved into the "PCR / assay setup" FIELD_GROUP
+# instead (alongside a new "second_pcr_amplification_conditions"
+# counterpart), since the shared framing every FALLBACK_NARRATIVE_FIELDS
+# entry gets ("use ONLY IF no concept above applies") is the opposite of
+# what was actually wanted: the raw PCR narrative captured regardless of
+# whether the atomic fields also succeeded, specifically so a human can
+# see which paragraph/assay a given atomic value came from.
 LLM_EXCLUDED_OPTIONAL_NATIVE_FIELDS = frozenset(
     {
-        "PCR_amplification_conditions",
         "collection_method",
         "storage_conditions",
         "environmental_context",
@@ -335,6 +340,42 @@ FIELD_GROUPS: dict[str, tuple[FaireExtractionField, ...]] = {
             "pcr2_cycles",
             required_any_flags=frozenset({"pcr_0_1"}),
         ),
+        # Real gap found live: pcr_method_additional/pcr2_method_additional
+        # were always blank. Root cause: "PCR_amplification_conditions"
+        # (pcr_method_additional's own free-text source) was deliberately
+        # excluded from the LLM checklist entirely (LLM_EXCLUDED_OPTIONAL_
+        # NATIVE_FIELDS) on the theory that the atomic PCR fields above
+        # already capture everything useful -- and pcr2_method_additional
+        # never had ANY extraction path at all (its own CategoryTerm/
+        # MappingRule were retired alongside the whole PCR2 section-
+        # category, per an earlier explicit user request). Per an explicit
+        # user request, this narrative text is independently useful for a
+        # DIFFERENT reason than the atomic fields: when a paper describes
+        # two separate assays each with their own PCR, the raw wording is
+        # what actually shows which paragraph/PCR a given atomic value
+        # came from -- something no atomic field alone can disambiguate.
+        # Un-excluded and moved out of FALLBACK_NARRATIVE_FIELDS (whose
+        # own shared prompt framing says "use ONLY IF no concept above
+        # applies", the opposite of "capture this regardless, for
+        # context") into this group instead, gated on pcr_0_1 like its
+        # siblings, with a new pcr2 counterpart mirroring it.
+        FaireExtractionField(
+            "PCR_amplification_conditions",
+            "the FIRST/original PCR's own methods text -- primers, mixture, thermal profile, or any other "
+            "PCR-specific detail in the paper's own words, captured regardless of whether the atomic PCR "
+            "fields above already captured a value, since this raw text is what shows which assay/PCR round "
+            "it came from when a paper describes more than one",
+            required_any_flags=frozenset({"pcr_0_1"}),
+        ),
+        FaireExtractionField(
+            "second_pcr_amplification_conditions",
+            "a distinct SECOND amplification/PCR step's own methods text (recognizable from phrasing like "
+            "a second-round PCR, second PCR, PCR2, indexing PCR, or index/adapter addition during another "
+            "round of cycling) -- that second PCR's own words only, never the first/original PCR's, "
+            "captured regardless of whether pcr2_annealingTemp/pcr2_cycles above already captured a value",
+            "pcr2_method_additional",
+            required_any_flags=frozenset({"pcr_0_1"}),
+        ),
         FaireExtractionField(
             "probe_sequence",
             "hydrolysis/TaqMan probe sequence, 5' to 3', if a probe-based qPCR/ddPCR assay was used",
@@ -441,7 +482,6 @@ FIELD_GROUPS: dict[str, tuple[FaireExtractionField, ...]] = {
 # specific FAIRe field's atomic content.
 FALLBACK_NARRATIVE_FIELDS: tuple[FaireExtractionField, ...] = (
     FaireExtractionField("DNA_extraction_method", "general DNA extraction narrative, if no atomic kit/method field applies"),
-    FaireExtractionField("PCR_amplification_conditions", "general PCR narrative, if no atomic PCR field applies"),
     FaireExtractionField("storage_conditions", "how samples were stored (temperature, preservative, duration)"),
     FaireExtractionField("sequencing_platform", "sequencing platform mentioned only in a general narrative sentence"),
     FaireExtractionField("collection_method", "how samples were physically collected (device, gear, procedure)"),

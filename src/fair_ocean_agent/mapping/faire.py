@@ -174,6 +174,16 @@ _PIPE_UNION_TARGET_FIELDS = frozenset(
         "assay_name", "assay_type", "target_gene", "target_subfragment",
         "pcr_primer_forward", "pcr_primer_reverse", "pcr_primer_name_forward", "pcr_primer_name_reverse",
         "pcr_primer_reference_forward", "pcr_primer_reference_reverse",
+        # pcr_method_additional/pcr2_method_additional: several distinct
+        # native facts already target each of these (primer_sequences,
+        # PCR_amplification_conditions, PCR_amplification_conditions_PCR_
+        # adaptor/_spacer/_template for the first; second_pcr_amplification_
+        # conditions for the second) -- without pipe-union, re-enabling the
+        # narrative fields per an explicit user request would just add a
+        # new way for one of them to silently win a "first wins" race
+        # against the others, the exact bug this same fix already closed
+        # for assay_name/target_gene/primers above.
+        "pcr_method_additional", "pcr2_method_additional",
     }
 )
 _PIPE_UNION_REVIEW_ON_MULTIPLE_FIELDS = frozenset({"platform", "instrument"})

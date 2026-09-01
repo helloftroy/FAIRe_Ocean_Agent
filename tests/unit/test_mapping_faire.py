@@ -391,13 +391,24 @@ def test_biological_rep_relation_derives_from_compact_samp_category_names(db_ses
             entity_level=EntityLevel.SAMPLE.value,
             external_identifier=external_identifier,
         )
-        for external_identifier in ("SAMN_P1", "SAMN_P2", "SAMN_P3", "SAMN_TCP1", "SAMN_TCP2", "SAMN_TCP3")
+        for external_identifier in (
+            "SAMN_P1", "SAMN_P2", "SAMN_P3",
+            "SAMN_TCP1", "SAMN_TCP2", "SAMN_TCP3",
+            "SAMN_SITE1_REP1", "SAMN_SITE1_REP2", "SAMN_SITE1_REP3",
+        )
     ]
     db_session.add_all(samples)
     db_session.flush()
     for sample in samples:
         db_session.add(_home_entity_study(sample))
-    for sample, category in zip(samples, ("P1", "P2", "P3", "T_C1P", "T_C2P", "T_C3P")):
+    for sample, category in zip(
+        samples,
+        (
+            "P1", "P2", "P3",
+            "T_C1P", "T_C2P", "T_C3P",
+            "Site1Rep1Valsecchi16S", "Site1Rep2Valsecchi16S", "Site1Rep3Valsecchi16S",
+        ),
+    ):
         _fact(db_session, study, entity=sample, field="samp_category", value=category, entity_level="sample")
     db_session.commit()
 
@@ -410,6 +421,9 @@ def test_biological_rep_relation_derives_from_compact_samp_category_names(db_ses
     }
     assert values[(samples[0].entity_id, "biological_rep_relation")] == "SAMN_P1 | SAMN_P2 | SAMN_P3"
     assert values[(samples[3].entity_id, "biological_rep_relation")] == "SAMN_TCP1 | SAMN_TCP2 | SAMN_TCP3"
+    assert values[(samples[6].entity_id, "biological_rep_relation")] == (
+        "SAMN_SITE1_REP1 | SAMN_SITE1_REP2 | SAMN_SITE1_REP3"
+    )
     assert values[(None, "biological_rep")] == "3"
 
 
@@ -1329,6 +1343,38 @@ def test_pipe_joins_two_assays_target_gene_and_primers_instead_of_dropping_the_s
     primer_name_forward = db_session.query(StandardizedValue).filter_by(study_id=study.study_id, target_field="pcr_primer_name_forward").one()
     assert target_gene.standardized_value == "16S rRNA | cbbL"
     assert primer_name_forward.standardized_value == "338F | cbbL_K2f"
+
+
+def test_pcr_method_additional_fields_have_a_real_extraction_path_and_pipe_join(db_session):
+    """Real gap found live: pcr_method_additional/pcr2_method_additional
+    were always blank. Root cause: PCR_amplification_conditions was
+    deliberately excluded from the LLM checklist, and pcr2_method_
+    additional never had any extraction path at all after its own
+    section-category was retired. Per an explicit user request, this
+    narrative text is independently useful for showing which paragraph/
+    PCR a given atomic value came from when a paper describes two
+    separate assays, each with its own PCR (and its own second/indexing
+    PCR) -- both must pipe-join rather than one silently winning, the
+    same class of gap already fixed for target_gene/primers above."""
+    study = _study(db_session, title="Two assays, two PCR narratives")
+    _fact(db_session, study, field="PCR_amplification_conditions",
+          value="MiFish 12S PCR: universal primers, 35 cycles at 95C/56C/72C.", entity_level="study")
+    _fact(db_session, study, field="second_pcr_amplification_conditions",
+          value="Index PCR: 8 cycles adding Nextera indices to the MiFish product.", entity_level="study")
+    _fact(db_session, study, field="second_pcr_amplification_conditions",
+          value="Second-round PCR for Valsecchi 16S: 10 cycles adding indices via KAPA HiFi.", entity_level="study")
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    pcr1 = db_session.query(StandardizedValue).filter_by(study_id=study.study_id, target_field="pcr_method_additional").one()
+    pcr2 = db_session.query(StandardizedValue).filter_by(study_id=study.study_id, target_field="pcr2_method_additional").one()
+    assert pcr1.standardized_value == "MiFish 12S PCR: universal primers, 35 cycles at 95C/56C/72C."
+    assert pcr2.standardized_value == (
+        "Index PCR: 8 cycles adding Nextera indices to the MiFish product. | "
+        "Second-round PCR for Valsecchi 16S: 10 cycles adding indices via KAPA HiFi."
+    )
 
 
 def test_assay_name_gets_a_gene_assay_fallback_for_an_unnamed_second_target_gene(db_session):
