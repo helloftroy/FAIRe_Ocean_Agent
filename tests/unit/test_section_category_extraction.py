@@ -178,6 +178,37 @@ def test_extract_category_terms_extracts_verbatim_values_and_pipe_joins_conflict
     assert all(f.support_type.value == "explicit" for f in facts)
 
 
+def test_extract_category_terms_accepts_multiple_bracketed_fields_from_one_quote():
+    """Real gap found live: "After overnight fixation at 4°C, the fixed
+    sediment was washed twice with PBS buffer and stored in 50%
+    PBS/ethanol at -20°C" genuinely supports THREE distinct storage
+    facts at once (temperature, duration via "overnight", and the
+    storage solution) -- the prompt used to tell the model "only extract
+    ONE of those bracketed fields for that quote", which reads as
+    capping extraction to a single field even when a quote legitimately
+    supports several. Confirms the code itself never enforced that cap
+    (nothing here rejects a second field for the same quote_id) --
+    responding with all three for one quote_id must keep every one of
+    them, not just the first."""
+    run_text = (
+        "After overnight fixation at 4°C, the fixed sediment was washed twice with PBS buffer and "
+        "stored in 50% PBS/ethanol at -20°C."
+    )
+    response = json.dumps(
+        [
+            {"field": "samp_store_temp", "raw_value": "-20°C", "quote_id": "Q001"},
+            {"field": "samp_store_dur", "raw_value": "overnight", "quote_id": "Q001"},
+            {"field": "samp_store_sol", "raw_value": "50% PBS/ethanol", "quote_id": "Q001"},
+        ]
+    )
+    backend = MockLLMBackend(responses=[response])
+    facts = extract_category_terms(backend, _SAMPLE_PREP_CATEGORY, run_text, locator_prefix="test")
+    by_field = {f.fact_type_candidate: f.raw_value for f in facts}
+    assert by_field["samp_store_temp"] == "-20°C"
+    assert by_field["samp_store_dur"] == "overnight"
+    assert by_field["samp_store_sol"] == "50% PBS/ethanol"
+
+
 def test_extract_category_terms_rejects_hallucinated_field_names():
     run_text = "DNA was extracted using the DNeasy PowerSoil kit."
     response = json.dumps([{"field": "not_a_real_sample_prep_field", "raw_value": "DNeasy PowerSoil kit", "quote_id": "Q001"}])

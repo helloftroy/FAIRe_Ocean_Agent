@@ -566,9 +566,12 @@ sequences, and phrases must all be verbatim, not generated or reworded). Return 
 explicitly supports it. If multiple distinct values for the same field are explicitly supported by different
 quotes, return one object per value.
 
-Each quote below is labeled with the field name(s) in brackets it was pre-matched for -- only extract one of
-those bracketed field(s) for that quote, even if the quote's text also happens to contain a number or phrase
-that could look relevant to a different, unbracketed field.
+Each quote below is labeled with the field name(s) in brackets it was pre-matched for. A single quote can
+genuinely support MORE THAN ONE of its own bracketed fields at once (e.g. one sentence stating both a storage
+temperature and a storage duration) -- return a separate object for each bracketed field the quote actually
+supports, not just one. Never attach a value to a field that is NOT in that quote's own bracket list, even if
+the quote's text also happens to contain a number or phrase that could look relevant to a different,
+unbracketed field.
 
 Fields:
 {fields_reference}

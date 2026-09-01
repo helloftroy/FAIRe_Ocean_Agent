@@ -436,7 +436,19 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
                 # fixed multi-word phrase cue silently never matches
                 # (10.1371/journal.pone.0303937).
                 "immersed", "resuspended", "submerged",
-            ), definition='The solution in which the sample (original or, after processing, e.g. a filter membrane) was stored, preserved, immersed, or resuspended, such as RNAlater, ethanol, or a lysis buffer -- even if the immersion and a later storage event (e.g. "stored at -20C") are described in separate nearby sentences. Return ONLY the short solution name/phrase itself (e.g. for "the biomass was immersed with 3 ml of lysis buffer", return "lysis buffer"), never the surrounding sentence.'),
+                # Real gap found live: "...washed twice with PBS buffer and
+                # stored in 50% PBS/ethanol at -20°C" never matched any cue
+                # above -- the fixed "stored in ethanol"/"stored in RNAlater"
+                # phrases only cover a solution named alone, not a mixture
+                # ("50% PBS/ethanol") or a differently-named solution
+                # entirely. Bare "stored in" (already used by samp_store_
+                # temp/samp_store_method_additional for the same reason)
+                # catches any such phrasing regardless of what the solution
+                # actually is -- an over-broad candidate costs nothing here,
+                # since the judgement LLM still only extracts a value when
+                # the quote genuinely supports this field's own definition.
+                "stored in", "PBS", "PBS buffer", "fixation", "fixative", "fixed in",
+            ), definition='The solution in which the sample (original or, after processing, e.g. a filter membrane) was stored, preserved, immersed, or resuspended, such as RNAlater, ethanol, a lysis buffer, or a fixative/wash solution (e.g. PBS, PBS/ethanol) -- even if the immersion and a later storage event (e.g. "stored at -20C") are described in separate nearby sentences, or if the sample was washed with one solution and then stored in a different one. Return ONLY the short solution name/phrase itself (e.g. for "the biomass was immersed with 3 ml of lysis buffer", return "lysis buffer"; for "stored in 50% PBS/ethanol", return "50% PBS/ethanol"), never the surrounding sentence.'),
             CategoryTerm("samp_store_method_additional", (
                 "transported frozen", "transported on ice", "shipped frozen", "storage conditions",
                 "shipped on dry ice", "shipped on ice",

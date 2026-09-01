@@ -208,6 +208,20 @@ def test_sterilise_method_cues_match_sanitised_field_equipment_wording():
     assert _term_cues_match("sterilise_method", "Sampling equipment was sterilized between sites using 10% bleach.")
 
 
+def test_samp_store_sol_cues_match_a_named_mixture_not_just_a_bare_solution():
+    """Real gap found live: "...washed twice with PBS buffer and stored
+    in 50% PBS/ethanol at -20°C" never matched any cue -- the original
+    fixed phrases ("stored in ethanol", "stored in RNAlater") only cover
+    a solution named alone, not a mixture like "50% PBS/ethanol"."""
+    assert _term_cues_match(
+        "samp_store_sol",
+        "After overnight fixation at 4°C, the fixed sediment was washed twice with PBS buffer and "
+        "stored in 50% PBS/ethanol at -20°C.",
+    )
+    # the original fixed-phrase cues must keep matching too
+    assert _term_cues_match("samp_store_sol", "Filters were stored in RNAlater until DNA extraction.")
+
+
 def test_candidate_categories_for_paragraph_finds_sample_prep_in_dense_text():
     """Real evidence: this dense supplementary-methods paragraph's own
     opening sentence ("DNA for amplicon sequencing and qPCR was extracted
