@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from pathlib import Path
 import gzip
 import re
@@ -14,9 +15,9 @@ from fair_ocean_agent.seed_discovery.clients.europepmc import EuropePmcSeedClien
 from fair_ocean_agent.seed_discovery.clients.http import CachedHttpClient
 from fair_ocean_agent.seed_discovery.clients.mgnify import MgnifyClient, extract_insdc_identifiers, parse_study
 from fair_ocean_agent.seed_discovery.clients.openalex import OpenAlexSeedClient
-from fair_ocean_agent.seed_discovery.config import SeedDiscoveryConfig
+from fair_ocean_agent.seed_discovery.config import RunLimits, SeedDiscoveryConfig
 from fair_ocean_agent.seed_discovery.db import SeedDiscoveryDB, choose_primary_candidate, normalize_doi_for_seed
-from fair_ocean_agent.seed_discovery.ena_discovery import aggregate_ena_study, build_ena_query_partitions
+from fair_ocean_agent.seed_discovery.ena_discovery import EnaQueryPartition, EnaSeedDiscoveryRunner, aggregate_ena_study, build_ena_query_partitions
 from fair_ocean_agent.seed_discovery.filters import is_marine_study
 from fair_ocean_agent.seed_discovery.jgi_gold import inspect_gold_snapshot, process_gold_snapshot
 from fair_ocean_agent.seed_discovery.local_epmc import DatasetAccessions, LocalEuropePmcResolver, normalize_epmc_accession
@@ -243,6 +244,38 @@ def test_ena_study_aggregation_and_paper_seed_view(tmp_path):
 
     assert row["primary_doi"] == "10.1000/ena"
     assert row["seed_status"] == "complete"
+
+
+def test_ena_discovery_resume_revisits_partial_limit_partitions(tmp_path, monkeypatch):
+    config = SeedDiscoveryConfig(db_path=tmp_path / "seeds.sqlite")
+    runner = EnaSeedDiscoveryRunner(config)
+    runner.db.initialize()
+    runner.db.update_crawl_state("ena_read_run:done", status="completed", completed=True)
+    runner.db.update_crawl_state("ena_read_run:partial", status="partial_limit_reached", completed=False)
+    calls = []
+
+    partitions = [
+        EnaQueryPartition("done", "done-query", "high", "done"),
+        EnaQueryPartition("partial", "partial-query", "high", "partial"),
+    ]
+
+    class FakeEnaPortalClient:
+        def __init__(self, http, config):  # noqa: ANN001
+            pass
+
+        def search_read_runs(self, query, **kwargs):  # noqa: ANN001
+            calls.append(query)
+            return []
+
+    monkeypatch.setattr("fair_ocean_agent.seed_discovery.ena_discovery.build_ena_query_partitions", lambda config, include_secondary=False: partitions)
+    monkeypatch.setattr("fair_ocean_agent.seed_discovery.ena_discovery.EnaPortalClient", FakeEnaPortalClient)
+
+    try:
+        runner._discover_runs(RunLimits(max_pages=10, resume=True), Counter())
+    finally:
+        runner.close()
+
+    assert calls == ["partial-query"]
 
 
 def test_publication_candidate_deduplication_and_primary_selection(tmp_path):

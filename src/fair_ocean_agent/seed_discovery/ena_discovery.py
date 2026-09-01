@@ -312,7 +312,7 @@ class EnaSeedDiscoveryRunner:
         pages_seen = 0
         for partition in build_ena_query_partitions(self.config, include_secondary=limits.include_secondary):
             state_key = f"ena_read_run:{partition.name}"
-            if limits.resume and self.db.crawl_status(state_key) in {"completed", "partial_limit_reached"}:
+            if limits.resume and self.db.crawl_status(state_key) == "completed":
                 counts["ena_partitions_skipped_resume"] += 1
                 continue
             if self.stop_requested:

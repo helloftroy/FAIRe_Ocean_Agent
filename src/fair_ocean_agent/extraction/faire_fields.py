@@ -342,17 +342,17 @@ FIELD_GROUPS: dict[str, tuple[FaireExtractionField, ...]] = {
             "second_pcr_annealing_temperature",
             "annealing temperature of a distinct SECOND amplification/PCR step used to add an index, "
             "barcode, or sequencing adapter (recognizable from phrasing like a second-round PCR, second "
-            "PCR, PCR2, indexing PCR, or index/adapter addition during another round of cycling) -- that "
-            "second PCR's own annealing temperature only, never the first/original PCR's",
+            "PCR, secondary PCR, PCR2, indexing PCR, or index/adapter addition during another round of "
+            "cycling) -- that second PCR's own annealing temperature only, never the first/original PCR's",
             "pcr2_annealingTemp",
             required_any_flags=frozenset({"pcr_0_1"}),
         ),
         FaireExtractionField(
             "second_pcr_cycle_count",
             "number of cycles in a distinct SECOND amplification/PCR step used to add an index, barcode, "
-            "or sequencing adapter (recognizable from phrasing like a second-round PCR, second PCR, PCR2, "
-            "indexing PCR, or index/adapter addition during another round of cycling) -- that second "
-            "PCR's own cycle count only, never the first/original PCR's",
+            "or sequencing adapter (recognizable from phrasing like a second-round PCR, second PCR, "
+            "secondary PCR, PCR2, indexing PCR, or index/adapter addition during another round of "
+            "cycling) -- that second PCR's own cycle count only, never the first/original PCR's",
             "pcr2_cycles",
             required_any_flags=frozenset({"pcr_0_1"}),
         ),
@@ -386,8 +386,8 @@ FIELD_GROUPS: dict[str, tuple[FaireExtractionField, ...]] = {
         FaireExtractionField(
             "second_pcr_amplification_conditions",
             "a distinct SECOND amplification/PCR step's own methods text (recognizable from phrasing like "
-            "a second-round PCR, second PCR, PCR2, indexing PCR, or index/adapter addition during another "
-            "round of cycling) -- that second PCR's own words only, never the first/original PCR's, "
+            "a second-round PCR, second PCR, secondary PCR, PCR2, indexing PCR, or index/adapter addition "
+            "during another round of cycling) -- that second PCR's own words only, never the first/original PCR's, "
             "captured regardless of whether pcr2_annealingTemp/pcr2_cycles above already captured a value",
             "pcr2_method_additional",
             required_any_flags=frozenset({"pcr_0_1"}),

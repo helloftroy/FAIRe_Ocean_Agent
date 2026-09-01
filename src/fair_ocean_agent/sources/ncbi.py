@@ -431,6 +431,15 @@ def _canonical_biosample_attribute_name(name: str) -> str:
         return "geo_loc_name"
     if normalized == "isolationsource":
         return "isolation_source"
+    # Real gap found live (SAMN41116853, an older MIMARKS.survey.host-
+    # associated.6.0 package): <Attribute attribute_name="collection_depth">
+    # 6.7</Attribute> carries no harmonized_name at all -- NCBI's own
+    # harmonization doesn't recognize this legacy synonym for the standard
+    # "depth" attribute the way it does for collection_date/lat_lon/
+    # geo_loc_name on the very same record, so it was silently passed
+    # through unmapped (no MappingRule matches "collection_depth" literally).
+    if normalized == "collectiondepth":
+        return "depth"
     return name
 
 

@@ -19,6 +19,33 @@ def test_explicit_marker_is_case_insensitive_and_accepts_replicate_spelling():
     assert set(groups[0].members) == {"S1", "S2"}
 
 
+def test_explicit_marker_groups_embedded_rep_number_with_constant_suffix():
+    names = {
+        "S1": "Site1Rep1Valsecchi16S",
+        "S2": "Site1Rep2Valsecchi16S",
+        "S3": "Site1Rep3Valsecchi16S",
+    }
+
+    groups = detect_replicate_groups(names)
+
+    assert len(groups) == 1
+    assert groups[0].signal is ReplicateSignal.EXPLICIT_REP_MARKER
+    assert groups[0].members == ("S1", "S2", "S3")
+
+
+def test_embedded_rep_marker_keeps_different_suffixes_separate():
+    names = {
+        "S1": "Site1Rep1Valsecchi16S",
+        "S2": "Site1Rep2Valsecchi18S",
+        "S3": "Site1Rep3Valsecchi16S",
+    }
+
+    groups = detect_replicate_groups(names)
+
+    assert len(groups) == 1
+    assert groups[0].members == ("S1", "S3")
+
+
 def test_bare_trailing_digit_suffix_is_not_treated_as_replicate():
     names = {"S1": "Sample1", "S2": "Sample12"}
     assert detect_replicate_groups(names) == []

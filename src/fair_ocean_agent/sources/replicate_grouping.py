@@ -18,8 +18,11 @@ pattern to detect there.
 
 Two independent, deliberately conservative signals:
   1. EXPLICIT_REP_MARKER -- an explicit "rep"/"replicate" token plus a
-     digit (e.g. "_rep1", "-REP_2", "_replicate3"). High confidence: the
-     token is unambiguous.
+     digit (e.g. "_rep1", "-REP_2", "_replicate3", or
+     "Site1Rep1Valsecchi16S"). High confidence: the token is
+     unambiguous. Embedded forms keep any trailing constant assay/sample
+     suffix as part of the grouping key, so "Site1Rep1Valsecchi16S" and
+     "Site1Rep2Valsecchi18S" are not merged.
   2. TRAILING_NUMBER_SUFFIX -- a bare number after an underscore or space
      (e.g. "LM_1", "LM 2"). This is intentionally separator-scoped and
      grouped by exact prefix, so "LM_1" and "LM_2" group, but "LM_1" and
@@ -89,6 +92,10 @@ class ReplicateGroup:
 # "replicate" token only -- `base` is captured verbatim, case preserved, so
 # "Site_A" and "site_a" are never silently merged).
 _EXPLICIT_REP_RE = re.compile(r"^(?P<base>.+?)[-_](?:rep(?:licate)?)[-_]?(?P<num>\d+)$", re.IGNORECASE)
+_EXPLICIT_EMBEDDED_REP_RE = re.compile(
+    r"^(?P<base>.+?)(?:rep(?:licate)?)[-_]?(?P<num>\d+)(?P<suffix>[A-Za-z][A-Za-z0-9_.-]*)$",
+    re.IGNORECASE,
+)
 
 # Matches "LM 6" and "LM_6", but deliberately not "LM-6" or "LM6".
 _TRAILING_NUMBER_RE = re.compile(r"^(?P<base>.+?)[_ ]+(?P<num>\d+)$")
@@ -154,11 +161,18 @@ def detect_replicate_groups(
 
     explicit_buckets: dict[str, list[tuple[str, int]]] = {}
     for sample_id, name in sample_names_by_id.items():
-        match = _EXPLICIT_REP_RE.match(name.strip())
+        stripped = name.strip()
+        match = _EXPLICIT_REP_RE.match(stripped)
         if match:
-            explicit_buckets.setdefault(match.group("base"), []).append(
-                (sample_id, int(match.group("num")))
-            )
+            key = match.group("base")
+        else:
+            match = _EXPLICIT_EMBEDDED_REP_RE.match(stripped)
+            if not match:
+                continue
+            key = f"{match.group('base')}\0{match.group('suffix')}"
+        explicit_buckets.setdefault(key, []).append(
+            (sample_id, int(match.group("num")))
+        )
     for members in explicit_buckets.values():
         if len(members) < 2:
             continue

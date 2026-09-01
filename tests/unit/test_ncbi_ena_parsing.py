@@ -158,6 +158,35 @@ def test_biosample_extract_structured_facts_normalizes_location_and_host_aliases
     assert values["isolation_source"].source_locator.endswith("Attributes.isolation_source")
 
 
+def test_biosample_extract_structured_facts_normalizes_collection_depth_alias(biosample_adapter):
+    """Real gap found live (SAMN41116853, an older MIMARKS.survey.host-
+    associated.6.0 package): <Attribute attribute_name="collection_depth">
+    6.7</Attribute> carries no harmonized_name at all -- NCBI's own
+    harmonization doesn't recognize this legacy synonym for the standard
+    "depth" attribute, unlike collection_date/lat_lon/geo_loc_name on the
+    very same record, so it was silently passed through unmapped (no
+    MappingRule matches "collection_depth" literally)."""
+    raw = {
+        "bioproject_accession": "PRJNA1106054",
+        "total_linked_samples": 1,
+        "truncated": False,
+        "samples": [
+            {
+                "accession": "SAMN41116853",
+                "title": "CH_Cnat_05_2017",
+                "attributes": {"collection_depth": "6.7"},
+            },
+        ],
+    }
+
+    facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw))
+    values = {fact.fact_type_candidate: fact for fact in facts}
+
+    assert values["collection_depth"].raw_value == "6.7"
+    assert values["depth"].raw_value == "6.7"
+    assert values["depth"].source_locator.endswith("Attributes.depth")
+
+
 def test_biosample_extract_structured_facts_skips_absent_location_placeholders(biosample_adapter):
     raw = {
         "bioproject_accession": "PRJNA242644",
