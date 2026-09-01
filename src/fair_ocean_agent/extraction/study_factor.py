@@ -25,7 +25,20 @@ from fair_ocean_agent.database.enums import EntityLevel, SupportType
 from fair_ocean_agent.llm.base import LLMBackend, LLMBackendError
 from fair_ocean_agent.sources.base import RawFactCandidate
 
-_ABSTRACT_HEADING_RE = re.compile(r"(?im)^\s*(?:abstract|summary)\s*$")
+# Real gap found live: PDF-to-text extraction (this function's own
+# fallback for a paper with no JATS fulltext XML) routinely jams the
+# heading and the abstract's own first sentence onto one line with no
+# line break between them (e.g. "Abstract Background: high-latitude
+# coral habitats..."), especially for two-column PDF layouts -- the
+# original regex required "Abstract"/"Summary" to be the ENTIRE line
+# (nothing else, `\s*$`), so any such run-together heading silently
+# failed to match at all, and generate_study_factor's own `if not
+# abstract: return []` meant the whole field was skipped with no error,
+# no review flag, nothing. Now only anchors the heading WORD at the
+# start of a line, optionally followed by ":"/"." -- the match still
+# ends right after the heading itself, so real abstract content on the
+# same line is correctly kept, not consumed by the heading match.
+_ABSTRACT_HEADING_RE = re.compile(r"(?im)^\s*(?:abstract|summary)\b[.:]?\s*")
 _ABSTRACT_END_HEADING_RE = re.compile(
     r"(?im)^\s*(?:keywords?|introduction|background|materials?\s+and\s+methods?|methods?|results?)\b"
 )

@@ -56,6 +56,32 @@ This part should not be included in the abstract evidence.
     assert "This part should not be included" not in facts[0].evidence_quote
 
 
+def test_generate_study_factor_accepts_heading_jammed_onto_the_same_line_as_the_abstract():
+    """Real gap found live: PDF-to-text extraction (especially for
+    two-column layouts) routinely jams the "Abstract" heading and the
+    abstract's own first sentence onto one line with no line break
+    between them -- the original heading regex required "Abstract" to
+    be the entire line, so this silently skipped the whole field with
+    no error and no review flag at all, which is why it looked like the
+    LLM was never even asked."""
+    summary = "Habitat type as a predictor of microbial community structure."
+    backend = MockLLMBackend(responses=[json.dumps({"study_factor": summary})])
+    pdf_text = (
+        "Title\n"
+        "Abstract Background: We compared microbial community composition across three habitat "
+        "types to test whether habitat type predicts community structure.\n"
+        "Introduction\n"
+        "This part should not be included in the abstract evidence.\n"
+    )
+
+    facts = generate_study_factor(backend, pdf_text, locator_prefix="pdf")
+
+    assert len(facts) == 1
+    assert facts[0].raw_value == summary
+    assert facts[0].evidence_quote.startswith("Background:")
+    assert "This part should not be included" not in facts[0].evidence_quote
+
+
 def test_generate_study_target_taxonomic_scope_returns_pipe_values_from_abstract():
     response = json.dumps(
         {"study_target_taxonomic_scope": "prokaryotic microorganisms | bacteria | archaea"}
