@@ -354,8 +354,18 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
                 "Sterivex", "filter cartridge", "cartridge filter", "commercial filter",
                 "filter brand", "filter product",
             ), definition='Commercial name or brand/model of the filter used. Do not return cross-reference placeholders such as "see below" or "see above".'),
+            # Real gap found live: "1 L of water was filtered onto a 47 mm
+            # diameter, 0.22 um pore size, PVDF membrane filter" never
+            # matched any existing cue -- the extremely common real-world
+            # phrasing lists diameter/pore-size/material as a comma-
+            # separated adjective chain BEFORE the word "filter" ever
+            # appears, so "mm diameter filter" (three consecutive words)
+            # and "mm filter" (two consecutive words) both require an
+            # adjacency this phrasing never has. Bare "mm diameter" cues
+            # this even when "filter" is several words away.
             CategoryTerm("filter_diameter", (
                 "filter diameter", "diameter of the filter", "mm filter", "mm diameter filter",
+                "mm diameter", "mm-diameter",
             ), definition='Physical diameter of a circular filter, usually in mm. Do not confuse with pore size.'),
             CategoryTerm("filter_surface_area", (
                 "filter surface area", "filter area", "surface area of the filter",

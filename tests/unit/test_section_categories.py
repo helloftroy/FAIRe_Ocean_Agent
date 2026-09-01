@@ -252,6 +252,24 @@ def test_dna_cleanup_cues_match_a_bare_kit_name_with_no_cleanup_verb():
     assert _term_cues_match("dna_cleanup_method", "DNA was purified using a silica column.")
 
 
+def test_filter_diameter_cue_matches_a_diameter_separated_from_the_word_filter_by_other_adjectives():
+    """Real gap found live: "1 L of water was filtered onto a 47 mm
+    diameter, 0.22 um pore size, polyvinylidene difluoride (PVDF)
+    membrane filter" never matched any cue -- the common real-world
+    phrasing lists diameter/pore-size/material as a comma-separated
+    adjective chain before the word "filter" ever appears, so
+    "mm diameter filter"/"mm filter" (which both require that adjacency)
+    never fire. samp_size, filter_material, and size_frac all matched
+    their own cues fine; only filter_diameter was silently missed."""
+    sentence = (
+        "1 L of water was filtered onto a 47 mm diameter, 0.22 um pore size, polyvinylidene "
+        "difluoride (PVDF) membrane filter."
+    )
+    assert _term_cues_match("filter_diameter", sentence)
+    # the original adjacent-phrase cues must keep matching too
+    assert _term_cues_match("filter_diameter", "Samples were filtered onto a 47 mm diameter filter.")
+
+
 def test_candidate_categories_for_paragraph_finds_sample_prep_in_dense_text():
     """Real evidence: this dense supplementary-methods paragraph's own
     opening sentence ("DNA for amplicon sequencing and qPCR was extracted

@@ -277,8 +277,10 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
         description="Forward sequencing adapter sequence.",
         output_instructions=(
             "Return only an explicit forward/read 1/P5/5-prime adapter sequence. Copy the sequence exactly "
-            "from the quote, preserving letters and order. Omit this field if the quote names an adapter but "
-            "does not give the sequence."
+            "from the quote, preserving letters and order. A named tag system fused ahead of the real PCR "
+            "primer (e.g. Fluidigm CS1, Fluidigm Access Array CS1, a Nextera or TruSeq overhang) IS an "
+            "adapter even if the quote never uses the word \"adapter\" -- return its own sequence, not the "
+            "primer's. Omit this field if the quote names an adapter but does not give the sequence."
         ),
         search_terms=(
             "adapter-containing forward primer",
@@ -304,6 +306,20 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
             "adapter-linked primer",
             "sequencing tail",
             "adapter",
+            # Fluidigm CS1/CS2 ("common sequence") tags: a real, common
+            # named adapter-tag system on their own Access Array PCR
+            # platform, functionally identical to a Nextera/TruSeq
+            # overhang, but named without the word "adapter" anywhere
+            # nearby -- real gap found live: "Fluidigm CS1 + MiFish-U-F
+            # ACACTGACGACATGGTTCTACA GTCGGTAAAACTCGTGCCAGC" never matched
+            # any existing cue at all.
+            "Fluidigm CS1",
+            "Fluidigm CS2",
+            "CS1 tag",
+            "CS2 tag",
+            "common sequence 1",
+            "common sequence 2",
+            "Access Array",
         ),
     ),
     LLMJudgedSearchField(
@@ -312,8 +328,10 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
         description="Reverse sequencing adapter sequence.",
         output_instructions=(
             "Return only an explicit reverse/read 2/P7/3-prime adapter sequence. Copy the sequence exactly "
-            "from the quote, preserving letters and order. Omit this field if the quote names an adapter but "
-            "does not give the sequence."
+            "from the quote, preserving letters and order. A named tag system fused ahead of the real PCR "
+            "primer (e.g. Fluidigm CS2, Fluidigm Access Array CS2, a Nextera or TruSeq overhang) IS an "
+            "adapter even if the quote never uses the word \"adapter\" -- return its own sequence, not the "
+            "primer's. Omit this field if the quote names an adapter but does not give the sequence."
         ),
         search_terms=(
             "adapter-containing reverse primer",
@@ -338,6 +356,14 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
             "adapter-linked primer",
             "sequencing tail",
             "adapter",
+            # See adapter_forward's own comment on Fluidigm CS1/CS2.
+            "Fluidigm CS1",
+            "Fluidigm CS2",
+            "CS1 tag",
+            "CS2 tag",
+            "common sequence 1",
+            "common sequence 2",
+            "Access Array",
         ),
     ),
     LLMJudgedSearchField(
@@ -3709,23 +3735,45 @@ def _clean_fused_sequence_part(value: str) -> str:
     return re.sub(r"\s+", "", cleaned)  # real sequences never contain whitespace
 
 
+def _fused_sequence_split(raw_value: str) -> tuple[str, str] | None:
+    """Splits a fused adapter+primer sequence at its join point. A plain
+    ASCII hyphen is the common, explicit notation (see this module's own
+    history), but real gap found live: "Fluidigm CS1 + MiFish-U-F
+    ACACTGACGACATGGTTCTACA GTCGGTAAAACTCGTGCCAGC" -- the CS1 adapter tag
+    and the MiFish-U-F primer are simply printed side by side, space-
+    separated, no hyphen anywhere between them. Tries a hyphen split
+    first (the more explicit, intentional notation, so it wins whenever
+    both a hyphen and incidental whitespace are present), then falls back
+    to a plain-whitespace split when there's no hyphen at all -- either
+    way, both resulting halves must independently validate as clean
+    nucleotide-only sequences before the split is accepted, so this never
+    guesses on something that isn't genuinely two fused sequences."""
+    if "-" in raw_value:
+        left, _, right = raw_value.rpartition("-")
+        left, right = _clean_fused_sequence_part(left), _clean_fused_sequence_part(right)
+        if _NUCLEOTIDE_SEQUENCE_ONLY_RE.match(left) and _NUCLEOTIDE_SEQUENCE_ONLY_RE.match(right):
+            return left, right
+    parts = raw_value.split()
+    if len(parts) == 2:
+        left, right = (_clean_fused_sequence_part(part) for part in parts)
+        if _NUCLEOTIDE_SEQUENCE_ONLY_RE.match(left) and _NUCLEOTIDE_SEQUENCE_ONLY_RE.match(right):
+            return left, right
+    return None
+
+
 def _split_fused_adapter_primer_facts(facts: list[RawFactCandidate]) -> list[RawFactCandidate]:
     result: list[RawFactCandidate] = []
     for fact in facts:
         primer_field = _ADAPTER_TO_FUSED_PRIMER_FIELD.get(fact.fact_type_candidate)
-        if primer_field is None or "-" not in fact.raw_value:
+        split = _fused_sequence_split(fact.raw_value) if primer_field is not None else None
+        if split is None:
+            # Doesn't look like a genuine fusion-primer split (either no
+            # separator found, or either side isn't a clean nucleotide
+            # sequence) -- leave the fact as-is rather than risk mangling
+            # something this pattern wasn't meant for.
             result.append(fact)
             continue
-        adapter_part, _, primer_part = fact.raw_value.rpartition("-")
-        adapter_part = _clean_fused_sequence_part(adapter_part)
-        primer_part = _clean_fused_sequence_part(primer_part)
-        if not _NUCLEOTIDE_SEQUENCE_ONLY_RE.match(adapter_part) or not _NUCLEOTIDE_SEQUENCE_ONLY_RE.match(primer_part):
-            # Doesn't look like a genuine fusion-primer split (either side
-            # isn't a clean nucleotide sequence) -- leave the fact as-is
-            # rather than risk mangling something this pattern wasn't
-            # meant for.
-            result.append(fact)
-            continue
+        adapter_part, primer_part = split
         result.append(fact.model_copy(update={"raw_value": adapter_part}))
         result.append(
             fact.model_copy(

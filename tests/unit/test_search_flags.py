@@ -1231,6 +1231,58 @@ def test_split_fused_adapter_primer_facts_leaves_non_fused_values_untouched():
     assert [fact.fact_type_candidate for fact in facts] == ["adapter_forward", "adapter_reverse", "assay_name"]
 
 
+def test_split_fused_adapter_primer_facts_splits_a_space_separated_fusion_with_no_hyphen():
+    """Real gap found live: "Fluidigm CS1 + MiFish-U-F ACACTGACGACATGGTTCTACA
+    GTCGGTAAAACTCGTGCCAGC" -- the Fluidigm CS1 adapter tag and the real
+    MiFish-U-F primer are simply printed side by side, space-separated,
+    with no hyphen anywhere between them. The dash-based split alone can
+    never fire here; a plain-whitespace fallback is needed once no hyphen
+    is present at all."""
+    from fair_ocean_agent.extraction.search_flags import RawFactCandidate, _split_fused_adapter_primer_facts
+    from fair_ocean_agent.database.enums import EntityLevel, SupportType
+
+    forward = RawFactCandidate(
+        fact_type_candidate="adapter_forward",
+        raw_field_name="adapter_forward",
+        raw_value="ACACTGACGACATGGTTCTACA GTCGGTAAAACTCGTGCCAGC",
+        evidence_quote="quote",
+        source_locator="paper:PMC1#p1",
+        support_type=SupportType.EXPLICIT,
+        entity_level=EntityLevel.STUDY,
+    )
+
+    facts = _split_fused_adapter_primer_facts([forward])
+
+    by_type: dict[str, list[str]] = {}
+    for fact in facts:
+        by_type.setdefault(fact.fact_type_candidate, []).append(fact.raw_value)
+
+    assert by_type["adapter_forward"] == ["ACACTGACGACATGGTTCTACA"]
+    assert by_type["pcr_primer_forward"] == ["GTCGGTAAAACTCGTGCCAGC"]
+
+
+def test_quote_candidates_for_adapter_fields_accept_fluidigm_cs1_cs2_tag_names():
+    """Real gap found live: "Primary PCR primers were as follows, listed
+    in 5'-3' direction: Fluidigm CS1 + MiFish-U-F ACACTGACGACATGGTTCTACA
+    GTCGGTAAAACTCGTGCCAGC and Fluidigm CS2 + MiFish-U-R
+    TACGGTAGCAGAGACTTGGTCT CATAGTGGGGTATCTAATCCCAGTTTG." never says
+    "adapter"/"overhang"/"tail" anywhere -- Fluidigm's own CS1/CS2 "common
+    sequence" tags are a real, common adapter-tag system named without
+    any of the existing generic cues."""
+    candidates = quote_candidates_for_llm_judged_search(
+        (
+            (
+                "Methods",
+                "Primary PCR primers were as follows, listed in 5' to 3' direction: Fluidigm CS1 + "
+                "MiFish-U-F ACACTGACGACATGGTTCTACA GTCGGTAAAACTCGTGCCAGC and Fluidigm CS2 + "
+                "MiFish-U-R TACGGTAGCAGAGACTTGGTCT CATAGTGGGGTATCTAATCCCAGTTTG.",
+            ),
+        )
+    )
+    assert any("adapter_forward" in c.field_names for c in candidates)
+    assert any("adapter_reverse" in c.field_names for c in candidates)
+
+
 def test_detect_llm_judged_search_facts_accepts_quote_id_and_stores_literal_quote():
     def respond(prompt: str) -> str:
         assert "Q001 [barcoding_pcr_appr]" in prompt
