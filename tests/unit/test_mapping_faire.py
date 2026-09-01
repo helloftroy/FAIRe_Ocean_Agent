@@ -1377,6 +1377,39 @@ def test_pcr_method_additional_fields_have_a_real_extraction_path_and_pipe_join(
     )
 
 
+def test_pipe_joins_multiple_distinct_filters_named_in_one_study_instead_of_dropping_the_rest(db_session):
+    """Real gap found live (STUDY-017230ae34c4): one dense Methods
+    paragraph named three distinct filters for three distinct
+    sub-analyses -- 0.22 um 25 mm Supor filters for DNA, a separate 0.1 um
+    142 mm Supor filter for shotgun metagenomics, and 25 mm GF/F glass
+    microfiber filters for pigment analysis. section_categories.py's term
+    extraction can emit one filter_name/filter_diameter/filter_material
+    fact per mention, all targeting the same STUDY-level field -- before
+    these were added to _PIPE_UNION_TARGET_FIELDS, whichever filter was
+    extracted first silently won the field outright (only flagged for
+    review, the other filters' names/diameters/materials never actually
+    kept), the same class of gap already fixed for target_gene/primers/
+    pcr_method_additional above."""
+    study = _study(db_session, title="Three filters, one study")
+    _fact(db_session, study, field="filter_name", value="Supor filter", entity_level="study")
+    _fact(db_session, study, field="filter_name", value="GF/F glass microfiber filter", entity_level="study")
+    _fact(db_session, study, field="filter_diameter", value="25 mm", entity_level="study")
+    _fact(db_session, study, field="filter_diameter", value="142 mm", entity_level="study")
+    _fact(db_session, study, field="filter_material", value="polyethersulfone", entity_level="study")
+    _fact(db_session, study, field="filter_material", value="glass microfiber", entity_level="study")
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    filter_name = db_session.query(StandardizedValue).filter_by(study_id=study.study_id, target_field="filter_name").one()
+    filter_diameter = db_session.query(StandardizedValue).filter_by(study_id=study.study_id, target_field="filter_diameter").one()
+    filter_material = db_session.query(StandardizedValue).filter_by(study_id=study.study_id, target_field="filter_material").one()
+    assert filter_name.standardized_value == "Supor filter | GF/F glass microfiber filter"
+    assert filter_diameter.standardized_value == "25 mm | 142 mm"
+    assert filter_material.standardized_value == "polyethersulfone | glass microfiber"
+
+
 def test_assay_name_gets_a_gene_assay_fallback_for_an_unnamed_second_target_gene(db_session):
     """Same real study (10.3390/microorganisms10030558): the paper gives
     its 16S assay a real short name ("V3V4 region of 16S rRNA genes",

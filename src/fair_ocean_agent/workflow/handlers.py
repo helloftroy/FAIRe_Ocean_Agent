@@ -879,24 +879,25 @@ def _resolve_repository_sources(
         return study
 
     if bioproject_accession:
-        for name in ("ncbi_bioproject", "ncbi_biosample"):
-            adapter = adapters.get(name)
-            if adapter is None:
-                continue
-            record = _fetch_ncbi_record_with_biosample_fallback(session, study, name, adapter, bioproject_accession)
-            if record is None:
-                continue
-            _created, source = persist_fn(session, study, adapter, SourceType.REPOSITORY_API, bioproject_accession, record)
-            study = _apply_related_identifiers(session, study, adapter.find_related(record), name, source)
+        bioproject_adapter = adapters.get("ncbi_bioproject")
+        if bioproject_adapter is not None:
+            record = _fetch_ncbi_record_with_biosample_fallback(
+                session, study, "ncbi_bioproject", bioproject_adapter, bioproject_accession
+            )
+            if record is not None:
+                _created, source = persist_fn(
+                    session, study, bioproject_adapter, SourceType.REPOSITORY_API, bioproject_accession, record
+                )
+                study = _apply_related_identifiers(session, study, bioproject_adapter.find_related(record), "ncbi_bioproject", source)
 
-            # Repository-only studies (no DOI, so _resolve_publication_sources
-            # never runs) would otherwise never get a study.title at all --
-            # read it directly off the BioProject record rather than adding a
-            # parse_publication_fields-style method for a single field.
-            if name == "ncbi_bioproject" and not study.title:
-                title = record.raw.get("title")
-                if title:
-                    study.title = title
+                # Repository-only studies (no DOI, so _resolve_publication_sources
+                # never runs) would otherwise never get a study.title at all --
+                # read it directly off the BioProject record rather than adding a
+                # parse_publication_fields-style method for a single field.
+                if not study.title:
+                    title = record.raw.get("title")
+                    if title:
+                        study.title = title
 
     ena_adapter = adapters.get("ena")
     ena_query_identifier = bioproject_accession or ena_accession
@@ -907,11 +908,35 @@ def _resolve_repository_sources(
             logger.info("no ena record for %s", ena_query_identifier)
         else:
             _created, source = persist_fn(session, study, ena_adapter, SourceType.REPOSITORY_API, ena_query_identifier, record)
+            # Runs BEFORE the ncbi_biosample fetch below, deliberately: this is
+            # what persists BIOSAMPLE_ACCESSION identifiers (via each run's own
+            # sample_accession) that _fetch_ncbi_record_with_biosample_fallback
+            # reads for its "NCBI's own elink is empty" fallback. Real gap
+            # confirmed live (STUDY-017230ae34c4): on a study's very FIRST
+            # discovery pass, ncbi_biosample used to run before ena ever had a
+            # chance to discover/persist those same accessions, so the fallback
+            # always saw zero known accessions and never fired -- only a later
+            # rediscovery run (after some other path had already persisted a
+            # BIOSAMPLE_ACCESSION) would ever recover. Reordering so ena runs
+            # first means the fallback's known_accessions lookup already sees
+            # this same pass's own discoveries.
             study = _apply_related_identifiers(session, study, ena_adapter.find_related(record), "ena", source)
             if not study.title:
                 title = record.raw.get("study", {}).get("study_title")
                 if title:
                     study.title = title
+
+    if bioproject_accession:
+        biosample_adapter = adapters.get("ncbi_biosample")
+        if biosample_adapter is not None:
+            record = _fetch_ncbi_record_with_biosample_fallback(
+                session, study, "ncbi_biosample", biosample_adapter, bioproject_accession
+            )
+            if record is not None:
+                _created, source = persist_fn(
+                    session, study, biosample_adapter, SourceType.REPOSITORY_API, bioproject_accession, record
+                )
+                study = _apply_related_identifiers(session, study, biosample_adapter.find_related(record), "ncbi_biosample", source)
 
     return study
 

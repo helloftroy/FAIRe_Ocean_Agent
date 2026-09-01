@@ -683,6 +683,46 @@ def test_ncbi_biosample_fallback_returns_none_when_fallback_also_fails(db_sessio
     assert adapter.fallback_calls == [("PRJNA1", ["SAMN1"])]
 
 
+def test_resolve_repository_sources_ncbi_biosample_fallback_sees_enas_own_pass_accessions(db_session, monkeypatch):
+    """Regression test for a real live gap (STUDY-017230ae34c4): on a
+    single call to _resolve_repository_sources -- e.g. a study's very
+    first discovery pass, before any BIOSAMPLE_ACCESSION identifier has
+    ever been persisted for it -- ncbi_biosample's own elink cross-
+    reference can come back empty while ENA's fetch_record/find_related
+    for the SAME bioproject accession discovers the real BioSample
+    accessions via each run's own sample_accession. The elink-empty
+    fallback (_fetch_ncbi_record_with_biosample_fallback) only ever reads
+    identifiers already persisted to the study, so ena must run -- and its
+    related identifiers must be persisted -- BEFORE ncbi_biosample's own
+    fetch is attempted, or the fallback sees zero known accessions on this
+    pass and only ever recovers on some later, unrelated rediscovery run."""
+    study = Study(title=None)
+    db_session.add(study)
+    db_session.flush()
+
+    ena_adapter = FakeAdapter(
+        name="ena",
+        record=_make_record("ena"),
+        related=[
+            RelatedIdentifier(
+                identifier_type=IdentifierType.BIOSAMPLE_ACCESSION,
+                value="SAMN99999999",
+                relationship_type=RelationshipType.CONTAINS_SAMPLES_FROM,
+                source="ena",
+            )
+        ],
+    )
+    fallback_record = _make_record("ncbi_biosample")
+    biosample_adapter = FakeNcbiBioSampleAdapter(name="ncbi_biosample", not_found=True, fallback_record=fallback_record)
+    monkeypatch.setattr(
+        handlers, "_build_enabled_adapters", lambda: {"ena": ena_adapter, "ncbi_biosample": biosample_adapter}
+    )
+
+    handlers._resolve_repository_sources(db_session, study, "PRJNA1", None)
+
+    assert biosample_adapter.fallback_calls == [("PRJNA1", ["SAMN99999999"])]
+
+
 def test_ncbi_bioproject_never_uses_fallback_even_when_not_found(db_session):
     """The fallback is ncbi_biosample-specific -- ncbi_bioproject has no
     fetch_record_by_accessions method at all and shouldn't be expected to."""

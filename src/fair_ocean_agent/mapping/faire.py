@@ -184,6 +184,20 @@ _PIPE_UNION_TARGET_FIELDS = frozenset(
         # against the others, the exact bug this same fix already closed
         # for assay_name/target_gene/primers above.
         "pcr_method_additional", "pcr2_method_additional",
+        # filter_name/filter_diameter/filter_material: a single paper's
+        # Methods section frequently names more than one distinct filter for
+        # different sub-analyses in the same dense paragraph (real example,
+        # STUDY-017230ae34c4: 0.22 um 25 mm Supor filters for DNA, a separate
+        # 0.1 um 142 mm Supor filter for shotgun metagenomics, and 25 mm GF/F
+        # glass microfiber filters for pigment analysis) -- section_categories.py's
+        # term extraction can emit one fact per filter mention, all sharing the
+        # same fact_type_candidate/target field at STUDY level, so without
+        # pipe-union only the first-extracted filter's name/diameter/material
+        # survives and the rest are silently dropped (flagged for review, but
+        # never actually kept), the same "first wins" race already fixed above
+        # for assay_name/target_gene/primers/pcr_method_additional. size_frac
+        # (pore size) already has this fix.
+        "filter_name", "filter_diameter", "filter_material",
     }
 )
 _PIPE_UNION_REVIEW_ON_MULTIPLE_FIELDS = frozenset({"platform", "instrument"})
