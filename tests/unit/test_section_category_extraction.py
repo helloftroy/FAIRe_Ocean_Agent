@@ -994,6 +994,49 @@ def test_extract_section_category_facts_sample_collection_terms():
     assert by_field["samp_category"] == "negative control"
 
 
+def test_extract_section_category_facts_prepends_expedition_ids_before_sentence():
+    sentence = (
+        "For comparison in the DNA analysis, we used stratified sediment core samples from the Peru Margin, "
+        "Juan de Fuca ridge flank, and offshore of the Shimokita Peninsula, Japan, which were collected during "
+        "Ocean Drilling Program (ODP) Leg 201 in 2002, Integrated Ocean Drilling Program (IODP) Expedition "
+        "301 in 2004, and shakedown cruise CK06-06 of JAMSTEC's deep-sea drilling vessel (D/V) Chikyu in "
+        "2006, respectively (Table 1)."
+    )
+    text = (
+        "At each station, hydrographic parameters were recorded with a CTD-carousel system. "
+        f"{sentence}"
+    )
+    categorization_response = json.dumps(
+        [
+            {"sentence_id": "S0.0", "categories": ["sample_prep"]},
+            {"sentence_id": "S0.1", "categories": ["sample_prep"]},
+        ]
+    )
+
+    def fake_backend(prompt: str) -> str:
+        if "categorizing sentences" in prompt:
+            return categorization_response
+        if 'extracting FAIRe "Sample preparation' in prompt:
+            return json.dumps(
+                [
+                    {
+                        "field": "internal_expedition_id",
+                        "raw_value": sentence,
+                        "quote_id": "Q002",
+                    },
+                ]
+            )
+        return "[]"
+
+    backend = MockLLMBackend(responses=fake_backend)
+    facts = extract_section_category_facts(backend, [("Methods", text)], locator_prefix="test")
+    by_field = {f.fact_type_candidate: f.raw_value for f in facts}
+
+    assert by_field["internal_expedition_id"] == (
+        f"ODP Leg 201 | IODP Expedition 301 | CK06-06 | {sentence}"
+    )
+
+
 def test_extract_section_category_facts_no_gated_paragraphs_makes_no_llm_call():
     backend = MockLLMBackend(responses=["[]"])
     facts = extract_section_category_facts(

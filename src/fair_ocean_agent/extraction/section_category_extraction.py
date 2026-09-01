@@ -79,6 +79,26 @@ _SIZE_FRAC_FIELD = "size_frac"
 _SIZE_FRAC_VALUE_RE = re.compile(r"\b\d+(?:\.\d+)?\s*[-\s]?\s*[µμu]m\b", re.IGNORECASE)
 _FILTER_PASSIVE_ACTIVE_FIELD = "filter_passive_active_0_1"
 _ACTIVE_FILTER_NAME_RE = re.compile(r"\bSterivex\b", re.IGNORECASE)
+_INTERNAL_EXPEDITION_ID_FIELD = "internal_expedition_id"
+_ODP_LEG_WITH_PREFIX_RE = re.compile(
+    r"\b(?:Ocean\s+Drilling\s+Program\s+\(ODP\)|ODP)\s+Leg\s+(?P<number>\d+[A-Za-z]?)\b",
+    re.IGNORECASE,
+)
+_BARE_ODP_LEG_RE = re.compile(r"\bLeg\s+(?P<number>\d+[A-Za-z]?)\b", re.IGNORECASE)
+_IODP_EXPEDITION_WITH_PREFIX_RE = re.compile(
+    r"\b(?:Integrated\s+Ocean\s+Drilling\s+Program\s+\(IODP\)|IODP)\s+Expedition\s+(?P<number>\d+[A-Za-z]?)\b",
+    re.IGNORECASE,
+)
+_BARE_IODP_EXPEDITION_RE = re.compile(r"\bExpedition\s+(?P<number>\d+[A-Za-z]?)\b", re.IGNORECASE)
+_CRUISE_ID_RE = re.compile(
+    r"\b(?:shakedown\s+)?(?:cruise|voyage)\s+(?:number\s+|no\.\s*|#\s*)?(?P<id>[A-Z]{1,8}\d{2,}(?:[-_/][A-Z0-9]+)+)\b",
+    re.IGNORECASE,
+)
+_RV_CRUISE_RE = re.compile(
+    r"\b(?:R/V|RV|M/V|D/V)\s+[A-Z][A-Za-z0-9._-]*(?:\s+[A-Z][A-Za-z0-9._-]*){0,3}\s+"
+    r"(?:cruise|voyage)\s+(?:number\s+|no\.\s*|#\s*)?(?P<id>[A-Z]{1,8}\d{2,}(?:[-_/][A-Z0-9]+)+)\b",
+    re.IGNORECASE,
+)
 _FILTER_EVIDENCE_FIELDS = frozenset(
     {
         "filter_material",
@@ -721,6 +741,57 @@ def _add_size_frac_values_from_candidate_quotes(
         grouped.pop(_SIZE_FRAC_FIELD, None)
 
 
+def _extract_internal_expedition_ids(text: str) -> list[str]:
+    ids: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: str) -> None:
+        value = " ".join(value.strip(" ;,.").split())
+        if not value:
+            return
+        key = value.casefold()
+        if key in seen:
+            return
+        seen.add(key)
+        ids.append(value)
+
+    for match in _ODP_LEG_WITH_PREFIX_RE.finditer(text):
+        add(f"ODP Leg {match.group('number')}")
+    for match in _IODP_EXPEDITION_WITH_PREFIX_RE.finditer(text):
+        add(f"IODP Expedition {match.group('number')}")
+    if re.search(r"\bOcean\s+Drilling\s+Program\s+\(ODP\)\b", text, re.IGNORECASE):
+        for match in _BARE_ODP_LEG_RE.finditer(text):
+            add(f"ODP Leg {match.group('number')}")
+    if re.search(r"\bIntegrated\s+Ocean\s+Drilling\s+Program\s+\(IODP\)\b", text, re.IGNORECASE):
+        for match in _BARE_IODP_EXPEDITION_RE.finditer(text):
+            add(f"IODP Expedition {match.group('number')}")
+    for pattern in (_RV_CRUISE_RE, _CRUISE_ID_RE):
+        for match in pattern.finditer(text):
+            add(match.group("id"))
+    return ids
+
+
+def _prepend_expedition_ids_to_raw_value(grouped: dict[str, dict]) -> None:
+    group = grouped.get(_INTERNAL_EXPEDITION_ID_FIELD)
+    if not group:
+        return
+    text = " ".join([*(group.get("entries") or []), *(group.get("quotes") or [])])
+    ids = _extract_internal_expedition_ids(text)
+    if not ids:
+        return
+    entries = [*(group.get("entries") or []), *(group.get("quotes") or [])]
+    id_keys = {identifier.casefold() for identifier in ids}
+    retained_seen: set[str] = set()
+    retained_entries: list[str] = []
+    for entry in entries:
+        key = entry.casefold()
+        if key in id_keys or key in retained_seen:
+            continue
+        retained_seen.add(key)
+        retained_entries.append(entry)
+    group["entries"] = [*ids, *retained_entries]
+
+
 # A real live audit (10.7717/peerj.9857) caught dna_cleanup_0_1 left blank
 # while dna_cleanup_method resolved to a real value ("PCR clean-up kit
 # (Fermentas)") from the exact same quote -- the boolean's own cue list
@@ -899,6 +970,7 @@ def extract_category_terms(
         _add_size_frac_values_from_candidate_quotes(grouped, candidates)
         _add_filter_passive_active_fallback(grouped)
         _add_missing_boolean_companions_from_method(grouped)
+        _prepend_expedition_ids_to_raw_value(grouped)
     for field_name, group in grouped.items():
         if field_name.endswith(_BOOLEAN_FIELD_SUFFIX):
             _resolve_boolean_field_entries(group)
