@@ -2135,10 +2135,21 @@ def _match_flag(flag: TextSearchFlag, text: str) -> tuple[int, str, str, tuple[s
 
 
 def _term_pattern(term: str) -> re.Pattern[str]:
+    """Real gap found live (STUDY-012e2a73836d): "...potential
+    contaminants..." and "...in the negative controls..." never matched
+    the cues "contaminant"/"negative control" at all -- the strict
+    right-boundary check (?![A-Za-z0-9]) correctly rejects a DIFFERENT
+    word sharing a prefix (so "contaminant" doesn't wrongly match
+    "contaminantly" or similar), but it was equally strict about a
+    simple plural of the exact same word, which real prose uses
+    constantly. `e?s?` optionally matches a trailing "s" or "es"
+    (covering both "contaminant"->"contaminants" and "process"->
+    "processes"/"analysis" staying as-is since irregular plurals aren't
+    a simple suffix) without weakening the boundary check itself."""
     escaped = re.escape(term)
     escaped = escaped.replace(r"\ ", r"\s+")
     escaped = escaped.replace(r"\-", r"[-\s]+")
-    return re.compile(rf"(?<![A-Za-z0-9]){escaped}(?![A-Za-z0-9])", re.IGNORECASE)
+    return re.compile(rf"(?<![A-Za-z0-9]){escaped}e?s?(?![A-Za-z0-9])", re.IGNORECASE)
 
 
 def _match_controlled_terms(

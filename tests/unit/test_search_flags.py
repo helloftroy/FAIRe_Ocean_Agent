@@ -2113,3 +2113,21 @@ def test_quote_candidates_for_screen_contam_method_still_matches_real_decontam_l
         )
     )
     assert any("screen_contam_method" in c.field_names for c in candidates)
+
+
+def test_quote_candidates_for_screen_contam_method_matches_plural_contaminants_and_negative_controls():
+    """Real gap found live (STUDY-012e2a73836d): "...potential
+    contaminants..." and "...in the negative controls..." never matched
+    the cues "contaminant"/"negative control" at all -- _term_pattern's
+    strict right-boundary check correctly rejects a different word
+    sharing a prefix, but was equally strict about a simple plural of
+    the exact same word. This sentence deliberately uses ONLY plural
+    forms (no bare "decontam"/"blank" etc. to accidentally pass via a
+    different cue) so it isolates the pluralization gap specifically."""
+    text = (
+        "To exclude confounding results due to potential contaminants from the extraction process "
+        "and chemicals used for PCR and sequencing, the top 10 families in the negative controls, "
+        "and previously reported core-human microbiomes were arbitrarily removed."
+    )
+    candidates = quote_candidates_for_llm_judged_search((("Methods", text),))
+    assert any("screen_contam_method" in c.field_names for c in candidates)

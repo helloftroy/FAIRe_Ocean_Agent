@@ -627,10 +627,16 @@ TERM_PHASES_BY_CATEGORY: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
 
 
 def _term_pattern(term: str) -> re.Pattern[str]:
+    """Same fix as search_flags.py's identical helper (real gap found
+    live, STUDY-012e2a73836d): the strict right-boundary check correctly
+    rejects a different word sharing a prefix, but was equally strict
+    about a simple plural of the exact same word ("contaminant" never
+    matching "contaminants"). `e?s?` covers a trailing "s"/"es" without
+    weakening the boundary check itself."""
     escaped = re.escape(term)
     escaped = escaped.replace(r"\ ", r"\s+")
     escaped = escaped.replace(r"\-", r"[-\s]+")
-    return re.compile(rf"(?<![A-Za-z0-9]){escaped}(?![A-Za-z0-9])", re.IGNORECASE)
+    return re.compile(rf"(?<![A-Za-z0-9]){escaped}e?s?(?![A-Za-z0-9])", re.IGNORECASE)
 
 
 _CATEGORY_PATTERNS: dict[str, tuple[re.Pattern[str], ...]] = {

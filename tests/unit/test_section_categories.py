@@ -23,6 +23,18 @@ def _term_cues_match(native_name: str, sentence: str) -> bool:
     term = next(t for t in _SAMPLE_PREP_CATEGORY.terms if t.native_name == native_name)
     return any(_term_pattern(cue).search(sentence) for cue in term.search_cues)
 
+
+def test_term_pattern_matches_a_simple_plural_of_the_cue():
+    """Real gap found live (STUDY-012e2a73836d): "potential contaminants"
+    never matched the cue "contaminant" at all -- the strict right-
+    boundary check correctly rejects a DIFFERENT word sharing a prefix
+    (e.g. "contaminant" must not match "contaminantly"), but was equally
+    strict about a simple plural of the exact same word."""
+    assert _term_pattern("contaminant").search("potential contaminants were removed")
+    assert _term_pattern("process").search("removed during downstream processes")
+    # still correctly rejects a genuinely different word sharing a prefix
+    assert not _term_pattern("contaminant").search("this was handled contaminantly")
+
 # Locks in the exact per-category term count from the user's own term
 # tables, so a future edit that accidentally drops or duplicates an entry
 # fails loudly here instead of silently shrinking Stage 3's eventual
