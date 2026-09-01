@@ -2,6 +2,7 @@ import json
 
 from fair_ocean_agent.config import MIN_LLM_MAX_OUTPUT_TOKENS
 from fair_ocean_agent.extraction.search_flags import (
+    _barcoding_pcr_appr_keyword_match,
     confirm_value_described_as_depth,
     detect_controlled_search_facts,
     detect_llm_judged_search_facts,
@@ -458,6 +459,9 @@ def test_detect_controlled_search_facts_extracts_frontiers_primer_pair_from_tabl
         "U806R | GGACTACHVGGGTWTCTAAT | Prokaryote | S | Walters et al., 2011\n"
         "B27F | AGRGTTYGATYMTGGCTCAG | Bacteria | D | Lane, 1991\n"
         "B357R | CTGCWGCCNCCCGTAGG | Bacteria | D | Herlemann et al., 2011\n"
+        "A806F | ATTAGATACCCSBGTAGTCC | Archaea | D | Raskin et al., 1994\n"
+        "A958R | YCCGGCGTTGAMTCCAATT | Archaea | D | DeLong, 1992\n"
+        "Digital PCR was performed with domain-specific primers B27F-B357R and A806F-A958R. "
         "The V3-V4 hyper-variable region of the 16S rRNA gene was amplified by PCR "
         "using universal primers U515F/U806R (Table 2)."
     )
@@ -469,11 +473,14 @@ def test_detect_controlled_search_facts_extracts_frontiers_primer_pair_from_tabl
     )
 
     by_type = {fact.fact_type_candidate: fact for fact in controlled}
-    assert by_type["forward_primer_name"].raw_value == "U515F"
-    assert by_type["reverse_primer_name"].raw_value == "U806R"
-    assert by_type["forward_primer_sequence"].raw_value == "TGYCAGCMGCCGCCGTAA"
-    assert by_type["reverse_primer_sequence"].raw_value == "GGACTACHVGGGTWTCTAAT"
-    assert "B27F" not in by_type["forward_primer_name"].raw_value
+    assert by_type["forward_primer_name"].raw_value == "B27F | A806F | U515F"
+    assert by_type["reverse_primer_name"].raw_value == "B357R | A958R | U806R"
+    assert by_type["forward_primer_sequence"].raw_value == (
+        "AGRGTTYGATYMTGGCTCAG | ATTAGATACCCSBGTAGTCC | TGYCAGCMGCCGCCGTAA"
+    )
+    assert by_type["reverse_primer_sequence"].raw_value == (
+        "CTGCWGCCNCCCGTAGG | YCCGGCGTTGAMTCCAATT | GGACTACHVGGGTWTCTAAT"
+    )
 
 
 def test_detect_controlled_search_facts_does_not_match_bare_its_as_target_gene():
@@ -877,6 +884,39 @@ def test_quote_candidates_for_llm_judged_barcoding_maps_two_round_pcr():
     assert candidates[0].field_names == ("barcoding_pcr_appr",)
 
 
+def test_quote_candidates_for_llm_judged_barcoding_maps_second_round_pcr():
+    """Real gap found live (10.3389/fmicb.2017.01135): "index and adapter
+    were added to the purified product during the eight cycles of
+    second-round PCR" never matched any barcoding_pcr_appr search term at
+    all -- the inserted "-round" broke the fixed "second PCR" phrase,
+    silently defaulting the whole study to one-step PCR and leaving the
+    entire pcr2_* field family blank."""
+    candidates = quote_candidates_for_llm_judged_search(
+        (
+            (
+                "Methods",
+                "Index and adapter were added to the purified product during the eight cycles of "
+                "second-round PCR using KAPA HiFi HotStart Ready mix.",
+            ),
+        )
+    )
+    assert any("barcoding_pcr_appr" in c.field_names for c in candidates)
+
+
+def test_barcoding_pcr_appr_keyword_fallback_matches_second_round_pcr():
+    """Same real gap, the deterministic safety-net path: this fallback
+    exists specifically because a small local model can silently drop a
+    two-step-PCR candidate quote, so it must not share the same
+    "second-round" blind spot as the LLM-judged search_terms."""
+    text = (
+        "Index and adapter were added to the purified product during the eight cycles of "
+        "second-round PCR using KAPA HiFi HotStart Ready mix."
+    )
+    result = _barcoding_pcr_appr_keyword_match((("Methods", text),))
+    assert result is not None
+    assert result[0] == "two-step PCR"
+
+
 def test_quote_candidates_for_llm_judged_inhibition_search_is_targeted():
     candidates = quote_candidates_for_llm_judged_search(
         (
@@ -892,7 +932,13 @@ def test_quote_candidates_for_llm_judged_inhibition_search_is_targeted():
     # control" contains the bare word "control", one of their own search
     # terms -- correctly so, since the LLM (not this deterministic gate)
     # is what decides whether the quote actually supports either.
-    assert candidates[0].field_names == ("inhibition_check_0_1", "inhibition_check", "neg_cont_0_1", "pos_cont_0_1")
+    assert candidates[0].field_names == (
+        "inhibition_check_0_1",
+        "inhibition_check",
+        "targeted_detection_method_additional",
+        "neg_cont_0_1",
+        "pos_cont_0_1",
+    )
 
 
 def test_quote_candidates_split_semicolon_joined_enumerated_steps_into_separate_quotes():
@@ -1194,6 +1240,163 @@ def test_detect_llm_judged_search_facts_accepts_quote_id_and_stores_literal_quot
     )
     assert by_type["assay_name"].confidence_metadata["matches"][0]["quote_id"] == "Q002"
     assert backend.calls[0]["max_tokens"] == MIN_LLM_MAX_OUTPUT_TOKENS
+
+
+def test_detect_llm_judged_search_facts_restores_sequencing_methodology():
+    text = (
+        "The indexed PCR products were purified twice by AMPure XP. "
+        "The PCR product was sequenced by the MiSeq platform with MiSeq Reagent Kit v3, "
+        "600 cycles (Illumina). "
+        "OTUs were clustered using UPARSE."
+    )
+
+    def respond(prompt: str) -> str:
+        assert "sequencing_methodology" in prompt
+        assert "Q001 [" in prompt
+        assert "The PCR product was sequenced by the MiSeq platform" in prompt
+        return json.dumps(
+            [
+                {
+                    "field": "sequencing_methodology",
+                    "raw_value": (
+                        "The PCR product was sequenced by the MiSeq platform with MiSeq Reagent Kit v3, "
+                        "600 cycles (Illumina)."
+                    ),
+                    "quote_id": "Q001",
+                }
+            ]
+        )
+
+    backend = MockLLMBackend(label="judge", responses=respond)
+    facts = detect_llm_judged_search_facts(
+        backend,
+        (("Sequencing", text),),
+        locator_prefix="paper:PMC1",
+    )
+
+    by_type = {fact.fact_type_candidate: fact for fact in facts}
+    assert by_type["sequencing_methodology"].raw_value == (
+        "The PCR product was sequenced by the MiSeq platform with MiSeq Reagent Kit v3, "
+        "600 cycles (Illumina)."
+    )
+    assert by_type["sequencing_methodology"].confidence_metadata["section"] == "Library preparation sequencing"
+
+
+def test_detect_llm_judged_search_facts_extracts_targeted_detection_bundle():
+    text = (
+        "PCR products were checked by agarose gel electrophoresis. "
+        "CARD-FISH was performed with probe Atri578 (5'-ACTTTTAAGACCGCCTACGA-3') "
+        "at 0.5 uM, designed in this study to target Atribacteria. "
+        "A host-blocking primer 5'-ACGTACGTACGT-3' was used to suppress fish DNA amplification. "
+        "Samples with Cq < 40 in two of three replicates were considered positive. "
+        "The LOD was determined by dilution series and was 3 copies/reaction; "
+        "the LOQ was determined from the lowest standard meeting precision criteria and was 30 copies/reaction. "
+        "Standard curves used a plasmid containing the target sequence and the fluorescence threshold was set to 0.02."
+    )
+
+    def respond(prompt: str) -> str:
+        assert "amp_vis_method" in prompt
+        assert "probe_seq" in prompt
+        assert "block_seq" in prompt
+        assert "targeted_detection_method_additional" in prompt
+        return json.dumps(
+            [
+                {"field": "amp_vis_method", "raw_value": "agarose gel electrophoresis", "quote_id": "Q001"},
+                {"field": "probe_seq", "raw_value": "ACTTTTAAGACCGCCTACGA", "quote_id": "Q002"},
+                {"field": "probe_conc", "raw_value": "0.5 uM", "quote_id": "Q002"},
+                {"field": "probe_ref", "raw_value": "designed in this study", "quote_id": "Q002"},
+                {"field": "block_seq", "raw_value": "ACGTACGTACGT", "quote_id": "Q003"},
+                {"field": "block_taxa", "raw_value": "fish DNA", "quote_id": "Q003"},
+                {"field": "detection_criteria", "raw_value": "Cq < 40 in two of three replicates", "quote_id": "Q004"},
+                {"field": "lod_method", "raw_value": "dilution series", "quote_id": "Q005"},
+                {"field": "pcr_assay_lod", "raw_value": "3", "quote_id": "Q005"},
+                {"field": "pcr_assay_lod_unit", "raw_value": "copies/reaction", "quote_id": "Q005"},
+                {
+                    "field": "loq_method",
+                    "raw_value": "lowest standard meeting precision criteria",
+                    "quote_id": "Q006",
+                },
+                {"field": "pcr_assay_loq", "raw_value": "30", "quote_id": "Q006"},
+                {"field": "pcr_assay_loq_unit", "raw_value": "copies/reaction", "quote_id": "Q006"},
+                {"field": "std_source", "raw_value": "plasmid containing the target sequence", "quote_id": "Q007"},
+                {"field": "thresholdQuantificationCycle", "raw_value": "0.02", "quote_id": "Q007"},
+                {
+                    "field": "targeted_detection_method_additional",
+                    "raw_value": "CARD-FISH was performed with probe Atri578 at 0.5 uM.",
+                    "quote_id": "Q002",
+                },
+            ]
+        )
+
+    backend = MockLLMBackend(label="judge", responses=respond)
+    facts = detect_llm_judged_search_facts(backend, (("Targeted detection", text),), locator_prefix="paper:PMC1")
+
+    by_type = {fact.fact_type_candidate: fact.raw_value for fact in facts}
+    assert by_type["amp_vis_method"] == "agarose gel electrophoresis"
+    assert by_type["probe_seq"] == "ACTTTTAAGACCGCCTACGA"
+    assert by_type["probe_conc"] == "0.5 uM"
+    assert by_type["probe_ref"] == "designed in this study"
+    assert by_type["block_seq"] == "ACGTACGTACGT"
+    assert by_type["block_taxa"] == "fish DNA"
+    assert by_type["detection_criteria"] == "Cq < 40 in two of three replicates"
+    assert by_type["lod_method"] == "dilution series"
+    assert by_type["pcr_assay_lod"] == "3"
+    assert by_type["pcr_assay_lod_unit"] == "copies/reaction"
+    assert by_type["loq_method"] == "lowest standard meeting precision criteria"
+    assert by_type["pcr_assay_loq"] == "30"
+    assert by_type["pcr_assay_loq_unit"] == "copies/reaction"
+    assert by_type["std_source"] == "plasmid containing the target sequence"
+    assert by_type["thresholdQuantificationCycle"] == "0.02"
+    assert by_type["targeted_detection_method_additional"] == "CARD-FISH was performed with probe Atri578 at 0.5 uM."
+
+
+def test_detect_llm_judged_search_facts_handles_frontiers_atri578_probe_and_gel():
+    text = (
+        "TABLE 2. Oligonucleotide primers and Atribacteria-specific probe used in this study. "
+        "Primer | Sequence (5'-3') | Target | Use | Reference "
+        "Atri578 | ACTTTTAAGACCGCCTACGA | Atribacteria | C | This study. "
+        "After purification of the desired PCR products by agarose gel electrophoresis, index and adapter "
+        "were added to the purified product during the eight cycles of second-round PCR using KAPA HiFi "
+        "HotStart Ready mix. "
+        "The horseradish peroxidase (HRP)-labeled Atri578 probe was purchased from Biomers GmbH "
+        "(Ulm, Germany). "
+        "Briefly, hybridization was performed in hybridization buffer containing 10% formamide and 0.5 μM "
+        "of the HRP-labeled Atri578 probe at 35°C for 2 h."
+    )
+
+    def respond(prompt: str) -> str:
+        assert "probe_seq" in prompt
+        assert "amp_vis_method" in prompt
+        assert "targeted_detection_method_additional" in prompt
+        assert "Atri578 | ACTTTTAAGACCGCCTACGA" in prompt
+        assert "agarose gel electrophoresis" in prompt
+        assert "HRP-labeled Atri578 probe" in prompt
+        return json.dumps(
+            [
+                {"field": "probe_seq", "raw_value": "ACTTTTAAGACCGCCTACGA", "quote_id": "Q001"},
+                {"field": "probe_ref", "raw_value": "This study", "quote_id": "Q001"},
+                {"field": "amp_vis_method", "raw_value": "agarose gel electrophoresis", "quote_id": "Q003"},
+                {"field": "probe_conc", "raw_value": "0.5 μM", "quote_id": "Q005"},
+                {
+                    "field": "targeted_detection_method_additional",
+                    "raw_value": (
+                        "horseradish peroxidase (HRP)-labeled Atri578 probe; hybridization buffer "
+                        "containing 10% formamide and 0.5 μM probe at 35°C for 2 h"
+                    ),
+                    "quote_id": "Q004",
+                },
+            ]
+        )
+
+    backend = MockLLMBackend(label="judge", responses=respond)
+    facts = detect_llm_judged_search_facts(backend, (("Methods", text),), locator_prefix="paper:PMC5476839")
+
+    by_type = {fact.fact_type_candidate: fact.raw_value for fact in facts}
+    assert by_type["probe_seq"] == "ACTTTTAAGACCGCCTACGA"
+    assert by_type["probe_ref"] == "This study"
+    assert by_type["amp_vis_method"] == "agarose gel electrophoresis"
+    assert by_type["probe_conc"] == "0.5 μM"
+    assert "(HRP)-labeled Atri578 probe" in by_type["targeted_detection_method_additional"]
 
 
 def test_detect_llm_judged_search_facts_accepts_multiple_bracketed_fields_from_one_quote():

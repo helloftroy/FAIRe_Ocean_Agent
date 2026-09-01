@@ -102,11 +102,14 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
         output_instructions=(
             "Classify only the barcoding/indexing/library-construction approach for metabarcoding. "
             "Use one of: one-step PCR, two-step PCR, ligation-based. Map two-step PCR, two-stage PCR, "
-            "two-round PCR, two-round PCR amplification strategy, "
-            "second PCR, PCR2, indexing PCR, barcode PCR, or adapter PCR to two-step PCR. Map "
-            "ligation-based, adapter ligation, barcode ligation, ligated adapters, ligation sequencing kit, "
-            "or library adapters were ligated to ligation-based. Omit this field if the quote only mentions "
-            "ordinary PCR without a library/barcoding/indexing context; a separate fallback handles one-step PCR."
+            "two-round PCR, two-round PCR amplification strategy, second-round PCR, second round of PCR, "
+            "second PCR, PCR2, indexing PCR, barcode PCR, or adapter PCR to two-step PCR -- including a "
+            "quote that only describes adding an index/adapter during a distinct second amplification step "
+            "(e.g. 'during the eight cycles of second-round PCR'), even if it never uses the literal phrase "
+            "'two-step'. Map ligation-based, adapter ligation, barcode ligation, ligated adapters, ligation "
+            "sequencing kit, or library adapters were ligated to ligation-based. Omit this field if the quote "
+            "only mentions ordinary PCR without a library/barcoding/indexing context; a separate fallback "
+            "handles one-step PCR."
         ),
         search_terms=(
             "one-step PCR",
@@ -120,6 +123,12 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
             "two-stage PCR",
             "two-round PCR",
             "two-round PCR amplification strategy",
+            # Real gap found live (10.3389/fmicb.2017.01135): "the eight
+            # cycles of second-round PCR" never matched "second PCR" at
+            # all -- the inserted "-round" broke the fixed phrase.
+            "second-round PCR",
+            "second round PCR",
+            "second round of PCR",
             "second PCR",
             "indexing PCR",
             "barcode PCR",
@@ -332,6 +341,53 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
         ),
     ),
     LLMJudgedSearchField(
+        term_name="sequencing_methodology",
+        section="Library preparation sequencing",
+        description=(
+            "Relevant sequencing-method sentences from the paper, including the sequencing platform, "
+            "instrument, chemistry/kit, read layout, read length, library loading/run setup, and the "
+            "statement that libraries/amplicons/products were sequenced."
+        ),
+        output_instructions=(
+            "Return the full relevant sequencing-method sentence or phrase, preserving the source wording. "
+            "Include sentences that describe the actual sequencing run, platform/instrument, kit/chemistry, "
+            "paired-end/single-end layout, read length, flow cell, loading, or library sequencing. Omit "
+            "sample collection, PCR-only details with no sequencing/library-run information, and downstream "
+            "bioinformatic analysis."
+        ),
+        search_terms=(
+            "sequenced by",
+            "sequenced on",
+            "sequenced using",
+            "sequencing was performed",
+            "amplicon sequencing",
+            "library was sequenced",
+            "libraries were sequenced",
+            "PCR product was sequenced",
+            "PCR products were sequenced",
+            "MiSeq",
+            "HiSeq",
+            "NextSeq",
+            "NovaSeq",
+            "Ion Torrent",
+            "Ion PGM",
+            "PacBio",
+            "SMRT",
+            "Oxford Nanopore",
+            "MinION",
+            "paired-end",
+            "single-end",
+            "2 x",
+            "2x",
+            "read length",
+            "bp reads",
+            "cycle kit",
+            "reagent kit",
+            "flow cell",
+            "sequencing run",
+        ),
+    ),
+    LLMJudgedSearchField(
         term_name="inhibition_check_0_1",
         section="PCR",
         description="Whether the study explicitly tested samples or DNA extracts for PCR inhibition.",
@@ -449,6 +505,368 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
             "reduced inhibition",
             "improved amplification",
             "inhibition mitigation",
+        ),
+    ),
+    LLMJudgedSearchField(
+        term_name="amp_vis_method",
+        section="Targeted detection",
+        description="Method used to visualize or verify PCR amplification products.",
+        output_instructions=(
+            "Return only the PCR amplicon/product visualization or verification method, such as agarose gel "
+            "electrophoresis, gel electrophoresis, capillary electrophoresis, Bioanalyzer, or TapeStation. "
+            "Only accept it when the quote uses the method to inspect or verify amplified PCR products. Do "
+            "not confuse microscopy/FISH visualization with PCR amplicon visualization."
+        ),
+        search_terms=(
+            "agarose gel electrophoresis",
+            "gel electrophoresis",
+            "electrophoresis",
+            "capillary electrophoresis",
+            "Bioanalyzer",
+            "TapeStation",
+            "amplicons were visualized",
+            "PCR products were visualized",
+            "PCR products were checked",
+            "amplicon bands",
+            "PCR bands",
+            "bands were observed",
+        ),
+    ),
+    LLMJudgedSearchField(
+        term_name="block_seq",
+        section="Targeted detection",
+        description="Nucleotide sequence of a blocking primer or blocking oligonucleotide.",
+        output_instructions=(
+            "Return only an explicit nucleotide sequence for a blocking primer, blocking oligo, blocker, "
+            "host-blocking primer, or suppressor oligonucleotide. Do not return ordinary forward/reverse "
+            "PCR primer sequences."
+        ),
+        search_terms=(
+            "blocking primer",
+            "blocking primers",
+            "blocking oligo",
+            "blocking oligonucleotide",
+            "blocking oligonucleotides",
+            "blocker",
+            "host-blocking primer",
+            "suppressor oligonucleotide",
+        ),
+    ),
+    LLMJudgedSearchField(
+        term_name="block_ref",
+        section="Targeted detection",
+        description="Citation/reference/provenance associated with a blocking primer or blocking oligonucleotide.",
+        output_instructions=(
+            "Return the citation, DOI, reference phrase, or provenance for the blocking primer/oligonucleotide. "
+            "If it was designed in the current study, return that it was designed in the current study. Do not "
+            "invent an external citation."
+        ),
+        search_terms=(
+            "blocking primer",
+            "blocking oligo",
+            "blocking oligonucleotide",
+            "blocker",
+            "described by",
+            "designed in this study",
+            "designed for this study",
+            "previously published",
+            "modified from",
+        ),
+    ),
+    LLMJudgedSearchField(
+        term_name="block_taxa",
+        section="Targeted detection",
+        description="Taxon/taxa whose amplification or hybridization the blocking oligonucleotide is intended to suppress.",
+        output_instructions=(
+            "Return the taxon or broad source the blocking oligo is intended to suppress, such as human, fish, "
+            "host, chloroplast, mitochondrial, predator DNA, or another explicitly stated target. Do not infer "
+            "the taxon from the sample type alone."
+        ),
+        search_terms=(
+            "blocking primer",
+            "blocking oligo",
+            "blocking oligonucleotide",
+            "suppress amplification",
+            "inhibit amplification",
+            "block host",
+            "host DNA",
+            "chloroplast",
+            "mitochondrial",
+            "predator DNA",
+        ),
+    ),
+    LLMJudgedSearchField(
+        term_name="detection_criteria",
+        section="Targeted detection",
+        description="Explicit criteria used to decide whether a target was detected/present/positive.",
+        output_instructions=(
+            "Return the explicit positive/detection criterion, preserving thresholds and replicate rules. "
+            "Examples include Cq < 40 considered positive, target amplified in 2 of 3 replicates, minimum "
+            "positive droplets, fluorescence above threshold, minimum copy-number criterion, or explicit "
+            "microscopy/hybridization positive criterion. Do not create a criterion from a general statement "
+            "that the target was detected."
+        ),
+        search_terms=(
+            "considered positive",
+            "scored positive",
+            "called positive",
+            "positive if",
+            "positive when",
+            "detection criteria",
+            "detection criterion",
+            "presence was defined",
+            "detected if",
+            "detected when",
+            "Cq <",
+            "Ct <",
+            "quantification cycle below",
+            "positive droplets",
+            "fluorescence above threshold",
+            "minimum copy number",
+            "replicates",
+        ),
+    ),
+    LLMJudgedSearchField(
+        term_name="lod_method",
+        section="Targeted detection",
+        description="How the assay limit of detection was determined.",
+        output_instructions=(
+            "Return the method used to determine LOD, such as dilution series, replicate detection probability, "
+            "lowest standard consistently detected, probit/logistic model, synthetic target dilution, or "
+            "genomic DNA dilution. Do not infer the method from an LOD value alone."
+        ),
+        search_terms=(
+            "limit of detection",
+            "LOD",
+            "detection limit",
+            "dilution series",
+            "lowest standard",
+            "consistently detected",
+            "probit",
+            "logistic model",
+            "synthetic target dilution",
+            "genomic DNA dilution",
+        ),
+    ),
+    LLMJudgedSearchField(
+        term_name="loq_method",
+        section="Targeted detection",
+        description="How the assay limit of quantification was determined.",
+        output_instructions=(
+            "Return the method used to determine LOQ, such as lowest standard meeting precision criteria, "
+            "coefficient-of-variation threshold, standard-curve based determination, or replicate "
+            "quantification criterion. Do not infer the method from an LOQ value alone."
+        ),
+        search_terms=(
+            "limit of quantification",
+            "LOQ",
+            "quantification limit",
+            "lowest standard",
+            "precision criteria",
+            "coefficient of variation",
+            "coefficient-of-variation",
+            "CV threshold",
+            "standard curve",
+            "replicate quantification",
+        ),
+    ),
+    LLMJudgedSearchField(
+        term_name="pcr_assay_lod",
+        section="Targeted detection",
+        description="Numerical assay limit of detection.",
+        output_instructions=(
+            "Return only the numerical LOD value explicitly reported by the quote, without the unit. Do not "
+            "return the LOD method or infer an LOD from a dilution series."
+        ),
+        search_terms=("limit of detection", "LOD", "detection limit"),
+    ),
+    LLMJudgedSearchField(
+        term_name="pcr_assay_lod_unit",
+        section="Targeted detection",
+        description="Unit corresponding to the assay limit of detection.",
+        output_instructions=(
+            "Return only the LOD unit explicitly reported by the quote, such as copies/reaction, copies/uL, "
+            "copies/L, gene copies, or cells/reaction. Keep the paper's unit wording."
+        ),
+        search_terms=("limit of detection", "LOD", "detection limit", "copies/reaction", "copies/uL", "gene copies"),
+    ),
+    LLMJudgedSearchField(
+        term_name="pcr_assay_loq",
+        section="Targeted detection",
+        description="Numerical assay limit of quantification.",
+        output_instructions=(
+            "Return only the numerical LOQ value explicitly reported by the quote, without the unit. Do not "
+            "return the LOQ method or infer an LOQ from a standard curve."
+        ),
+        search_terms=("limit of quantification", "LOQ", "quantification limit"),
+    ),
+    LLMJudgedSearchField(
+        term_name="pcr_assay_loq_unit",
+        section="Targeted detection",
+        description="Unit corresponding to the assay limit of quantification.",
+        output_instructions=(
+            "Return only the LOQ unit explicitly reported by the quote. Keep the paper's unit wording."
+        ),
+        search_terms=("limit of quantification", "LOQ", "quantification limit", "copies/reaction", "copies/uL"),
+    ),
+    LLMJudgedSearchField(
+        term_name="probe_seq",
+        section="Targeted detection",
+        description="Nucleotide sequence of an explicitly identified detection or hybridization probe.",
+        output_instructions=(
+            "Return only the nucleotide sequence of an explicitly identified detection/hybridization probe, "
+            "including qPCR, TaqMan/hydrolysis probe, molecular beacon, FISH probe, or CARD-FISH probe. Do "
+            "not extract ordinary PCR primer sequences into this field."
+        ),
+        search_terms=(
+            "probe sequence",
+            "TaqMan probe",
+            "hydrolysis probe",
+            "molecular beacon",
+            "FISH probe",
+            "CARD-FISH probe",
+            "oligonucleotide probe",
+            "hybridization probe",
+            "probe",
+        ),
+    ),
+    LLMJudgedSearchField(
+        term_name="probe_ref",
+        section="Targeted detection",
+        description="Citation/reference/provenance for the detection or hybridization probe.",
+        output_instructions=(
+            "Return the citation, DOI, reference phrase, or provenance for the probe. If the probe was newly "
+            "designed in the current paper, return that rather than fabricating a reference."
+        ),
+        search_terms=(
+            "probe",
+            "described by",
+            "probe described",
+            "previously published probe",
+            "designed in this study",
+            "designed for this study",
+            "modified from",
+        ),
+    ),
+    LLMJudgedSearchField(
+        term_name="probe_conc",
+        section="Targeted detection",
+        description="Explicitly reported concentration of a qPCR, FISH, CARD-FISH, or other detection probe.",
+        output_instructions=(
+            "Return the probe concentration with unit exactly as reported, such as 0.5 uM or 200 nM. Probe "
+            "concentration may apply to qPCR probes or hybridization/FISH probes."
+        ),
+        search_terms=(
+            "probe concentration",
+            "probe was added",
+            "probe final concentration",
+            "probe at",
+            "0.5 uM probe",
+            "nM probe",
+            "uM probe",
+            "µM probe",
+            "nM",
+            "uM",
+            "µM",
+        ),
+    ),
+    LLMJudgedSearchField(
+        term_name="std_source",
+        section="Targeted detection",
+        description="Source/material used to create an assay standard or standard curve.",
+        output_instructions=(
+            "Return the material/source used for assay calibration or the standard curve, such as plasmid "
+            "containing target sequence, synthetic gBlock, genomic DNA, purified PCR product, cloned target "
+            "sequence, or cultured organism DNA. Do not treat cloned material as a qPCR standard unless the "
+            "quote explicitly uses it for assay calibration/quantification."
+        ),
+        search_terms=(
+            "standard curve",
+            "standard curves",
+            "assay standard",
+            "calibration standard",
+            "plasmid standard",
+            "synthetic gBlock",
+            "gBlock",
+            "genomic DNA standard",
+            "purified PCR product",
+            "cloned target",
+            "serial dilution",
+            "known copy number",
+        ),
+    ),
+    LLMJudgedSearchField(
+        term_name="thresholdQuantificationCycle",
+        section="Targeted detection",
+        description="Explicit fluorescence threshold parameter used to determine qPCR Cq/Ct.",
+        output_instructions=(
+            "Return only the actual fluorescence threshold parameter used to determine Cq/Ct, if explicitly "
+            "stated. Do not populate with sample Cq values, Ct positivity cutoffs, number of PCR cycles, or "
+            "detection criteria."
+        ),
+        search_terms=(
+            "fluorescence threshold",
+            "threshold quantification cycle",
+            "quantification cycle threshold",
+            "Ct threshold",
+            "Cq threshold",
+            "threshold cycle",
+            "baseline threshold",
+        ),
+    ),
+    LLMJudgedSearchField(
+        term_name="targeted_detection_method_additional",
+        section="Targeted detection",
+        description=(
+            "Useful targeted-detection details that do not fit cleanly elsewhere, including qPCR/ddPCR/FISH/"
+            "CARD-FISH chemistry, probe names, hybridization conditions, labels, counterstains, validation, "
+            "blocking oligos, detection rules, standard-curve details, and adapter/index addition when "
+            "sequences are unavailable."
+        ),
+        output_instructions=(
+            "Return a concise source-faithful sentence or semicolon-separated phrase preserving useful targeted "
+            "detection methodology. Use this when the quote contains important qPCR, dPCR/ddPCR, FISH, CARD-FISH, "
+            "blocking-oligo, assay-validation, standard-curve, detection-limit, inhibition-test, probe, or "
+            "adapter/indexing detail that is not fully captured by another field. Do not include generic PCR, "
+            "sequencing, sample collection, or downstream bioinformatics unless the sentence is specifically "
+            "part of targeted detection or adapter/index addition without explicit adapter sequences."
+        ),
+        search_terms=(
+            "qPCR",
+            "quantitative PCR",
+            "real-time PCR",
+            "digital PCR",
+            "dPCR",
+            "ddPCR",
+            "targeted PCR",
+            "targeted detection",
+            "probe-based detection",
+            "FISH",
+            "CARD-FISH",
+            "fluorescence in situ hybridization",
+            "hybridization buffer",
+            "formamide",
+            "hybridization probe",
+            "TaqMan",
+            "hydrolysis probe",
+            "molecular beacon",
+            "HRP-labeled",
+            "horseradish peroxidase",
+            "tyramide",
+            "signal deposition",
+            "counterstaining",
+            "SYBR Green",
+            "DAPI",
+            "blocking oligo",
+            "blocking primer",
+            "detection criteria",
+            "limit of detection",
+            "limit of quantification",
+            "standard curve",
+            "PCR inhibition",
+            "index adapter",
+            "adapter were added",
+            "adapters were added",
         ),
     ),
     LLMJudgedSearchField(
@@ -1964,9 +2382,7 @@ def _primer_pair_uses(
             folded = snippet.casefold()
             if "primer" not in folded and "amplified" not in folded and "pcr" not in folded:
                 continue
-            pair_matches = list(_PRIMER_PAIR_RE.finditer(snippet))
-            if not pair_matches and ("primer" in folded or "pcr" in folded):
-                pair_matches = list(_PRIMER_PAIR_CONTINUATION_RE.finditer(snippet))
+            pair_matches = [*_PRIMER_PAIR_RE.finditer(snippet), *_PRIMER_PAIR_CONTINUATION_RE.finditer(snippet)]
             for match in pair_matches:
                 forward_name = _clean_primer_name(match.group("forward"))
                 reverse_name = _clean_primer_name(match.group("reverse"))
@@ -2543,6 +2959,15 @@ _SCREEN_CONTAM_METHOD_CONTEXT_RE = re.compile(
 # same-sentence check can miss when a paper simply states conditions and
 # then immediately describes collection right after.
 _SAMPLING_TIME_WINDOW_FIELDS = frozenset({"in_situ_temp", "in_situ_salinity"})
+_OLIGO_TABLE_CONTEXT_RE = re.compile(r"\b(?:oligonucleotide|primer|probe|blocking|blocker)\b", re.IGNORECASE)
+_OLIGO_TABLE_ROW_CANDIDATE_RE = re.compile(
+    r"\b(?P<name>[A-Za-z0-9][A-Za-z0-9_.-]{1,50})\s*\|\s*"
+    r"(?P<sequence>[ACGTRYSWKMBDHVN]{10,})\s*\|\s*"
+    r"(?P<target>[^|.]{1,80})\s*\|\s*"
+    r"(?P<use>[^|.]{1,20})\s*\|\s*"
+    r"(?P<reference>[^.]{1,120})",
+    re.IGNORECASE,
+)
 
 
 def _llm_judged_field_matches_snippet(field: LLMJudgedSearchField, snippet: str, window: str | None = None) -> bool:
@@ -2577,6 +3002,49 @@ def _candidate_fields_for_snippet(
     return tuple(field_names)
 
 
+def _oligo_table_quote_candidates(
+    text: str,
+    *,
+    title: str,
+    existing_count: int,
+    exclude_field_names: frozenset[str],
+) -> tuple[QuoteCandidate, ...]:
+    if not _OLIGO_TABLE_CONTEXT_RE.search(text):
+        return ()
+    candidates: list[QuoteCandidate] = []
+    for match_index, match in enumerate(_OLIGO_TABLE_ROW_CANDIDATE_RE.finditer(" ".join(text.split()))):
+        row_text = " | ".join(
+            (
+                match.group("name").strip(),
+                match.group("sequence").strip(),
+                match.group("target").strip(),
+                match.group("use").strip(),
+                match.group("reference").strip(),
+            )
+        )
+        folded = row_text.casefold()
+        field_names: list[str] = []
+        if (
+            "probe" in folded or match.group("use").strip().casefold() in {"c", "fish", "card-fish"}
+        ):
+            field_names.extend(["probe_seq", "probe_ref", "targeted_detection_method_additional"])
+        if "block" in folded or "blocking" in folded or "blocker" in folded:
+            field_names.extend(["block_seq", "block_ref", "block_taxa", "targeted_detection_method_additional"])
+        field_names = [name for name in field_names if name not in exclude_field_names]
+        if not field_names:
+            continue
+        candidates.append(
+            QuoteCandidate(
+                quote_id=f"Q{existing_count + len(candidates) + 1:03d}",
+                field_names=tuple(dict.fromkeys(field_names)),
+                title=title,
+                snippet_index=match_index,
+                text=row_text,
+            )
+        )
+    return tuple(candidates)
+
+
 def _neighboring_sentences_window(snippets_list: list[tuple[int, str]], position: int) -> str:
     """+/-1 sentence around snippets_list[position], joined -- see
     _SAMPLING_TIME_WINDOW_FIELDS's own comment for why this exists."""
@@ -2602,6 +3070,18 @@ def quote_candidates_for_llm_judged_search(
     candidates: list[QuoteCandidate] = []
     seen_text: set[str] = set()
     for title, text in texts:
+        for table_candidate in _oligo_table_quote_candidates(
+            text,
+            title=title,
+            existing_count=len(candidates),
+            exclude_field_names=exclude_field_names,
+        ):
+            if table_candidate.text in seen_text:
+                continue
+            seen_text.add(table_candidate.text)
+            candidates.append(table_candidate)
+            if len(candidates) >= max_candidates:
+                return tuple(candidates)
         snippets_list = list(_snippets(text))
         for position, (snippet_index, snippet) in enumerate(snippets_list):
             window = _neighboring_sentences_window(snippets_list, position)
@@ -2693,8 +3173,10 @@ def _valid_llm_judged_value(field: LLMJudgedSearchField, value: str) -> bool:
         return not _BARE_MARKER_GENE_TARGET_TAXA_RE.fullmatch(stripped)
     if field.term_name == "otu_db":
         return bool(_OTU_DB_VALUE_RE.search(stripped))
-    if field.term_name in ("adapter_forward", "adapter_reverse"):
+    if field.term_name in ("adapter_forward", "adapter_reverse", "block_seq", "probe_seq"):
         return _looks_like_nucleotide_sequence(stripped)
+    if field.term_name in ("pcr_assay_lod", "pcr_assay_loq"):
+        return bool(re.search(r"\d", stripped))
     if not field.allowed_values:
         return True
     parts = [part.strip() for part in stripped.split("|")]
@@ -2773,6 +3255,8 @@ _VERBATIM_REQUIRED_FIELDS = frozenset(
         "informationWithheld",
         "in_situ_temp",
         "in_situ_salinity",
+        "probe_seq",
+        "block_seq",
     }
 )
 
@@ -2999,7 +3483,13 @@ def _control_not_found_fallback_facts(
 
 
 _BARCODING_TWO_STEP_KEYWORD_RE = re.compile(
-    r"two[- ]step PCR|two[- ]stage PCR|two[- ]round PCR|second PCR|PCR ?2\b|indexing PCR|barcode PCR|adapter PCR",
+    r"two[- ]step PCR|two[- ]stage PCR|two[- ]round PCR|"
+    # Real gap found live (10.3389/fmicb.2017.01135): "the eight cycles
+    # of second-round PCR" never matched the original "second PCR"
+    # phrase at all -- the inserted "-round" broke the fixed 2-word
+    # match, silently defaulting the whole study to one-step PCR and,
+    # downstream, leaving the entire pcr2_* field family blank.
+    r"second[- ]round(?:\s+of)?\s+PCR|second PCR|PCR ?2\b|indexing PCR|barcode PCR|adapter PCR",
     re.IGNORECASE,
 )
 _BARCODING_LIGATION_KEYWORD_RE = re.compile(

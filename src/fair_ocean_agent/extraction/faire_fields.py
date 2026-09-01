@@ -307,8 +307,34 @@ FIELD_GROUPS: dict[str, tuple[FaireExtractionField, ...]] = {
         # temptation; every other field in this module already omits one
         # where a concise, unambiguous example wasn't obviously safe (e.g.
         # forward_primer_sequence).
-        FaireExtractionField("second_pcr_annealing_temperature", "annealing temperature of the second-step PCR, if a two-step PCR protocol was used -- the SECOND PCR's own annealing temperature only, never the first PCR's", "pcr2_annealingTemp", required_any_flags=frozenset({"pcr_0_1"})),
-        FaireExtractionField("second_pcr_cycle_count", "number of cycles in the second-step PCR, if a two-step PCR protocol was used -- the SECOND PCR's own cycle count only, never the first PCR's", "pcr2_cycles", required_any_flags=frozenset({"pcr_0_1"})),
+        # Real gap found live (10.3389/fmicb.2017.01135): "index and
+        # adapter were added to the purified product during the eight
+        # cycles of second-round PCR using KAPA HiFi HotStart Ready mix"
+        # left both fields blank -- the old "if a two-step PCR protocol
+        # was used" hint asks the model to first classify the WHOLE
+        # protocol before it's willing to extract a number, which is a
+        # much less certain judgment than just recognizing that THIS
+        # quote itself describes a distinct second amplification step.
+        # Rewritten to name the concrete trigger phrasing directly rather
+        # than requiring that prior classification.
+        FaireExtractionField(
+            "second_pcr_annealing_temperature",
+            "annealing temperature of a distinct SECOND amplification/PCR step used to add an index, "
+            "barcode, or sequencing adapter (recognizable from phrasing like a second-round PCR, second "
+            "PCR, PCR2, indexing PCR, or index/adapter addition during another round of cycling) -- that "
+            "second PCR's own annealing temperature only, never the first/original PCR's",
+            "pcr2_annealingTemp",
+            required_any_flags=frozenset({"pcr_0_1"}),
+        ),
+        FaireExtractionField(
+            "second_pcr_cycle_count",
+            "number of cycles in a distinct SECOND amplification/PCR step used to add an index, barcode, "
+            "or sequencing adapter (recognizable from phrasing like a second-round PCR, second PCR, PCR2, "
+            "indexing PCR, or index/adapter addition during another round of cycling) -- that second "
+            "PCR's own cycle count only, never the first/original PCR's",
+            "pcr2_cycles",
+            required_any_flags=frozenset({"pcr_0_1"}),
+        ),
         FaireExtractionField(
             "probe_sequence",
             "hydrolysis/TaqMan probe sequence, 5' to 3', if a probe-based qPCR/ddPCR assay was used",
