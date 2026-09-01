@@ -246,7 +246,27 @@ FIELD_GROUPS: dict[str, tuple[FaireExtractionField, ...]] = {
         # (e.g. "MyFi Mix (Meridian Bioscience)" matches nothing in
         # commercial_mm's term list). Gated here rather than excluded, so
         # the LLM stays the richer source, just asked conditionally.
-        FaireExtractionField("assay_type", "targeted, metabarcoding, or other detection approach", "assay_type", required_any_flags=frozenset({"pcr_0_1"})),
+        # Real gap found live (10.3390/microorganisms10030558): this
+        # field's own hint used to be so bare ("targeted, metabarcoding,
+        # or other detection approach") that the model labeled a SECOND
+        # marker-gene community-profiling assay (cbbL, amplified with its
+        # own specific primers, OTU-clustered exactly like the paper's
+        # own 16S assay) as "targeted" -- apparently reasoning "named,
+        # specific primers = targeted", when FAIRe's own real distinction
+        # is single-species/qPCR-style detection (targeted) vs.
+        # marker-gene community profiling via amplicon sequencing +
+        # OTU/ASV clustering (metabarcoding), regardless of how specific
+        # the primers are.
+        FaireExtractionField(
+            "assay_type",
+            "targeted (qPCR/ddPCR-style detection of one species or a small, named taxon set), "
+            "metabarcoding (marker-gene community profiling via amplicon sequencing, OTU/ASV clustering, "
+            "and taxonomic database assignment -- still metabarcoding even when specific, named primers "
+            "are used, and even for a functional/non-taxonomic marker gene like cbbL/nifH/amoA profiled "
+            "the same way), or other detection approach",
+            "assay_type",
+            required_any_flags=frozenset({"pcr_0_1"}),
+        ),
         FaireExtractionField("target_gene", "targeted gene or locus", "target_gene", "16S rRNA", required_any_flags=frozenset({"pcr_0_1"})),
         FaireExtractionField("target_subfragment", "targeted hypervariable subregion", "target_subfragment", "V4", required_any_flags=frozenset({"pcr_0_1"})),
         FaireExtractionField("forward_primer_sequence", "forward primer sequence, 5' to 3'", "pcr_primer_forward", required_any_flags=frozenset({"pcr_0_1"})),
