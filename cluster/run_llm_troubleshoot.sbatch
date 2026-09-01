@@ -18,6 +18,15 @@
 # Picking a fresh batch of studies from the current test DB (no re-copy):
 #   sbatch --account=<acct> --export=ALL,LLM_TEST_PHASES="select enqueue worker remap report export" cluster/run_llm_troubleshoot.sbatch
 #
+# After a DISCOVERY-side code change (not extraction-side): reset/enqueue/
+# worker/remap above only ever touch EXTRACT_TEXT_FACTS/MAP_FAIRE, a
+# completely different task type from DISCOVER_IDENTIFIERS -- a fix to
+# e.g. sources/ncbi.py's own BioProject<->BioSample resolution is NEVER
+# exercised by that loop alone, no matter how many times it's re-run.
+# rediscover/rediscover_worker force a real DISCOVER_IDENTIFIERS re-run
+# first (live NCBI/ENA/etc network calls, no GPU/LLM needed):
+#   sbatch --account=<acct> --export=ALL,LLM_TEST_PHASES="rediscover rediscover_worker remap report export" cluster/run_llm_troubleshoot.sbatch
+#
 # Starting over completely (re-copy from the real, current main database):
 #   sbatch --account=<acct> --export=ALL,LLM_TEST_DB_REFRESH=1 cluster/run_llm_troubleshoot.sbatch
 #
@@ -180,6 +189,12 @@ for phase in ${LLM_TEST_PHASES}; do
     select)
       python scripts/llm_troubleshooting_batch.py select --count "${LLM_TEST_COUNT}" --manifest "${LLM_TEST_MANIFEST}"
       ;;
+    rediscover)
+      python scripts/llm_troubleshooting_batch.py rediscover --manifest "${LLM_TEST_MANIFEST}"
+      ;;
+    rediscover_worker)
+      python -m fair_ocean_agent.cli worker --task-type DISCOVER_IDENTIFIERS --until-empty
+      ;;
     reset)
       python scripts/llm_troubleshooting_batch.py reset --manifest "${LLM_TEST_MANIFEST}"
       ;;
@@ -199,7 +214,7 @@ for phase in ${LLM_TEST_PHASES}; do
       python scripts/llm_troubleshooting_batch.py export --manifest "${LLM_TEST_MANIFEST}" --output-dir "${LLM_TEST_EXPORT_DIR}"
       ;;
     *)
-      echo "Unknown phase '${phase}' in LLM_TEST_PHASES -- valid: select reset enqueue worker remap report export" >&2
+      echo "Unknown phase '${phase}' in LLM_TEST_PHASES -- valid: select rediscover rediscover_worker reset enqueue worker remap report export" >&2
       exit 2
       ;;
   esac

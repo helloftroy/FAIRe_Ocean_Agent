@@ -16,7 +16,7 @@ Plain `cp` is NOT safe against a live, actively-written database (this
 pipeline's own established precedent -- SQLite's own .backup command is
 the only safe way to copy a file another process may be writing to).
 
-Five phases, run in order (see cluster/run_llm_troubleshoot.sbatch for the
+Phases, run in order (see cluster/run_llm_troubleshoot.sbatch for the
 full sequence including starting the LLM server):
 
   select  Picks up to --count real candidate studies (has a DOI, has a
@@ -25,6 +25,26 @@ full sequence including starting the LLM server):
           discovery actually found real sequence data to extract facts
           about) that have never had an EXTRACT_TEXT_FACTS task queued
           before. Writes the chosen study_ids to --manifest.
+
+  rediscover  OPTIONAL, and separate from the reset/enqueue/worker/remap/
+          report/export loop below: forces DISCOVER_IDENTIFIERS to run
+          again for exactly the manifest's study_ids, bypassing
+          enqueue_task's own idempotency (a study already discovered once
+          is otherwise never revisited). Real gap found live: a fix to
+          sources/ncbi.py's own BioProject<->BioSample resolution (or any
+          other discovery-side code) is NEVER exercised by reset/enqueue/
+          worker/remap alone -- those four only ever touch
+          EXTRACT_TEXT_FACTS/MAP_FAIRE, a completely different task type
+          from DISCOVER_IDENTIFIERS, so lat_lon/collection_date/depth
+          (structured BioSample-attribute facts, not LLM-extracted) stay
+          exactly as stale as whatever the study's LAST real discovery
+          run found, no matter how many times the LLM-focused loop below
+          gets re-run. Follow this with:
+              python -m fair_ocean_agent.cli worker --task-type DISCOVER_IDENTIFIERS --until-empty
+          (real, live network calls to NCBI/ENA/etc -- no GPU/LLM server
+          needed, unlike the worker step below) before `remap`/`report`/
+          `export` so the freshly re-discovered structured facts actually
+          get mapped and show up.
 
   reset   Clears out a study's PREVIOUS EXTRACT_TEXT_FACTS output (its
           article_fulltext Source row, the RawFacts it produced, their
@@ -71,6 +91,9 @@ full sequence including starting the LLM server):
 
 Usage:
     python scripts/llm_troubleshooting_batch.py select --count 10
+    # only needed after a discovery-side (not extraction-side) code change:
+    python scripts/llm_troubleshooting_batch.py rediscover
+    # ... run: python -m fair_ocean_agent.cli worker --task-type DISCOVER_IDENTIFIERS --until-empty
     python scripts/llm_troubleshooting_batch.py enqueue
     # ... run the worker ...
     python scripts/llm_troubleshooting_batch.py remap
@@ -88,6 +111,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import uuid
 from pathlib import Path
 
 from sqlalchemy import delete, select
@@ -139,6 +163,21 @@ def select_candidates(session, count: int) -> list[str]:
             .distinct()
             .limit(count)
         ).all()
+    )
+
+
+def rediscover_study(session, study_id: str) -> None:
+    """Forces a real DISCOVER_IDENTIFIERS re-run, bypassing enqueue_task's
+    own idempotency (its default key would just hand back the already-
+    completed task from the study's original discovery). Mirrors
+    scheduling/rediscovery.py::enqueue_full_rediscovery's own
+    idempotency-bypass pattern (a fresh, run-scoped key), scoped to one
+    study instead of every candidate in the database."""
+    enqueue_task(
+        session,
+        TaskType.DISCOVER_IDENTIFIERS,
+        study_id=study_id,
+        idempotency_key=f"llm_troubleshoot_rediscover:{study_id}:{uuid.uuid4()}",
     )
 
 
@@ -202,7 +241,7 @@ def report_study(session, study_id: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("phase", choices=("select", "reset", "enqueue", "remap", "report", "export"))
+    parser.add_argument("phase", choices=("select", "rediscover", "reset", "enqueue", "remap", "report", "export"))
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--count", type=int, default=10, help="select phase only: how many studies to pick")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_EXPORT_DIR, help="export phase only: where to write the FAIRe CSVs")
@@ -225,7 +264,14 @@ def main() -> None:
 
         study_ids = _load_manifest(args.manifest)
 
-        if args.phase == "reset":
+        if args.phase == "rediscover":
+            for study_id in study_ids:
+                rediscover_study(session, study_id)
+            print(
+                f"Queued DISCOVER_IDENTIFIERS for {len(study_ids)} studies. Now run:\n"
+                "  python -m fair_ocean_agent.cli worker --task-type DISCOVER_IDENTIFIERS --until-empty"
+            )
+        elif args.phase == "reset":
             for study_id in study_ids:
                 reset_study(session, study_id)
             print(f"Reset EXTRACT_TEXT_FACTS output for {len(study_ids)} studies from {args.manifest}.")

@@ -25,7 +25,7 @@ from fair_ocean_agent.database.models import (
 from fair_ocean_agent.workflow.task_queue import enqueue_task
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
-from llm_troubleshooting_batch import report_study, reset_study, select_candidates  # noqa: E402
+from llm_troubleshooting_batch import rediscover_study, report_study, reset_study, select_candidates  # noqa: E402
 
 
 def _study(session, study_id: str, *, title: str = "t") -> Study:
@@ -132,6 +132,28 @@ def test_reset_then_reenqueue_creates_a_fresh_pending_task(db_session):
 
     assert second_task.task_id != first_task.task_id
     assert second_task.status == TaskStatus.PENDING.value
+
+
+def test_rediscover_study_forces_a_fresh_discover_identifiers_task(db_session):
+    """Real gap found live: reset/enqueue/worker/remap only ever touch
+    EXTRACT_TEXT_FACTS/MAP_FAIRE, a completely different task type from
+    DISCOVER_IDENTIFIERS -- so a discovery-side code fix (e.g. sources/
+    ncbi.py's own BioProject<->BioSample resolution) was never exercised
+    by that loop, no matter how many times it ran. Plain enqueue_task
+    would just hand back the study's already-completed DISCOVER_IDENTIFIERS
+    task via its own default idempotency key; rediscover_study must force
+    a genuinely new one."""
+    _fully_qualified_study(db_session, "STUDY-7")
+    first_task = enqueue_task(db_session, TaskType.DISCOVER_IDENTIFIERS, study_id="STUDY-7")
+    first_task.status = TaskStatus.COMPLETED.value
+    db_session.flush()
+
+    rediscover_study(db_session, "STUDY-7")
+    db_session.flush()
+
+    tasks = db_session.query(Task).filter_by(task_type=TaskType.DISCOVER_IDENTIFIERS.value, study_id="STUDY-7").all()
+    assert len(tasks) == 2
+    assert any(t.status == TaskStatus.PENDING.value for t in tasks)
 
 
 def test_report_study_shows_structured_facts_separately_from_llm_facts(db_session, capsys):
