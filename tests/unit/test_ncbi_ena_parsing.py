@@ -744,6 +744,35 @@ def test_biosample_extract_structured_facts_groups_title_number_suffix_by_exact_
     }
 
 
+def test_biosample_extract_structured_facts_groups_compact_sample_category_names(biosample_adapter):
+    raw = {
+        "bioproject_accession": "PRJNA_COMPACT",
+        "total_linked_samples": 6,
+        "truncated": False,
+        "samples": [
+            {"accession": "SAMN_P1", "title": "MIMS Environmental sample", "attributes": {"sample_name": "P1"}},
+            {"accession": "SAMN_P2", "title": "MIMS Environmental sample", "attributes": {"sample_name": "P2"}},
+            {"accession": "SAMN_P3", "title": "MIMS Environmental sample", "attributes": {"sample_name": "P3"}},
+            {"accession": "SAMN_TCP1", "title": "MIMS Environmental sample", "attributes": {"sample_name": "T_C1P"}},
+            {"accession": "SAMN_TCP2", "title": "MIMS Environmental sample", "attributes": {"sample_name": "T_C2P"}},
+            {"accession": "SAMN_TCP3", "title": "MIMS Environmental sample", "attributes": {"sample_name": "T_C3P"}},
+        ],
+    }
+    facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw, "PRJNA_COMPACT"))
+
+    categories = {f.entity_external_id: f for f in facts if f.fact_type_candidate == "samp_category"}
+    assert categories["SAMN_P1"].raw_value == "P1"
+    assert categories["SAMN_TCP1"].raw_value == "T_C1P"
+
+    rep_facts = {f.entity_external_id: f for f in facts if f.fact_type_candidate == "biological_rep_relation"}
+    assert rep_facts["SAMN_P1"].raw_value == "SAMN_P1 | SAMN_P2 | SAMN_P3"
+    assert rep_facts["SAMN_TCP1"].raw_value == "SAMN_TCP1 | SAMN_TCP2 | SAMN_TCP3"
+    assert rep_facts["SAMN_TCP1"].confidence_metadata == {
+        "replicate_detection_signal": "short_prefix_number_suffix",
+        "replicate_group_size": 3,
+    }
+
+
 def test_biosample_extract_structured_facts_no_biological_rep_relation_without_sibling(biosample_adapter):
     raw = {
         "bioproject_accession": "PRJNA1425045",

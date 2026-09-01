@@ -47,6 +47,14 @@ def test_short_prefix_signal_groups_developmental_stage_replicates_when_enabled(
     }
 
 
+def test_short_prefix_signal_groups_single_letter_sample_categories_when_enabled():
+    names = {"S1": "P1", "S2": "P2", "S3": "P3"}
+    groups = detect_replicate_groups(names, include_short_prefix_signal=True)
+    assert len(groups) == 1
+    assert groups[0].signal is ReplicateSignal.SHORT_PREFIX_NUMBER_SUFFIX
+    assert groups[0].members == ("S1", "S2", "S3")
+
+
 def test_short_prefix_signal_groups_descriptive_prefix_replicates_when_enabled():
     """Real gap found live (another gold paper): a biofilm sample series
     named by a descriptive, non-generic prefix with no separator at all
@@ -59,6 +67,21 @@ def test_short_prefix_signal_groups_descriptive_prefix_replicates_when_enabled()
     assert len(groups) == 1
     assert groups[0].signal is ReplicateSignal.SHORT_PREFIX_NUMBER_SUFFIX
     assert groups[0].members == ("S1", "S2", "S3")
+
+
+def test_short_prefix_signal_groups_embedded_number_with_constant_suffix_when_enabled():
+    names = {"S1": "T_C1P", "S2": "T_C2P", "S3": "T_C3P"}
+    groups = detect_replicate_groups(names, include_short_prefix_signal=True)
+    assert len(groups) == 1
+    assert groups[0].signal is ReplicateSignal.SHORT_PREFIX_NUMBER_SUFFIX
+    assert groups[0].members == ("S1", "S2", "S3")
+
+
+def test_short_prefix_signal_keeps_different_trailing_suffixes_separate():
+    names = {"S1": "T_C1P", "S2": "T_C2Q", "S3": "T_C3P"}
+    groups = detect_replicate_groups(names, include_short_prefix_signal=True)
+    assert len(groups) == 1
+    assert groups[0].members == ("S1", "S3")
 
 
 def test_short_prefix_signal_still_excludes_s_prefix_even_when_enabled():

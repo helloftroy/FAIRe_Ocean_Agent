@@ -40,7 +40,9 @@ _GENERIC_NUMBERED_SAMPLE_BASE_RE.
   4. SHORT_PREFIX_NUMBER_SUFFIX -- opt-in only (include_short_prefix_signal,
      default off), a bare digit directly after a letter/underscore base of
      any length, no separator (e.g. "E2"/"E3", "AS1"/"AS2",
-     "PB_Biofilm1"/"PB_Biofilm2"/"PB_Biofilm3"). Real gap found live
+     "PB_Biofilm1"/"PB_Biofilm2"/"PB_Biofilm3", or "T_C1P"/
+     "T_C2P"/"T_C3P" where a constant trailing letter is part of the
+     sample-series code). Real gap found live
      (PMC10988111): a developmental-stage time series named samples by a
      short stage-code prefix (P polyp, ES early strobila, AS advanced
      strobila, E ephyra) plus a bare replicate number, no separator at
@@ -95,9 +97,11 @@ _GENERIC_NUMBERED_SAMPLE_BASE_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Matches "E2"/"E3", "AS1"/"AS2", and (real gap found live, another gold
-# paper) "PB_Biofilm1"/"PB_Biofilm2"/"PB_Biofilm3" -- a bare digit directly
-# after a letter/underscore base of ANY length, no separator. Originally
+# Matches "E2"/"E3", "AS1"/"AS2", (real gap found live, another gold
+# paper) "PB_Biofilm1"/"PB_Biofilm2"/"PB_Biofilm3", and names with a
+# constant trailing letter after the replicate number ("T_C1P"/"T_C2P") --
+# a bare digit directly after a letter/underscore base of ANY length, no
+# separator before the number. Originally
 # capped at 1-2 letters, relaxed to any length once a real descriptive
 # multi-word base ("PB_Biofilm") turned up needing the same treatment --
 # the base can never contain a digit itself (so "Sample1" splits cleanly
@@ -107,7 +111,7 @@ _GENERIC_NUMBERED_SAMPLE_BASE_RE = re.compile(
 # "S" alone is excluded regardless, since "S1"/"S2" is itself a common
 # generic sequential sample-ID convention, not a replicate signal -- see
 # module docstring's SHORT_PREFIX_NUMBER_SUFFIX section.
-_SHORT_PREFIX_NUMBER_RE = re.compile(r"^(?P<base>[A-Za-z][A-Za-z_]*)(?P<num>\d+)$")
+_SHORT_PREFIX_NUMBER_RE = re.compile(r"^(?P<base>[A-Za-z][A-Za-z_]*)(?P<num>\d+)(?P<suffix>[A-Za-z]*)$")
 _SHORT_PREFIX_EXCLUDED_BASES = frozenset({"S"})
 _MIN_SHORT_PREFIX_GROUP_SIZE = 2
 
@@ -189,9 +193,10 @@ def detect_replicate_groups(
             if not match:
                 continue
             base = match.group("base")
+            suffix = match.group("suffix")
             if base.upper() in _SHORT_PREFIX_EXCLUDED_BASES or _GENERIC_NUMBERED_SAMPLE_BASE_RE.match(base):
                 continue
-            short_prefix_buckets.setdefault(base, []).append((sample_id, int(match.group("num"))))
+            short_prefix_buckets.setdefault(f"{base}\0{suffix}", []).append((sample_id, int(match.group("num"))))
         for members in short_prefix_buckets.values():
             if len(members) < _MIN_SHORT_PREFIX_GROUP_SIZE:
                 continue

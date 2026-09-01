@@ -62,6 +62,7 @@ from fair_ocean_agent.identity.sample_alias_reconciliation import reconcile_samp
 from fair_ocean_agent.mapping import vocabularies
 from fair_ocean_agent.mapping.primer_library import resolve_primer_sequences_from_corpus
 from fair_ocean_agent.mapping.rules import MappingRule, rules_for
+from fair_ocean_agent.sources.replicate_grouping import detect_replicate_groups
 
 TARGET_SCHEMA = "faire"
 TARGET_SCHEMA_VERSION = "1.0.2"
@@ -617,6 +618,90 @@ def _detect_sample_type_routed_facts(
     return routed
 
 
+def _apply_biological_rep_relations_from_sample_categories(
+    session: Session,
+    study_id: str,
+    seen: dict[tuple[str, str, str | None], StandardizedValue],
+) -> int:
+    """Fallback for sources that know a real sample label only as
+    samp_category. NCBI and supplement parsing usually emit
+    biological_rep_relation themselves, but source adapters such as Qiita,
+    JGI, or other tabular/API sources may only provide compact labels
+    like P1/P2/P3 or T_C1P/T_C2P/T_C3P. Derive the relation here from
+    authoritative sample-level samp_category facts so the exported sample
+    table gets a relation and projectMetadata.biological_rep can become a
+    count/range instead of 0."""
+    sample_entities = _authoritative_sample_entities(session, study_id)
+    if not sample_entities:
+        return 0
+    sample_by_entity_id = {entity.entity_id: entity for entity in sample_entities}
+    sample_ids = set(sample_by_entity_id)
+    category_facts = session.scalars(
+        select(RawFact)
+        .where(
+            RawFact.study_id == study_id,
+            RawFact.entity_id.in_(sample_ids),
+            RawFact.fact_type_candidate == "samp_category",
+            RawFact.review_status != ReviewStatus.REJECTED.value,
+            RawFact.raw_value.is_not(None),
+        )
+        .order_by(RawFact.created_at)
+    ).all()
+
+    name_by_entity_id: dict[str, str] = {}
+    evidence_by_entity_id: dict[str, RawFact] = {}
+    for fact in category_facts:
+        if fact.entity_id is None or fact.entity_id in name_by_entity_id:
+            continue
+        value = (fact.raw_value or "").strip()
+        if not value:
+            continue
+        name_by_entity_id[fact.entity_id] = value
+        evidence_by_entity_id[fact.entity_id] = fact
+
+    group_by_entity_id = {
+        member: group
+        for group in detect_replicate_groups(name_by_entity_id, include_short_prefix_signal=True)
+        for member in group.members
+    }
+    created = 0
+    for entity_id, group in group_by_entity_id.items():
+        key = ("sampleMetadata", "biological_rep_relation", entity_id)
+        if key in seen:
+            continue
+        relation = " | ".join(
+            sample_by_entity_id[member].external_identifier or member
+            for member in group.members
+            if member in sample_by_entity_id
+        )
+        if not relation:
+            continue
+        standardized_value = StandardizedValue(
+            study_id=study_id,
+            entity_id=entity_id,
+            target_schema=TARGET_SCHEMA,
+            target_schema_version=TARGET_SCHEMA_VERSION,
+            target_field="biological_rep_relation",
+            standardized_value=relation,
+            mapping_method=MappingMethod.DETERMINISTIC_SYNONYM.value,
+            review_required=True,
+            missingness_status=MissingnessStatus.PRESENT.value,
+        )
+        session.add(standardized_value)
+        session.flush()
+        evidence = evidence_by_entity_id.get(entity_id)
+        if evidence is not None:
+            session.add(
+                StandardizedValueEvidence(
+                    standardized_value_id=standardized_value.standardized_value_id,
+                    fact_id=evidence.fact_id,
+                )
+            )
+        seen[key] = standardized_value
+        created += 1
+    return created
+
+
 def _apply_biological_rep_from_relations(
     session: Session,
     study_id: str,
@@ -655,13 +740,28 @@ def _apply_biological_rep_from_relations(
         if fact.raw_value not in group_sizes:
             group_sizes[fact.raw_value] = len(fact.raw_value.split(" | "))
             evidence_fact_id_by_group[fact.raw_value] = fact.fact_id
+    for standardized_value in session.scalars(
+        select(StandardizedValue)
+        .where(
+            StandardizedValue.study_id == study_id,
+            StandardizedValue.entity_id.in_(sample_ids),
+            StandardizedValue.target_schema == TARGET_SCHEMA,
+            StandardizedValue.target_field == "biological_rep_relation",
+            StandardizedValue.missingness_status == MissingnessStatus.PRESENT.value,
+            StandardizedValue.standardized_value.is_not(None),
+        )
+    ):
+        if standardized_value.standardized_value not in group_sizes:
+            group_sizes[standardized_value.standardized_value] = len(
+                standardized_value.standardized_value.split(" | ")
+            )
     sizes = sorted(group_sizes.values())
     if not sizes:
         value = "0"
         evidence_fact_id = None
     else:
         value = str(sizes[0]) if sizes[0] == sizes[-1] else f"{sizes[0]}-{sizes[-1]}"
-        evidence_fact_id = next(iter(evidence_fact_id_by_group.values()))
+        evidence_fact_id = next(iter(evidence_fact_id_by_group.values()), None)
 
     key = ("projectMetadata", "biological_rep", None)
     existing = seen.get(key)
@@ -1194,6 +1294,7 @@ def map_study_to_faire(session: Session, study_id: str) -> int:
             seen[key] = standardized_value
             created += 1
 
+    created += _apply_biological_rep_relations_from_sample_categories(session, study_id, seen)
     created += _apply_biological_rep_from_relations(session, study_id, seen)
 
     for entity in session.scalars(select(Entity).where(Entity.study_id == study_id)):

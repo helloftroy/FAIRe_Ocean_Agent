@@ -383,6 +383,36 @@ def test_biological_rep_derives_a_single_count_from_one_relation_group(db_sessio
     assert value.review_required is False
 
 
+def test_biological_rep_relation_derives_from_compact_samp_category_names(db_session):
+    study = _study(db_session, title="Compact sample category replicate groups")
+    samples = [
+        Entity(
+            study_id=study.study_id,
+            entity_level=EntityLevel.SAMPLE.value,
+            external_identifier=external_identifier,
+        )
+        for external_identifier in ("SAMN_P1", "SAMN_P2", "SAMN_P3", "SAMN_TCP1", "SAMN_TCP2", "SAMN_TCP3")
+    ]
+    db_session.add_all(samples)
+    db_session.flush()
+    for sample in samples:
+        db_session.add(_home_entity_study(sample))
+    for sample, category in zip(samples, ("P1", "P2", "P3", "T_C1P", "T_C2P", "T_C3P")):
+        _fact(db_session, study, entity=sample, field="samp_category", value=category, entity_level="sample")
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    values = {
+        (sv.entity_id, sv.target_field): sv.standardized_value
+        for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id)
+    }
+    assert values[(samples[0].entity_id, "biological_rep_relation")] == "SAMN_P1 | SAMN_P2 | SAMN_P3"
+    assert values[(samples[3].entity_id, "biological_rep_relation")] == "SAMN_TCP1 | SAMN_TCP2 | SAMN_TCP3"
+    assert values[(None, "biological_rep")] == "3"
+
+
 def test_biological_rep_reports_a_range_across_differently_sized_groups(db_session):
     """Some samples might have 2 replicates, others 4 -- the study-level
     value is the "min-max" range across the study's own distinct
