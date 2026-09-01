@@ -197,6 +197,144 @@ _SEQUENCE_FIELD_TO_REFERENCE_FIELD = {
     "pcr_primer_reverse": "pcr_primer_reference_reverse",
 }
 
+PROJECT_METADATA_COLUMN_ORDER = (
+    INTERNAL_STUDY_ID_FIELD,
+    "project_id",
+    "project_contact",
+    "institution",
+    "recordedBy",
+    "assay_name",
+    "assay_type",
+    "targetTaxonomicScope",
+    "targetTaxonomicAssay",
+    "study_factor",
+    "biological_rep",
+    "sample_prep_0_1",
+    "sterilise_method",
+    "neg_cont_0_1",
+    "pos_cont_0_1",
+    "inhibition_check",
+    "inhibition_check_0_1",
+    "pcr_0_1",
+    "target_gene",
+    "target_subfragment",
+    "pcr_primer_name_forward",
+    "pcr_primer_forward",
+    "pcr_primer_reference_forward",
+    "primer_forward_source_unresolved",
+    "pcr_primer_name_reverse",
+    "pcr_primer_reverse",
+    "pcr_primer_reference_reverse",
+    "primer_reverse_source_unresolved",
+    "ampliconSize",
+    "annealingTemp",
+    "pcr_cycles",
+    "pcr_rep",
+    "pcr_method_additional",
+    "probeReporter",
+    "barcoding_pcr_appr",
+    "pcr2_annealingTemp",
+    "pcr2_cycles",
+    "pcr2_method_additional",
+    "seq_kit",
+    "lib_layout",
+    "platform",
+    "instrument",
+    "seq_method_additional",
+    "screen_contam_method",
+    "otu_seq_comp_appr",
+    "otu_clust_tool",
+    "otu_db",
+    "internal_downstream_analysis_techniques",
+    "commercial_mm",
+    "custom_mm",
+    CUSTOM_SPREADSHEET_HEADERS_FIELD,
+    "associated_resource",
+    "code_repo",
+    "accessRights",
+    "license",
+    "informationWithheld",
+    "checksum_method",
+    "bibliographicCitation",
+    "funding_source",
+    "rightsHolder",
+    "checkls_ver",
+)
+
+SAMPLE_METADATA_COLUMN_ORDER = (
+    INTERNAL_STUDY_ID_FIELD,
+    "internal_expedition_id",
+    INTERNAL_ALIAS_SAMPLE_IDS_FIELD,
+    "materialSampleID",
+    "samp_name",
+    "assay_name",
+    "samp_category",
+    "biological_rep_relation",
+    "sample_composed_of",
+    "sample_derived_from",
+    "geo_loc_name",
+    "decimalLatitude",
+    "decimalLongitude",
+    "elev",
+    "minimumDepthInMeters",
+    "maximumDepthInMeters",
+    "tot_depth_water_col",
+    "eventDate",
+    "eventDurationValue",
+    "host_species",
+    "host_life_stage",
+    "host_length",
+    "host_length_unit",
+    "host_height",
+    "host_height_unit",
+    "host_tot_mass",
+    "host_tot_mass_unit",
+    "env_broad_scale",
+    "env_local_scale",
+    "env_medium",
+    CUSTOM_ENV_VAR_BLOCK_FIELD,
+    CUSTOM_PULLED_ENV_VAR_FIELD,
+    "samp_collect_method",
+    "samp_collect_device",
+    "samp_size",
+    "samp_size_unit",
+    "pump_flow_rate",
+    "pump_flow_rate_unit",
+    "filter_name",
+    "filter_material",
+    "filter_diameter",
+    "filter_surface_area",
+    "filter_passive_active_0_1",
+    "prefilter_material",
+    "size_frac",
+    "samp_mat_process",
+    "samp_store_method_additional",
+    "samp_store_sol",
+    "samp_store_temp",
+    "samp_store_dur",
+    "samp_store_loc",
+    "samp_vol_we_dna_ext",
+    "samp_vol_we_dna_ext_unit",
+    "pool_dna_num",
+    "nucl_acid_ext_kit",
+    "nucl_acid_ext_lysis",
+    "nucl_acid_ext_sep",
+    "nucl_acid_ext_method_additional",
+    "dna_cleanup_0_1",
+    "dna_cleanup_method",
+    "prep_method_additional",
+    "concentration",
+    "eventDate_submitted",
+)
+
+
+def _ordered_columns(columns: list[str], preferred_order: tuple[str, ...]) -> list[str]:
+    available = list(dict.fromkeys(columns))
+    available_set = set(available)
+    ordered = [field for field in preferred_order if field in available_set]
+    ordered_set = set(ordered)
+    return ordered + [field for field in available if field not in ordered_set]
+
 
 def _primer_traceability_values(session: Session, study_id: str) -> dict[str, str]:
     flags = {field: "0" for field in INTERNAL_PRIMER_TRACEABILITY_FIELDS}
@@ -780,8 +918,7 @@ def export_faire(session: Session, output_dir: str | Path, *, study_ids: list[st
             row.update(section_detection)
             row.update(primer_traceability)
             project_rows.append(row)
-    counts["projectMetadata"] = _write_csv(
-        output_dir / "projectMetadata.csv",
+    project_export_columns = _ordered_columns(
         [
             INTERNAL_STUDY_ID_FIELD,
             *INTERNAL_SECTION_DETECTION_FIELDS,
@@ -789,8 +926,9 @@ def export_faire(session: Session, output_dir: str | Path, *, study_ids: list[st
             *project_columns,
             CUSTOM_SPREADSHEET_HEADERS_FIELD,
         ],
-        project_rows,
+        PROJECT_METADATA_COLUMN_ORDER,
     )
+    counts["projectMetadata"] = _write_csv(output_dir / "projectMetadata.csv", project_export_columns, project_rows)
 
     sample_columns = _exportable_sample_columns()
     sample_rows = []
@@ -844,8 +982,7 @@ def export_faire(session: Session, output_dir: str | Path, *, study_ids: list[st
 
             row[INTERNAL_STUDY_ID_FIELD] = "|".join(sorted(linked_study_ids))
             sample_rows.append(row)
-    counts["sampleMetadata"] = _write_csv(
-        output_dir / "sampleMetadata.csv",
+    sample_export_columns = _ordered_columns(
         [
             INTERNAL_STUDY_ID_FIELD,
             INTERNAL_ALIAS_SAMPLE_IDS_FIELD,
@@ -853,8 +990,9 @@ def export_faire(session: Session, output_dir: str | Path, *, study_ids: list[st
             CUSTOM_ENV_VAR_BLOCK_FIELD,
             CUSTOM_PULLED_ENV_VAR_FIELD,
         ],
-        sample_rows,
+        SAMPLE_METADATA_COLUMN_ORDER,
     )
+    counts["sampleMetadata"] = _write_csv(output_dir / "sampleMetadata.csv", sample_export_columns, sample_rows)
 
     experiment_columns = _exportable_experiment_columns()
     experiment_rows = []
@@ -915,8 +1053,8 @@ def export_faire(session: Session, output_dir: str | Path, *, study_ids: list[st
     )
 
     columns_by_class = {
-        "projectMetadata": project_columns,
-        "sampleMetadata": sample_columns,
+        "projectMetadata": [field for field in project_export_columns if field in project_columns],
+        "sampleMetadata": [field for field in sample_export_columns if field in sample_columns],
         "experimentRunMetadata": experiment_columns,
     }
     counts["field_reference"] = _write_field_reference(output_dir, columns_by_class)

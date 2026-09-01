@@ -18,6 +18,8 @@ from fair_ocean_agent.exports.faire import (
     INTERNAL_PRIMER_TRACEABILITY_FIELDS,
     INTERNAL_SECTION_DETECTION_FIELDS,
     INTERNAL_STUDY_ID_FIELD,
+    PROJECT_METADATA_COLUMN_ORDER,
+    SAMPLE_METADATA_COLUMN_ORDER,
     class_columns,
     export_faire,
 )
@@ -41,6 +43,11 @@ def _home_entity_study(entity: Entity) -> EntityStudy:
         relationship_type=RelationshipType.IS_HOME_OF.value,
         confidence=SupportType.STRUCTURED_SOURCE.value,
     )
+
+
+def _assert_preferred_header_order(header: list[str], preferred_order: tuple[str, ...]) -> None:
+    preferred_present = [field for field in preferred_order if field in header]
+    assert header[: len(preferred_present)] == preferred_present
 
 
 def test_export_faire_writes_expected_files_and_rows(db_session, tmp_path):
@@ -96,11 +103,17 @@ def test_export_faire_writes_expected_files_and_rows(db_session, tmp_path):
         assert not (tmp_path / f"{class_name}.csv").exists()
 
     with (tmp_path / "projectMetadata.csv").open() as f:
-        rows = list(csv.DictReader(f))
+        reader = csv.DictReader(f)
+        assert reader.fieldnames is not None
+        _assert_preferred_header_order(reader.fieldnames, PROJECT_METADATA_COLUMN_ORDER)
+        rows = list(reader)
     assert rows[0]["project_id"] == "PRJNA1"
 
     with (tmp_path / "sampleMetadata.csv").open() as f:
-        rows = list(csv.DictReader(f))
+        reader = csv.DictReader(f)
+        assert reader.fieldnames is not None
+        _assert_preferred_header_order(reader.fieldnames, SAMPLE_METADATA_COLUMN_ORDER)
+        rows = list(reader)
     assert rows[0]["samp_name"] == "SAMN1"
     assert rows[0]["geo_loc_name"] == "USA: California"
 
@@ -656,7 +669,7 @@ def test_export_refuses_ambiguous_library_to_run_relationship(db_session, tmp_pa
         export_faire(db_session, tmp_path)
 
 
-def test_export_faire_column_order_matches_classes_yaml(db_session, tmp_path):
+def test_export_faire_sample_column_order_uses_preferred_human_readable_layout(db_session, tmp_path):
     from fair_ocean_agent.exports.faire import (
         CUSTOM_ENV_VAR_BLOCK_FIELD,
         CUSTOM_PULLED_ENV_VAR_FIELD,
@@ -666,22 +679,22 @@ def test_export_faire_column_order_matches_classes_yaml(db_session, tmp_path):
     export_faire(db_session, tmp_path)
     with (tmp_path / "sampleMetadata.csv").open() as f:
         header = next(csv.reader(f))
-    # internal_study_id/internal_alias_sample_ids are pipeline-internal
-    # traceability columns, prepended ahead of the real FAIRe columns --
-    # neither is itself part of classes.yaml. Columns still follow
-    # classes.yaml's own order, just with the suppressed ones dropped out.
-    # x_env_var_block/x_pulled_env_var (also not in classes.yaml -- custom,
-    # non-schema columns) are appended at the very end.
+    # Same exportable fields as before -- real class columns with suppressed
+    # fields removed, plus pipeline-local/internal columns -- but arranged in
+    # the human-readable order used for audit spreadsheets.
     expected_columns = [
         field for field in class_columns("sampleMetadata") if field not in SAMPLE_METADATA_SUPPRESSED_FIELDS
     ]
-    assert header == [
+    exportable_columns = [
         INTERNAL_STUDY_ID_FIELD,
         INTERNAL_ALIAS_SAMPLE_IDS_FIELD,
         *expected_columns,
         CUSTOM_ENV_VAR_BLOCK_FIELD,
         CUSTOM_PULLED_ENV_VAR_FIELD,
     ]
+    preferred_present = [field for field in SAMPLE_METADATA_COLUMN_ORDER if field in set(exportable_columns)]
+    preferred_set = set(preferred_present)
+    assert header == preferred_present + [field for field in exportable_columns if field not in preferred_set]
     assert not {
         "verbatimCoordinateSystem",
         "verbatimEventDate",
