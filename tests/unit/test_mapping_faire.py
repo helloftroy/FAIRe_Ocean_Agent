@@ -1667,6 +1667,37 @@ def test_llm_study_level_geo_loc_name_broadcasts_when_only_a_named_site_is_given
     assert row.standardized_value == "China: Yantai (Yantai Haichang Whale Shark Ocean Park)"
 
 
+def test_absent_sample_geo_loc_name_does_not_block_llm_named_site_broadcast(db_session):
+    study = _study(db_session, title="API absent location, paper named site")
+    sample = Entity(
+        study_id=study.study_id,
+        entity_level=EntityLevel.SAMPLE.value,
+        external_identifier="SAMN_NOT_COLLECTED",
+    )
+    db_session.add(sample)
+    db_session.flush()
+    db_session.add(_home_entity_study(sample))
+    _fact(db_session, study, entity=sample, field="geo_loc_name", value="not collected", entity_level="sample")
+    _fact(
+        db_session,
+        study,
+        field="geo_loc_name",
+        value="China: Yantai (Yantai Haichang Whale Shark Ocean Park)",
+        entity_level="study",
+        support=SupportType.EXPLICIT,
+    )
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    rows = db_session.query(StandardizedValue).filter_by(study_id=study.study_id, target_field="geo_loc_name").all()
+    assert len(rows) == 1
+    assert rows[0].entity_id is None
+    assert rows[0].standardized_value == "China: Yantai (Yantai Haichang Whale Shark Ocean Park)"
+    assert rows[0].review_required is True
+
+
 def test_study_level_filter_name_maps_as_sample_broadcast_default(db_session):
     study = _study(db_session, title="Filter name")
     _fact(

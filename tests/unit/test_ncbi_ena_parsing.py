@@ -158,6 +158,34 @@ def test_biosample_extract_structured_facts_normalizes_location_and_host_aliases
     assert values["isolation_source"].source_locator.endswith("Attributes.isolation_source")
 
 
+def test_biosample_extract_structured_facts_skips_absent_location_placeholders(biosample_adapter):
+    raw = {
+        "bioproject_accession": "PRJNA242644",
+        "total_linked_samples": 1,
+        "truncated": False,
+        "samples": [
+            {
+                "accession": "SAMN_NOT_COLLECTED",
+                "title": "environmental sample",
+                "attributes": {
+                    "geographic location": "not collected",
+                    "geo_loc_name": "not provided",
+                    "lat_lon": "unknown",
+                    "env_local_scale": "not applicable",
+                },
+            },
+        ],
+    }
+
+    facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw))
+    by_type = {fact.fact_type_candidate: fact.raw_value for fact in facts}
+
+    assert "geographic location" not in by_type
+    assert "geo_loc_name" not in by_type
+    assert "lat_lon" not in by_type
+    assert by_type["env_local_scale"] == "not applicable"
+
+
 def test_biosample_extract_structured_facts_uses_isolate_as_host_species_fallback(biosample_adapter):
     raw = {
         "bioproject_accession": "PRJNA999999",

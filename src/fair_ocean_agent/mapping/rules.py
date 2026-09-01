@@ -150,6 +150,19 @@ def _non_placeholder_text(value: str) -> str | None:
     return stripped
 
 
+_ABSENT_LOCATION_RE = re.compile(
+    r"^(?:not\s+collected|not\s+provided|not\s+available|unknown|missing|n/?a|na)$",
+    re.IGNORECASE,
+)
+
+
+def _non_absent_geo_loc_name(value: str) -> str | None:
+    stripped = value.strip()
+    if not stripped or _ABSENT_LOCATION_RE.match(stripped):
+        return None
+    return stripped
+
+
 def _license_url(value: str) -> str | None:
     stripped = value.strip()
     if not stripped:
@@ -400,7 +413,7 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
     MappingRule("isolation_source", EntityLevel.SAMPLE.value, "sampleMetadata", "env_medium",
                 MappingMethod.DETERMINISTIC_SYNONYM.value, transform=expand_envo_terms, enum_name="env_medium_enum"),
     MappingRule("geo_loc_name", EntityLevel.SAMPLE.value, "sampleMetadata", "geo_loc_name",
-                MappingMethod.EXACT_LABEL.value),
+                MappingMethod.EXACT_LABEL.value, transform=_non_absent_geo_loc_name),
     MappingRule("cruise", EntityLevel.SAMPLE.value, "sampleMetadata", "internal_expedition_id",
                 MappingMethod.DETERMINISTIC_SYNONYM.value),
     MappingRule("cruise_id", EntityLevel.SAMPLE.value, "sampleMetadata", "internal_expedition_id",
@@ -786,7 +799,7 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
     # above), same review_required=True safety net as every other
     # LLM-inferred study-wide broadcast in this section.
     MappingRule("geo_loc_name", EntityLevel.STUDY.value, "sampleMetadata", "geo_loc_name",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
+                MappingMethod.SUGGESTED_SEMANTIC.value, transform=_non_absent_geo_loc_name, review_required=True),
     MappingRule("sample_collection_method", EntityLevel.STUDY.value, "sampleMetadata", "samp_collect_method",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("sediment_sampling_method", EntityLevel.STUDY.value, "sampleMetadata", "samp_collect_method",

@@ -263,7 +263,20 @@ _SOURCE_MATERIAL_SAMPLE_NAME_RE = re.compile(
     r"^[A-Za-z0-9]+[-_][A-Za-z]+\d+[-_]\d+$"
 )
 _HOST_SPECIES_ATTRIBUTE_NAMES = ("host_species", "host species", "host", "cultivar")
-_ABSENT_ATTRIBUTE_VALUE_RE = re.compile(r"^(?:not\s+applicable|not\s+available|not\s+collected|unknown|missing|n/?a|na)$", re.IGNORECASE)
+_ABSENT_ATTRIBUTE_VALUE_RE = re.compile(
+    r"^(?:not\s+applicable|not\s+available|not\s+collected|not\s+provided|unknown|missing|n/?a|na)$",
+    re.IGNORECASE,
+)
+_LOCATION_ATTRIBUTE_NAMES = frozenset(
+    {
+        "geo_loc_name",
+        "lat_lon",
+        "latitude",
+        "longitude",
+        "geographic location",
+        "geographic_location",
+    }
+)
 
 
 def _source_material_id_sample_name(value: str | None) -> str | None:
@@ -419,6 +432,16 @@ def _canonical_biosample_attribute_name(name: str) -> str:
     if normalized == "isolationsource":
         return "isolation_source"
     return name
+
+
+def _present_biosample_attribute_value(attr_name: str, value: str | None) -> str | None:
+    cleaned = _clean_text(value)
+    if not cleaned:
+        return None
+    canonical_name = _canonical_biosample_attribute_name(attr_name)
+    if canonical_name in _LOCATION_ATTRIBUTE_NAMES and _ABSENT_ATTRIBUTE_VALUE_RE.match(cleaned):
+        return None
+    return cleaned
 
 
 def _uid_verification_fact(
@@ -817,12 +840,13 @@ class NcbiBioSampleAdapter(SourceAdapter):
                     )
                 )
             for attr_name, attr_value in sample.get("attributes", {}).items():
-                if attr_value in (None, ""):
+                cleaned_attr_value = _present_biosample_attribute_value(attr_name, attr_value)
+                if cleaned_attr_value is None:
                     continue
-                normalized_attrs[attr_name] = str(attr_value)
+                normalized_attrs[attr_name] = cleaned_attr_value
                 canonical_attr_name = _canonical_biosample_attribute_name(attr_name)
                 if canonical_attr_name != attr_name:
-                    normalized_attrs[canonical_attr_name] = str(attr_value)
+                    normalized_attrs[canonical_attr_name] = cleaned_attr_value
             host_species = _host_species_from_attributes(normalized_attrs)
             if host_species:
                 host_attr_name, host_attr_value = host_species
@@ -927,7 +951,8 @@ class NcbiBioSampleAdapter(SourceAdapter):
                     )
                 )
             for attr_name, attr_value in sample.get("attributes", {}).items():
-                if attr_value in (None, ""):
+                cleaned_attr_value = _present_biosample_attribute_value(attr_name, attr_value)
+                if cleaned_attr_value is None:
                     continue
                 attr_name = _canonical_biosample_attribute_name(attr_name)
                 if attr_name not in _MAG_SAFE_ENVIRONMENTAL_ATTRIBUTES:
@@ -937,7 +962,7 @@ class NcbiBioSampleAdapter(SourceAdapter):
                         entity_level=EntityLevel.SAMPLE,
                         fact_type_candidate=attr_name,
                         raw_field_name=attr_name,
-                        raw_value=str(attr_value),
+                        raw_value=cleaned_attr_value,
                         source_locator=f"ncbi_biosample.{accession}.Attributes.{attr_name}",
                         entity_external_id=accession,
                         entity_label=sample.get("title"),
