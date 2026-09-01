@@ -262,13 +262,29 @@ FIELD_GROUPS: dict[str, tuple[FaireExtractionField, ...]] = {
         # marker-gene community profiling via amplicon sequencing +
         # OTU/ASV clustering (metabarcoding), regardless of how specific
         # the primers are.
+        # Real gap found live (10.7717/peerj.17091): "MiFish 12S" and
+        # "Valsecchi 16S" -- both universal fish taxonomic marker genes --
+        # were classified "targeted" despite the paper's own abstract and
+        # results explicitly calling both "metabarcoding" assays. 16S/18S/
+        # 12S/COI/ITS/rbcL are, BY DEFINITION, universal/semi-universal
+        # taxonomic barcode genes used to profile a whole community at
+        # once -- the model apparently wasn't confident on this specific
+        # definitional fact, so it's now spelled out directly rather than
+        # left to be inferred from the more general targeted-vs-
+        # metabarcoding description alone.
         FaireExtractionField(
             "assay_type",
             "targeted (qPCR/ddPCR-style detection of one species or a small, named taxon set), "
             "metabarcoding (marker-gene community profiling via amplicon sequencing, OTU/ASV clustering, "
             "and taxonomic database assignment -- still metabarcoding even when specific, named primers "
             "are used, and even for a functional/non-taxonomic marker gene like cbbL/nifH/amoA profiled "
-            "the same way), or other detection approach",
+            "the same way), or other detection approach. IMPORTANT DEFINITIONAL RULE: 16S rRNA, 18S rRNA, "
+            "12S rRNA, COI, ITS, and rbcL are universal or semi-universal taxonomic marker/barcode genes -- "
+            "sequencing ANY of these to identify/profile the organisms present is metabarcoding BY "
+            "DEFINITION, regardless of how specific or well-known the primer set's own name is (e.g. "
+            "MiFish, Valsecchi), unless the paper explicitly describes a qPCR/ddPCR probe-based assay "
+            "detecting ONE named species using that gene as the target -- a primer set simply having its "
+            "own specific/branded name does NOT make it targeted.",
             "assay_type",
             required_any_flags=frozenset({"pcr_0_1"}),
         ),
