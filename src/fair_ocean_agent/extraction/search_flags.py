@@ -3463,17 +3463,58 @@ def _mirror_not_a_control_to_sibling_field(facts: list[RawFactCandidate]) -> lis
     return facts
 
 
+
+# neg_cont_0_1's own search_terms ("control"/"controls"/"blank"/"blanks")
+# are deliberately broad enough to also flag a POSITIVE control mention
+# ("a positive control using synthetic DNA...") or an unrelated generic
+# usage ("quality control was performed...") as a raw candidate -- the
+# LLM's own judgement, not the candidate gate, is what tells those apart
+# in the normal case. That means "the model returned nothing for this
+# candidate" is genuinely ambiguous on its own: it could mean "correctly
+# recognized this ISN'T a real negative control" (silence is the RIGHT
+# answer, "0" is still the honest confident default) or "missed a real
+# one" (STUDY-0161dd80b492: "Each batch of extractions included an
+# extraction blank" is textbook negative-control terminology the model
+# simply failed to report). Only "blank"/"blanks" -- unlike bare
+# "control"/"controls", which both those false-positive-shaped
+# candidates above also matched -- is unambiguous enough in this domain
+# to trust as "a real negative control was very likely being described
+# here", so only a missed BLANK-bearing candidate withholds the
+# confident "0" default; a missed bare-"control" candidate still gets
+# it, same as before.
+_STRONG_NEG_CONT_EVIDENCE_RE = re.compile(r"\bblanks?\b", re.IGNORECASE)
+
+
 def _control_not_found_fallback_facts(
-    *, locator_prefix: str, existing_fact_types: frozenset[str], exclude_field_names: frozenset[str]
+    *,
+    locator_prefix: str,
+    existing_fact_types: frozenset[str],
+    exclude_field_names: frozenset[str],
+    candidates: tuple[QuoteCandidate, ...] = (),
 ) -> list[RawFactCandidate]:
     """Per an explicit user request ("i also see no mention of +/- controls
     ... I think they should both be 0"): when a paper's text never even
     raises a "control"/"blank" candidate for one or both of neg_cont_0_1/
     pos_cont_0_1, the honest, confident default is "0" (no control used),
-    not a blank field indistinguishable from "never checked"."""
+    not a blank field indistinguishable from "never checked".
+
+    Real gap found live (STUDY-0161dd80b492): a real, unambiguous
+    "extraction blank" mention DID raise a neg_cont_0_1 candidate quote,
+    but the model's own judgement call didn't return a value for it (a
+    real partial-completion miss, the same class already seen elsewhere
+    with this small local model) -- yet this fallback fired anyway and
+    wrote a confident "0", silently converting a genuine negative
+    control mention into the opposite answer. See
+    _STRONG_NEG_CONT_EVIDENCE_RE's own comment for why this is scoped to
+    "blank"-bearing candidates specifically rather than any candidate."""
     facts: list[RawFactCandidate] = []
     for field_name in ("neg_cont_0_1", "pos_cont_0_1"):
         if field_name in exclude_field_names or field_name in existing_fact_types:
+            continue
+        if field_name == "neg_cont_0_1" and any(
+            field_name in candidate.field_names and _STRONG_NEG_CONT_EVIDENCE_RE.search(candidate.text)
+            for candidate in candidates
+        ):
             continue
         facts.append(
             RawFactCandidate(
@@ -3725,6 +3766,7 @@ def detect_llm_judged_search_facts(
                 locator_prefix=locator_prefix,
                 existing_fact_types=frozenset(),
                 exclude_field_names=exclude_field_names,
+                candidates=candidates,
             )
         )
         return facts
@@ -3769,6 +3811,7 @@ def detect_llm_judged_search_facts(
             locator_prefix=locator_prefix,
             existing_fact_types=existing_fact_types,
             exclude_field_names=exclude_field_names,
+            candidates=candidates,
         )
     )
     return facts

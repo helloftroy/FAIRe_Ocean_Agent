@@ -242,6 +242,30 @@ def test_detect_llm_judged_search_facts_defaults_both_controls_to_zero_when_neve
     assert by_type["neg_cont_0_1"].confidence_metadata["detector"] == "control_not_found_default"
 
 
+def test_detect_llm_judged_search_facts_does_not_default_neg_cont_to_zero_when_a_blank_was_missed():
+    """Real gap found live (STUDY-0161dd80b492): "Each batch of
+    extractions included an extraction blank" DID raise a real
+    neg_cont_0_1 candidate quote, but the model's own judgement call
+    (simulated here by an empty response) never returned a value for it
+    -- a genuine partial-completion miss, not a "nothing to find" case.
+    The not-found-default fallback used to fire anyway and silently
+    write a confident, WRONG "0" over a real negative control mention.
+    "blank" is unambiguous enough in this domain that a missed
+    blank-bearing candidate now withholds the confident default instead
+    of guessing."""
+    text = (
+        "A DNeasy Blood and Tissue Kit (Qiagen, Hilden, Germany) was used to extract DNA from the "
+        "filters. Each batch of extractions included an extraction blank."
+    )
+    facts = detect_llm_judged_search_facts(
+        MockLLMBackend(responses=["[]"]),
+        (("Methods", text),),
+        locator_prefix="paper:PMC1",
+    )
+    by_type = {fact.fact_type_candidate: fact for fact in facts}
+    assert "neg_cont_0_1" not in by_type
+
+
 def test_detect_llm_judged_search_facts_control_prefers_positive_evidence_over_negative_across_quotes():
     """If the model judges "1" for one candidate quote and "0" for
     another (e.g. a confusing paper, or one candidate genuinely stronger
