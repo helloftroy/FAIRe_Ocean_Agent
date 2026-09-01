@@ -234,6 +234,24 @@ def test_samp_store_sol_cues_match_a_named_mixture_not_just_a_bare_solution():
     assert _term_cues_match("samp_store_sol", "Filters were stored in RNAlater until DNA extraction.")
 
 
+def test_dna_cleanup_cues_match_a_bare_kit_name_with_no_cleanup_verb():
+    """Real gap found live: "Genomic DNA Clean and Concentrator kit (Zymo
+    Research Corporation)" -- a real, common commercial cleanup kit --
+    matched none of the existing cues at all, because every one of them
+    was a cleanup VERB phrase ("cleaned using", "purified using", "cleanup
+    kit", ...) and this sentence names only the kit itself. Both
+    dna_cleanup_0_1 and dna_cleanup_method were silently missed."""
+    sentence = (
+        "Genomic DNA Clean and Concentrator kit (Zymo Research Corporation) was used to remove "
+        "PCR inhibitors from the extracted DNA."
+    )
+    assert _term_cues_match("dna_cleanup_0_1", sentence)
+    assert _term_cues_match("dna_cleanup_method", sentence)
+    # the original cleanup-verb cues must keep matching too
+    assert _term_cues_match("dna_cleanup_0_1", "DNA was cleaned using a silica column.")
+    assert _term_cues_match("dna_cleanup_method", "DNA was purified using a silica column.")
+
+
 def test_candidate_categories_for_paragraph_finds_sample_prep_in_dense_text():
     """Real evidence: this dense supplementary-methods paragraph's own
     opening sentence ("DNA for amplicon sequencing and qPCR was extracted

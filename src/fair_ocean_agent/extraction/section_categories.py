@@ -493,18 +493,30 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
             # -- the original cue lists only had "cleaned"/"purified"
             # phrasing, missing both "contamination was removed" and
             # precipitation-based cleanup language entirely.
+            # "Clean and Concentrator"/"Clean & Concentrator" (Zymo Research)
+            # added as its own literal kit-name cue, same as PowerWater/
+            # PowerSoil/Quick-DNA etc. above: a real, live sentence naming
+            # "Genomic DNA Clean and Concentrator kit (Zymo Research
+            # Corporation)" matched none of the generic cleanup-verb cues
+            # below at all (no "cleaned using"/"purified using"/"cleanup
+            # kit"/etc.), so both dna_cleanup_0_1 and dna_cleanup_method
+            # were silently missed -- a bare commercial kit name mentioned
+            # without any of those surrounding verbs is common enough on its
+            # own to need a direct cue, not just the generic phrasing.
             CategoryTerm("dna_cleanup_0_1", (
                 "DNA was cleaned", "DNA was purified", "DNA purification", "cleanup was performed",
                 "no additional cleanup", "purification step",
                 "contamination was removed", "DNA-free kit", "DNase treatment", "DNase treated",
                 "treated with DNase", "removed with the", "isopropanol precipitation",
                 "ethanol precipitation", "DNA pellet was washed", "precipitated DNA",
+                "Clean and Concentrator", "Clean & Concentrator", "Genomic DNA Clean",
             ), definition='Whether extracted DNA was subsequently cleaned or purified after the initial extraction: yes = 1, no = 0. This includes a commercial cleanup/purification kit, a DNA-free/DNase treatment to remove contaminants, AND a precipitation-based cleanup (e.g. isopropanol or ethanol precipitation followed by removing the supernatant/washing the pellet) -- precipitation-and-wash steps described narratively (without ever using the word "cleanup" or "purification") still count as yes = 1.'),
             CategoryTerm("dna_cleanup_method", (
                 "cleaned using", "purified using", "cleanup kit", "purification kit",
                 "contamination was removed with", "removed with the", "DNA-free kit",
                 "DNase treatment", "treated with DNase", "isopropanol precipitation",
                 "ethanol precipitation", "precipitated with isopropanol", "precipitated with ethanol",
+                "Clean and Concentrator", "Clean & Concentrator", "Genomic DNA Clean",
             ), definition='Method or commercial kit used to clean/purify extracted DNA.'),
             CategoryTerm("pool_dna_num", (
                 "pool", "pooled", "pooling", "samples were pooled", "sample was pooled",

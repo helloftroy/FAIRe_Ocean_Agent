@@ -2155,3 +2155,23 @@ def test_quote_candidates_for_screen_contam_method_matches_plural_contaminants_a
     )
     candidates = quote_candidates_for_llm_judged_search((("Methods", text),))
     assert any("screen_contam_method" in c.field_names for c in candidates)
+
+
+def test_quote_candidates_for_pos_cont_0_1_matches_a_mock_community_mention():
+    """Real gap found live: 'Lastly, genomic DNA from a microbial mock
+    community (BEI Resources, NIAID, NIH ... Genomic DNA from Microbial
+    Mock Community A (Even, Low Concentration), v3.1, HM-278D) was
+    included in the final sample array to account for amplification and
+    sequencing error.' never says "control" or "blank" at all, so the old
+    search_terms=("control", "controls", "blank", "blanks") never even
+    offered this sentence to the judging LLM as a pos_cont_0_1 candidate,
+    even though the field's own description already names "mock
+    community" as a canonical example."""
+    text = (
+        "Lastly, genomic DNA from a microbial mock community (BEI Resources, NIAID, NIH as part of "
+        "the Human Microbiome Project: Genomic DNA from Microbial Mock Community A (Even, Low "
+        "Concentration), v3.1, HM-278D) was included in the final sample array to account for "
+        "amplification and sequencing error."
+    )
+    candidates = quote_candidates_for_llm_judged_search((("Methods", text),))
+    assert any("pos_cont_0_1" in c.field_names for c in candidates)

@@ -1230,7 +1230,23 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
             "only if the quote explicitly states NO positive control was used. If the quote is ambiguous "
             "or doesn't clearly support either, omit this field rather than guessing."
         ),
-        search_terms=("control", "controls", "blank", "blanks"),
+        # "control"/"controls"/"blank"/"blanks" alone miss the most common
+        # real phrasing of a positive control: a real, live sentence
+        # ("genomic DNA from a microbial mock community ... was included in
+        # the final sample array to account for amplification and
+        # sequencing error") never says "control" or "blank" at all, so the
+        # candidate-quote step never even offered it to the judging LLM.
+        # This field's own description already promises "mock community,
+        # reference/known/synthetic DNA, gBlock" as detectable examples --
+        # none of those phrases contain "control"/"blank" either, so all are
+        # added here explicitly (mirroring the same vetted term list already
+        # used for SAMPLE-level positive-control classification in
+        # mapping/rules.py's _POSITIVE_CONTROL_TERMS).
+        search_terms=(
+            "control", "controls", "blank", "blanks",
+            "mock community", "mock communities", "reference dna", "known dna",
+            "synthetic dna", "gblock", "gblocks",
+        ),
     ),
     # A real audit (10.1093/ismejo/wrae013, STUDY-295abf4a8f43) found rich
     # in-situ temperature/salinity measurements in the
