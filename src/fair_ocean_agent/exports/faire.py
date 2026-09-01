@@ -120,6 +120,15 @@ CUSTOM_PULLED_ENV_VAR_FIELD = "x_pulled_env_var"
 # (sources/supplement_parsing.py::_facts_from_rows is the producer).
 CUSTOM_SPREADSHEET_HEADERS_FIELD = "spreadsheet_headers"
 
+# Same custom-non-FAIRe-field treatment as CUSTOM_ENV_VAR_BLOCK_FIELD above,
+# for a sample's own leftover repository-API attributes this time. Per an
+# explicit user request (SAMN08449373: NCBI's own BioSample page shows
+# real, useful metadata like treatment/TankReplicate/Sampling_point that
+# has no FAIRe field of its own and was previously silently dropped) --
+# mapping/faire.py::_apply_source_unmapped_attributes is the producer, one
+# pipe-joined "name: value" catch-all per sample.
+CUSTOM_SOURCE_UNMAPPED_FIELD = "source_unmapped"
+
 # samp_name/materialSampleID are the row's own identifying columns -- the
 # real accession must win outright as the identifier, never get pipe-joined
 # against an alias's native name (that native name is preserved separately,
@@ -325,6 +334,7 @@ SAMPLE_METADATA_COLUMN_ORDER = (
     "prep_method_additional",
     "concentration",
     "eventDate_submitted",
+    CUSTOM_SOURCE_UNMAPPED_FIELD,
 )
 
 
@@ -989,6 +999,7 @@ def export_faire(session: Session, output_dir: str | Path, *, study_ids: list[st
             *sample_columns,
             CUSTOM_ENV_VAR_BLOCK_FIELD,
             CUSTOM_PULLED_ENV_VAR_FIELD,
+            CUSTOM_SOURCE_UNMAPPED_FIELD,
         ],
         SAMPLE_METADATA_COLUMN_ORDER,
     )

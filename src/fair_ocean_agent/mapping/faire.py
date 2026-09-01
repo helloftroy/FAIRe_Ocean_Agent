@@ -803,6 +803,117 @@ def _apply_biological_rep_from_relations(
     return 1
 
 
+# Mirrors sources/ncbi.py's own _ABSENT_ATTRIBUTE_VALUE_RE -- a bare NCBI
+# placeholder ("missing", "not provided", ...) is never useful metadata,
+# and this mapping-layer check applies it source-agnostically rather than
+# importing a source-specific pattern.
+_ABSENT_ATTRIBUTE_LIKE_RE = re.compile(
+    r"^(?:not\s+applicable|not\s+available|not\s+collected|not\s+provided|unknown|missing|n/?a|na)$",
+    re.IGNORECASE,
+)
+
+# These raw attribute names are already captured, under a different
+# FAIRe field, by a dedicated attribute-priority search elsewhere:
+# host/host species/cultivar/isolate by host_species's own search
+# (sources/ncbi.py::_host_species_from_attributes), sample_name/title/
+# source_material_id by samp_category's own search (sources/ncbi.py::
+# _sample_category_from_title_or_name) -- including the bare raw name
+# here would just duplicate a value already visible under its real
+# FAIRe field.
+_SOURCE_UNMAPPED_EXCLUDED_FACT_TYPES = frozenset(
+    {"host", "host species", "cultivar", "isolate", "sample_name", "title", "source_material_id"}
+)
+
+
+def _apply_source_unmapped_attributes(
+    session: Session,
+    study_id: str,
+    seen: dict[tuple[str, str, str | None], StandardizedValue],
+) -> int:
+    """Real gap found live (SAMN08449373): NCBI carries plenty of real,
+    useful per-sample metadata (treatment, TankReplicate, Sampling_point,
+    ...) that has no FAIRe field of its own -- rules_for() found nothing,
+    so the fact never became a StandardizedValue and was silently
+    dropped. Per an explicit user request, any SAMPLE-level, API/
+    structured-sourced RawFact with no MappingRule (excluding
+    placeholder "missing"-shaped values, and the small exclude-list
+    above of raw names already captured under a different FAIRe field)
+    is combined into one "name: value" pipe-joined catch-all column per
+    sample, so real data stays visible for a human to judge instead of
+    disappearing entirely. Deliberately excludes LLM-derived facts:
+    every LLM-extracted fact_type_candidate is already deliberately
+    aimed at a real, known FAIRe field by design, so "no rule found"
+    for one would signal an actual code gap worth fixing, not a genuine
+    "extra" attribute -- this column is specifically for the raw,
+    open-ended attribute dumps a repository API hands back."""
+    created = 0
+    sample_entities = session.scalars(
+        select(Entity).where(Entity.study_id == study_id, Entity.entity_level == EntityLevel.SAMPLE.value)
+    ).all()
+    for entity in sample_entities:
+        facts = session.scalars(
+            select(RawFact)
+            .where(
+                RawFact.study_id == study_id,
+                RawFact.entity_id == entity.entity_id,
+                RawFact.entity_level == EntityLevel.SAMPLE.value,
+                RawFact.support_type.in_(_API_SUPPORT_TYPES),
+                RawFact.review_status != ReviewStatus.REJECTED.value,
+            )
+            .order_by(RawFact.created_at)
+        ).all()
+        parts: list[str] = []
+        evidence_fact_id: str | None = None
+        seen_names: set[str] = set()
+        for fact in facts:
+            fact_type = fact.fact_type_candidate
+            if (
+                fact_type is None
+                or not fact.raw_value
+                or fact_type in _SOURCE_UNMAPPED_EXCLUDED_FACT_TYPES
+                or fact_type.casefold() in seen_names
+                or rules_for(fact_type, fact.entity_level)
+                or _ABSENT_ATTRIBUTE_LIKE_RE.match(fact.raw_value.strip())
+            ):
+                continue
+            seen_names.add(fact_type.casefold())
+            parts.append(f"{fact.raw_field_name or fact_type}: {fact.raw_value}")
+            if evidence_fact_id is None:
+                evidence_fact_id = fact.fact_id
+        if not parts:
+            continue
+
+        value = " | ".join(parts)
+        key = ("sampleMetadata", "source_unmapped", entity.entity_id)
+        existing = seen.get(key)
+        if existing is not None:
+            existing.standardized_value = value
+            continue
+
+        standardized_value = StandardizedValue(
+            study_id=study_id,
+            entity_id=entity.entity_id,
+            target_schema=TARGET_SCHEMA,
+            target_schema_version=TARGET_SCHEMA_VERSION,
+            target_field="source_unmapped",
+            standardized_value=value,
+            mapping_method=MappingMethod.DETERMINISTIC_SYNONYM.value,
+            review_required=False,
+            missingness_status=MissingnessStatus.PRESENT.value,
+        )
+        session.add(standardized_value)
+        session.flush()
+        if evidence_fact_id is not None:
+            session.add(
+                StandardizedValueEvidence(
+                    standardized_value_id=standardized_value.standardized_value_id, fact_id=evidence_fact_id
+                )
+            )
+        seen[key] = standardized_value
+        created += 1
+    return created
+
+
 # Strips a common taxonomic-marker suffix so "16S rRNA" and "16S-V3V4"
 # are recognized as covering the same gene, while a bare functional gene
 # name like "cbbL" is left as-is (it has no such suffix to strip).
@@ -1374,6 +1485,7 @@ def map_study_to_faire(session: Session, study_id: str) -> int:
     created += _apply_biological_rep_relations_from_sample_categories(session, study_id, seen)
     created += _apply_biological_rep_from_relations(session, study_id, seen)
     created += _apply_assay_name_fallback_from_target_gene(session, study_id, seen)
+    created += _apply_source_unmapped_attributes(session, study_id, seen)
 
     for entity in session.scalars(select(Entity).where(Entity.study_id == study_id)):
         if not entity.external_identifier:

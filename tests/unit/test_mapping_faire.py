@@ -1386,6 +1386,56 @@ def test_assay_name_fallback_creates_a_new_row_when_no_assay_name_was_ever_given
     assert assay_name.review_required is True
 
 
+def test_source_unmapped_captures_real_attributes_with_no_faire_field(db_session):
+    """Real gap found live (SAMN08449373): NCBI's own BioSample page
+    shows real, useful metadata (treatment, TankReplicate,
+    Sampling_point) that has no FAIRe field of its own -- silently
+    dropped before, since rules_for() finds nothing for any of them.
+    Per an explicit user request, these get combined into one
+    "name: value" catch-all column instead of disappearing."""
+    study = _study(db_session, title="Leftover attributes")
+    sample = Entity(study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN08449373")
+    db_session.add(sample)
+    db_session.flush()
+    _fact(db_session, study, entity=sample, field="treatment", value="Pulse", entity_level="sample")
+    _fact(db_session, study, entity=sample, field="TankReplicate", value="E", entity_level="sample")
+    _fact(db_session, study, entity=sample, field="Sampling_point", value="168h after disturbance", entity_level="sample")
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    source_unmapped = db_session.query(StandardizedValue).filter_by(
+        study_id=study.study_id, entity_id=sample.entity_id, target_field="source_unmapped"
+    ).one()
+    assert source_unmapped.standardized_value == "treatment: Pulse | TankReplicate: E | Sampling_point: 168h after disturbance"
+    assert source_unmapped.review_required is False
+
+
+def test_source_unmapped_excludes_mapped_fields_absent_placeholders_and_redundant_host_names(db_session):
+    """collection_date has a real MappingRule (must not appear here);
+    strain="missing" is an NCBI not-provided placeholder (must not
+    appear); host="Amphimedon queenslandica" is unmapped by rules_for
+    but already captured under host_species's own real field (must not
+    be duplicated here)."""
+    study = _study(db_session, title="Excluded from source_unmapped")
+    sample = Entity(study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN2")
+    db_session.add(sample)
+    db_session.flush()
+    _fact(db_session, study, entity=sample, field="collection_date", value="2017-04-19", entity_level="sample")
+    _fact(db_session, study, entity=sample, field="strain", value="missing", entity_level="sample")
+    _fact(db_session, study, entity=sample, field="host", value="Amphimedon queenslandica", entity_level="sample")
+    _fact(db_session, study, entity=sample, field="host_species", value="Amphimedon queenslandica", entity_level="sample")
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    assert db_session.query(StandardizedValue).filter_by(
+        study_id=study.study_id, entity_id=sample.entity_id, target_field="source_unmapped"
+    ).first() is None
+
+
 def test_pipe_joins_conflicting_project_wide_instruments_with_review(db_session):
     study = _study(db_session, title="Two sequencing instruments")
     run_a = Entity(study_id=study.study_id, entity_level=EntityLevel.SEQUENCING_RUN.value, external_identifier="SRR_A")

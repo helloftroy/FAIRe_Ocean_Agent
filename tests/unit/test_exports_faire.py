@@ -673,6 +673,7 @@ def test_export_faire_sample_column_order_uses_preferred_human_readable_layout(d
     from fair_ocean_agent.exports.faire import (
         CUSTOM_ENV_VAR_BLOCK_FIELD,
         CUSTOM_PULLED_ENV_VAR_FIELD,
+        CUSTOM_SOURCE_UNMAPPED_FIELD,
         SAMPLE_METADATA_SUPPRESSED_FIELDS,
     )
 
@@ -691,6 +692,7 @@ def test_export_faire_sample_column_order_uses_preferred_human_readable_layout(d
         *expected_columns,
         CUSTOM_ENV_VAR_BLOCK_FIELD,
         CUSTOM_PULLED_ENV_VAR_FIELD,
+        CUSTOM_SOURCE_UNMAPPED_FIELD,
     ]
     preferred_present = [field for field in SAMPLE_METADATA_COLUMN_ORDER if field in set(exportable_columns)]
     preferred_set = set(preferred_present)
