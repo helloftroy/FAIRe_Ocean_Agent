@@ -16,6 +16,7 @@ from fair_ocean_agent.extraction.publication_metadata import (
     extract_from_jats_permissions,
     extract_method_section_citations,
     extract_primer_reference_citations,
+    extract_primer_reference_citations_from_text,
     extract_publication_metadata_facts,
     format_bibliographic_citation,
     generate_funding_source,
@@ -521,6 +522,48 @@ def test_primer_reference_citations_ignores_a_sentence_with_no_citation_marker()
         xml, {"pcr_primer_name_forward": "515F", "pcr_primer_name_reverse": ""}, locator_prefix="t"
     )
     assert facts == []
+
+
+def test_primer_reference_citations_from_text_resolves_numeric_pdf_reference_doi():
+    text = """
+    Methods
+    Amplicons were generated with 515F/806R primers [4].
+
+    References
+    [4] Caporaso, J. G. et al. Global patterns of 16S rRNA diversity.
+    ISME Journal. doi: 10.1038/ismej.2012.8.
+    """
+
+    facts = extract_primer_reference_citations_from_text(text, {}, locator_prefix="pdf")
+    by_type = {fact.fact_type_candidate: fact for fact in facts}
+
+    assert by_type["pcr_primer_reference_forward"].raw_value == "doi: 10.1038/ismej.2012.8"
+    assert by_type["pcr_primer_reference_reverse"].raw_value == "doi: 10.1038/ismej.2012.8"
+    assert by_type["pcr_primer_reference_forward"].confidence_metadata["detector"] == (
+        "primer_reference_citation_text_context_fallback"
+    )
+
+
+def test_primer_reference_citations_from_text_resolves_author_year_pdf_reference_doi_near_primer_name():
+    text = """
+    Methods
+    Similar to Zhao et al. (2020) where AOA's distribution was explored, we investigated NOB.
+    Amplicons were prepared using the primers of Uni519F/806r, as described in Smith et al. (2018).
+
+    References
+    Zhao, R. 2020. AOA distributions in marine sediments. Journal. doi: 10.1000/wrong-reference.
+    Smith, K. 2018. Primer pair source paper. Journal. doi: 10.1000/right-reference.
+    """
+
+    facts = extract_primer_reference_citations_from_text(
+        text, {"pcr_primer_name_forward": "Uni519F", "pcr_primer_name_reverse": ""}, locator_prefix="pdf"
+    )
+
+    assert {fact.fact_type_candidate for fact in facts} == {
+        "pcr_primer_reference_forward",
+        "pcr_primer_reference_reverse",
+    }
+    assert {fact.raw_value for fact in facts} == {"doi: 10.1000/right-reference"}
 
 
 def test_generate_funding_source_from_jats_funding_paragraph():

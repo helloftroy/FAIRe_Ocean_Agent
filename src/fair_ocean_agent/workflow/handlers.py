@@ -57,6 +57,7 @@ from fair_ocean_agent.extraction.faire_fields import suppress_resolved_faire_hin
 from fair_ocean_agent.extraction.pdf import extract_pdf_sections, extract_pdf_text
 from fair_ocean_agent.extraction.publication_metadata import (
     extract_primer_reference_citations,
+    extract_primer_reference_citations_from_text,
     extract_publication_metadata_facts,
     generate_funding_source,
     generate_rights_holder,
@@ -386,6 +387,7 @@ def _resolve_and_seed_primer_references(
     study: Study,
     source: Source,
     fulltext_xml: str | None,
+    source_text: str | None = None,
     *,
     locator_prefix: str,
 ) -> None:
@@ -399,17 +401,23 @@ def _resolve_and_seed_primer_references(
     there, at task-processing time, not here, since the corpus can change
     between now and whenever that task actually runs). Per an explicit
     user request: "put it next in the queue of papers to seed... go all
-    levels deep." No-op for the local-PDF path (fulltext_xml is None there
-    -- no structured bibliography to resolve against)."""
-    if fulltext_xml is None:
-        return
+    levels deep." JATS XML uses exact citation links; local PDFs use a
+    text/reference-list fallback so the projectMetadata fields still get
+    the primer-reference lead when a DOI can be recovered from the PDF."""
     primer_names = {
         name_field: study_primer_name(session, study.study_id, name_field)
         for name_field in PRIMER_NAME_TO_SEQUENCE_FIELD
     }
     if not any(primer_names.values()):
         return
-    reference_facts = extract_primer_reference_citations(fulltext_xml, primer_names, locator_prefix=locator_prefix)
+    if fulltext_xml is not None:
+        reference_facts = extract_primer_reference_citations(fulltext_xml, primer_names, locator_prefix=locator_prefix)
+    elif source_text is not None:
+        reference_facts = extract_primer_reference_citations_from_text(
+            source_text, primer_names, locator_prefix=locator_prefix
+        )
+    else:
+        return
     if not reference_facts:
         return
     _persist_candidate_facts(
@@ -2058,7 +2066,14 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
         review_status=ReviewStatus.ACCEPTED.value,
     )
 
-    _resolve_and_seed_primer_references(session, study, source, fulltext_xml, locator_prefix=locator_prefix)
+    _resolve_and_seed_primer_references(
+        session,
+        study,
+        source,
+        fulltext_xml,
+        source_text_for_metadata,
+        locator_prefix=locator_prefix,
+    )
 
     session.flush()
 

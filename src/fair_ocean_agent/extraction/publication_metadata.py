@@ -1012,6 +1012,113 @@ _BOTH_PRIMER_CONTEXT_RE = re.compile(
     r"forward/reverse|F/R|oligonucleotides?)\b|[A-Za-z0-9_-]+F\s*/\s*[A-Za-z0-9_-]+R",
     re.IGNORECASE,
 )
+_REFERENCES_HEADING_RE = re.compile(r"(?im)^\s*(?:references|literature\s+cited)\s*$")
+_TEXT_REFERENCE_ENTRY_START_RE = re.compile(
+    r"(?m)^\s*(?:(?:\[\s*)?(?P<number>\d{1,3})(?:\s*\])?[\.\)]?\s+)?(?P<entry>.+)"
+)
+_TEXT_NUMERIC_CITATION_RE = re.compile(r"\[(?P<number>\d{1,3})\]")
+_TEXT_AUTHOR_YEAR_CITATION_RE = re.compile(
+    r"\b(?P<author>[A-Z][A-Za-z'`-]+)(?:\s+et\s+al\.)?\s*\((?P<year>(?:19|20)\d{2}[a-z]?)\)"
+)
+_TEXT_PAREN_AUTHOR_YEAR_RE = re.compile(
+    r"\((?P<citation>[^()]*?\b(?:19|20)\d{2}[a-z]?[^()]*?)\)"
+)
+
+
+def _reference_resource_from_text(entry: str) -> str:
+    for match in _DOI_IN_TEXT_RE.finditer(entry):
+        resource = _doi_resource(match.group(1))
+        if resource:
+            return resource
+    cleaned = _clean_text(entry)
+    return f"{cleaned[:297].rstrip()}..." if cleaned and len(cleaned) > 300 else (cleaned or entry)
+
+
+def _split_text_references(full_text: str) -> list[dict[str, str]]:
+    heading = None
+    for match in _REFERENCES_HEADING_RE.finditer(full_text):
+        heading = match
+    if heading is None:
+        return []
+    references_text = full_text[heading.end():]
+    entries: list[dict[str, str]] = []
+    current_number: str | None = None
+    current_lines: list[str] = []
+    for raw_line in references_text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        match = _TEXT_REFERENCE_ENTRY_START_RE.match(line)
+        starts_numbered_entry = bool(match and match.group("number"))
+        starts_author_entry = bool(
+            not starts_numbered_entry
+            and re.match(r"^[A-Z][A-Za-z'`-]+,\s+(?:[A-Z]\.|[A-Z][a-z]+)", line)
+            and re.search(r"\b(?:19|20)\d{2}[a-z]?\b", line[:160])
+        )
+        if current_lines and (starts_numbered_entry or starts_author_entry):
+            entry = _clean_text(" ".join(current_lines))
+            if entry:
+                entries.append({"number": current_number or "", "text": entry, "resource": _reference_resource_from_text(entry)})
+            current_lines = []
+        if starts_numbered_entry:
+            current_number = match.group("number")
+            current_lines.append(match.group("entry"))
+        else:
+            if starts_author_entry:
+                current_number = None
+            current_lines.append(line)
+    if current_lines:
+        entry = _clean_text(" ".join(current_lines))
+        if entry:
+            entries.append({"number": current_number or "", "text": entry, "resource": _reference_resource_from_text(entry)})
+    return entries
+
+
+def _text_reference_for_numeric_marker(references: list[dict[str, str]], number: str) -> dict[str, str] | None:
+    return next((entry for entry in references if entry.get("number") == number), None)
+
+
+def _text_reference_for_author_year(references: list[dict[str, str]], author: str, year: str) -> dict[str, str] | None:
+    year_base = year[:4]
+    author_folded = author.casefold()
+    for entry in references:
+        text = entry["text"]
+        if author_folded in text[:180].casefold() and re.search(rf"\b{re.escape(year_base)}[a-z]?\b", text[:240]):
+            return entry
+    return None
+
+
+def _nearest_text_reference(sentence: str, references: list[dict[str, str]], anchor_pos: int) -> tuple[str, dict[str, str]] | None:
+    candidates: list[tuple[int, str, dict[str, str]]] = []
+    for match in _TEXT_NUMERIC_CITATION_RE.finditer(sentence):
+        reference = _text_reference_for_numeric_marker(references, match.group("number"))
+        if reference is not None:
+            candidates.append((abs(match.start() - anchor_pos), f"ref{match.group('number')}", reference))
+    for match in _TEXT_AUTHOR_YEAR_CITATION_RE.finditer(sentence):
+        reference = _text_reference_for_author_year(references, match.group("author"), match.group("year"))
+        if reference is not None:
+            candidates.append((abs(match.start() - anchor_pos), f"{match.group('author')} {match.group('year')}", reference))
+    for paren_match in _TEXT_PAREN_AUTHOR_YEAR_RE.finditer(sentence):
+        citation_text = paren_match.group("citation")
+        for match in re.finditer(r"(?P<author>[A-Z][A-Za-z'`-]+)(?:\s+et\s+al\.)?,?\s+(?P<year>(?:19|20)\d{2}[a-z]?)", citation_text):
+            reference = _text_reference_for_author_year(references, match.group("author"), match.group("year"))
+            if reference is not None:
+                candidates.append((abs(paren_match.start() - anchor_pos), f"{match.group('author')} {match.group('year')}", reference))
+    if not candidates:
+        return None
+    _, label, reference = sorted(candidates, key=lambda item: item[0])[0]
+    return label, reference
+
+
+def _text_citation_windows(methods_text: str) -> list[str]:
+    paragraphs = [
+        _clean_text(paragraph)
+        for paragraph in re.split(r"\n\s*\n+", methods_text)
+        if _clean_text(paragraph)
+    ]
+    if paragraphs:
+        return paragraphs
+    return [_clean_text(methods_text)] if _clean_text(methods_text) else []
 
 
 def _first_primer_reference_fact(
@@ -1195,6 +1302,104 @@ def extract_primer_reference_citations(
             facts.append(fact)
             existing_fields.add(reference_field)
     facts.extend(_primer_reference_fallback_facts(root, bibliography, primer_names, locator_prefix, existing_fields))
+    return facts
+
+
+def extract_primer_reference_citations_from_text(
+    text: str, primer_names: dict[str, str], *, locator_prefix: str
+) -> list[RawFactCandidate]:
+    """Best-effort primer-reference extraction for local PDFs/plain text.
+
+    The JATS path above is preferred whenever XML is available because it
+    has exact citation graph links. PDFs do not preserve those links, so
+    this fallback reconstructs enough: primer-context sentences in the
+    methods text + numeric or author/year markers + a parsed References
+    section. DOI output still uses the same `doi: ...` normalization; if
+    no DOI is present, the matched reference text is kept as the lead.
+    """
+    references = _split_text_references(text)
+    if not references:
+        return []
+    references_heading = _REFERENCES_HEADING_RE.search(text)
+    methods_text = text[: references_heading.start()] if references_heading else text
+    citation_windows = _text_citation_windows(methods_text)
+
+    facts: list[RawFactCandidate] = []
+    existing_fields: set[str] = set()
+
+    for name_field, reference_field in _PRIMER_NAME_TO_REFERENCE_FIELD.items():
+        primer_name = (primer_names.get(name_field) or "").strip()
+        if not primer_name:
+            continue
+        name_pattern = re.compile(r"\b" + re.escape(primer_name) + r"\b", re.IGNORECASE)
+        for sentence in citation_windows:
+            name_match = name_pattern.search(sentence)
+            if name_match is None:
+                continue
+            nearest = _nearest_text_reference(sentence, references, name_match.start())
+            if nearest is None:
+                continue
+            ref_id, reference = nearest
+            facts.append(
+                RawFactCandidate(
+                    entity_level=EntityLevel.STUDY,
+                    fact_type_candidate=reference_field,
+                    raw_field_name=reference_field,
+                    raw_value=reference["resource"],
+                    source_locator=f"{locator_prefix}:primer_reference_citation_text:{reference_field}",
+                    support_type=SupportType.DETERMINISTICALLY_DERIVED,
+                    evidence_quote=sentence,
+                    confidence_metadata={
+                        "detector": "primer_reference_citation_text",
+                        "primer_name": primer_name,
+                        "ref_id": ref_id,
+                        "citation_text": reference["text"],
+                    },
+                )
+            )
+            existing_fields.add(reference_field)
+            break
+
+    for sentence in citation_windows:
+        if {"pcr_primer_reference_forward", "pcr_primer_reference_reverse"} <= existing_fields:
+            break
+        context_match = _PRIMER_REFERENCE_CONTEXT_RE.search(sentence)
+        if context_match is None:
+            continue
+        nearest = _nearest_text_reference(sentence, references, context_match.end())
+        if nearest is None:
+            continue
+        ref_id, reference = nearest
+        for reference_field in sorted(_primer_reference_direction_fields(sentence, primer_names)):
+            if reference_field in existing_fields:
+                continue
+            name_field = (
+                "pcr_primer_name_forward"
+                if reference_field == "pcr_primer_reference_forward"
+                else "pcr_primer_name_reverse"
+            )
+            if (primer_names.get(name_field) or "").strip():
+                continue
+            facts.append(
+                RawFactCandidate(
+                    entity_level=EntityLevel.STUDY,
+                    fact_type_candidate=reference_field,
+                    raw_field_name=reference_field,
+                    raw_value=reference["resource"],
+                    source_locator=f"{locator_prefix}:primer_reference_citation_text:{reference_field}:primer_context_fallback",
+                    support_type=SupportType.DETERMINISTICALLY_DERIVED,
+                    evidence_quote=sentence,
+                    confidence_metadata={
+                        "detector": "primer_reference_citation_text_context_fallback",
+                        "primer_name": primer_names.get("pcr_primer_name_forward")
+                        if reference_field.endswith("_forward")
+                        else primer_names.get("pcr_primer_name_reverse"),
+                        "ref_id": ref_id,
+                        "citation_text": reference["text"],
+                    },
+                )
+            )
+            existing_fields.add(reference_field)
     return facts
 
 
