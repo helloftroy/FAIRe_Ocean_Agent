@@ -1575,6 +1575,42 @@ _PRIMER_DIRECTIONAL_NAME_RE = re.compile(
     re.IGNORECASE,
 )
 _PRIMER_NAME_EXCLUSIONS = frozenset({"unique", "universal", "indexed", "tailed"})
+_PRIMER_PAIR_RE = re.compile(
+    r"\b(?:primers?|primer\s+pairs?)\s+"
+    r"(?P<forward>[A-Za-z0-9][A-Za-z0-9_.-]{1,50}F)\s*(?:/|[-–])\s*"
+    r"(?P<reverse>[A-Za-z0-9][A-Za-z0-9_.-]{1,50}R)\b",
+    re.IGNORECASE,
+)
+_PRIMER_PAIR_CONTINUATION_RE = re.compile(
+    r"\b(?P<forward>[A-Za-z0-9][A-Za-z0-9_.-]{1,50}F)\s*(?:/|[-–])\s*"
+    r"(?P<reverse>[A-Za-z0-9][A-Za-z0-9_.-]{1,50}R)\b",
+    re.IGNORECASE,
+)
+_PRIMER_TABLE_ROW_RE = re.compile(
+    r"\b(?P<name>[A-Za-z0-9][A-Za-z0-9_.-]{1,50})\s*\|\s*"
+    r"(?P<sequence>[ACGTRYSWKMBDHVN]{10,})\s*\|",
+    re.IGNORECASE,
+)
+_PRIMER_TABLE_FLAT_ROW_RE = re.compile(
+    r"\b(?P<name>[A-Za-z0-9][A-Za-z0-9_.-]{1,50})\s+"
+    r"(?P<sequence>[ACGTRYSWKMBDHVN]{10,})\b",
+    re.IGNORECASE,
+)
+
+
+@dataclass(frozen=True)
+class _PrimerTableRow:
+    name: str
+    sequence: str
+    evidence: str
+
+
+@dataclass(frozen=True)
+class _PrimerPairUse:
+    forward_name: str
+    reverse_name: str
+    evidence: str
+    source_locator: str
 
 # A real bug found live (10.1093/ismejo/wrae013): a methods sentence
 # describing three DIFFERENT tools for three DIFFERENT purposes as one
@@ -1893,6 +1929,107 @@ def _clean_primer_sequence(value: str) -> str:
     return re.sub(r"[^ACGTRYSWKMBDHVN]", "", value.upper())
 
 
+def _clean_primer_name(value: str) -> str:
+    return value.strip(" .;,()[]")
+
+
+def _parse_primer_table_rows(text: str) -> dict[str, _PrimerTableRow]:
+    rows: dict[str, _PrimerTableRow] = {}
+    for raw_line in text.splitlines():
+        line = " ".join(raw_line.split())
+        if not line:
+            continue
+        matches = list(_PRIMER_TABLE_ROW_RE.finditer(line))
+        if not matches and "primer" in text.casefold():
+            matches = list(_PRIMER_TABLE_FLAT_ROW_RE.finditer(line))
+        for match in matches:
+            name = _clean_primer_name(match.group("name"))
+            sequence = _clean_primer_sequence(match.group("sequence"))
+            if not name or len(sequence) < 10 or name.casefold() in _PRIMER_NAME_EXCLUSIONS:
+                continue
+            rows.setdefault(name.casefold(), _PrimerTableRow(name=name, sequence=sequence, evidence=line))
+    return rows
+
+
+def _primer_pair_uses(
+    texts: Iterable[tuple[str, str]],
+    locator_prefix: str,
+) -> tuple[list[_PrimerPairUse], dict[str, _PrimerTableRow]]:
+    pairs: list[_PrimerPairUse] = []
+    table_rows: dict[str, _PrimerTableRow] = {}
+    seen_pairs: set[tuple[str, str]] = set()
+    for title, text in texts:
+        table_rows.update(_parse_primer_table_rows(text))
+        for snippet_index, snippet in _snippets(text):
+            folded = snippet.casefold()
+            if "primer" not in folded and "amplified" not in folded and "pcr" not in folded:
+                continue
+            pair_matches = list(_PRIMER_PAIR_RE.finditer(snippet))
+            if not pair_matches and ("primer" in folded or "pcr" in folded):
+                pair_matches = list(_PRIMER_PAIR_CONTINUATION_RE.finditer(snippet))
+            for match in pair_matches:
+                forward_name = _clean_primer_name(match.group("forward"))
+                reverse_name = _clean_primer_name(match.group("reverse"))
+                if not forward_name or not reverse_name:
+                    continue
+                key = (forward_name.casefold(), reverse_name.casefold())
+                if key in seen_pairs:
+                    continue
+                seen_pairs.add(key)
+                pairs.append(
+                    _PrimerPairUse(
+                        forward_name=forward_name,
+                        reverse_name=reverse_name,
+                        evidence=snippet,
+                        source_locator=f"{locator_prefix}:{title}:sentence[{snippet_index}]",
+                    )
+                )
+    return pairs, table_rows
+
+
+def _match_primer_pairs_and_tables(
+    texts: Iterable[tuple[str, str]],
+    locator_prefix: str,
+    *,
+    direction: str,
+    value_kind: str,
+) -> tuple[list[str], list[str], list[dict]]:
+    pairs, table_rows = _primer_pair_uses(texts, locator_prefix)
+    values: list[str] = []
+    evidence_quotes: list[str] = []
+    match_metadata: list[dict] = []
+    seen_values: set[str] = set()
+    for pair in pairs:
+        primer_name = pair.forward_name if direction == "forward" else pair.reverse_name
+        table_row = table_rows.get(primer_name.casefold())
+        if value_kind == "sequence":
+            if table_row is None:
+                continue
+            value = table_row.sequence
+            evidence = f"{pair.evidence} | {table_row.evidence}"
+            matched_pattern = _PRIMER_TABLE_ROW_RE.pattern
+        else:
+            value = primer_name
+            evidence = pair.evidence
+            matched_pattern = _PRIMER_PAIR_RE.pattern
+        key = value.casefold()
+        if not value or key in seen_values:
+            continue
+        seen_values.add(key)
+        values.append(value)
+        if evidence not in evidence_quotes:
+            evidence_quotes.append(evidence)
+        match_metadata.append(
+            {
+                "matched_value": value,
+                "matched_pattern": matched_pattern,
+                "primer_pair": f"{pair.forward_name}/{pair.reverse_name}",
+                "source_locator": pair.source_locator,
+            }
+        )
+    return values, evidence_quotes, match_metadata
+
+
 def _match_primer_phrase(
     field: ControlledSearchField,
     texts: Iterable[tuple[str, str]],
@@ -1901,12 +2038,19 @@ def _match_primer_phrase(
     direction: str,
     value_kind: str,
 ) -> tuple[list[str], list[str], list[dict]]:
+    text_items = tuple(texts)
+    pair_values, pair_quotes, pair_metadata = _match_primer_pairs_and_tables(
+        text_items,
+        locator_prefix,
+        direction=direction,
+        value_kind=value_kind,
+    )
     values: list[str] = []
     evidence_quotes: list[str] = []
     match_metadata: list[dict] = []
-    seen_values: set[str] = set()
+    seen_values: set[str] = {value.casefold() for value in pair_values}
 
-    for title, text in texts:
+    for title, text in text_items:
         for snippet_index, snippet in _snippets(text):
             if "primer" not in snippet.casefold():
                 continue
@@ -1946,7 +2090,7 @@ def _match_primer_phrase(
                     }
                 )
 
-    return values, evidence_quotes, match_metadata
+    return [*pair_values, *values], [*pair_quotes, *evidence_quotes], [*pair_metadata, *match_metadata]
 
 
 # Broad "there's a PCR-mixture-composition sentence here" trigger, shared
@@ -2500,7 +2644,11 @@ def build_llm_judged_search_prompt(candidates: tuple[QuoteCandidate, ...]) -> st
 Use only the candidate quotes below. Do not use outside knowledge. Do not infer from a keyword alone.
 Return a field only if a quote explicitly supports it. For free-text fields, keep raw_value as close as possible to
 the quote text; copy exact phrases when possible. Do not rewrite adapter sequences. If multiple values for the same
-field are explicitly supported, return one object per value, each citing its supporting quote_id.
+field are explicitly supported, return one object per value, each citing its supporting quote_id. Each quote below
+is labeled with the field name(s) in brackets it was pre-matched for -- a single dense quote can genuinely support
+MORE THAN ONE of its own bracketed fields at once (e.g. one sentence naming both a database and a clustering tool);
+return a separate object for each bracketed field the quote actually supports, not just one. Never attach a value
+to a field that is NOT in that quote's own bracket list.
 
 Fields:
 {field_reference}

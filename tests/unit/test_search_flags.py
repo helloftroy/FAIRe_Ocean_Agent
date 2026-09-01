@@ -451,6 +451,31 @@ def test_detect_controlled_search_facts_extracts_rrna_f_r_primer_names():
     assert by_type["reverse_primer_name"].evidence_quote == text
 
 
+def test_detect_controlled_search_facts_extracts_frontiers_primer_pair_from_table():
+    text = (
+        "TABLE 2. Primer | Sequence (5'-3') | Target | Use | Reference\n"
+        "U515F | TGYCAGCMGCCGCCGTAA | Prokaryote | S | Hoshino and Inagaki, 2017\n"
+        "U806R | GGACTACHVGGGTWTCTAAT | Prokaryote | S | Walters et al., 2011\n"
+        "B27F | AGRGTTYGATYMTGGCTCAG | Bacteria | D | Lane, 1991\n"
+        "B357R | CTGCWGCCNCCCGTAGG | Bacteria | D | Herlemann et al., 2011\n"
+        "The V3-V4 hyper-variable region of the 16S rRNA gene was amplified by PCR "
+        "using universal primers U515F/U806R (Table 2)."
+    )
+
+    controlled = detect_controlled_search_facts(
+        (("Methods", text),),
+        locator_prefix="paper:PMC5476839",
+        active_flags=frozenset({"pcr_0_1"}),
+    )
+
+    by_type = {fact.fact_type_candidate: fact for fact in controlled}
+    assert by_type["forward_primer_name"].raw_value == "U515F"
+    assert by_type["reverse_primer_name"].raw_value == "U806R"
+    assert by_type["forward_primer_sequence"].raw_value == "TGYCAGCMGCCGCCGTAA"
+    assert by_type["reverse_primer_sequence"].raw_value == "GGACTACHVGGGTWTCTAAT"
+    assert "B27F" not in by_type["forward_primer_name"].raw_value
+
+
 def test_detect_controlled_search_facts_does_not_match_bare_its_as_target_gene():
     text = "PCR amplified 18S rRNA; its sequence reads were clustered after filtering."
     flag_facts = detect_text_search_flags((("Methods", text),), locator_prefix="paper:PMC1")
@@ -1169,6 +1194,27 @@ def test_detect_llm_judged_search_facts_accepts_quote_id_and_stores_literal_quot
     )
     assert by_type["assay_name"].confidence_metadata["matches"][0]["quote_id"] == "Q002"
     assert backend.calls[0]["max_tokens"] == MIN_LLM_MAX_OUTPUT_TOKENS
+
+
+def test_detect_llm_judged_search_facts_accepts_multiple_bracketed_fields_from_one_quote():
+    """Same class of fix as section_category_extraction.py's own
+    multi-field prompt clarification: "OTUs were clustered using UPARSE
+    and taxonomically assigned using the SILVA database" genuinely
+    supports both otu_clust_tool AND otu_db from the same sentence.
+    Confirms the code itself never enforced a one-field-per-quote cap
+    here either (nothing rejects a second field for the same quote_id)."""
+    text = "OTUs were clustered using UPARSE and taxonomically assigned using the SILVA database."
+    response = json.dumps(
+        [
+            {"field": "otu_clust_tool", "raw_value": "UPARSE", "quote_id": "Q001"},
+            {"field": "otu_db", "raw_value": "SILVA", "quote_id": "Q001"},
+        ]
+    )
+    backend = MockLLMBackend(responses=[response])
+    facts = detect_llm_judged_search_facts(backend, (("Bioinformatics", text),), locator_prefix="paper:PMC1")
+    by_type = {fact.fact_type_candidate: fact.raw_value for fact in facts}
+    assert by_type["otu_clust_tool"] == "UPARSE"
+    assert by_type["otu_db"] == "SILVA"
 
 
 def test_detect_llm_judged_search_facts_rejects_value_for_field_the_quote_was_never_offered_for():
