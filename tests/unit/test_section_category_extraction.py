@@ -144,19 +144,32 @@ def test_extract_category_terms_chunks_a_dense_category_instead_of_one_giant_cal
 
 
 def test_extract_category_terms_extracts_verbatim_values_and_pipe_joins_conflicts():
+    """nucl_acid_ext_kit/samp_store_temp/sterilise_method each live in a
+    different workflow phase (extraction/storage/collection -- see
+    TERM_PHASES_BY_CATEGORY), so this exercises three separate phase
+    calls, not one. The mock responds per-call from the prompt's own
+    field list rather than a hardcoded quote_id, since each phase's own
+    candidate numbering restarts at Q001."""
     run_text = (
         "DNA was extracted using the DNeasy PowerSoil kit. "
         "Samples were stored at -80C prior to extraction. "
         "Sterile 10-mL cutoff syringes were used for subsampling."
     )
-    response = json.dumps(
-        [
-            {"field": "nucl_acid_ext_kit", "raw_value": "DNeasy PowerSoil kit", "quote_id": "Q001"},
-            {"field": "samp_store_temp", "raw_value": "-80C", "quote_id": "Q002"},
-            {"field": "sterilise_method", "raw_value": "Sterile 10-mL cutoff syringes", "quote_id": "Q003"},
-        ]
-    )
-    backend = MockLLMBackend(responses=[response])
+    answers = {
+        "nucl_acid_ext_kit": "DNeasy PowerSoil kit",
+        "samp_store_temp": "-80C",
+        "sterilise_method": "Sterile 10-mL cutoff syringes",
+    }
+
+    def respond(prompt: str) -> str:
+        items = []
+        for qid, bracketed in re.findall(r"(Q\d+) \[([^\]]+)\]:", prompt):
+            for field in (name.strip() for name in bracketed.split(",")):
+                if field in answers:
+                    items.append({"field": field, "raw_value": answers[field], "quote_id": qid})
+        return json.dumps(items)
+
+    backend = MockLLMBackend(responses=respond)
     facts = extract_category_terms(backend, _SAMPLE_PREP_CATEGORY, run_text, locator_prefix="test")
     by_field = {f.fact_type_candidate: f for f in facts}
     assert by_field["nucl_acid_ext_kit"].raw_value == "DNeasy PowerSoil kit"

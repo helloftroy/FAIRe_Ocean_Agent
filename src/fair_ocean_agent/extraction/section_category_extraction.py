@@ -35,6 +35,7 @@ from fair_ocean_agent.config import MIN_LLM_MAX_OUTPUT_TOKENS
 from fair_ocean_agent.database.enums import EntityLevel, SupportType
 from fair_ocean_agent.extraction.section_categories import (
     SECTION_CATEGORIES,
+    TERM_PHASES_BY_CATEGORY,
     CategoryTerm,
     SectionCategory,
     _term_pattern,
@@ -488,16 +489,15 @@ class _TermQuoteCandidate:
     text: str
 
 
-def _term_candidate_quotes(category: SectionCategory, run_text: str) -> tuple[_TermQuoteCandidate, ...]:
+def _term_candidate_quotes(terms: tuple[CategoryTerm, ...], run_text: str) -> tuple[_TermQuoteCandidate, ...]:
     candidates: list[_TermQuoteCandidate] = []
     seen_text: set[str] = set()
-    searchable_terms = tuple(term for term in category.terms if not term.fallback_only)
     for sentence in _split_into_sentences(run_text):
         if sentence in seen_text:
             continue
         matched_terms = tuple(
             term.native_name
-            for term in searchable_terms
+            for term in terms
             if any(_term_pattern(cue).search(sentence) for cue in term.search_cues)
         )
         if not matched_terms:
@@ -507,12 +507,35 @@ def _term_candidate_quotes(category: SectionCategory, run_text: str) -> tuple[_T
     return tuple(candidates)
 
 
-def _build_term_extraction_prompt(category: SectionCategory, candidates: tuple[_TermQuoteCandidate, ...]) -> str:
-    fields_reference = "\n".join(
-        f"- {term.native_name}: {term.definition}" for term in category.terms if not term.fallback_only
+def _searchable_terms(category: SectionCategory) -> tuple[CategoryTerm, ...]:
+    return tuple(term for term in category.terms if not term.fallback_only)
+
+
+def _term_phases(category: SectionCategory) -> tuple[tuple[str, tuple[CategoryTerm, ...]], ...]:
+    """Splits a category's searchable terms into smaller, ordered groups
+    for Stage 3 (see extraction/section_categories.py's
+    TERM_PHASES_BY_CATEGORY for why -- smaller, workflow-ordered passes
+    with only their own field definitions listed, instead of one call
+    listing every field in the category regardless of relevance). A
+    category with no phase mapping there falls back to one phase holding
+    every searchable term, i.e. today's original unsplit behavior."""
+    all_terms = _searchable_terms(category)
+    phase_names = TERM_PHASES_BY_CATEGORY.get(category.name)
+    if phase_names is None:
+        return ((category.name, all_terms),)
+    terms_by_name = {term.native_name: term for term in all_terms}
+    return tuple(
+        (phase_name, tuple(terms_by_name[name] for name in native_names if name in terms_by_name))
+        for phase_name, native_names in phase_names
     )
+
+
+def _build_term_extraction_prompt(
+    category_label: str, terms: tuple[CategoryTerm, ...], candidates: tuple[_TermQuoteCandidate, ...]
+) -> str:
+    fields_reference = "\n".join(f"- {term.native_name}: {term.definition}" for term in terms)
     quotes = "\n".join(f"{c.quote_id} [{', '.join(c.term_names)}]: {c.text}" for c in candidates)
-    return f"""You are extracting FAIRe "{category.label}" fields from supplied quote IDs only.
+    return f"""You are extracting FAIRe "{category_label}" fields from supplied quote IDs only.
 
 Use only the candidate quotes below. Do not use outside knowledge, do not infer, and do not paraphrase -- copy
 the relevant value WORD FOR WORD from the quote text exactly as reported (numbers, units, software names,
@@ -748,87 +771,104 @@ def extract_category_terms(
     output). `pcr_method_additional`-style fallback_only terms are never
     part of this term-level candidate search (an explicit user
     instruction: "do not independently keyword-search") -- they're left
-    for a future fallback pass, not built here."""
-    candidates = _term_candidate_quotes(category, run_text)
-    if not candidates:
-        return []
+    for a future fallback pass, not built here.
 
-    terms_by_name = {term.native_name: term for term in category.terms if not term.fallback_only}
-    candidates_by_id = {c.quote_id: c for c in candidates}
+    Per an explicit user request, this runs one smaller LLM call per
+    workflow phase (see extraction/section_categories.py's
+    TERM_PHASES_BY_CATEGORY) instead of one call listing every field in
+    the category -- each phase's own prompt only lists ITS OWN field
+    definitions, in the order these facts naturally appear in a paper's
+    Methods narrative, rather than diluting a small model's attention
+    with every field regardless of relevance to that batch's quotes.
+    Still sub-batched by _MAX_CANDIDATES_PER_TERM_EXTRACTION_CALL within
+    a phase if that phase alone has a lot of matching quotes."""
     grouped: dict[str, dict] = {}
+    all_candidates: list[_TermQuoteCandidate] = []
 
-    for batch_start in range(0, len(candidates), _MAX_CANDIDATES_PER_TERM_EXTRACTION_CALL):
-        batch = candidates[batch_start : batch_start + _MAX_CANDIDATES_PER_TERM_EXTRACTION_CALL]
-        prompt = _build_term_extraction_prompt(category, batch)
-        parsed, _response = backend.generate_json(
-            prompt,
-            system=f'You extract FAIRe "{category.label}" facts from supplied quote IDs only.',
-            temperature=0,
-            max_tokens=max_output_tokens,
-        )
-        if parsed is None:
-            raise LLMBackendError(f"{backend.label}: {category.name} term extraction returned invalid JSON after retries")
-        if not isinstance(parsed, list):
+    for phase_name, phase_terms in _term_phases(category):
+        candidates = _term_candidate_quotes(phase_terms, run_text)
+        if not candidates:
             continue
-        for item in parsed:
-            if not isinstance(item, dict):
-                continue
-            field_name = str(item.get("field") or "").strip()
-            value = str(item.get("raw_value") or "").strip()
-            quote_id = str(item.get("quote_id") or "").strip()
-            term = terms_by_name.get(field_name)
-            candidate = candidates_by_id.get(quote_id)
-            if term is None or candidate is None or not value:
-                continue
-            # A real live audit caught the model answering a quote_id with a
-            # field name that quote was never even offered for (e.g. Q002 was
-            # only tagged/candidate-listed for screen_other, but the model
-            # attached its value to min_reads_cutoff instead, since that
-            # value happened to also appear verbatim in the same quote text).
-            # The verbatim guard below only checks the TEXT, not which field
-            # the quote was actually tagged for -- this closes that gap.
-            if field_name not in candidate.term_names:
-                continue
-            if not _valid_sequence_value(field_name, value):
-                continue
-            if not _valid_context_for_amount_field(field_name, candidate.text):
-                continue
-            if not _is_valid_short_numeric_value(field_name, value):
-                continue
-            if field_name.endswith(_BOOLEAN_FIELD_SUFFIX):
-                # A real live audit (10.1371/journal.pone.0303937) caught
-                # this: filter_passive_active_0_1 is a JUDGED classification
-                # ("1"/"0"), not a copied value -- the verbatim check below is
-                # meaningless for it (a single digit character coincidentally
-                # appears in almost any real quote, e.g. a catalog/model
-                # number), and worse, actively harmful here: the one quote
-                # that unambiguously supports "1" ("...connected to
-                # compressed air and an overpressure of 2 bar was applied.")
-                # has no literal "1" anywhere in it, while an unrelated quote
-                # that only names a flowmeter MODEL NUMBER happened to
-                # contain a stray "0" and won by pure chance. Boolean fields
-                # are validated by shape instead (only "0"/"1" survive), with
-                # the actual value chosen after the loop by _resolve_boolean_
-                # field_entries below.
-                if value not in ("0", "1"):
-                    continue
-            # Verbatim-only guard: a prompt instruction alone is never trusted
-            # to be self-enforcing anywhere else in this codebase -- discard
-            # any value that doesn't literally appear in its own cited quote,
-            # rather than trusting the model's self-report of verbatim-ness.
-            elif value.casefold() not in candidate.text.casefold():
-                continue
-            group = grouped.setdefault(field_name, {"entries": [], "quotes": [], "entry_quotes": {}})
-            key = value.casefold()
-            group["entry_quotes"].setdefault(key, [])
-            if candidate.text not in group["entry_quotes"][key]:
-                group["entry_quotes"][key].append(candidate.text)
-            if any(entry.casefold() == key for entry in group["entries"]):
-                continue
-            group["entries"].append(value)
-            if candidate.text not in group["quotes"]:
-                group["quotes"].append(candidate.text)
+        all_candidates.extend(candidates)
 
+        terms_by_name = {term.native_name: term for term in phase_terms}
+        candidates_by_id = {c.quote_id: c for c in candidates}
+
+        for batch_start in range(0, len(candidates), _MAX_CANDIDATES_PER_TERM_EXTRACTION_CALL):
+            batch = candidates[batch_start : batch_start + _MAX_CANDIDATES_PER_TERM_EXTRACTION_CALL]
+            prompt = _build_term_extraction_prompt(category.label, phase_terms, batch)
+            parsed, _response = backend.generate_json(
+                prompt,
+                system=f'You extract FAIRe "{category.label}" ({phase_name}) facts from supplied quote IDs only.',
+                temperature=0,
+                max_tokens=max_output_tokens,
+            )
+            if parsed is None:
+                raise LLMBackendError(
+                    f"{backend.label}: {category.name}:{phase_name} term extraction returned invalid JSON after retries"
+                )
+            if not isinstance(parsed, list):
+                continue
+            for item in parsed:
+                if not isinstance(item, dict):
+                    continue
+                field_name = str(item.get("field") or "").strip()
+                value = str(item.get("raw_value") or "").strip()
+                quote_id = str(item.get("quote_id") or "").strip()
+                term = terms_by_name.get(field_name)
+                candidate = candidates_by_id.get(quote_id)
+                if term is None or candidate is None or not value:
+                    continue
+                # A real live audit caught the model answering a quote_id with a
+                # field name that quote was never even offered for (e.g. Q002 was
+                # only tagged/candidate-listed for screen_other, but the model
+                # attached its value to min_reads_cutoff instead, since that
+                # value happened to also appear verbatim in the same quote text).
+                # The verbatim guard below only checks the TEXT, not which field
+                # the quote was actually tagged for -- this closes that gap.
+                if field_name not in candidate.term_names:
+                    continue
+                if not _valid_sequence_value(field_name, value):
+                    continue
+                if not _valid_context_for_amount_field(field_name, candidate.text):
+                    continue
+                if not _is_valid_short_numeric_value(field_name, value):
+                    continue
+                if field_name.endswith(_BOOLEAN_FIELD_SUFFIX):
+                    # A real live audit (10.1371/journal.pone.0303937) caught
+                    # this: filter_passive_active_0_1 is a JUDGED classification
+                    # ("1"/"0"), not a copied value -- the verbatim check below is
+                    # meaningless for it (a single digit character coincidentally
+                    # appears in almost any real quote, e.g. a catalog/model
+                    # number), and worse, actively harmful here: the one quote
+                    # that unambiguously supports "1" ("...connected to
+                    # compressed air and an overpressure of 2 bar was applied.")
+                    # has no literal "1" anywhere in it, while an unrelated quote
+                    # that only names a flowmeter MODEL NUMBER happened to
+                    # contain a stray "0" and won by pure chance. Boolean fields
+                    # are validated by shape instead (only "0"/"1" survive), with
+                    # the actual value chosen after the loop by _resolve_boolean_
+                    # field_entries below.
+                    if value not in ("0", "1"):
+                        continue
+                # Verbatim-only guard: a prompt instruction alone is never trusted
+                # to be self-enforcing anywhere else in this codebase -- discard
+                # any value that doesn't literally appear in its own cited quote,
+                # rather than trusting the model's self-report of verbatim-ness.
+                elif value.casefold() not in candidate.text.casefold():
+                    continue
+                group = grouped.setdefault(field_name, {"entries": [], "quotes": [], "entry_quotes": {}})
+                key = value.casefold()
+                group["entry_quotes"].setdefault(key, [])
+                if candidate.text not in group["entry_quotes"][key]:
+                    group["entry_quotes"][key].append(candidate.text)
+                if any(entry.casefold() == key for entry in group["entries"]):
+                    continue
+                group["entries"].append(value)
+                if candidate.text not in group["quotes"]:
+                    group["quotes"].append(candidate.text)
+
+    candidates = tuple(all_candidates)
     _add_missing_amount_companions(grouped)
     if category.name == "sample_prep":
         _add_size_frac_values_from_candidate_quotes(grouped, candidates)

@@ -555,6 +555,55 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
 )
 
 
+# Splits sample_prep's own 34 searchable terms into smaller, ordered,
+# workflow-phase groups for Stage 3 (section_category_extraction.py's
+# extract_category_terms) -- per an explicit user request: a single call
+# listing all 34 field definitions regardless of which ones that batch's
+# quotes actually matched is unnecessary noise for a small model, and the
+# real fix for one specific miss (pool_dna_num missing "Three replicates
+# were pooled...", see section_category_extraction.py's own
+# _POOLING_SAMPLE_CONTEXT_RE comment) already came from elsewhere, but a
+# more focused per-phase prompt is still a real accuracy improvement:
+# each phase's own call only ever lists ITS OWN terms as candidate
+# fields, in the order these facts naturally appear in a paper's own
+# Methods narrative (collection, then filtration, then storage, then
+# nucleic-acid extraction/pooling -- "pool_dna_num... after sampling and
+# before pcr", per that request). A category with no entry here (there
+# are none today) falls back to one single phase covering every
+# searchable term, i.e. today's existing behavior, unchanged.
+SAMPLE_PREP_TERM_PHASES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "collection",
+        (
+            "samp_collect_device", "samp_collect_method", "sterilise_method", "samp_size",
+            "samp_size_unit", "sample_composed_of", "sample_derived_from", "internal_expedition_id",
+            "x_env_var_block", "samp_category", "samp_mat_process",
+        ),
+    ),
+    (
+        "filtration",
+        (
+            "filter_material", "filter_name", "filter_diameter", "filter_surface_area", "size_frac",
+            "prefilter_material", "filter_passive_active_0_1", "pump_flow_rate", "pump_flow_rate_unit",
+        ),
+    ),
+    (
+        "storage",
+        ("samp_store_temp", "samp_store_dur", "samp_store_loc", "samp_store_sol", "samp_store_method_additional"),
+    ),
+    (
+        "extraction",
+        (
+            "nucl_acid_ext_kit", "dna_cleanup_0_1", "dna_cleanup_method", "pool_dna_num", "concentration",
+            "samp_vol_we_dna_ext", "samp_vol_we_dna_ext_unit", "nucl_acid_ext_lysis", "nucl_acid_ext_sep",
+        ),
+    ),
+)
+TERM_PHASES_BY_CATEGORY: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
+    "sample_prep": SAMPLE_PREP_TERM_PHASES,
+}
+
+
 def _term_pattern(term: str) -> re.Pattern[str]:
     escaped = re.escape(term)
     escaped = escaped.replace(r"\ ", r"\s+")
