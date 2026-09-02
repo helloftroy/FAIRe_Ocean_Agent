@@ -394,6 +394,21 @@ EXTRACTION_FOCUSES: tuple[ExtractionFocus, ...] = (
         name="pcr_assay_setup",
         description="assay identity, PCR thermal cycling conditions, master mix, and PCR replicate facts",
         group_names=frozenset({"PCR / assay setup", "Controls & replicates"}),
+        # Real gap found live: PCR_amplification_conditions/second_pcr_
+        # amplification_conditions (pcr_method_additional/pcr2_method_
+        # additional's own source) were completely absent from every real
+        # production extraction call once EXTRACTION_FOCUSES went back into
+        # use (v17) -- this focus's own `native_names` allowlist restricts
+        # which "PCR / assay setup" fields even get shown, and neither
+        # native_name was ever added to it. The `fallback_names={"PCR_
+        # amplification_conditions"}` that used to be here was already
+        # dead: it only ever restricted FALLBACK_NARRATIVE_FIELDS, but this
+        # field had already been moved OUT of that list and into
+        # FIELD_GROUPS["PCR / assay setup"] by an earlier fix, so
+        # `include_fallback_names` never had any effect on it (and
+        # second_pcr_amplification_conditions was never referenced by
+        # either mechanism at all). Both narrative fields belong in
+        # native_names now, alongside their atomic siblings.
         native_names=frozenset(
             {
                 "assay_name",
@@ -404,13 +419,14 @@ EXTRACTION_FOCUSES: tuple[ExtractionFocus, ...] = (
                 "custom_master_mix",
                 "second_pcr_annealing_temperature",
                 "second_pcr_cycle_count",
+                "PCR_amplification_conditions",
+                "second_pcr_amplification_conditions",
                 "assay_target_taxa",
                 "study_target_taxonomic_scope",
                 "pcr_replicate_count",
             }
         ),
         keywords=frozenset({"assay", "pcr", "anneal", "cycle", "thermocycler", "master mix", "replicate"}),
-        fallback_names=frozenset({"PCR_amplification_conditions"}),
     ),
     ExtractionFocus(
         name="qpcr_standard_curve",

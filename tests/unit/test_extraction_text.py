@@ -518,6 +518,24 @@ def test_focused_prompt_only_embeds_requested_topic_checklist():
     assert "forward_primer_sequence" not in prompt
 
 
+def test_pcr_assay_setup_focus_still_asks_for_both_pcr_narrative_fields():
+    """Real gap found live: once real production extraction started
+    passing focuses=EXTRACTION_FOCUSES (v17), pcr_method_additional/
+    pcr2_method_additional (PCR_amplification_conditions/second_pcr_
+    amplification_conditions) came back completely blank -- the
+    pcr_assay_setup focus's own native_names allowlist never included
+    either one, and its fallback_names={"PCR_amplification_conditions"}
+    was already dead (that field had already been moved out of
+    FALLBACK_NARRATIVE_FIELDS into FIELD_GROUPS by an earlier fix, and
+    include_fallback_names only ever restricts the FALLBACK_NARRATIVE_
+    FIELDS loop, never FIELD_GROUPS)."""
+    pcr_focus = next(focus for focus in EXTRACTION_FOCUSES if focus.name == "pcr_assay_setup")
+    prompt = build_prompt("PCR", SECTION_TEXT, focus=pcr_focus, active_flags=frozenset({"pcr_0_1"}))
+
+    assert "PCR_amplification_conditions" in prompt
+    assert "second_pcr_amplification_conditions" in prompt
+
+
 def test_segments_for_focus_skips_unrelated_topic_prompts():
     segments = segment_source_text(
         "Methods",
