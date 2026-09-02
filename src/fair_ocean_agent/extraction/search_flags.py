@@ -3497,6 +3497,12 @@ def _format_otu_seq_comp_appr_value(entries: list[dict], quotes: list[str]) -> s
     return " | ".join([*tools, *quote_parts])
 
 
+def _format_control_value_with_quote(entry: dict) -> str:
+    value = str(entry["raw_value"]).strip()
+    quote = " ".join(str(entry.get("quote") or "").split()).strip()
+    return f"{value} | {quote}" if quote else value
+
+
 def _facts_from_llm_judgement(
     parsed,
     candidates: tuple[QuoteCandidate, ...],
@@ -3556,6 +3562,7 @@ def _facts_from_llm_judgement(
                 "quote_id": quote_id,
                 "source_locator": f"{locator_prefix}:llm_judged_search:{field_name}:{quote_id}",
                 "priority": _llm_judged_value_priority(field, value, candidate.text),
+                "quote": candidate.text,
             }
         )
 
@@ -3568,6 +3575,8 @@ def _facts_from_llm_judgement(
         raw_value = (
             _format_otu_seq_comp_appr_value(entries, group["quotes"])
             if field_name == "otu_seq_comp_appr"
+            else _format_control_value_with_quote(entries[0])
+            if field_name in {"neg_cont_0_1", "pos_cont_0_1"}
             else " | ".join(entry["raw_value"] for entry in entries)
         )
         facts.append(
@@ -3606,9 +3615,9 @@ def _mirror_not_a_control_to_sibling_field(facts: list[RawFactCandidate]) -> lis
     by_type = {fact.fact_type_candidate: fact for fact in facts}
     neg = by_type.get("neg_cont_0_1")
     pos = by_type.get("pos_cont_0_1")
-    if neg is not None and neg.raw_value == "0" and pos is None:
+    if neg is not None and neg.raw_value.split("|", 1)[0].strip() == "0" and pos is None:
         facts = [*facts, neg.model_copy(update={"fact_type_candidate": "pos_cont_0_1", "raw_field_name": "pos_cont_0_1"})]
-    elif pos is not None and pos.raw_value == "0" and neg is None:
+    elif pos is not None and pos.raw_value.split("|", 1)[0].strip() == "0" and neg is None:
         facts = [*facts, pos.model_copy(update={"fact_type_candidate": "neg_cont_0_1", "raw_field_name": "neg_cont_0_1"})]
     return facts
 
@@ -3671,7 +3680,7 @@ def _control_not_found_fallback_facts(
                 entity_level=EntityLevel.STUDY,
                 fact_type_candidate=field_name,
                 raw_field_name=field_name,
-                raw_value="0",
+                raw_value="0 | no control/blank mention found",
                 source_locator=f"{locator_prefix}:llm_judged_search:{field_name}:not_found_fallback",
                 support_type=SupportType.DETERMINISTICALLY_DERIVED,
                 evidence_quote=None,

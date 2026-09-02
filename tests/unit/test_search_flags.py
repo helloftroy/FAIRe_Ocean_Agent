@@ -164,8 +164,8 @@ def test_detect_llm_judged_search_facts_records_control_booleans_from_context():
         locator_prefix="paper:PMC1",
     )
     by_type = {fact.fact_type_candidate: fact for fact in facts}
-    assert by_type["neg_cont_0_1"].raw_value == "1"
-    assert by_type["pos_cont_0_1"].raw_value == "1"
+    assert by_type["neg_cont_0_1"].raw_value == "1 | Negative controls included field blanks and NTCs."
+    assert by_type["pos_cont_0_1"].raw_value == "1 | A positive control used synthetic DNA from a mock community."
 
 
 def test_detect_llm_judged_search_facts_sets_control_zero_from_explicit_absence():
@@ -182,8 +182,8 @@ def test_detect_llm_judged_search_facts_sets_control_zero_from_explicit_absence(
         locator_prefix="paper:PMC1",
     )
     by_type = {fact.fact_type_candidate: fact for fact in facts}
-    assert by_type["neg_cont_0_1"].raw_value == "0"
-    assert by_type["pos_cont_0_1"].raw_value == "0"
+    assert by_type["neg_cont_0_1"].raw_value == "0 | No negative controls were used."
+    assert by_type["pos_cont_0_1"].raw_value == "0 | No negative controls were used."
 
 
 def test_detect_llm_judged_search_facts_mirrors_not_a_control_to_sibling_field():
@@ -201,8 +201,8 @@ def test_detect_llm_judged_search_facts_mirrors_not_a_control_to_sibling_field()
         locator_prefix="paper:PMC1",
     )
     by_type = {fact.fact_type_candidate: fact for fact in facts}
-    assert by_type["neg_cont_0_1"].raw_value == "0"
-    assert by_type["pos_cont_0_1"].raw_value == "0"
+    assert by_type["neg_cont_0_1"].raw_value == "0 | The raw sequencing reads underwent quality control before assembly."
+    assert by_type["pos_cont_0_1"].raw_value == "0 | The raw sequencing reads underwent quality control before assembly."
     assert by_type["pos_cont_0_1"].source_locator == by_type["neg_cont_0_1"].source_locator
 
 
@@ -220,8 +220,8 @@ def test_detect_llm_judged_search_facts_never_mirrors_a_positive_control_result(
         locator_prefix="paper:PMC1",
     )
     by_type = {fact.fact_type_candidate: fact for fact in facts}
-    assert by_type["pos_cont_0_1"].raw_value == "1"
-    assert by_type["neg_cont_0_1"].raw_value == "0"
+    assert by_type["pos_cont_0_1"].raw_value == "1 | A positive control using synthetic DNA from a mock community was included."
+    assert by_type["neg_cont_0_1"].raw_value == "0 | no control/blank mention found"
     assert by_type["neg_cont_0_1"].confidence_metadata["detector"] == "control_not_found_default"
 
 
@@ -237,8 +237,8 @@ def test_detect_llm_judged_search_facts_defaults_both_controls_to_zero_when_neve
         locator_prefix="paper:PMC1",
     )
     by_type = {fact.fact_type_candidate: fact for fact in facts}
-    assert by_type["neg_cont_0_1"].raw_value == "0"
-    assert by_type["pos_cont_0_1"].raw_value == "0"
+    assert by_type["neg_cont_0_1"].raw_value == "0 | no control/blank mention found"
+    assert by_type["pos_cont_0_1"].raw_value == "0 | no control/blank mention found"
     assert by_type["neg_cont_0_1"].confidence_metadata["detector"] == "control_not_found_default"
 
 
@@ -285,7 +285,7 @@ def test_detect_llm_judged_search_facts_control_prefers_positive_evidence_over_n
         locator_prefix="paper:PMC1",
     )
     by_type = {fact.fact_type_candidate: fact for fact in facts}
-    assert by_type["neg_cont_0_1"].raw_value == "1"
+    assert by_type["neg_cont_0_1"].raw_value == "1 | Field blanks were included at each site."
 
 
 def test_detect_llm_judged_search_facts_control_never_confuses_unrelated_control_usage():
@@ -308,8 +308,8 @@ def test_detect_llm_judged_search_facts_control_never_confuses_unrelated_control
         exclude_field_names=frozenset({"chimera_check_method", "trim_method", "trim_param", "tax_assign_cat", "tax_class_other"}),
     )
     by_type = {fact.fact_type_candidate: fact for fact in facts}
-    assert by_type["neg_cont_0_1"].raw_value == "0"
-    assert by_type["pos_cont_0_1"].raw_value == "0"
+    assert by_type["neg_cont_0_1"].raw_value == "0 | no control/blank mention found"
+    assert by_type["pos_cont_0_1"].raw_value == "0 | no control/blank mention found"
 
 
 def test_detect_controlled_search_facts_uses_active_flags_and_pipe_delimited_matches():
