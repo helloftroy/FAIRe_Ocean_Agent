@@ -124,7 +124,19 @@ class SectionCategory:
 SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
     SectionCategory(
         name="sample_prep",
-        label="Sample preparation / storage / nucleic acid extraction",
+        # Real gap found live: "Seawater temperature was 28.1 +/- 0.2 C." (a
+        # bare environmental-reading sentence, no collection/prep verb at
+        # all) never got tagged into this category by Stage 2's own
+        # sentence-level categorization LLM -- Stage 2 sees ONLY this label,
+        # never the category's own keyword list below (that's Stage 1's
+        # paragraph-level gate only), and the label never mentioned
+        # environmental measurements at all even though x_env_var_block
+        # deliberately lives in this same category. A reasonable classifier
+        # reading "Sample preparation / storage / nucleic acid extraction"
+        # has no reason to think a bare temperature reading belongs there,
+        # so it was silently dropped before Stage 3 ever saw it as a
+        # candidate.
+        label="Sample preparation / storage / nucleic acid extraction / in-situ environmental measurements",
         keywords=(
             # General sample preparation / handling -- physical/chemical
             # handling after collection and before PCR, per an explicit
@@ -255,7 +267,17 @@ SECTION_CATEGORIES: tuple[SectionCategory, ...] = (
                 "L of seawater was filtered", "L of seawater were filtered",
                 "liters of water was filtered", "liters of water were filtered",
                 "L of water was filtered", "L of water were filtered",
-            ), definition='The total amount of environmental material originally collected for that sample, such as 10 L of water or 500 g of sediment. Do not confuse with the smaller amount later used for DNA extraction.'),
+            ), definition=(
+                'The total amount of environmental material originally collected for that sample, such as '
+                '10 L of water or 500 g of sediment. A volume reported as FILTERED at collection (e.g. '
+                '"Two liters of seawater was filtered onto a 0.22 um membrane filter ... for DNA '
+                'extraction") IS this original collected amount -- filtration is the field-side collection/ '
+                'concentration step for a water sample, not a smaller sub-portion taken from it, even '
+                'though the same sentence also names DNA extraction as the eventual purpose. Only exclude '
+                'a genuinely smaller sub-amount explicitly described as taken FROM an already-collected '
+                'larger sample specifically for extraction (e.g. "a 5 mL aliquot of the 2 L sample was '
+                'used for extraction").'
+            )),
             CategoryTerm("samp_size_unit", (
                 "L of water", "mL of water", "g of sediment", "mg of sediment", "kg of sediment",
                 "cm2 of surface", "cm² of surface",
