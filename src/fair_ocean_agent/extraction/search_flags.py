@@ -65,6 +65,8 @@ TEXT_SEARCH_FLAGS: tuple[TextSearchFlag, ...] = (
             re.compile(r"\bhydrolysis\s+probe(s)?\b", re.IGNORECASE),
             re.compile(r"\bprobe[-\s]+based\b", re.IGNORECASE),
             re.compile(r"\breporter\s+dye(s)?\b", re.IGNORECASE),
+            re.compile(r"\bHRP[-\s]?labeled\b", re.IGNORECASE),
+            re.compile(r"\bhorseradish\s+peroxidase\b", re.IGNORECASE),
             re.compile(r"\bquencher(s)?\b", re.IGNORECASE),
             re.compile(r"\bFAM\b"),
             re.compile(r"\bHEX\b"),
@@ -585,18 +587,16 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
         output_instructions=(
             "Return the citation, DOI, reference phrase, or provenance for the blocking primer/oligonucleotide. "
             "If it was designed in the current study, return that it was designed in the current study. Do not "
-            "invent an external citation."
+            "invent an external citation. Omit ordinary primer/probe references unless the quote explicitly "
+            "describes a blocking primer, blocking oligo, blocker, or host-blocking/suppressor oligonucleotide."
         ),
         search_terms=(
             "blocking primer",
             "blocking oligo",
             "blocking oligonucleotide",
             "blocker",
-            "described by",
-            "designed in this study",
-            "designed for this study",
-            "previously published",
-            "modified from",
+            "host-blocking primer",
+            "suppressor oligonucleotide",
         ),
     ),
     LLMJudgedSearchField(
@@ -606,7 +606,9 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
         output_instructions=(
             "Return the taxon or broad source the blocking oligo is intended to suppress, such as human, fish, "
             "host, chloroplast, mitochondrial, predator DNA, or another explicitly stated target. Do not infer "
-            "the taxon from the sample type alone."
+            "the taxon from the sample type alone. Omit taxonomy-filtering or contaminant-removal sentences "
+            "that mention chloroplasts, mitochondria, host reads, or non-target taxa but do not describe a "
+            "blocking primer/oligo."
         ),
         search_terms=(
             "blocking primer",
@@ -626,30 +628,36 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
         section="Targeted detection",
         description="Explicit criteria used to decide whether a target was detected/present/positive.",
         output_instructions=(
-            "Return the explicit positive/detection criterion, preserving thresholds and replicate rules. "
-            "Examples include Cq < 40 considered positive, target amplified in 2 of 3 replicates, minimum "
-            "positive droplets, fluorescence above threshold, minimum copy-number criterion, or explicit "
-            "microscopy/hybridization positive criterion. Do not create a criterion from a general statement "
-            "that the target was detected."
+            "Return ONLY an explicit rule used to call a target positive/present/detected, preserving "
+            "thresholds and replicate rules. Examples include Cq < 40 considered positive, target amplified "
+            "in 2 of 3 technical replicates was accepted as detected, minimum positive droplets, fluorescence "
+            "above threshold, minimum copy-number criterion, or explicit microscopy/hybridization positive "
+            "criterion. Omit ordinary biological/PCR replicate counts, sample pooling, amplification success, "
+            "statistical analysis of replicates, or a general statement that the target was detected unless "
+            "the quote states the rule for calling the target positive/present/detected."
         ),
         search_terms=(
             "considered positive",
             "scored positive",
             "called positive",
+            "accepted as positive",
+            "counted as positive",
             "positive if",
             "positive when",
             "detection criteria",
             "detection criterion",
             "presence was defined",
+            "presence was confirmed",
             "detected if",
             "detected when",
+            "accepted as detected",
+            "confirmed when",
             "Cq <",
             "Ct <",
             "quantification cycle below",
             "positive droplets",
             "fluorescence above threshold",
             "minimum copy number",
-            "replicates",
         ),
     ),
     LLMJudgedSearchField(
@@ -761,17 +769,24 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
         section="Targeted detection",
         description="Citation/reference/provenance for the detection or hybridization probe.",
         output_instructions=(
-            "Return the citation, DOI, reference phrase, or provenance for the probe. If the probe was newly "
-            "designed in the current paper, return that rather than fabricating a reference."
+            "Return the citation, DOI, reference phrase, or provenance for the detection/hybridization probe "
+            "only when the same quote explicitly describes a reporter/probe-based assay or a FISH/CARD-FISH "
+            "probe. If the probe was newly designed in the current paper, return that rather than fabricating "
+            "a reference. Omit instrument names, environmental sensor citations, ordinary PCR primer "
+            "references, and database/software citations."
         ),
         search_terms=(
-            "probe",
-            "described by",
             "probe described",
             "previously published probe",
+            "probe was described",
+            "probe designed",
             "designed in this study",
             "designed for this study",
             "modified from",
+            "HRP-labeled",
+            "horseradish peroxidase",
+            "FISH probe",
+            "CARD-FISH probe",
         ),
     ),
     LLMJudgedSearchField(
@@ -779,8 +794,10 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
         section="Targeted detection",
         description="Explicitly reported concentration of a qPCR, FISH, CARD-FISH, or other detection probe.",
         output_instructions=(
-            "Return the probe concentration with unit exactly as reported, such as 0.5 uM or 200 nM. Probe "
-            "concentration may apply to qPCR probes or hybridization/FISH probes."
+            "Return ONLY the probe concentration with unit exactly as reported, such as 0.5 uM or 200 nM. "
+            "The same quote must explicitly say this concentration belongs to a detection/hybridization "
+            "probe. Do not return primer concentrations, DNA/RNA concentrations, filter pore sizes, or full "
+            "sentences."
         ),
         search_terms=(
             "probe concentration",
@@ -794,6 +811,7 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
             "nM",
             "uM",
             "µM",
+            "μM",
         ),
     ),
     LLMJudgedSearchField(
@@ -1494,6 +1512,9 @@ CONTROLLED_SEARCH_FIELDS: tuple[ControlledSearchField, ...] = (
             "TAMRA",
             "ROX",
             "JOE",
+            "HRP",
+            "HRP-labeled",
+            "horseradish peroxidase",
         ),
     ),
     ControlledSearchField(
@@ -2996,6 +3017,72 @@ _SCREEN_CONTAM_METHOD_CONTEXT_RE = re.compile(
     r"(?:a\s+)?contaminant",
     re.IGNORECASE,
 )
+_BLOCKING_OLIGO_CONTEXT_RE = re.compile(
+    r"\b(?:"
+    r"blocking\s+(?:primer|primers|oligo|oligos|oligonucleotide|oligonucleotides)|"
+    r"host[-\s]+blocking\s+primer|"
+    r"blocker(?:\s+(?:primer|oligo|oligonucleotide))?|"
+    r"suppressor\s+oligonucleotide|"
+    r"(?:suppress|inhibit|block)\s+(?:host\s+|predator\s+|non[-\s]?target\s+)?(?:DNA\s+)?amplification"
+    r")\b",
+    re.IGNORECASE,
+)
+_PROBE_ASSAY_CONTEXT_RE = re.compile(
+    r"\b(?:"
+    r"TaqMan|hydrolysis\s+probe|molecular\s+beacon|reporter\s+dye|fluorophore|"
+    r"FAM|HEX|VIC|Cy5|TET|TAMRA|ROX|JOE|BHQ|ZEN|MGB|"
+    r"FISH|CARD[-\s]?FISH|oligonucleotide\s+probe|hybridization\s+probe|"
+    r"HRP[-\s]?labeled|horseradish\s+peroxidase"
+    r")\b",
+    re.IGNORECASE,
+)
+_PROBE_REF_CONTEXT_RE = re.compile(
+    r"\b(?:"
+    r"probe\s+(?:described|designed|modified|published)|"
+    r"(?:described|designed|modified|published)\s+(?:by|for|in|from).{0,80}\bprobe|"
+    r"previously\s+published\s+probe|"
+    r"designed\s+in\s+this\s+study|"
+    r"designed\s+for\s+this\s+study|"
+    r"HRP[-\s]?labeled|horseradish\s+peroxidase|FISH\s+probe|CARD[-\s]?FISH\s+probe"
+    r")\b",
+    re.IGNORECASE,
+)
+_PROBE_CONC_CONTEXT_RE = re.compile(
+    r"\b(?:"
+    r"probe\s+(?:concentration|final\s+concentration|was\s+added|at)|"
+    r"(?:final\s+)?concentration\s+of\s+(?:the\s+)?probe|"
+    r"probe\b.{0,100}\b\d+(?:\.\d+)?\s*(?:nM|uM|µM|μM)\b|"
+    r"\d+(?:\.\d+)?\s*(?:nM|uM|µM|μM)\s+(?:[^.]{0,40}\s+)?probe"
+    r")\b",
+    re.IGNORECASE,
+)
+_PROBE_CONC_VALUE_RE = re.compile(
+    r"^\s*(?:~|≈|about\s+|approximately\s+)?\d+(?:\.\d+)?\s*(?:nM|uM|µM|μM|nmol/L|umol/L|µmol/L|μmol/L)\s*$",
+    re.IGNORECASE,
+)
+_DETECTION_CRITERIA_CONTEXT_RE = re.compile(
+    r"\b(?:"
+    r"(?:considered|scored|called|accepted|counted)\s+(?:as\s+)?positive|"
+    r"positive\s+(?:if|when)|"
+    r"(?:detected|present)\s+(?:if|when)|"
+    r"(?:accepted|confirmed|counted)\s+as\s+(?:detected|present)|"
+    r"presence\s+was\s+(?:defined|confirmed)|"
+    r"detection\s+criteri(?:on|a)|"
+    r"(?:Cq|Ct)\s*[<≤]|"
+    r"quantification\s+cycle\s+below|"
+    r"positive\s+droplets?|"
+    r"fluorescence\s+above\s+(?:the\s+)?threshold|"
+    r"minimum\s+copy[-\s]?number\s+(?:criterion|criteria|threshold)"
+    r")\b",
+    re.IGNORECASE,
+)
+_DETECTION_CRITERIA_VALUE_RE = re.compile(
+    r"\b(?:"
+    r"positive|detected|present|presence|detection\s+criteri(?:on|a)|"
+    r"Cq|Ct|quantification\s+cycle|positive\s+droplets?|fluorescence|copy[-\s]?number|threshold"
+    r")\b|[<≤]",
+    re.IGNORECASE,
+)
 
 
 # Real gap found live (10.3390/microorganisms10030558, STUDY-0049c7972ece):
@@ -3036,6 +3123,14 @@ def _llm_judged_field_matches_snippet(field: LLMJudgedSearchField, snippet: str,
         return bool(_ASSAY_NAME_CONTEXT_RE.search(snippet))
     if field.term_name == "screen_contam_method":
         return bool(_SCREEN_CONTAM_METHOD_CONTEXT_RE.search(snippet))
+    if field.term_name in {"block_ref", "block_taxa"}:
+        return bool(_BLOCKING_OLIGO_CONTEXT_RE.search(snippet))
+    if field.term_name == "probe_ref":
+        return bool(_PROBE_ASSAY_CONTEXT_RE.search(snippet) and _PROBE_REF_CONTEXT_RE.search(snippet))
+    if field.term_name == "probe_conc":
+        return bool(_PROBE_ASSAY_CONTEXT_RE.search(snippet) and _PROBE_CONC_CONTEXT_RE.search(snippet))
+    if field.term_name == "detection_criteria":
+        return bool(_DETECTION_CRITERIA_CONTEXT_RE.search(snippet))
     if field.term_name == "assay_target_taxa":
         return bool(_TARGET_TAXONOMIC_ASSAY_CONTEXT_RE.search(snippet))
     if field.term_name == "study_target_taxonomic_scope":
@@ -3228,8 +3323,21 @@ def _valid_llm_judged_value(field: LLMJudgedSearchField, value: str) -> bool:
         return bool(_OTU_DB_VALUE_RE.search(stripped))
     if field.term_name in ("adapter_forward", "adapter_reverse", "block_seq", "probe_seq"):
         return _looks_like_nucleotide_sequence(stripped)
+    if field.term_name == "block_taxa":
+        lowered = stripped.casefold()
+        if any(term in lowered for term in ("otu", "asv", "abundance", "representative sequences", "unidentified sequences")):
+            return False
+        return len(stripped.split()) <= 8
+    if field.term_name == "probe_conc":
+        return bool(_PROBE_CONC_VALUE_RE.fullmatch(stripped))
+    if field.term_name == "probe_ref":
+        lowered = stripped.casefold()
+        if any(term in lowered for term in ("ysi", "yellow springs", "http://www.drive5.com", "usearch")):
+            return False
     if field.term_name in ("pcr_assay_lod", "pcr_assay_loq"):
         return bool(re.search(r"\d", stripped))
+    if field.term_name == "detection_criteria":
+        return bool(_DETECTION_CRITERIA_VALUE_RE.search(stripped))
     if not field.allowed_values:
         return True
     parts = [part.strip() for part in stripped.split("|")]

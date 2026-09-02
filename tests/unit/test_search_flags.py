@@ -1426,6 +1426,105 @@ def test_detect_llm_judged_search_facts_extracts_targeted_detection_bundle():
     assert by_type["targeted_detection_method_additional"] == "CARD-FISH was performed with probe Atri578 at 0.5 uM."
 
 
+def test_detection_criteria_candidates_reject_general_replicate_language():
+    text = (
+        "Three replicates were pooled and purified using the QIAquick Gel Extraction Kits. "
+        "Sample collection, microbial enrichment, and community DNA extraction were completed with "
+        "three replicates per stage and 30 individuals per replicate. "
+        "The initial PCR included multiple PCR replicates for each sample. "
+        "Within each site, we randomly selected all three replicates from one transect and one replicate "
+        "at the remaining transects for eDNA analysis."
+    )
+
+    candidates = quote_candidates_for_llm_judged_search((("Methods", text),))
+
+    assert "detection_criteria" not in {
+        field_name
+        for candidate in candidates
+        for field_name in candidate.field_names
+    }
+
+
+def test_detection_criteria_rejects_llm_value_without_positive_call_language():
+    text = "Samples with Cq < 40 in two of three replicates were considered positive."
+
+    def respond(prompt: str) -> str:
+        assert "detection_criteria" in prompt
+        return json.dumps(
+            [
+                {
+                    "field": "detection_criteria",
+                    "raw_value": "three replicates were pooled",
+                    "quote_id": "Q001",
+                }
+            ]
+        )
+
+    backend = MockLLMBackend(label="judge", responses=respond)
+    facts = detect_llm_judged_search_facts(backend, (("Targeted detection", text),), locator_prefix="paper:PMC1")
+
+    assert [fact for fact in facts if fact.fact_type_candidate == "detection_criteria"] == []
+
+
+def test_targeted_detection_candidates_reject_non_blocking_taxonomy_and_probe_noise():
+    text = (
+        "Mitochondria, chloroplasts, archaea, eukaryotes, unidentified sequences, and OTUs with "
+        "abundances below 0.005% were removed. "
+        "Environmental variables were measured using a YSI Pro Plus, Yellow Springs, Ohio, USA. "
+        "For each eDNA sample, 1 L of water was filtered onto a 47 mm diameter, 0.22 μm pore size, "
+        "polyvinylidene difluoride membrane filter and stored at -80 C prior to extraction."
+    )
+
+    candidates = quote_candidates_for_llm_judged_search((("Methods", text),))
+    field_names = {
+        field_name
+        for candidate in candidates
+        for field_name in candidate.field_names
+    }
+
+    assert "block_taxa" not in field_names
+    assert "probe_conc" not in field_names
+    assert "probe_ref" not in field_names
+
+
+def test_targeted_detection_rejects_bad_block_taxa_probe_conc_and_probe_ref_values():
+    text = (
+        "A host-blocking primer 5'-ACGTACGTACGT-3' was used to suppress fish DNA amplification. "
+        "CARD-FISH was performed with HRP-labeled probe Atri578 at 0.5 μM, designed in this study."
+    )
+
+    def respond(prompt: str) -> str:
+        assert "block_taxa" in prompt
+        assert "probe_conc" in prompt
+        assert "probe_ref" in prompt
+        return json.dumps(
+            [
+                {
+                    "field": "block_taxa",
+                    "raw_value": "Mitochondria, chloroplasts, archaea, eukaryotes, unidentified sequences, and OTUs",
+                    "quote_id": "Q001",
+                },
+                {
+                    "field": "probe_conc",
+                    "raw_value": "For each eDNA sample, 1 L of water was filtered onto a 0.22 μm filter.",
+                    "quote_id": "Q002",
+                },
+                {"field": "probe_ref", "raw_value": "YSI Pro Plus, Yellow Springs, Ohio, USA", "quote_id": "Q002"},
+                {"field": "block_taxa", "raw_value": "fish DNA", "quote_id": "Q001"},
+                {"field": "probe_conc", "raw_value": "0.5 μM", "quote_id": "Q002"},
+                {"field": "probe_ref", "raw_value": "designed in this study", "quote_id": "Q002"},
+            ]
+        )
+
+    backend = MockLLMBackend(label="judge", responses=respond)
+    facts = detect_llm_judged_search_facts(backend, (("Targeted detection", text),), locator_prefix="paper:PMC1")
+    by_type = {fact.fact_type_candidate: fact.raw_value for fact in facts}
+
+    assert by_type["block_taxa"] == "fish DNA"
+    assert by_type["probe_conc"] == "0.5 μM"
+    assert by_type["probe_ref"] == "designed in this study"
+
+
 def test_detect_llm_judged_search_facts_handles_frontiers_atri578_probe_and_gel():
     text = (
         "TABLE 2. Oligonucleotide primers and Atribacteria-specific probe used in this study. "
