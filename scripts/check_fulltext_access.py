@@ -38,15 +38,24 @@ BioSample accession) are reported separately: they never need a paper's
 own full text for their sample data, so lumping them into "no confirmed
 path to fulltext" would overstate how many papers are actually stuck.
 
+--export-csv writes the FULL no_confirmed_path_to_fulltext and
+repository_only lists (not just a truncated sample) to CSV files, one row
+per study with its title and whatever identifiers it does have (DOI,
+PMCID, BioProject accession, PMID) -- enough to actually go search for
+each paper by hand.
+
 Usage:
     python scripts/check_fulltext_access.py
     python scripts/check_fulltext_access.py --json
+    python scripts/check_fulltext_access.py --export-csv data/paper_classification
     FAIR_OCEAN_DATABASE_URL=sqlite:////path/to/other.db python scripts/check_fulltext_access.py
 """
 from __future__ import annotations
 
 import argparse
+import csv
 import json
+from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -55,6 +64,25 @@ from fair_ocean_agent.database.enums import CanonicalStatus, IdentifierType, Sou
 from fair_ocean_agent.database.models import ExternalIdentifier, Source, Study
 from fair_ocean_agent.database.session import session_scope
 from fair_ocean_agent.workflow.handlers import _local_pdf_path_for_study
+
+_EXPORT_IDENTIFIER_TYPES = (
+    IdentifierType.DOI,
+    IdentifierType.PMCID,
+    IdentifierType.PMID,
+    IdentifierType.BIOPROJECT_ACCESSION,
+)
+
+
+def _identifiers_by_study(session: Session, identifier_type: IdentifierType) -> dict[str, str]:
+    rows = session.execute(
+        select(ExternalIdentifier.study_id, ExternalIdentifier.identifier_value)
+        .where(ExternalIdentifier.identifier_type == identifier_type.value)
+        .order_by(ExternalIdentifier.created_at)
+    ).all()
+    result: dict[str, str] = {}
+    for study_id, value in rows:
+        result.setdefault(study_id, value)
+    return result
 
 
 def build_report(session: Session) -> dict:
@@ -112,7 +140,28 @@ def build_report(session: Session) -> dict:
         "no_confirmed_path_to_fulltext": len(no_confirmed_path),
         "repository_only_no_doi_no_paper_needed": len(repository_only),
         "no_confirmed_path_study_ids_sample": no_confirmed_path[:25],
+        "no_confirmed_path_study_ids": no_confirmed_path,
+        "repository_only_study_ids": repository_only,
     }
+
+
+def _export_csv(session: Session, study_ids: list[str], out_path: Path) -> None:
+    titles = {study.study_id: study.title for study in session.scalars(select(Study).where(Study.study_id.in_(study_ids)))}
+    identifiers_by_type = {
+        identifier_type: _identifiers_by_study(session, identifier_type) for identifier_type in _EXPORT_IDENTIFIER_TYPES
+    }
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["study_id", "title", *(t.value for t in _EXPORT_IDENTIFIER_TYPES)])
+        for study_id in study_ids:
+            writer.writerow(
+                [
+                    study_id,
+                    titles.get(study_id) or "",
+                    *(identifiers_by_type[t].get(study_id, "") for t in _EXPORT_IDENTIFIER_TYPES),
+                ]
+            )
 
 
 def render_text(report: dict) -> str:
@@ -135,15 +184,27 @@ def render_text(report: dict) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--json", action="store_true", help="print machine-readable JSON instead of a text report")
+    parser.add_argument(
+        "--export-csv",
+        type=Path,
+        metavar="DIR",
+        help="write the full no_confirmed_path_to_fulltext.csv and repository_only.csv lists to this directory",
+    )
     args = parser.parse_args()
 
     with session_scope() as session:
         report = build_report(session)
+        if args.export_csv:
+            _export_csv(session, report["no_confirmed_path_study_ids"], args.export_csv / "no_confirmed_path_to_fulltext.csv")
+            _export_csv(session, report["repository_only_study_ids"], args.export_csv / "repository_only.csv")
 
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
         print(render_text(report))
+        if args.export_csv:
+            print(f"\nWrote {args.export_csv / 'no_confirmed_path_to_fulltext.csv'}")
+            print(f"Wrote {args.export_csv / 'repository_only.csv'}")
 
 
 if __name__ == "__main__":

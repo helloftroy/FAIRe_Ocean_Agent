@@ -28,6 +28,12 @@ set -euo pipefail
 : "${SLURM_SUBMIT_DIR:?SLURM_SUBMIT_DIR is unset -- this script must be run via sbatch, not directly.}"
 cd "${SLURM_SUBMIT_DIR}"   # repo root (fair_ocean_agent/), i.e. wherever you ran `sbatch cluster/run_extraction.sbatch` from
 mkdir -p logs
+# Python defaults to fully-buffered stdout when it isn't a TTY (always
+# true under sbatch, since output goes to a log file) -- a long-running
+# job's own periodic progress logging can sit in that buffer for its
+# entire runtime with nothing ever reaching the .out file, looking
+# exactly like a silently-stuck job even though it's working fine.
+export PYTHONUNBUFFERED=1
 
 if [ ! -f cluster/env_activate.sh ]; then
   echo "cluster/env_activate.sh is missing -- run ./cluster/setup_env.sh first." >&2
