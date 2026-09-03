@@ -20,7 +20,7 @@ def test_detect_downstream_analysis_techniques_from_methods_sequence_context():
 
     assert len(facts) == 1
     assert facts[0].fact_type_candidate == FIELD_NAME
-    assert facts[0].raw_value == "relative abundance | Hellinger | NMDS | Bray-Curtis | PERMANOVA | CatBoost"
+    assert facts[0].raw_value == "relative abundance | Hellinger transformation | NMDS | Bray-Curtis | PERMANOVA"
     assert "ASV abundances were converted" in (facts[0].evidence_quote or "")
 
 
@@ -56,7 +56,7 @@ def test_detect_downstream_analysis_techniques_ignores_non_methods_sections():
     assert facts == []
 
 
-def test_detect_downstream_analysis_techniques_requires_sequence_data_context():
+def test_detect_downstream_analysis_techniques_matches_methods_without_sequence_data_context():
     facts = detect_downstream_analysis_techniques(
         [
             (
@@ -68,7 +68,8 @@ def test_detect_downstream_analysis_techniques_requires_sequence_data_context():
         locator_prefix="test",
     )
 
-    assert facts == []
+    assert len(facts) == 1
+    assert facts[0].raw_value == "PCA"
 
 
 def test_detect_downstream_analysis_techniques_uses_strict_ambiguous_acronyms():
@@ -84,4 +85,4 @@ def test_detect_downstream_analysis_techniques_uses_strict_ambiguous_acronyms():
     )
 
     assert len(facts) == 1
-    assert facts[0].raw_value == "canonical correspondence analysis | ANCOM-BC"
+    assert facts[0].raw_value == "CCA | ANCOM-BC | differential abundance analysis"
