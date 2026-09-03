@@ -3029,6 +3029,16 @@ _TARGET_TAXONOMIC_SCOPE_CONTEXT_RE = re.compile(
 _SCREEN_CONTAM_METHOD_CONTEXT_RE = re.compile(
     r"\bblank(?:s)?\b|\bnegative\s+control(?:s)?\b|\bcontrol\s+sample(?:s)?\b|\bdecontam|"
     r"\bprevalence\b|\bfrequency[-\s]based\b|"
+    # Real gap found live (10.1111/1462-2920.14870): "Sequences detected in
+    # the DNA extraction and pooling controls are believed to originate
+    # from amplicon contamination... these sequences were removed from
+    # all samples" -- a real, clear contamination-screening explanation
+    # that names its controls by PROCESS ("extraction and pooling
+    # controls") rather than "blank"/"negative control"/"control sample",
+    # and says "contamination" (the process/state), never literally
+    # "contaminant sequences" or "removed AS a contaminant" -- none of the
+    # existing alternatives matched.
+    r"\b(?:extraction|pooling|library|sequencing|processing)\s+controls?\b|"
     r"\bcontaminant\s+(?:sequences?|OTUs?|ASVs?|taxa|taxon|reads?)\b|"
     r"\b(?:sequences?|OTUs?|ASVs?|reads?|taxa|taxon)\s+(?:considered|flagged|identified|removed)\s+as\s+"
     r"(?:a\s+)?contaminant",

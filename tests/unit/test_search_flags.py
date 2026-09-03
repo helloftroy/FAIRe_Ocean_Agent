@@ -2347,6 +2347,26 @@ def test_quote_candidates_for_screen_contam_method_matches_plural_contaminants_a
     assert any("screen_contam_method" in c.field_names for c in candidates)
 
 
+def test_quote_candidates_for_screen_contam_method_matches_named_process_controls():
+    """Real gap found live (10.1111/1462-2920.14870): "Sequences detected
+    in the DNA extraction and pooling controls are believed to originate
+    from amplicon contamination during sample processing or cross-talk
+    between multiplexed samples during sequencing ... these sequences
+    were removed from all samples" never matched any existing context
+    alternative -- it names its controls by PROCESS ("extraction and
+    pooling controls"), never "blank"/"negative control"/"control
+    sample", and says "contamination" (the process/state), never
+    literally "contaminant sequences" or "removed AS a contaminant"."""
+    text = (
+        "Sequences detected in the DNA extraction and pooling controls are believed to originate from "
+        "amplicon contamination during sample processing or cross-talk between multiplexed samples "
+        "during sequencing due to their classification as marine bacteria. To be conservative, these "
+        "sequences were removed from all samples."
+    )
+    candidates = quote_candidates_for_llm_judged_search((("Methods", text),))
+    assert any("screen_contam_method" in c.field_names for c in candidates)
+
+
 def test_quote_candidates_for_pos_cont_0_1_matches_a_mock_community_mention():
     """Real gap found live: 'Lastly, genomic DNA from a microbial mock
     community (BEI Resources, NIAID, NIH ... Genomic DNA from Microbial

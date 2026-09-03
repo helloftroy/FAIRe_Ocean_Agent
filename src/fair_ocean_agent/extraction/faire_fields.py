@@ -305,7 +305,14 @@ FIELD_GROUPS: dict[str, tuple[FaireExtractionField, ...]] = {
             "DEFINITION, regardless of how specific or well-known the primer set's own name is (e.g. "
             "MiFish, Valsecchi), unless the paper explicitly describes a qPCR/ddPCR probe-based assay "
             "detecting ONE named species using that gene as the target -- a primer set simply having its "
-            "own specific/branded name does NOT make it targeted.",
+            "own specific/branded name does NOT make it targeted. Real gap found live (10.1111/1462-2920.14870): "
+            "'V4 hypervariable regions of the 16S rRNA gene were amplified using the Fluidigm microfluidics "
+            "quantitative PCR platform ... prepared for ... Illumina MiSeq sequencing' is STILL metabarcoding, "
+            "not targeted -- Fluidigm's Access Array and similar chip-based systems use qPCR CHEMISTRY purely "
+            "as the AMPLIFICATION step of a community-profiling workflow, never to compute a Cq/Ct value for "
+            "single-target detection. The word 'quantitative PCR' describing the amplification "
+            "instrument/chemistry does NOT by itself make an assay targeted -- only return targeted when the "
+            "paper's own OUTPUT is a Cq/Ct-based positive/negative or quantity call for one specific target.",
             "assay_type",
             required_any_flags=frozenset({"pcr_0_1"}),
         ),
