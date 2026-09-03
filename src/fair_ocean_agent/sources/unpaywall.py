@@ -52,16 +52,47 @@ def _contact_email() -> str:
     return os.environ.get("FAIR_OCEAN_CONTACT_EMAIL", _DEFAULT_CONTACT_EMAIL)
 
 
+def _location_url(location: dict) -> str | None:
+    # Prefers a direct `url_for_pdf` (an actual PDF link) but falls back to
+    # the location's own bare `url` (sometimes a landing page that still
+    # happens to serve the PDF directly, confirmed live for several
+    # repository-hosted copies) -- same fallback OpenAlexAdapter's own
+    # best_oa_location.pdf_url convention doesn't need, since OpenAlex only
+    # ever populates pdf_url when it found one.
+    return location.get("url_for_pdf") or location.get("url")
+
+
+def oa_pdf_urls(record: SourceRecord) -> list[str]:
+    """Every candidate OA URL this record knows about, in trial order:
+    repository-hosted copies FIRST, the publisher's own copy last. A real
+    gap: this pipeline's own bot-detection avoidance stance (never fetch
+    past a publisher's deliberate block, see
+    workflow/handlers.py::_try_fetch_and_save_oa_pdf) means the publisher's
+    own OA copy -- Unpaywall's own `best_oa_location`, since it typically
+    prefers the canonical published version -- is exactly the copy most
+    likely to sit behind that kind of block. A REPOSITORY copy (an
+    institutional repository, a PMC-adjacent mirror, a preprint server) is
+    the same legally-open content served from a plain, unprotected file
+    host, so it's tried first even when Unpaywall itself ranks the
+    publisher's copy as "best". Falls back to best_oa_location alone if
+    oa_locations is empty/absent (an older or malformed response)."""
+    locations = record.raw.get("oa_locations") or (
+        [record.raw["best_oa_location"]] if record.raw.get("best_oa_location") else []
+    )
+    repository_urls = [
+        url for loc in locations if loc.get("host_type") == "repository" and (url := _location_url(loc))
+    ]
+    other_urls = [
+        url for loc in locations if loc.get("host_type") != "repository" and (url := _location_url(loc))
+    ]
+    return list(dict.fromkeys([*repository_urls, *other_urls]))  # de-dup, preserve trial order
+
+
 def best_oa_pdf_url(record: SourceRecord) -> str | None:
-    """The single most useful candidate PDF URL from this record, if any
-    -- prefers a direct `url_for_pdf` (an actual PDF link) but falls back
-    to the location's own bare `url` (sometimes a landing page that still
-    happens to serve the PDF directly, confirmed live for several
-    repository-hosted copies), same fallback OpenAlexAdapter's own
-    best_oa_location.pdf_url convention doesn't need since OpenAlex only
-    ever populates pdf_url when it found one."""
-    best = record.raw.get("best_oa_location") or {}
-    return best.get("url_for_pdf") or best.get("url")
+    """Backward-compatible single-URL convenience wrapper around
+    oa_pdf_urls -- the first (most likely to succeed) candidate, if any."""
+    urls = oa_pdf_urls(record)
+    return urls[0] if urls else None
 
 
 class UnpaywallAdapter(SourceAdapter):

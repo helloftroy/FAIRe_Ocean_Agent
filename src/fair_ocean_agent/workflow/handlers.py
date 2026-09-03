@@ -132,7 +132,7 @@ from fair_ocean_agent.sources.osf import OsfAdapter
 from fair_ocean_agent.sources.pangaea import PangaeaAdapter
 from fair_ocean_agent.sources.qiita import QiitaAdapter
 from fair_ocean_agent.sources.sequence_file_heuristics import SequenceDataStatus
-from fair_ocean_agent.sources.unpaywall import UnpaywallAdapter, best_oa_pdf_url
+from fair_ocean_agent.sources.unpaywall import UnpaywallAdapter, oa_pdf_urls
 from fair_ocean_agent.sources.zenodo import ZenodoAdapter
 from fair_ocean_agent.workflow.worker import TASK_HANDLERS
 
@@ -1085,10 +1085,31 @@ def _open_access_pdf_candidate_urls(doi: str, adapters: dict[str, SourceAdapter]
     the other -- confirmed live (10.1016/j.jhazmat.2024.133878, a real
     ScienceDirect paper): Unpaywall correctly reports it as genuine CC-BY
     open access when OpenAlex's own best_oa_location for it isn't
-    reliably populated. Order doesn't matter much (whichever comes first
-    wins if both agree), but OpenAlex is tried first since it's already
-    used elsewhere in ordinary discovery."""
+    reliably populated.
+
+    Unpaywall's own candidates are tried FIRST, ahead of OpenAlex's single
+    link: sources/unpaywall.py's oa_pdf_urls already orders REPOSITORY-
+    hosted copies (an institutional repository, a PMC-adjacent mirror, a
+    preprint server -- a plain, unprotected file host) ahead of the
+    publisher's own copy, per an explicit user question ("doesn't
+    Unpaywall also indicate where else to find [an OA paper]... so we
+    could avoid [the publisher]?") -- exactly the copy least likely to
+    sit behind the SAME kind of bot-detection block this function already
+    refuses to route around (_try_fetch_and_save_oa_pdf's own docstring).
+    OpenAlex's own best_oa_location is a single URL with no repository-
+    vs-publisher distinction surfaced here, so it's tried last, as a
+    fallback rather than the first guess."""
     urls: list[str] = []
+
+    unpaywall = adapters.get("unpaywall")
+    if isinstance(unpaywall, UnpaywallAdapter):
+        try:
+            record = unpaywall.fetch_record(doi)
+        except SourceRecordNotFoundError:
+            pass
+        else:
+            if record.raw.get("is_oa"):
+                urls.extend(oa_pdf_urls(record))
 
     openalex = adapters.get("openalex")
     if isinstance(openalex, OpenAlexAdapter):
@@ -1100,18 +1121,6 @@ def _open_access_pdf_candidate_urls(doi: str, adapters: dict[str, SourceAdapter]
             best_oa = record.raw.get("best_oa_location") or {}
             if best_oa.get("is_oa") and best_oa.get("pdf_url"):
                 urls.append(best_oa["pdf_url"])
-
-    unpaywall = adapters.get("unpaywall")
-    if isinstance(unpaywall, UnpaywallAdapter):
-        try:
-            record = unpaywall.fetch_record(doi)
-        except SourceRecordNotFoundError:
-            pass
-        else:
-            if record.raw.get("is_oa"):
-                pdf_url = best_oa_pdf_url(record)
-                if pdf_url:
-                    urls.append(pdf_url)
 
     return list(dict.fromkeys(urls))  # de-dup while preserving trial order
 
