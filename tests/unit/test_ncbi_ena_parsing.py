@@ -187,6 +187,36 @@ def test_biosample_extract_structured_facts_normalizes_collection_depth_alias(bi
     assert values["depth"].source_locator.endswith("Attributes.depth")
 
 
+def test_biosample_extract_structured_facts_organism_fallback_beats_a_missing_host_placeholder(biosample_adapter):
+    """Real gap found live (STUDY-012a00dba8bc): a submitter's literal
+    "host_species: missing" (a valid MIxS null-value token, not real
+    data) used to pass straight through the generic per-attribute loop
+    unfiltered -- the absent-value check applied only to location
+    attributes -- poisoning normalized_attrs["host_species"] with the
+    string "missing" before the organism -> host_species fallback ever
+    ran, so the fallback's own setdefault never fired even though the
+    sample's real organism ("sponge metagenome") was right there."""
+    raw = {
+        "bioproject_accession": "PRJNA999999",
+        "total_linked_samples": 1,
+        "truncated": False,
+        "samples": [
+            {
+                "accession": "SAMN1",
+                "title": "sponge sample",
+                "organism": {"taxonomy_name": "sponge metagenome", "taxonomy_id": "1234"},
+                "attributes": {"host_species": "missing"},
+            },
+        ],
+    }
+
+    facts = biosample_adapter.extract_structured_facts(_record("ncbi_biosample", raw))
+    values = {fact.fact_type_candidate: fact for fact in facts}
+
+    assert values["host_species"].raw_value == "sponge metagenome"
+    assert "missing" not in {f.raw_value for f in facts}
+
+
 def test_biosample_extract_structured_facts_skips_absent_location_placeholders(biosample_adapter):
     raw = {
         "bioproject_accession": "PRJNA242644",

@@ -426,7 +426,11 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
             "when the quote explicitly says inhibition was not checked/tested/assessed. Omit the field when "
             "there is no explicit inhibition-check statement. Do not return 1 from BSA, sample dilution, or "
             "an inhibitor-resistant master mix alone unless the quote explicitly connects it to checking or "
-            "detecting inhibition."
+            "detecting inhibition. Never return 1 just because the quote SPECULATES about whether inhibition "
+            "might explain a failed or reduced result, without describing an actual inhibition-specific test "
+            "or control that was performed -- e.g. 'the lack of amplification was likely caused by low "
+            "concentrations of DNA, although we cannot rule out PCR inhibition' is post-hoc discussion "
+            "weighing possible causes, not an inhibition check; omit the field for a quote like that."
         ),
         search_terms=(
             "PCR inhibition",
@@ -482,7 +486,11 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
             "Return the full explicit method phrase/sentence supported by the quote. Include the inhibition "
             "test/control and any mitigation action such as dilution, cleanup, additives, or inhibitor-tolerant "
             "reagents. Omit this field when the quote mentions BSA, dilution, or inhibitor-tolerant reagents "
-            "without explicitly tying them to inhibition detection or mitigation."
+            "without explicitly tying them to inhibition detection or mitigation. Also omit this field when "
+            "the quote only SPECULATES about whether inhibition might explain a failed or reduced result "
+            "(e.g. 'we cannot rule out PCR inhibition, which is less likely given that some replicates "
+            "amplified') without describing an actual inhibition-specific test or control that was performed "
+            "-- that is post-hoc discussion, not a real method."
         ),
         search_terms=(
             "PCR inhibition",

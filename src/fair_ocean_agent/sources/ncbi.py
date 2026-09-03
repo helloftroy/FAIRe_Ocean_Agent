@@ -277,6 +277,25 @@ _LOCATION_ATTRIBUTE_NAMES = frozenset(
         "geographic_location",
     }
 )
+# host/host_species/cultivar/isolate: real gap found live (STUDY-
+# 012a00dba8bc) -- a submitter's literal "host_species: missing" (a valid
+# MIxS null-value token, not real data) passed straight through the
+# generic per-attribute loop below unfiltered, since the absent-value
+# check used to apply only to _LOCATION_ATTRIBUTE_NAMES. That poisoned
+# normalized_attrs["host_species"] with the literal string "missing"
+# BEFORE _host_species_from_attributes or the organism -> host_species
+# fallback ever ran, so the fallback's own setdefault never fired (the
+# key already "existed"), and "missing" -- not the real, useful "sponge
+# metagenome" from the sample's own organism -- reached the final FAIRe
+# export. Unlike env_local_scale (see
+# test_biosample_extract_structured_facts_skips_absent_location_placeholders's
+# own comment: "not applicable" IS a genuinely meaningful MIxS answer
+# there), a host field literally has no equivalent "meaningful missing"
+# case in this schema -- a non-host-associated sample simply never gets a
+# host_species fact at all, rather than one holding a null-value token.
+_PLACEHOLDER_FILTERED_ATTRIBUTE_NAMES = _LOCATION_ATTRIBUTE_NAMES | frozenset(_HOST_SPECIES_ATTRIBUTE_NAMES) | frozenset(
+    {"isolate"}
+)
 
 
 def _source_material_id_sample_name(value: str | None) -> str | None:
@@ -448,7 +467,7 @@ def _present_biosample_attribute_value(attr_name: str, value: str | None) -> str
     if not cleaned:
         return None
     canonical_name = _canonical_biosample_attribute_name(attr_name)
-    if canonical_name in _LOCATION_ATTRIBUTE_NAMES and _ABSENT_ATTRIBUTE_VALUE_RE.match(cleaned):
+    if canonical_name in _PLACEHOLDER_FILTERED_ATTRIBUTE_NAMES and _ABSENT_ATTRIBUTE_VALUE_RE.match(cleaned):
         return None
     return cleaned
 
