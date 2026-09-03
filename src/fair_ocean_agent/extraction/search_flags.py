@@ -3854,11 +3854,21 @@ _ADAPTER_TO_FUSED_PRIMER_FIELD = {"adapter_forward": "pcr_primer_forward", "adap
 # then dash -- for the leading boundary, but "–3´" -- dash, then digit,
 # then prime mark -- for the trailing one), so both orders are accepted on
 # each end rather than assuming a fixed order.
+# Real gap found live (10.1111/1462-2920.14870): "5′‐GTGYCAGCMGCCGCGGTAA"
+# uses TWO characters this regex never recognized at all: U+2032 (PRIME,
+# ′) -- the actual, correct Unicode character for a prime mark, ironically
+# never included even though apostrophe/right-quote/acute-accent
+# lookalikes were -- and U+2010 (HYPHEN, ‐), a real, common Unicode
+# punctuation character Wiley's own typesetting produces here, distinct
+# from all three dash characters already handled (ASCII hyphen-minus
+# U+002D, en dash U+2013, em dash U+2014). Both added to their respective
+# character classes rather than new branches, since they play the
+# identical role as their already-handled lookalikes.
 _LEADING_PRIME_MARKER_RE = re.compile(
-    r"^\s*(?:[53]\s*['’´]|['’´]\s*[53])\s*[-–—]?\s*", re.IGNORECASE
+    r"^\s*(?:[53]\s*['’´′]|['’´′]\s*[53])\s*[-–—‐]?\s*", re.IGNORECASE
 )
 _TRAILING_PRIME_MARKER_RE = re.compile(
-    r"\s*[-–—]?\s*(?:[53]\s*['’´]|['’´]\s*[53])\s*$", re.IGNORECASE
+    r"\s*[-–—‐]?\s*(?:[53]\s*['’´′]|['’´′]\s*[53])\s*$", re.IGNORECASE
 )
 _NUCLEOTIDE_SEQUENCE_ONLY_RE = re.compile(r"^[ACGTURYSWKMBDHVN]{6,}$", re.IGNORECASE)
 

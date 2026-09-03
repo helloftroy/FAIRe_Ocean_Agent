@@ -219,7 +219,28 @@ FIELD_GROUPS: dict[str, tuple[FaireExtractionField, ...]] = {
         FaireExtractionField("dna_extraction_kit", "name of the extraction kit used", "nucl_acid_ext_kit", "DNeasy PowerWater Kit"),
         FaireExtractionField("dna_lysis_method", "lysis method (e.g. physical, chemical, enzymatic)", "nucl_acid_ext_lysis", "bead-beating"),
         FaireExtractionField("dna_separation_method", "how DNA was separated/purified (e.g. spin column, magnetic beads)", "nucl_acid_ext_sep"),
-        FaireExtractionField("sample_volume_for_extraction", "volume or mass of sample processed for extraction", "samp_vol_we_dna_ext", "500 mL"),
+        # Real gap found live (STUDY-017230ae34c4): this field's own bare
+        # hint ("volume or mass of sample processed for extraction") let
+        # the model latch onto "nine reef-depth seawater samples from JR
+        # (n = 4) and FK (n = 5)" -- a SAMPLE COUNT/site breakdown, not any
+        # amount of material at all. Per an explicit user request, the
+        # hint now states a clear priority order (an explicit DNA amount
+        # in ng/nanograms first, since that's the amount actually reported
+        # right next to extraction in many papers; the original
+        # environmental sample volume/mass otherwise) and explicitly names
+        # the observed failure mode as something to exclude.
+        FaireExtractionField(
+            "sample_volume_for_extraction",
+            "the amount of material actually used for extraction. PRIORITIZE, in this order: (1) an explicit "
+            "amount of DNA in ng/nanograms used as extraction/library input, if the paper states one -- search "
+            "for 'ng' or 'nanograms'; otherwise (2) the volume (e.g. liters, mL) or mass (e.g. g) of the "
+            "original environmental sample (water, sediment, etc.) that was filtered/processed for extraction. "
+            "NEVER a count of samples, sites, or replicates (e.g. 'nine seawater samples from site X (n = 4)', "
+            "'duplicate samples at each site') -- a sample COUNT is not an amount of material, even when it "
+            "includes numbers.",
+            "samp_vol_we_dna_ext",
+            "500 mL",
+        ),
         FaireExtractionField("sample_volume_for_extraction_unit", "unit for sample_volume_for_extraction", "samp_vol_we_dna_ext_unit", "mL"),
         FaireExtractionField(
             "dna_concentration",

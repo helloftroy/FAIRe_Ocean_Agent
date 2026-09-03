@@ -102,6 +102,44 @@ def test_real_primer_sequence_survives_the_nucleotide_shape_check():
     assert facts[0].raw_value == "GGWACWGGWTGAACWGTWTAYCCYCC"
 
 
+def test_primer_sequence_with_leading_prime_marker_decoration_is_cleaned_not_dropped():
+    """Real gap found live (10.1111/1462-2920.14870): "The Fluidgim V4
+    primer set 515F-Y: 5'-GTGYCAGCMGCCGCGGTAA ... and 806RB:
+    5'-GGACTACNVGGGTWTCTAAT" -- the model copied the sequence verbatim
+    from the quote per its own instructions, decorative 5'/3' boundary
+    markers included, which used to fail the strict nucleotide-only shape
+    check outright and get silently dropped entirely (the primer NAME
+    survived since it has no such check, only the sequence vanished).
+    Cleaned instead of discarded, matching search_flags.py's own
+    fused-adapter-primer cleaning for the identical decoration."""
+    text = (
+        "The Fluidgim V4 primer set 515F-Y: 5′‐GTGYCAGCMGCCGCGGTAA (Parada et al., 2016) and "
+        "806RB: 5′‐GGACTACNVGGGTWTCTAAT (Apprill et al., 2015), accompanied with Illumina "
+        "adapters, index, pad, and linker sequences, were used for amplification."
+    )
+    response = json.dumps(
+        [
+            {
+                "fact_type_candidate": "forward_primer_sequence",
+                "raw_value": "5′‐GTGYCAGCMGCCGCGGTAA",
+                "evidence_id": "METHODS.P001",
+            },
+            {
+                "fact_type_candidate": "reverse_primer_sequence",
+                "raw_value": "5′‐GGACTACNVGGGTWTCTAAT",
+                "evidence_id": "METHODS.P001",
+            },
+        ]
+    )
+    backend = MockLLMBackend(responses=[response])
+
+    facts, _ = extract_facts_from_section(backend, "Methods", text, active_flags=frozenset({"pcr_0_1"}))
+
+    by_type = {fact.fact_type_candidate: fact.raw_value for fact in facts}
+    assert by_type["forward_primer_sequence"] == "GTGYCAGCMGCCGCGGTAA"
+    assert by_type["reverse_primer_sequence"] == "GGACTACNVGGGTWTCTAAT"
+
+
 def test_filter_name_can_be_extracted_from_sampling_text():
     text = "Samples were filtered directly using a 0.22 μm cartridge filter (Sterivex filter)."
     response = json.dumps(

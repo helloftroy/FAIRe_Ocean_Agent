@@ -230,6 +230,7 @@ from fair_ocean_agent.extraction.faire_fields import (
     field_names_for_reference,
     render_field_reference,
 )
+from fair_ocean_agent.extraction.search_flags import _clean_fused_sequence_part
 from fair_ocean_agent.llm.base import LLMBackend, LLMResponse
 from fair_ocean_agent.mapping.faire import TARGET_SCHEMA
 from fair_ocean_agent.sources.base import RawFactCandidate
@@ -1124,6 +1125,20 @@ def _facts_from_candidates(
             continue
         if allowed_fact_types is not None and str(fact_type) not in allowed_fact_types:
             continue
+        if str(fact_type) in _PRIMER_SEQUENCE_FACT_TYPES and isinstance(raw_value, str):
+            # Real gap found live (10.1111/1462-2920.14870): the model
+            # copies the primer sequence "verbatim from the quote" exactly
+            # as its own prompt instructs, decorative 5'/3' boundary
+            # markers included (e.g. "5'-GTGYCAGCMGCCGCGGTAA") -- the
+            # strict nucleotide-only shape check just below would reject
+            # the whole value outright rather than see past that
+            # decoration, silently dropping a real, correctly-extracted
+            # sequence. Clean it the same way search_flags.py's own
+            # fused-adapter-primer splitting already does for the
+            # identical decoration, and use the cleaned value from here on
+            # (both for validation and as the stored fact) rather than
+            # just validating and discarding.
+            raw_value = _clean_fused_sequence_part(raw_value)
         if not _candidate_value_is_supported_by_quote(str(fact_type), raw_value, quote):
             continue
         assay_tag = _candidate_assay_tag(candidate, str(fact_type))

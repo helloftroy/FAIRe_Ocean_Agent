@@ -1145,6 +1145,21 @@ def test_clean_fused_sequence_part_strips_prime_markers_in_either_digit_quote_or
     assert _clean_fused_sequence_part("CTCCTACGGGAGGCAGCAG–3´") == "CTCCTACGGGAGGCAGCAG"
 
 
+def test_clean_fused_sequence_part_strips_the_real_unicode_prime_and_hyphen_characters():
+    """Real gap found live (10.1111/1462-2920.14870): "5′‐GTGYCAGCMGCCGCGGTAA"
+    uses U+2032 (PRIME, the actual correct Unicode character for a prime
+    mark -- never previously recognized even though apostrophe/right-
+    quote/acute-accent lookalikes were) together with U+2010 (HYPHEN, a
+    real Wiley-typesetting punctuation character distinct from the ASCII
+    hyphen/en dash/em dash already handled). Neither character was
+    stripped before this fix, so the whole value failed the strict
+    nucleotide-only shape check downstream and was silently dropped."""
+    from fair_ocean_agent.extraction.search_flags import _clean_fused_sequence_part
+
+    assert _clean_fused_sequence_part("5′‐GTGYCAGCMGCCGCGGTAA") == "GTGYCAGCMGCCGCGGTAA"
+    assert _clean_fused_sequence_part("5′‐GGACTACNVGGGTWTCTAAT") == "GGACTACNVGGGTWTCTAAT"
+
+
 def test_split_fused_adapter_primer_facts_splits_real_forward_and_reverse_sequences():
     """Real, live-verified fusion-primer sequences from a PLOS ONE paper
     (10.1371/journal.pone.0303937): Illumina Nextera overhang adapters
