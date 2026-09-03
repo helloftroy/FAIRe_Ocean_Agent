@@ -61,6 +61,22 @@ def _counts_by_type_and_status(session: Session) -> dict[str, dict[str, int]]:
     return counts
 
 
+def _distinct_study_counts_by_type(session: Session) -> dict[str, int]:
+    """A task-type's own row count can be wildly inflated relative to
+    "studies" -- e.g. DISCOVER_CITING_STUDIES enqueues one task per
+    BioProject/BioSample ACCESSION a study has (workflow/handlers.py), not
+    one per study, so a single multi-sample study can spawn dozens to
+    hundreds of them. Reported alongside the raw count in the text report
+    specifically so a huge task count is never mistaken for a huge study
+    count."""
+    rows = session.execute(
+        select(Task.task_type, func.count(func.distinct(Task.study_id)))
+        .where(Task.study_id.is_not(None))
+        .group_by(Task.task_type)
+    ).all()
+    return {task_type: count for task_type, count in rows}
+
+
 def _study_ids_for(
     session: Session, task_types: Iterable[TaskType], statuses: Iterable[TaskStatus] | None = None
 ) -> set[str]:
@@ -107,6 +123,7 @@ def build_report(session: Session) -> dict:
     ) or 0
 
     by_type_status = _counts_by_type_and_status(session)
+    distinct_studies_by_type = _distinct_study_counts_by_type(session)
 
     llm_touched = _study_ids_for(session, LLM_TASK_TYPES)
     llm_waiting = _study_ids_for(session, LLM_TASK_TYPES, WAITING_STATUSES)
@@ -127,6 +144,7 @@ def build_report(session: Session) -> dict:
     return {
         "total_candidate_studies": total_candidate_studies,
         "by_task_type_and_status": by_type_status,
+        "distinct_studies_by_task_type": distinct_studies_by_type,
         "llm_stage": {
             "studies_waiting": len(llm_waiting),
             "papers_waiting": len(waiting_papers),
@@ -142,14 +160,21 @@ def render_text(report: dict) -> str:
     lines: list[str] = []
     lines.append(f"Total candidate studies: {report['total_candidate_studies']}")
     lines.append("")
-    lines.append("Task queue, by type and status (non-zero only):")
+    lines.append(
+        "Task queue, by type and status (non-zero only; \"studies\" is the DISTINCT study "
+        "count behind that type's tasks, not the task count itself -- some task types "
+        "(e.g. DISCOVER_CITING_STUDIES, one task per BioProject/BioSample accession) can "
+        "have many tasks per study):"
+    )
+    distinct_by_type = report.get("distinct_studies_by_task_type", {})
     for task_type, statuses in report["by_task_type_and_status"].items():
         non_zero = {status: count for status, count in statuses.items() if count}
         if not non_zero:
             continue
         marker = " *LLM*" if task_type in {t.value for t in LLM_TASK_TYPES} else ""
         parts = ", ".join(f"{status}={count}" for status, count in non_zero.items())
-        lines.append(f"  {task_type}{marker}: {parts}")
+        studies_note = f" [{distinct_by_type.get(task_type, 0)} distinct studies]"
+        lines.append(f"  {task_type}{marker}: {parts}{studies_note}")
     lines.append("")
     stage = report["llm_stage"]
     lines.append("LLM stage summary (EXTRACT_TEXT_FACTS / EXTRACT_SUPPLEMENT_TEXT_FACTS / VALIDATE_EVIDENCE):")
