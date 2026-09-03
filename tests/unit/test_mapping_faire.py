@@ -1467,11 +1467,14 @@ def test_assay_name_fallback_creates_a_new_row_when_no_assay_name_was_ever_given
 
 def test_source_unmapped_captures_real_attributes_with_no_faire_field(db_session):
     """Real gap found live (SAMN08449373): NCBI's own BioSample page
-    shows real, useful metadata (treatment, TankReplicate,
-    Sampling_point) that has no FAIRe field of its own -- silently
-    dropped before, since rules_for() finds nothing for any of them.
-    Per an explicit user request, these get combined into one
-    "name: value" catch-all column instead of disappearing."""
+    shows real, useful metadata (treatment, TankReplicate) that has no
+    FAIRe field of its own -- silently dropped before, since rules_for()
+    finds nothing for any of them. Per an explicit user request, these
+    get combined into one "name: value" catch-all column instead of
+    disappearing. Sampling_point is deliberately NOT expected here
+    anymore: a later explicit user request gave it its own real
+    MappingRule onto eventDurationValue (see
+    test_sample_level_sampling_point_maps_to_event_duration_value)."""
     study = _study(db_session, title="Leftover attributes")
     sample = Entity(study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN08449373")
     db_session.add(sample)
@@ -1487,8 +1490,13 @@ def test_source_unmapped_captures_real_attributes_with_no_faire_field(db_session
     source_unmapped = db_session.query(StandardizedValue).filter_by(
         study_id=study.study_id, entity_id=sample.entity_id, target_field="source_unmapped"
     ).one()
-    assert source_unmapped.standardized_value == "treatment: Pulse | TankReplicate: E | Sampling_point: 168h after disturbance"
+    assert source_unmapped.standardized_value == "treatment: Pulse | TankReplicate: E"
     assert source_unmapped.review_required is False
+
+    event_duration = db_session.query(StandardizedValue).filter_by(
+        study_id=study.study_id, entity_id=sample.entity_id, target_field="eventDurationValue"
+    ).one()
+    assert event_duration.standardized_value == "168h after disturbance"
 
 
 def test_source_unmapped_excludes_mapped_fields_absent_placeholders_and_redundant_host_names(db_session):
@@ -1496,7 +1504,11 @@ def test_source_unmapped_excludes_mapped_fields_absent_placeholders_and_redundan
     strain="missing" is an NCBI not-provided placeholder (must not
     appear); host="Amphimedon queenslandica" is unmapped by rules_for
     but already captured under host_species's own real field (must not
-    be duplicated here)."""
+    be duplicated here); organism="sponge metagenome" is likewise
+    unmapped by rules_for but already captured under host_species via
+    sources/ncbi.py's own organism -> host_species fallback (real gap
+    found live, STUDY-012a00dba8bc: "organism: sponge metagenome" showed
+    up in source_unmapped before this exclusion existed)."""
     study = _study(db_session, title="Excluded from source_unmapped")
     sample = Entity(study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN2")
     db_session.add(sample)
@@ -1505,6 +1517,7 @@ def test_source_unmapped_excludes_mapped_fields_absent_placeholders_and_redundan
     _fact(db_session, study, entity=sample, field="strain", value="missing", entity_level="sample")
     _fact(db_session, study, entity=sample, field="host", value="Amphimedon queenslandica", entity_level="sample")
     _fact(db_session, study, entity=sample, field="host_species", value="Amphimedon queenslandica", entity_level="sample")
+    _fact(db_session, study, entity=sample, field="organism", value="sponge metagenome", entity_level="sample")
     db_session.commit()
 
     map_study_to_faire(db_session, study.study_id)
@@ -1931,6 +1944,58 @@ def test_sample_level_isolation_source_maps_to_env_medium(db_session):
     ).one()
     assert value.standardized_value == "coral cue material"
     assert value.mapping_method == "deterministic_synonym"
+
+
+def test_legacy_env_biome_feature_material_map_onto_the_standard_env_triad(db_session):
+    """Real gap found live (STUDY-012a00dba8bc): a BioSample submission
+    without NCBI's own harmonized_name reported the legacy pre-MIxS-5.0
+    attribute names env_biome/env_feature/env_material -- these landed
+    in source_unmapped since no MappingRule matched them, even though
+    they're exactly env_broad_scale/env_local_scale/env_medium under an
+    older name (see sources/ncbi.py's own comment on this synonym set)."""
+    study = _study(db_session, title="Legacy env attribute names")
+    sample = Entity(study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN1")
+    db_session.add(sample)
+    db_session.flush()
+    _fact(db_session, study, entity=sample, field="env_biome", value="coral reef", entity_level="sample")
+    _fact(db_session, study, entity=sample, field="env_feature", value="marine benthic feature", entity_level="sample")
+    _fact(db_session, study, entity=sample, field="env_material", value="seawater", entity_level="sample")
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    values = {
+        row.target_field: row
+        for row in db_session.query(StandardizedValue).filter_by(study_id=study.study_id, entity_id=sample.entity_id)
+    }
+    assert values["env_broad_scale"].standardized_value == "coral reef"
+    assert values["env_local_scale"].standardized_value == "marine benthic feature"
+    assert values["env_medium"].standardized_value == "seawater"
+    assert "source_unmapped" not in values
+
+
+def test_sample_level_sampling_point_maps_to_event_duration_value(db_session):
+    """Real gap found live (STUDY-012a00dba8bc): "Sampling_point: 168h
+    after disturbance" is exactly eventDurationValue's own concept (time
+    elapsed relative to a reference event), per an explicit user
+    request, but had no MappingRule and landed in source_unmapped
+    instead."""
+    study = _study(db_session, title="Sampling point as event duration")
+    sample = Entity(study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN1")
+    db_session.add(sample)
+    db_session.flush()
+    _fact(db_session, study, entity=sample, field="Sampling_point", value="168h after disturbance", entity_level="sample")
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    value = db_session.query(StandardizedValue).filter_by(
+        study_id=study.study_id, entity_id=sample.entity_id, target_field="eventDurationValue"
+    ).one()
+    assert value.standardized_value == "168h after disturbance"
+    assert value.review_required is True
 
 
 def test_sample_level_cruise_or_station_attribute_maps_to_internal_expedition_id(db_session):

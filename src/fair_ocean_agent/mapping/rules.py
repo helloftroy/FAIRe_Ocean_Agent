@@ -412,6 +412,33 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
                 MappingMethod.EXACT_LABEL.value, transform=expand_envo_terms, enum_name="env_medium_enum"),
     MappingRule("isolation_source", EntityLevel.SAMPLE.value, "sampleMetadata", "env_medium",
                 MappingMethod.DETERMINISTIC_SYNONYM.value, transform=expand_envo_terms, enum_name="env_medium_enum"),
+    # env_biome/env_feature/env_material: legacy pre-MIxS-5.0 attribute
+    # names for what are now env_broad_scale/env_local_scale/env_medium
+    # (see sources/ncbi.py's own comment on this exact synonym set, next
+    # to its harmonized_name-preference logic). NCBI provides a
+    # harmonized_name for some submissions (already handled there), but
+    # not all -- real gap found live (STUDY-012a00dba8bc): this
+    # submission's own env_biome/env_feature/env_material attributes carry
+    # no harmonized_name at all, so they landed in source_unmapped with
+    # no MappingRule instead of reaching env_broad_scale/env_local_scale/
+    # env_medium. Same DETERMINISTIC_SYNONYM pattern as isolation_source
+    # above, onto the same three targets.
+    MappingRule("env_biome", EntityLevel.SAMPLE.value, "sampleMetadata", "env_broad_scale",
+                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=expand_envo_terms, enum_name="env_broad_scale_enum"),
+    MappingRule("env_feature", EntityLevel.SAMPLE.value, "sampleMetadata", "env_local_scale",
+                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=expand_envo_terms, enum_name="env_local_scale_enum"),
+    MappingRule("env_material", EntityLevel.SAMPLE.value, "sampleMetadata", "env_medium",
+                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=expand_envo_terms, enum_name="env_medium_enum"),
+    # Sampling_point: a real, custom (non-MIxS) BioSample attribute name
+    # found live (STUDY-012a00dba8bc) holding "168h after disturbance" --
+    # time elapsed relative to a reference event is exactly
+    # eventDurationValue's own concept, per an explicit user request.
+    # SUGGESTED_SEMANTIC (not an exact/deterministic synonym): this is a
+    # judgment call about a free-form, submitter-chosen attribute name,
+    # not a recognized standard synonym the way isolation_source/env_biome
+    # above are.
+    MappingRule("Sampling_point", EntityLevel.SAMPLE.value, "sampleMetadata", "eventDurationValue",
+                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("geo_loc_name", EntityLevel.SAMPLE.value, "sampleMetadata", "geo_loc_name",
                 MappingMethod.EXACT_LABEL.value, transform=_non_absent_geo_loc_name),
     MappingRule("cruise", EntityLevel.SAMPLE.value, "sampleMetadata", "internal_expedition_id",

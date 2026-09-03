@@ -841,11 +841,14 @@ _ABSENT_ATTRIBUTE_LIKE_RE = re.compile(
 # host/host species/cultivar/isolate by host_species's own search
 # (sources/ncbi.py::_host_species_from_attributes), sample_name/title/
 # source_material_id by samp_category's own search (sources/ncbi.py::
-# _sample_category_from_title_or_name) -- including the bare raw name
-# here would just duplicate a value already visible under its real
-# FAIRe field.
+# _sample_category_from_title_or_name), organism by that same module's
+# own organism -> host_species fallback (real gap found live, STUDY-
+# 012a00dba8bc: "organism: sponge metagenome" showed up in source_unmapped
+# even though its value is already captured as host_species) --
+# including the bare raw name here would just duplicate a value already
+# visible under its real FAIRe field.
 _SOURCE_UNMAPPED_EXCLUDED_FACT_TYPES = frozenset(
-    {"host", "host species", "cultivar", "isolate", "sample_name", "title", "source_material_id"}
+    {"host", "host species", "cultivar", "isolate", "sample_name", "title", "source_material_id", "organism"}
 )
 
 
