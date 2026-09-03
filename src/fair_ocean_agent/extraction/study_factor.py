@@ -84,6 +84,37 @@ def _abstract_from_article_text(article_text: str | None) -> str | None:
     return _abstract_from_jats(article_text) or _abstract_from_plain_text(article_text)
 
 
+# generate_json's own retry loop (llm/base.py) only ever retries on
+# INVALID JSON -- a response like {"study_factor": ""} is syntactically
+# valid, so it's accepted on the very first attempt and generate_json
+# never gets a chance to ask again. Per an explicit user request ("make
+# that llm call its own if needed, if that helps the llm not miss it"):
+# rather than a bigger architectural change (a separate task type), this
+# gives the model a couple more independent chances specifically for the
+# "valid JSON, but declined to answer" case, symmetric with generate_json's
+# own default of 2 retries for invalid JSON.
+_CONTENT_RETRY_ATTEMPTS = 2
+
+
+def _generate_nonempty_field(
+    backend: LLMBackend,
+    prompt: str,
+    *,
+    system: str,
+    max_output_tokens: int | None,
+    field_name: str,
+    error_label: str,
+) -> str:
+    for _ in range(_CONTENT_RETRY_ATTEMPTS + 1):
+        parsed, _response = backend.generate_json(prompt, system=system, temperature=0, max_tokens=max_output_tokens)
+        if parsed is None:
+            raise LLMBackendError(f"{backend.label}: {error_label} generation returned invalid JSON after retries")
+        value = str(parsed.get(field_name) or "").strip() if isinstance(parsed, dict) else ""
+        if value:
+            return value
+    return ""
+
+
 def generate_study_factor(
     backend: LLMBackend,
     fulltext_xml: str | None,
@@ -108,15 +139,14 @@ Abstract:
 
 Return ONLY a JSON object: {{"study_factor": "<your one-sentence summary>"}}
 """
-    parsed, _response = backend.generate_json(
+    sentence = _generate_nonempty_field(
+        backend,
         prompt,
         system="You summarize a paper's own study design factor(s) from its abstract in one sentence.",
-        temperature=0,
-        max_tokens=max_output_tokens,
+        max_output_tokens=max_output_tokens,
+        field_name="study_factor",
+        error_label="study_factor",
     )
-    if parsed is None:
-        raise LLMBackendError(f"{backend.label}: study_factor generation returned invalid JSON after retries")
-    sentence = str(parsed.get("study_factor") or "").strip() if isinstance(parsed, dict) else ""
     if not sentence:
         return []
 
@@ -168,15 +198,14 @@ Abstract:
 
 Return ONLY a JSON object: {{"study_target_taxonomic_scope": "<pipe-delimited scope values>"}}
 """
-    parsed, _response = backend.generate_json(
+    value = _generate_nonempty_field(
+        backend,
         prompt,
         system="You identify a paper's intended target taxonomic scope from its abstract.",
-        temperature=0,
-        max_tokens=max_output_tokens,
+        max_output_tokens=max_output_tokens,
+        field_name="study_target_taxonomic_scope",
+        error_label="study_target_taxonomic_scope",
     )
-    if parsed is None:
-        raise LLMBackendError(f"{backend.label}: study_target_taxonomic_scope generation returned invalid JSON after retries")
-    value = str(parsed.get("study_target_taxonomic_scope") or "").strip() if isinstance(parsed, dict) else ""
     if not value:
         return []
 

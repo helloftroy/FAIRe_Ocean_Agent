@@ -1445,6 +1445,30 @@ def test_detection_criteria_candidates_reject_general_replicate_language():
     }
 
 
+def test_detection_criteria_candidates_reject_replicate_count_amplification_outcomes():
+    """Real gap reported live: sentences reporting HOW MANY samples/sites
+    amplified, or comparing replicate counts across a study design, were
+    seen showing up under detection_criteria in a real export -- none of
+    these state a rule for calling a result positive/detected, they're
+    outcomes or study-design narrative."""
+    text = (
+        "Sites 4, 5, 9, 10, 14, 16, 20 and 28 had one or two samples out of the three replicates from each "
+        "site that amplified. For these reasons, the statistical analyses investigating the benefit of "
+        "replication, using the Valsecchi 16S assay results, included 21 of the Sussex sites (for which we "
+        "had 3 successful replicates at each site) and compared the benefit of taking 63 eDNA replicates, "
+        "42 replicates and 21 replicates. This was also used to assess the differences between the number "
+        "of replicates taken at each site."
+    )
+
+    candidates = quote_candidates_for_llm_judged_search((("Results", text),))
+
+    assert "detection_criteria" not in {
+        field_name
+        for candidate in candidates
+        for field_name in candidate.field_names
+    }
+
+
 def test_detection_criteria_rejects_llm_value_without_positive_call_language():
     text = "Samples with Cq < 40 in two of three replicates were considered positive."
 

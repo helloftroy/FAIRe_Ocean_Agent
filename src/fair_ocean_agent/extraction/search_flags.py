@@ -642,7 +642,16 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
             "above threshold, minimum copy-number criterion, or explicit microscopy/hybridization positive "
             "criterion. Omit ordinary biological/PCR replicate counts, sample pooling, amplification success, "
             "statistical analysis of replicates, or a general statement that the target was detected unless "
-            "the quote states the rule for calling the target positive/present/detected."
+            "the quote states the rule for calling the target positive/present/detected. Critically: a quote "
+            "merely REPORTING how many samples/sites amplified or how replicates were used is a result or a "
+            "methods-narrative detail, never a detection rule, even when it mentions a fraction of replicates "
+            "-- e.g. 'one or two samples out of the three replicates from each site that amplified', 'compared "
+            "the benefit of taking 63 eDNA replicates, 42 replicates and 21 replicates', 'three replicates "
+            "were pooled and purified', or 'three replicates per stage and 30 individuals per replicate' are "
+            "all outcomes/methods narrative, NOT a stated rule for what counts as detected -- omit the field "
+            "for quotes like these. Only return a value when the quote itself DEFINES the threshold/condition "
+            "used to call a result positive/detected (e.g. explicitly says a result WAS CALLED, COUNTED, or "
+            "ACCEPTED as positive/detected under some stated numeric or procedural condition)."
         ),
         search_terms=(
             "considered positive",

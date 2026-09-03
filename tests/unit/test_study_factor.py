@@ -147,6 +147,28 @@ def test_generate_study_factor_empty_sentence_returns_no_facts():
     assert facts == []
 
 
+def test_generate_study_factor_retries_after_a_valid_but_empty_response():
+    """Real gap: generate_json's own retry loop only ever retries on
+    INVALID JSON -- {"study_factor": ""} is syntactically valid, so it
+    used to be accepted (and silently given up on) on the very first
+    attempt with no second chance at all. Per an explicit user request,
+    a valid-but-empty response now gets a couple more independent tries
+    before giving up."""
+    summary = "The study compares bacterial community composition across three coral reef sites."
+    backend = MockLLMBackend(responses=[json.dumps({"study_factor": ""}), json.dumps({"study_factor": summary})])
+    facts = generate_study_factor(backend, _ABSTRACT_XML, locator_prefix="test")
+    assert len(facts) == 1
+    assert facts[0].raw_value == summary
+    assert len(backend.calls) == 2
+
+
+def test_generate_study_factor_gives_up_after_exhausting_content_retries():
+    backend = MockLLMBackend(responses=[json.dumps({"study_factor": ""})])
+    facts = generate_study_factor(backend, _ABSTRACT_XML, locator_prefix="test")
+    assert facts == []
+    assert len(backend.calls) == 3
+
+
 def test_generate_study_target_taxonomic_scope_empty_value_returns_no_facts():
     response = json.dumps({"study_target_taxonomic_scope": ""})
     backend = MockLLMBackend(responses=[response])
