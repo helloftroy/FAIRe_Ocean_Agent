@@ -12,6 +12,7 @@ from fair_ocean_agent.database.models import ExternalIdentifier, Study
 from fair_ocean_agent.identity.identifiers import normalize_doi
 from fair_ocean_agent.sources.base import SourceRecord, SourceRecordNotFoundError
 from fair_ocean_agent.sources.openalex import OpenAlexAdapter
+from fair_ocean_agent.sources.unpaywall import UnpaywallAdapter
 from fair_ocean_agent.workflow import handlers
 
 REAL_PDF_BYTES = b"%PDF-1.4\n%%EOF"
@@ -43,6 +44,26 @@ class FakeOpenAlexAdapter(OpenAlexAdapter):
         raw = {"best_oa_location": self._best_oa_location}
         return SourceRecord(
             source_name="openalex", external_identifier=identifier, url=None, raw=raw,
+            retrieved_at=datetime.now(timezone.utc), content_hash="deadbeef",
+        )
+
+
+class FakeUnpaywallAdapter(UnpaywallAdapter):
+    """Real class name matters -- _open_access_pdf_candidate_urls
+    isinstance-checks against the real UnpaywallAdapter."""
+
+    def __init__(self, is_oa=False, url_for_pdf=None, url=None, not_found=False):
+        self._is_oa = is_oa
+        self._url_for_pdf = url_for_pdf
+        self._url = url
+        self._not_found = not_found
+
+    def fetch_record(self, identifier):
+        if self._not_found:
+            raise SourceRecordNotFoundError(f"no unpaywall record for {identifier}")
+        raw = {"is_oa": self._is_oa, "best_oa_location": {"url_for_pdf": self._url_for_pdf, "url": self._url}}
+        return SourceRecord(
+            source_name="unpaywall", external_identifier=identifier, url=None, raw=raw,
             retrieved_at=datetime.now(timezone.utc), content_hash="deadbeef",
         )
 
@@ -154,3 +175,54 @@ def test_skips_without_a_doi(db_session, monkeypatch, tmp_path):
             raise AssertionError("should never fetch OpenAlex without a DOI")
 
     handlers._auto_fetch_open_access_pdf(db_session, study, {"openalex": _FailIfCalledOpenAlex()})
+
+
+def test_falls_back_to_unpaywall_when_openalex_has_no_oa_location(db_session, monkeypatch, tmp_path):
+    """Real gap found live (10.1016/j.jhazmat.2024.133878, a real
+    ScienceDirect paper): genuinely CC-BY open access per Unpaywall, but
+    with no usable OpenAlex best_oa_location.pdf_url -- Unpaywall must be
+    tried as an independent second source, not just as a no-op alongside
+    OpenAlex."""
+    study = _study_with_doi(db_session, "10.1016/j.jhazmat.2024.133878")
+    monkeypatch.setenv(handlers.LOCAL_PDF_DIR_ENV, str(tmp_path))
+    adapters = {
+        "openalex": FakeOpenAlexAdapter(best_oa_location={"is_oa": False}),
+        "unpaywall": FakeUnpaywallAdapter(is_oa=True, url_for_pdf="http://example/real.pdf"),
+    }
+    _patch_fetch_client(monkeypatch, content=REAL_PDF_BYTES)
+
+    handlers._auto_fetch_open_access_pdf(db_session, study, adapters)
+
+    saved = tmp_path / "10.1016_j.jhazmat.2024.133878.pdf"
+    assert saved.exists()
+    assert saved.read_bytes() == REAL_PDF_BYTES
+
+
+def test_unpaywall_falls_back_to_bare_url_when_no_pdf_specific_url(db_session, monkeypatch, tmp_path):
+    study = _study_with_doi(db_session, "10.1234/bare-url")
+    monkeypatch.setenv(handlers.LOCAL_PDF_DIR_ENV, str(tmp_path))
+    adapters = {
+        "openalex": FakeOpenAlexAdapter(not_found=True),
+        "unpaywall": FakeUnpaywallAdapter(is_oa=True, url_for_pdf=None, url="http://example/landing-that-is-a-pdf"),
+    }
+    _patch_fetch_client(monkeypatch, content=REAL_PDF_BYTES)
+
+    handlers._auto_fetch_open_access_pdf(db_session, study, adapters)
+
+    assert (tmp_path / "10.1234_bare-url.pdf").exists()
+
+
+def test_skips_when_unpaywall_also_reports_closed_access(db_session, monkeypatch, tmp_path):
+    """Real case, confirmed live (10.1126/science.1243768): Unpaywall
+    correctly reports genuinely closed-access papers as closed -- nothing
+    to fetch, no candidate URL at all."""
+    study = _study_with_doi(db_session, "10.1126/science.1243768")
+    monkeypatch.setenv(handlers.LOCAL_PDF_DIR_ENV, str(tmp_path))
+    adapters = {
+        "openalex": FakeOpenAlexAdapter(best_oa_location={"is_oa": False}),
+        "unpaywall": FakeUnpaywallAdapter(is_oa=False),
+    }
+
+    handlers._auto_fetch_open_access_pdf(db_session, study, adapters)
+
+    assert list(tmp_path.iterdir()) == []

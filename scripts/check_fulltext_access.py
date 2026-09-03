@@ -44,10 +44,24 @@ per study with its title and whatever identifiers it does have (DOI,
 PMCID, BioProject accession, PMID) -- enough to actually go search for
 each paper by hand.
 
+--check-unpaywall additionally queries Unpaywall (a free, no-API-key API
+aggregating legal open-access location data across every publisher, not
+just PMC -- see sources/unpaywall.py's own docstring) for every study in
+the no_confirmed_path_to_fulltext bucket, splitting it into two: papers
+Unpaywall confirms are genuinely closed access (nothing further to do)
+vs. papers it reports as genuinely open access that this pipeline simply
+couldn't auto-fetch (usually a publisher bot-detection block, e.g.
+Cloudflare -- these are worth a quick manual click since no subscription
+is actually needed, and should be prioritized over the genuinely-closed
+ones for manual follow-up). Makes one Unpaywall request per study in that
+bucket, rate-limited to 5/sec -- fine for a few thousand studies, but
+this is the one thing in this script that touches the network.
+
 Usage:
     python scripts/check_fulltext_access.py
     python scripts/check_fulltext_access.py --json
     python scripts/check_fulltext_access.py --export-csv data/paper_classification
+    python scripts/check_fulltext_access.py --check-unpaywall --export-csv data/paper_classification
     FAIR_OCEAN_DATABASE_URL=sqlite:////path/to/other.db python scripts/check_fulltext_access.py
 """
 from __future__ import annotations
@@ -55,15 +69,21 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import logging
 from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from fair_ocean_agent.config import load_config
 from fair_ocean_agent.database.enums import CanonicalStatus, IdentifierType, SourceType
 from fair_ocean_agent.database.models import ExternalIdentifier, Source, Study
 from fair_ocean_agent.database.session import session_scope
+from fair_ocean_agent.sources.base import SourceConfig, SourceRecordNotFoundError
+from fair_ocean_agent.sources.unpaywall import UnpaywallAdapter
 from fair_ocean_agent.workflow.handlers import _local_pdf_path_for_study
+
+logger = logging.getLogger(__name__)
 
 _EXPORT_IDENTIFIER_TYPES = (
     IdentifierType.DOI,
@@ -145,6 +165,62 @@ def build_report(session: Session) -> dict:
     }
 
 
+def classify_with_unpaywall(session: Session, study_ids: list[str]) -> dict:
+    """Splits `study_ids` (expected to be the no_confirmed_path_to_fulltext
+    bucket) into confirmed-closed vs. confirmed-open-but-unfetchable,
+    querying Unpaywall directly by each study's own DOI. A DOI Unpaywall
+    doesn't recognize at all (e.g. a dataset DOI registered with DataCite
+    rather than Crossref -- confirmed live for 10.15468/bvcp7p, a GBIF/
+    MGnify dataset record with no article body to begin with) lands in its
+    own bucket rather than being silently folded into "closed", since
+    that's a structurally different situation (not a paywall at all)."""
+    retrieval_config = load_config().retrieval
+    adapter = UnpaywallAdapter(
+        SourceConfig(name="unpaywall", enabled=True, base_url="https://api.unpaywall.org", rate_limit_per_second=5, priority=0),
+        retrieval_config,
+    )
+    doi_by_study = {}
+    for study_id in study_ids:
+        doi = session.execute(
+            select(ExternalIdentifier.identifier_value)
+            .where(ExternalIdentifier.study_id == study_id, ExternalIdentifier.identifier_type == IdentifierType.DOI.value)
+            .order_by(ExternalIdentifier.created_at)
+            .limit(1)
+        ).scalar_one_or_none()
+        if doi:
+            doi_by_study[study_id] = doi
+
+    confirmed_open_but_unfetchable: list[str] = []
+    confirmed_closed: list[str] = []
+    not_recognized_by_unpaywall: list[str] = []
+    try:
+        for study_id, doi in doi_by_study.items():
+            try:
+                record = adapter.fetch_record(doi)
+            except SourceRecordNotFoundError:
+                not_recognized_by_unpaywall.append(study_id)
+                continue
+            except Exception as exc:  # network hiccups shouldn't kill a multi-thousand-study run
+                logger.warning("unpaywall check failed for %s (%s): %s", study_id, doi, exc)
+                not_recognized_by_unpaywall.append(study_id)
+                continue
+            if record.raw.get("is_oa"):
+                confirmed_open_but_unfetchable.append(study_id)
+            else:
+                confirmed_closed.append(study_id)
+    finally:
+        adapter.close()
+
+    return {
+        "confirmed_open_but_unfetchable_count": len(confirmed_open_but_unfetchable),
+        "confirmed_closed_count": len(confirmed_closed),
+        "not_recognized_by_unpaywall_count": len(not_recognized_by_unpaywall),
+        "confirmed_open_but_unfetchable_study_ids": confirmed_open_but_unfetchable,
+        "confirmed_closed_study_ids": confirmed_closed,
+        "not_recognized_by_unpaywall_study_ids": not_recognized_by_unpaywall,
+    }
+
+
 def _export_csv(session: Session, study_ids: list[str], out_path: Path) -> None:
     titles = {study.study_id: study.title for study in session.scalars(select(Study).where(Study.study_id.in_(study_ids)))}
     identifiers_by_type = {
@@ -178,6 +254,18 @@ def render_text(report: dict) -> str:
         lines.append("")
         lines.append("Sample of studies with no confirmed path to full text (first 25):")
         lines.extend(f"  {study_id}" for study_id in report["no_confirmed_path_study_ids_sample"])
+    if "confirmed_open_but_unfetchable_count" in report:
+        lines.append("")
+        lines.append("Unpaywall classification of the no-confirmed-path bucket:")
+        lines.append(
+            f"  Confirmed genuinely OPEN, just couldn't auto-fetch (worth a manual click first): "
+            f"{report['confirmed_open_but_unfetchable_count']}"
+        )
+        lines.append(f"  Confirmed genuinely CLOSED (no free copy exists): {report['confirmed_closed_count']}")
+        lines.append(
+            f"  Not recognized by Unpaywall (often a dataset DOI, not an article -- see sources/unpaywall.py): "
+            f"{report['not_recognized_by_unpaywall_count']}"
+        )
     return "\n".join(lines)
 
 
@@ -190,13 +278,28 @@ def main() -> None:
         metavar="DIR",
         help="write the full no_confirmed_path_to_fulltext.csv and repository_only.csv lists to this directory",
     )
+    parser.add_argument(
+        "--check-unpaywall",
+        action="store_true",
+        help="query Unpaywall for every study with no confirmed full text, splitting it into "
+        "confirmed-open-but-unfetchable vs. confirmed-closed vs. not-a-recognized-article-DOI "
+        "(one network request per study, rate-limited to 5/sec)",
+    )
     args = parser.parse_args()
 
     with session_scope() as session:
         report = build_report(session)
+        if args.check_unpaywall:
+            report.update(classify_with_unpaywall(session, report["no_confirmed_path_study_ids"]))
         if args.export_csv:
             _export_csv(session, report["no_confirmed_path_study_ids"], args.export_csv / "no_confirmed_path_to_fulltext.csv")
             _export_csv(session, report["repository_only_study_ids"], args.export_csv / "repository_only.csv")
+            if args.check_unpaywall:
+                _export_csv(
+                    session,
+                    report["confirmed_open_but_unfetchable_study_ids"],
+                    args.export_csv / "confirmed_open_but_unfetchable.csv",
+                )
 
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
@@ -205,6 +308,8 @@ def main() -> None:
         if args.export_csv:
             print(f"\nWrote {args.export_csv / 'no_confirmed_path_to_fulltext.csv'}")
             print(f"Wrote {args.export_csv / 'repository_only.csv'}")
+            if args.check_unpaywall:
+                print(f"Wrote {args.export_csv / 'confirmed_open_but_unfetchable.csv'}")
 
 
 if __name__ == "__main__":

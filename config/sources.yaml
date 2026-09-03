@@ -35,6 +35,18 @@ sources:
     rate_limit_per_second: 5
     priority: 3
 
+  # Free, no-API-key OA-location lookup across every publisher (not just
+  # PMC) -- see sources/unpaywall.py's own module docstring for why this
+  # was added (a real ScienceDirect paper, genuinely CC-BY open access,
+  # that Europe PMC has no route to at all since it was never deposited
+  # there). FAIR_OCEAN_CONTACT_EMAIL supplies Unpaywall's required
+  # `email` query parameter.
+  unpaywall:
+    enabled: true
+    base_url: "https://api.unpaywall.org"
+    rate_limit_per_second: 5
+    priority: 18
+
   ncbi_bioproject:
     enabled: true
     base_url: "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"

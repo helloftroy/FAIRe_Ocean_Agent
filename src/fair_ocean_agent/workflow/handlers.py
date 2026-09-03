@@ -132,6 +132,7 @@ from fair_ocean_agent.sources.osf import OsfAdapter
 from fair_ocean_agent.sources.pangaea import PangaeaAdapter
 from fair_ocean_agent.sources.qiita import QiitaAdapter
 from fair_ocean_agent.sources.sequence_file_heuristics import SequenceDataStatus
+from fair_ocean_agent.sources.unpaywall import UnpaywallAdapter, best_oa_pdf_url
 from fair_ocean_agent.sources.zenodo import ZenodoAdapter
 from fair_ocean_agent.workflow.worker import TASK_HANDLERS
 
@@ -158,6 +159,7 @@ _PUBLICATION_ADAPTER_CLASSES: dict[str, type[SourceAdapter]] = {
     "crossref": CrossrefAdapter,
     "europe_pmc": EuropePmcAdapter,
     "openalex": OpenAlexAdapter,
+    "unpaywall": UnpaywallAdapter,
 }
 _REPOSITORY_ADAPTER_CLASSES: dict[str, type[SourceAdapter]] = {
     "ncbi_bioproject": NcbiBioProjectAdapter,
@@ -1043,18 +1045,86 @@ def _local_pdf_path_for_study(session: Session, study: Study) -> Path | None:
     return candidate if candidate.exists() else None
 
 
+def _try_fetch_and_save_oa_pdf(doi: str, pdf_url: str) -> bool:
+    """One candidate open-access PDF URL: fetch it with this project's own
+    honestly-identifying User-Agent (never a spoofed browser one -- a
+    publisher's bot-detection block is a real, deliberate access control,
+    not a bug to route around, confirmed live: Wiley 403s a plain request
+    even to a paper OpenAlex itself marks fully open-access), save it if
+    it's really a PDF, and report whether that succeeded. Never retried
+    past a single block/404/non-PDF response -- the caller just moves on
+    to its next candidate URL, if it has one."""
+    retrieval_config = load_config().retrieval
+    fetch_client = RateLimitedClient("open_access_pdf_fetch", retrieval_config, rate_limit_per_second=1)
+    try:
+        content, _from_cache = fetch_client.get_binary(pdf_url)
+    except SourceRecordNotFoundError:
+        logger.info("open-access PDF URL for %s 404s: %s", doi, pdf_url)
+        return False
+    except httpx.HTTPError as exc:
+        logger.info("open-access PDF fetch for %s was blocked or failed (%s): %s", doi, exc, pdf_url)
+        return False
+    finally:
+        fetch_client.close()
+    if not content.startswith(b"%PDF"):
+        logger.info("open-access URL for %s did not return real PDF content (likely an access-denied page): %s", doi, pdf_url)
+        return False
+
+    pdf_dir = _pdf_lookup_dir()
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    target_path = pdf_dir / _doi_pdf_filename(doi)
+    target_path.write_bytes(content)
+    logger.info("auto-fetched open-access PDF for %s -> %s", doi, target_path)
+    return True
+
+
+def _open_access_pdf_candidate_urls(doi: str, adapters: dict[str, SourceAdapter]) -> list[str]:
+    """Every candidate open-access PDF URL this pipeline currently knows
+    how to find for `doi`, in trial order. OpenAlex and Unpaywall each
+    aggregate OA-location data independently and neither is a superset of
+    the other -- confirmed live (10.1016/j.jhazmat.2024.133878, a real
+    ScienceDirect paper): Unpaywall correctly reports it as genuine CC-BY
+    open access when OpenAlex's own best_oa_location for it isn't
+    reliably populated. Order doesn't matter much (whichever comes first
+    wins if both agree), but OpenAlex is tried first since it's already
+    used elsewhere in ordinary discovery."""
+    urls: list[str] = []
+
+    openalex = adapters.get("openalex")
+    if isinstance(openalex, OpenAlexAdapter):
+        try:
+            record = openalex.fetch_record(doi)
+        except SourceRecordNotFoundError:
+            pass
+        else:
+            best_oa = record.raw.get("best_oa_location") or {}
+            if best_oa.get("is_oa") and best_oa.get("pdf_url"):
+                urls.append(best_oa["pdf_url"])
+
+    unpaywall = adapters.get("unpaywall")
+    if isinstance(unpaywall, UnpaywallAdapter):
+        try:
+            record = unpaywall.fetch_record(doi)
+        except SourceRecordNotFoundError:
+            pass
+        else:
+            if record.raw.get("is_oa"):
+                pdf_url = best_oa_pdf_url(record)
+                if pdf_url:
+                    urls.append(pdf_url)
+
+    return list(dict.fromkeys(urls))  # de-dup while preserving trial order
+
+
 def _auto_fetch_open_access_pdf(session: Session, study: Study, adapters: dict[str, SourceAdapter]) -> None:
     """Per an explicit user request: many papers with no PMCID at all
     (never deposited in PMC, so no route through the normal discovery
     path -- see _local_pdf_path_for_study's own docstring) are still
-    genuinely, legitimately open-access -- OpenAlex's own
-    best_oa_location.pdf_url, already fetched as part of ordinary
-    discovery, points straight at a real, freely-downloadable copy for
-    many of them. This downloads and saves those, using this project's own
-    honestly-identifying User-Agent (never a spoofed browser one -- a
-    publisher's bot-detection block is a real, deliberate access control,
-    not a bug to route around, confirmed live: Wiley 403s a plain request
-    even to a paper OpenAlex itself marks fully open-access). Whatever
+    genuinely, legitimately open-access -- OpenAlex's and Unpaywall's own
+    OA-location data, already fetched as part of ordinary discovery/
+    already a free no-key API call, point straight at a real, freely-
+    downloadable copy for many of them (see _open_access_pdf_candidate_urls
+    for why both are tried). This downloads and saves those; whatever
     gets blocked or isn't really open just stays exactly as manual as
     before; this only ever adds coverage, never replaces the working
     Europe PMC path for a study that already has one.
@@ -1069,44 +1139,10 @@ def _auto_fetch_open_access_pdf(session: Session, study: Study, adapters: dict[s
     doi = _identifier_value(session, study.study_id, IdentifierType.DOI)
     if not doi:
         return
-    openalex = adapters.get("openalex")
-    if not isinstance(openalex, OpenAlexAdapter):
-        return
 
-    try:
-        record = openalex.fetch_record(doi)
-    except SourceRecordNotFoundError:
-        return
-    best_oa = record.raw.get("best_oa_location") or {}
-    pdf_url = best_oa.get("pdf_url")
-    if not (best_oa.get("is_oa") and pdf_url):
-        return
-
-    retrieval_config = load_config().retrieval
-    fetch_client = RateLimitedClient("open_access_pdf_fetch", retrieval_config, rate_limit_per_second=1)
-    try:
-        content, _from_cache = fetch_client.get_binary(pdf_url)
-    except SourceRecordNotFoundError:
-        logger.info("open-access PDF URL for %s 404s: %s", doi, pdf_url)
-        return
-    except httpx.HTTPError as exc:
-        # A publisher's own bot-detection block (confirmed live: Wiley
-        # 403s a plain request to a paper OpenAlex itself marks fully
-        # open-access) -- not retried, not routed around, just skipped;
-        # this paper stays exactly as manual as it would have been anyway.
-        logger.info("open-access PDF fetch for %s was blocked or failed (%s): %s", doi, exc, pdf_url)
-        return
-    finally:
-        fetch_client.close()
-    if not content.startswith(b"%PDF"):
-        logger.info("open-access URL for %s did not return real PDF content (likely an access-denied page): %s", doi, pdf_url)
-        return
-
-    pdf_dir = _pdf_lookup_dir()
-    pdf_dir.mkdir(parents=True, exist_ok=True)
-    target_path = pdf_dir / _doi_pdf_filename(doi)
-    target_path.write_bytes(content)
-    logger.info("auto-fetched open-access PDF for %s -> %s", doi, target_path)
+    for pdf_url in _open_access_pdf_candidate_urls(doi, adapters):
+        if _try_fetch_and_save_oa_pdf(doi, pdf_url):
+            return
 
 
 def _fetch_and_persist_repository_record(
