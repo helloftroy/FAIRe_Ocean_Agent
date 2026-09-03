@@ -95,7 +95,10 @@ _CODE_AVAILABILITY_KEYWORDS_RE = re.compile(
 )
 _CITATION_MARKER_RE = re.compile(r"\[__CITE:([^_\]]+)__\]")
 
-_FUNDING_TITLE_RE = re.compile(r"\b(?:funding|funding information|financial disclosure|grant support)\b", re.IGNORECASE)
+_FUNDING_TITLE_RE = re.compile(
+    r"\b(?:funding|funding statement|funding information|financial disclosure|grant support)\b",
+    re.IGNORECASE,
+)
 _FUNDING_TEXT_RE = re.compile(
     r"\b(?:funded|funding|financial support|grant(?:s)?|award(?:s)?|"
     r"fellowship|scholarship|start-?up\s+grant)\b"
@@ -107,6 +110,12 @@ _FUNDING_TEXT_RE = re.compile(
 _FUNDING_AUTHOR_CONTRIBUTION_RE = re.compile(r"\bfunding\s+acquisition\s*:", re.IGNORECASE)
 _FUNDED_BY_SEGMENT_RE = re.compile(
     r"\b(?:funded|supported)\s+by\s+(.+?)(?:\.\s*The\s+funders\b|\.?\s*$)",
+    re.IGNORECASE,
+)
+_EXPLICIT_FUNDER_WITH_NUMBER_RE = re.compile(
+    r"(?:\b(?:funded|supported)\s+by\s+|\band\s+)(?:the\s+)?"
+    r"(?P<name>[A-Z][A-Za-z0-9&.,'’\-/ ]{2,140}?)\s*"
+    r"\(\s*(?:funding|grant|award|project)\s+No\.?",
     re.IGNORECASE,
 )
 _FUNDING_PARENTHESES_RE = re.compile(
@@ -142,7 +151,7 @@ _PLAIN_SECTION_END_TITLE_RE = re.compile(
 _PLAIN_METADATA_HEADING_TITLE_RE = re.compile(
     r"^(?:abstract|introduction|background|materials?\s+and\s+methods?|methods?|results?|"
     r"discussion|conclusions?|references|bibliography|funding|funding information|"
-    r"financial disclosure|grant support|rights|rights and permissions|permissions|"
+    r"funding statement|financial disclosure|grant support|rights|rights and permissions|permissions|"
     r"copyright|license|open access|author contributions?|competing interests?|"
     r"conflicts? of interest|data availability|supplementary material)$",
     re.IGNORECASE,
@@ -501,11 +510,27 @@ def _funding_paragraphs_from_plain_text(text: str | None) -> list[str]:
     return unique
 
 
-def _normalize_funding_source_value(value: object) -> str:
-    return _filter_funding_source_value(value)
+def _normalize_funding_source_value(value: object, *, funding_text: str | None = None) -> str:
+    return _filter_funding_source_value(value, funding_text=funding_text)
 
 
-def _filter_funding_source_value(value: object) -> str:
+def _institutional_unit_is_explicit_funder(piece: str, funding_text: str | None) -> bool:
+    if not funding_text:
+        return False
+    cleaned_piece = re.sub(r"^\s*(?:the\s+)?", "", piece.strip(), flags=re.IGNORECASE)
+    if not cleaned_piece:
+        return False
+    pattern = re.compile(
+        rf"\b(?:funded|supported)\s+by\b(?:(?!\b(?:conflicts?|references|author contributions?)\b).){{0,260}}"
+        rf"\b(?:the\s+)?{re.escape(cleaned_piece)}\b"
+        rf"(?:(?!\b(?:conflicts?|references|author contributions?)\b).){{0,120}}"
+        rf"\b(?:funding|grant|award|project)\s+No\.?",
+        re.IGNORECASE | re.DOTALL,
+    )
+    return bool(pattern.search(funding_text))
+
+
+def _filter_funding_source_value(value: object, *, funding_text: str | None = None) -> str:
     if isinstance(value, list):
         pieces = [str(piece).strip() for piece in value]
     else:
@@ -520,7 +545,11 @@ def _filter_funding_source_value(value: object) -> str:
             continue
         if len(piece) <= 2 or not re.search(r"[A-Za-z]", piece):
             continue
-        if _FUNDING_INSTITUTIONAL_UNIT_RE.search(piece) and not _FUNDING_KEEP_UNIT_RE.search(piece):
+        if (
+            _FUNDING_INSTITUTIONAL_UNIT_RE.search(piece)
+            and not _FUNDING_KEEP_UNIT_RE.search(piece)
+            and not _institutional_unit_is_explicit_funder(piece, funding_text)
+        ):
             continue
         key = piece.casefold()
         if key in seen:
@@ -542,6 +571,8 @@ def _fallback_funding_sources_from_text(funding_text: str) -> str:
     affiliation/institution noise.
     """
     candidates: list[str] = []
+    for match in _EXPLICIT_FUNDER_WITH_NUMBER_RE.finditer(funding_text):
+        candidates.append(match.group("name"))
     for match in _FUNDED_BY_SEGMENT_RE.finditer(funding_text):
         segment = _clean_text(match.group(1))
         segment = re.sub(r"\bThe\s+funders\b.*$", "", segment, flags=re.IGNORECASE).strip()
@@ -552,7 +583,7 @@ def _fallback_funding_sources_from_text(funding_text: str) -> str:
             piece = piece.strip(" ;,.")
             if piece:
                 candidates.append(piece)
-    return _filter_funding_source_value(candidates)
+    return _filter_funding_source_value(candidates, funding_text=funding_text)
 
 
 def _rights_paragraphs_from_jats(fulltext_xml: str | None) -> list[str]:
@@ -742,7 +773,10 @@ Return ONLY a JSON object: {{"funding_source": "<pipe-delimited funder names>"}}
     )
     if parsed is None:
         raise LLMBackendError(f"{backend.label}: funding_source generation returned invalid JSON after retries")
-    value = _normalize_funding_source_value(parsed.get("funding_source") if isinstance(parsed, dict) else "")
+    value = _normalize_funding_source_value(
+        parsed.get("funding_source") if isinstance(parsed, dict) else "",
+        funding_text=funding_text,
+    )
     if not value:
         value = _fallback_funding_sources_from_text(funding_text)
     if not value:

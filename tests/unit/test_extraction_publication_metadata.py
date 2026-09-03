@@ -757,6 +757,27 @@ Funding acquisition: David Schleheck.
     assert "Funding acquisition: David Schleheck" not in facts[0].evidence_quote
 
 
+def test_generate_funding_source_keeps_mdpi_institutional_funders_with_funding_numbers():
+    """Regression guard for 10.3390/genes13061050: its MDPI section title is
+    "Funding Statement" and both funder names look like institutional units
+    the generic noise filter used to drop, even though the paragraph
+    explicitly says they funded the work and gives Funding No. values."""
+    backend = MockLLMBackend(responses=[json.dumps({"funding_source": ""})])
+    text = """Funding Statement
+This research was funded by the Ocean University of China (Funding No. 842041010)
+and the Organization Department of China (Funding No. 862105020028).
+
+References
+Reference text.
+"""
+
+    facts = generate_funding_source(backend, text, locator_prefix="pdf")
+
+    assert len(facts) == 1
+    assert facts[0].raw_value == "Ocean University of China | Organization Department of China"
+    assert "Funding Statement" not in facts[0].evidence_quote
+
+
 def test_funding_sentences_ignore_author_contribution_funding_acquisition():
     backend = MockLLMBackend(responses=[json.dumps({"funding_source": "David Schleheck"})])
 

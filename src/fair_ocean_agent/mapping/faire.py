@@ -293,6 +293,88 @@ def _append_collapsed_unit(
     return f"{value} {unit}"
 
 
+_CONTROL_AUDIT_FIELDS = frozenset({"neg_cont_0_1", "pos_cont_0_1"})
+
+
+def _control_decision(value: str | None) -> str | None:
+    if value is None:
+        return None
+    decision = str(value).split("|", 1)[0].strip()
+    return decision if decision in {"0", "1"} else None
+
+
+def _control_quote_from_fact(fact: RawFact) -> str | None:
+    if fact.evidence_quote:
+        quote = " ".join(str(fact.evidence_quote).split()).strip()
+        if quote:
+            return quote
+    if fact.raw_value and "|" in fact.raw_value:
+        quote = " ".join(str(fact.raw_value).split("|", 1)[1].split()).strip()
+        if quote:
+            return quote
+    return None
+
+
+def _control_audit_fact_lookup(facts: list[RawFact]) -> dict[tuple[str, str], RawFact]:
+    lookup: dict[tuple[str, str], RawFact] = {}
+    for fact in facts:
+        if fact.fact_type_candidate not in _CONTROL_AUDIT_FIELDS or fact.raw_value is None:
+            continue
+        decision = _control_decision(fact.raw_value)
+        quote = _control_quote_from_fact(fact)
+        if decision is None or quote is None:
+            continue
+        key = (fact.fact_type_candidate, decision)
+        if key not in lookup or (decision == "1" and lookup[key].raw_value != "1"):
+            lookup[key] = fact
+    return lookup
+
+
+def _annotate_project_control_values(
+    session: Session,
+    study_id: str,
+    facts: list[RawFact],
+    seen: dict[tuple[str, str, str | None], StandardizedValue],
+) -> None:
+    """Append the quote behind neg/pos control calls to the exported value.
+
+    The LLM search already stores `0/1 | quote` on its own raw fact, but
+    sample/API-derived control mappings can fill the projectMetadata field
+    first. Because the mapper intentionally keeps the first value and only
+    adds later facts as evidence, the quote-bearing LLM fact would otherwise
+    be invisible in the CSV. This post-pass decorates whichever project-level
+    value won, as long as there is a matching LLM/raw-fact decision.
+    """
+    audit_facts = _control_audit_fact_lookup(facts)
+    for field in _CONTROL_AUDIT_FIELDS:
+        key = ("projectMetadata", field, None)
+        standardized_value = seen.get(key)
+        if standardized_value is None or "|" in str(standardized_value.standardized_value or ""):
+            continue
+        decision = _control_decision(standardized_value.standardized_value)
+        if decision is None:
+            continue
+        fact = audit_facts.get((field, decision))
+        quote = _control_quote_from_fact(fact) if fact is not None else None
+        if not quote:
+            continue
+        standardized_value.standardized_value = f"{decision} | {quote}"
+        session.add(standardized_value)
+        existing_evidence = session.scalar(
+            select(StandardizedValueEvidence).where(
+                StandardizedValueEvidence.standardized_value_id == standardized_value.standardized_value_id,
+                StandardizedValueEvidence.fact_id == fact.fact_id,
+            )
+        )
+        if existing_evidence is None:
+            session.add(
+                StandardizedValueEvidence(
+                    standardized_value_id=standardized_value.standardized_value_id,
+                    fact_id=fact.fact_id,
+                )
+            )
+
+
 def _lib_layout_from_fastq_facts(facts: list[RawFact]) -> tuple[str, bool, list[RawFact]]:
     """Derive layout from verified-accessible FASTQ entries when the source
     has run the accessibility check.
@@ -1714,6 +1796,7 @@ def map_study_to_faire(session: Session, study_id: str) -> int:
         created += 1
 
     created += _apply_sample_type_routed_facts(session, study_id, routed_facts_by_field, seen)
+    _annotate_project_control_values(session, study_id, facts, seen)
 
     return created
 

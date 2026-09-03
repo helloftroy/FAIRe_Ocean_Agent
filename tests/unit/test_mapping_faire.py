@@ -2183,6 +2183,46 @@ def test_controlled_text_search_project_facts_map_to_faire_with_review(db_sessio
     assert non_review_fields == set()
 
 
+def test_project_control_values_append_matching_llm_audit_quote_even_when_sample_fact_wins(db_session):
+    study = _study(db_session, title="Control quote annotation")
+    sample = Entity(
+        study_id=study.study_id,
+        entity_level=EntityLevel.SAMPLE.value,
+        external_identifier="SAMN_NEG",
+    )
+    db_session.add(sample)
+    db_session.flush()
+    db_session.add(_home_entity_study(sample))
+    _fact(db_session, study, entity=sample, field="samp_category", value="negative control", entity_level="sample")
+    _fact(
+        db_session,
+        study,
+        field="neg_cont_0_1",
+        value="1 | Negative controls included extraction blanks.",
+        entity_level="study",
+        support=SupportType.EXPLICIT,
+    )
+    _fact(
+        db_session,
+        study,
+        field="pos_cont_0_1",
+        value="0 | no positive control was reported.",
+        entity_level="study",
+        support=SupportType.EXPLICIT,
+    )
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    values = {
+        sv.target_field: sv
+        for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id, entity_id=None)
+    }
+    assert values["neg_cont_0_1"].standardized_value == "1 | Negative controls included extraction blanks."
+    assert values["pos_cont_0_1"].standardized_value == "0 | no positive control was reported."
+
+
 def test_all_v3_extraction_hints_have_mapping_rules():
     rule_names = {rule.source_fact_type for rule in RULES}
     missing = set(native_name_to_faire_hint()) - rule_names
