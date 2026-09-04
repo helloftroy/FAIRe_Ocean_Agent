@@ -116,6 +116,23 @@ CONDA_ENV_PREFIX=/scratch/morrill/users/hmp278/conda_envs/faire-agent \
 ```
 conda activate /scratch/morrill/users/hmp278/conda_envs/faire-agent
 
+**Contact email (required for OpenAlex/Unpaywall/Crossref "polite pool"
+requests).** `run_discovery.sbatch` calls all three of these while
+discovering papers and auto-fetching open-access PDFs (see "Automatic
+fetch for genuinely open-access papers" below); each is queried via a
+shared `RateLimitedClient`, keyed off `.env`, which is gitignored and not
+created for you automatically:
+
+```bash
+cp .env.example .env
+# then edit .env and set:
+#   FAIR_OCEAN_CONTACT_EMAIL=you@example.org
+```
+
+Leaving this unset doesn't error -- it silently falls back to the literal
+placeholder `REPLACE_WITH_CONTACT_EMAIL@example.org`, which still gets
+sent as the polite-pool contact string on every request. Set it for real
+before a large cluster run, not just on your Mac.
 
 `run_extraction.sbatch` supports three backends via `LLM_BACKEND`
 (default `ollama`): `ollama`, `vllm`, or `external` (an endpoint you're
@@ -269,15 +286,30 @@ leave it set by accident in a shell you're about to run a real batch from.
 
 **Automatic fetch for genuinely open-access papers.** Before falling back
 to "no PDF, no route" for a study with no PMCID, `run_discovery.sbatch`
-also tries OpenAlex's own `best_oa_location.pdf_url` (already fetched as
-part of ordinary discovery) and downloads it automatically if OpenAlex
-marks the paper truly open-access -- using this project's own honestly-
-identifying User-Agent, never a spoofed browser one. This works well for
-papers hosted somewhere permissive (PLOS, Frontiers, Nature, preprint
-servers); it does **not** get you out of downloading anything from a
-publisher that blocks plain automated requests even to open-access
-content (confirmed live: Wiley 403s these) -- those still need a manual
-download exactly as before. Nothing to configure: successes are saved
+builds a list of candidate OA PDF URLs from **both** OpenAlex
+(`best_oa_location.pdf_url`) and Unpaywall (`oa_locations`, repository-
+hosted copies tried before the publisher's own -- Unpaywall's
+`best_oa_location` is usually the publisher's canonical copy, which is
+exactly the one most likely to sit behind bot-detection, so it's tried
+last, not first), dedups them, and tries each in order until one actually
+downloads -- using this project's own honestly-identifying User-Agent,
+never a spoofed browser one. Unpaywall matters even for papers OpenAlex
+alone can't place: confirmed live, `10.1016/j.jhazmat.2024.133878` is
+genuinely CC-BY open access per Unpaywall despite never being deposited
+in PMC and having no `best_oa_location` in OpenAlex either. This works
+well for papers hosted somewhere permissive (PLOS, Frontiers, Nature,
+preprint servers, or a repository copy of an otherwise-blocked paper); it
+does **not** get you out of downloading anything from a publisher that
+blocks plain automated requests even to open-access content (confirmed
+live: Wiley 403s these, and Cloudflare's challenge blocks ScienceDirect
+the same way) -- those still need a manual download exactly as before,
+and this pipeline deliberately never tries to defeat that block (no
+spoofed headers, no CAPTCHA-solving). `scripts/check_fulltext_access.py
+--check-unpaywall` classifies exactly this residual "no full text" pile
+into genuinely-closed vs. genuinely-open-but-blocked, so you know which
+ones are worth a human's one-click manual download. Nothing to configure
+beyond `FAIR_OCEAN_CONTACT_EMAIL` (see "One-time setup" above): successes
+are saved
 straight into `FAIR_OCEAN_LOCAL_PDF_DIR` (or `data/auto_fetched_pdfs/` if
 that's not set) using the same DOI-based filename, so a paper it
 auto-fetches is indistinguishable from one you supplied by hand, and one
