@@ -832,6 +832,19 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
                 MappingMethod.SUGGESTED_SEMANTIC.value, enum_name="inhibition_check_0_1_enum", review_required=True),
     MappingRule("inhibition_check", EntityLevel.STUDY.value, "projectMetadata", "inhibition_check",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
+    # dna_cleanup_0_1/dna_cleanup_method: real FAIRe sampleMetadata fields
+    # (data_type: sampleMetadata in the vendored schema, unlike
+    # inhibition_check_0_1/inhibition_check above) -- STUDY-level source
+    # since a single DNA clean-up protocol is typically applied uniformly
+    # across a whole batch of samples, broadcasting like other STUDY-level
+    # sampleMetadata facts (see exports/faire.py's own broadcast-as-
+    # default docstring). See search_flags.py's own LLMJudgedSearchField
+    # comment for the real gap this closes -- neither field had any
+    # extraction path at all before.
+    MappingRule("dna_cleanup_0_1", EntityLevel.STUDY.value, "sampleMetadata", "dna_cleanup_0_1",
+                MappingMethod.SUGGESTED_SEMANTIC.value, enum_name="dna_cleanup_0_1_enum", review_required=True),
+    MappingRule("dna_cleanup_method", EntityLevel.STUDY.value, "sampleMetadata", "dna_cleanup_method",
+                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("pcr_assay_lod", EntityLevel.STUDY.value, "projectMetadata", "pcr_assay_lod",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("pcr_assay_lod_unit", EntityLevel.STUDY.value, "projectMetadata", "pcr_assay_lod_unit",

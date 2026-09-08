@@ -543,6 +543,82 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
             "inhibition mitigation",
         ),
     ),
+    # dna_cleanup_0_1/dna_cleanup_method: real FAIRe sampleMetadata fields
+    # (in_subset: Nucleic acid extraction) that had NO extraction path at
+    # all before -- confirmed live, neither field appeared anywhere in
+    # this codebase. Real gap found live (10.1038/s41598-021-93859-5,
+    # STUDY-01a5e9aa6491): scoped specifically to cleaning up the
+    # EXTRACTED DNA itself (pre-PCR), matching this field's own example
+    # ("Zymo DNA Clean & Concentrator Kits") and FAIRe's own "Nucleic acid
+    # extraction" grouping -- deliberately distinct from PCR-PRODUCT/
+    # amplicon cleanup (e.g. "Pooled PCR products were then...purified...
+    # using the Agencourt AMPure XP bead system", the SAME paper's own
+    # library-cleanup step, a different life-cycle stage that belongs
+    # under PCR_amplification_conditions/pcr_method_additional instead).
+    LLMJudgedSearchField(
+        term_name="dna_cleanup_0_1",
+        section="Nucleic acid extraction",
+        description="Whether the extracted DNA (the nucleic acid extract itself, before PCR) was cleaned/purified.",
+        allowed_values=("0", "1"),
+        output_instructions=(
+            "Return 1 only when the quote explicitly describes cleaning, purifying, or concentrating the "
+            "EXTRACTED DNA/nucleic acid itself -- e.g. a DNA clean-up/concentrator kit, column purification, "
+            "or bead-based purification applied to the raw DNA extract before PCR. Return 0 only when the "
+            "quote explicitly states extracted DNA was NOT cleaned/purified. Do not return 1 for cleanup of "
+            "PCR PRODUCTS/amplicons/libraries (a later step, after amplification) -- that is a different "
+            "concept, not this field. Omit the field when there is no explicit DNA-extract clean-up statement."
+        ),
+        search_terms=(
+            "DNA clean-up",
+            "DNA cleanup",
+            "DNA clean up",
+            "cleaned up",
+            "purified DNA",
+            "DNA was purified",
+            "extract was purified",
+            "extracts were purified",
+            "DNA Clean & Concentrator",
+            "Clean and Concentrator",
+            "Genomic DNA Clean",
+            "column purification",
+            "spin column",
+            "silica column",
+            "DNeasy PowerClean",
+            "OneStep PCR Inhibitor Removal",
+            "concentrated using",
+            "DNA concentrator",
+        ),
+    ),
+    LLMJudgedSearchField(
+        term_name="dna_cleanup_method",
+        section="Nucleic acid extraction",
+        description="The method or commercial kit used to clean up/purify the extracted DNA, before PCR.",
+        output_instructions=(
+            "Return the name of the DNA clean-up method or commercial kit, as close as possible to the "
+            "quote's own wording (e.g. 'Genomic DNA Clean and Concentrator kit', 'Zymo DNA Clean & "
+            "Concentrator'). Only accept it when the quote describes cleaning/purifying/concentrating the "
+            "EXTRACTED DNA itself, before PCR -- never a PCR product/amplicon/library cleanup step (a later, "
+            "different life-cycle stage)."
+        ),
+        search_terms=(
+            "DNA clean-up",
+            "DNA cleanup",
+            "DNA clean up",
+            "purified DNA",
+            "DNA was purified",
+            "extract was purified",
+            "extracts were purified",
+            "DNA Clean & Concentrator",
+            "Clean and Concentrator",
+            "Genomic DNA Clean",
+            "column purification",
+            "spin column",
+            "silica column",
+            "DNeasy PowerClean",
+            "concentrated using",
+            "DNA concentrator",
+        ),
+    ),
     LLMJudgedSearchField(
         term_name="amp_vis_method",
         section="Targeted detection",

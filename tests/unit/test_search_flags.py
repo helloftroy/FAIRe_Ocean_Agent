@@ -2357,6 +2357,70 @@ def test_detect_llm_judged_search_facts_skips_recall_when_every_quote_was_answer
     assert len(backend.calls) == 1
 
 
+def test_dna_cleanup_candidates_match_extract_purification_not_pcr_product_cleanup():
+    """Real gap found live: dna_cleanup_0_1/dna_cleanup_method had NO
+    extraction path at all before (confirmed live, neither field appeared
+    anywhere in this codebase), despite being real FAIRe sampleMetadata
+    fields (in_subset: Nucleic acid extraction). Scoped specifically to
+    cleaning up the EXTRACTED DNA itself, before PCR -- confirmed against
+    two real sentences from two different real papers: STUDY-017230ae34c4's
+    "Purified DNA...was pooled per sample using the Genomic DNA Clean and
+    Concentrator kit" (a real DNA-extract cleanup, should match) and
+    STUDY-01a5e9aa6491's "Pooled PCR products were then...purified...using
+    the Agencourt AMPure XP bead system" (a real PCR-PRODUCT/amplicon
+    cleanup, a different life-cycle stage that must NOT match)."""
+    dna_extract_sentence = (
+        "Purified DNA from the two different extraction methods was pooled per sample using the "
+        "Genomic DNA Clean and Concentrator kit."
+    )
+    pcr_product_sentence = (
+        "Pooled PCR products were then run through an agarose gel to confirm target amplification. "
+        "PCR products were then purified and size selected using the Agencourt AMPure XP bead system "
+        "(Beckman Coulter, USA) and a second agarose gel run to confirm primer removal."
+    )
+
+    extract_candidates = quote_candidates_for_llm_judged_search([("Methods", dna_extract_sentence)])
+    pcr_candidates = quote_candidates_for_llm_judged_search([("Methods", pcr_product_sentence)])
+
+    extract_fields = {name for c in extract_candidates for name in c.field_names}
+    pcr_fields = {name for c in pcr_candidates for name in c.field_names}
+    assert {"dna_cleanup_0_1", "dna_cleanup_method"} <= extract_fields
+    assert "dna_cleanup_0_1" not in pcr_fields
+    assert "dna_cleanup_method" not in pcr_fields
+
+
+def test_dna_cleanup_fields_map_onto_sample_metadata():
+    backend = MockLLMBackend(
+        responses=[
+            json.dumps(
+                [
+                    {"field": "dna_cleanup_0_1", "raw_value": "1", "quote_id": "Q001"},
+                    {
+                        "field": "dna_cleanup_method",
+                        "raw_value": "Genomic DNA Clean and Concentrator kit",
+                        "quote_id": "Q001",
+                    },
+                ]
+            )
+        ]
+    )
+
+    facts = detect_llm_judged_search_facts(
+        backend,
+        (
+            (
+                "Methods",
+                "Purified DNA was pooled per sample using the Genomic DNA Clean and Concentrator kit.",
+            ),
+        ),
+        locator_prefix="paper:PMC1",
+    )
+
+    by_type = {fact.fact_type_candidate: fact.raw_value for fact in facts}
+    assert by_type["dna_cleanup_0_1"].startswith("1")
+    assert "Genomic DNA Clean and Concentrator kit" in by_type["dna_cleanup_method"]
+
+
 def test_detect_llm_judged_search_facts_extracts_in_situ_temp_salinity_verbatim():
     """Real audit (10.1093/ismejo/wrae013, STUDY-295abf4a8f43): "In situ
     bottom water temperature (6.5C) and salinity (6.4 PSU) were measured

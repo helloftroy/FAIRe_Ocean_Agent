@@ -640,6 +640,33 @@ def test_maps_in_situ_temp_salinity_to_sample_metadata_fields_at_study_level(db_
     assert values["x_env_var_block"] == "temperature: 6.5C | salinity: 6.4 PSU"
 
 
+def test_maps_dna_cleanup_fields_to_sample_metadata_at_study_level(db_session):
+    """Real gap found live: dna_cleanup_0_1/dna_cleanup_method had NO
+    MappingRule at all before (confirmed live, neither field appeared
+    anywhere in this codebase), despite being real FAIRe sampleMetadata
+    fields (data_type: sampleMetadata in the vendored schema). STUDY-level
+    source since a single DNA clean-up protocol is typically applied
+    uniformly across a whole batch of samples, broadcasting like other
+    STUDY-level sampleMetadata facts."""
+    study = _study(db_session, title="DNA cleanup from text")
+    _fact(db_session, study, field="dna_cleanup_0_1", value="1", entity_level="study", support=SupportType.EXPLICIT)
+    _fact(
+        db_session, study, field="dna_cleanup_method",
+        value="Genomic DNA Clean and Concentrator kit", entity_level="study", support=SupportType.EXPLICIT,
+    )
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    values = {
+        sv.target_field: sv.standardized_value
+        for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id, entity_id=None)
+    }
+    assert values["dna_cleanup_0_1"] == "1"
+    assert values["dna_cleanup_method"] == "Genomic DNA Clean and Concentrator kit"
+
+
 # Real FAIRe Environment-subset fields deliberately dropped entirely per
 # an explicit, repeated user request -- removed from
 # _ADDITIONAL_ENVIRONMENTAL_SAMPLE_ATTRIBUTES (mapping/rules.py) and
