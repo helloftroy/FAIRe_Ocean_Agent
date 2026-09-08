@@ -23,7 +23,10 @@ import xml.etree.ElementTree as ET
 
 from fair_ocean_agent.database.enums import EntityLevel, SupportType
 from fair_ocean_agent.llm.base import LLMBackend, LLMBackendError
+from fair_ocean_agent.logging_setup import get_logger
 from fair_ocean_agent.sources.base import RawFactCandidate
+
+logger = get_logger(__name__)
 
 # Real gap found live: PDF-to-text extraction (this function's own
 # fallback for a paper with no JATS fulltext XML) routinely jams the
@@ -90,10 +93,25 @@ def _abstract_from_article_text(article_text: str | None) -> str | None:
 # never gets a chance to ask again. Per an explicit user request ("make
 # that llm call its own if needed, if that helps the llm not miss it"):
 # rather than a bigger architectural change (a separate task type), this
-# gives the model a couple more independent chances specifically for the
-# "valid JSON, but declined to answer" case, symmetric with generate_json's
-# own default of 2 retries for invalid JSON.
-_CONTENT_RETRY_ATTEMPTS = 2
+# gives the model a couple more chances specifically for the "valid JSON,
+# but declined to answer" case, symmetric with generate_json's own
+# default of 2 retries for invalid JSON.
+#
+# Real gap found live: two real studies (10.3389/fmicb.2017.01135,
+# 10.1186/s40168-020-00877-y) still came back empty even after this retry
+# was added -- confirmed live that abstract extraction itself succeeds
+# cleanly for both (_abstract_from_article_text finds a real, substantial
+# abstract), so the model itself is declining. The bug: every retry
+# attempt reused temperature=0, but a temperature=0 call is deterministic
+# -- if the model declines once for a given prompt+input, an identical
+# temperature=0 retry asks the exact same question the exact same way and
+# gets the exact same empty answer every time, making the "retry" pure
+# waste rather than a genuine second chance. Only the FIRST attempt stays
+# at temperature=0 (consistent with every other call in this pipeline
+# preferring determinism); retries now actually vary the sampling
+# temperature so they can land on a different, hopefully non-empty,
+# response instead of reproducing the same refusal.
+_CONTENT_RETRY_TEMPERATURES: tuple[float, ...] = (0.0, 0.4, 0.7)
 
 
 def _generate_nonempty_field(
@@ -105,13 +123,19 @@ def _generate_nonempty_field(
     field_name: str,
     error_label: str,
 ) -> str:
-    for _ in range(_CONTENT_RETRY_ATTEMPTS + 1):
-        parsed, _response = backend.generate_json(prompt, system=system, temperature=0, max_tokens=max_output_tokens)
+    for attempt, temperature in enumerate(_CONTENT_RETRY_TEMPERATURES):
+        parsed, _response = backend.generate_json(
+            prompt, system=system, temperature=temperature, max_tokens=max_output_tokens
+        )
         if parsed is None:
             raise LLMBackendError(f"{backend.label}: {error_label} generation returned invalid JSON after retries")
         value = str(parsed.get(field_name) or "").strip() if isinstance(parsed, dict) else ""
         if value:
             return value
+        logger.warning(
+            "%s: %s attempt %d/%d returned an empty value (temperature=%s)",
+            backend.label, error_label, attempt + 1, len(_CONTENT_RETRY_TEMPERATURES), temperature,
+        )
     return ""
 
 

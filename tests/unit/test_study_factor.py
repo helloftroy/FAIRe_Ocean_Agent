@@ -169,6 +169,23 @@ def test_generate_study_factor_gives_up_after_exhausting_content_retries():
     assert len(backend.calls) == 3
 
 
+def test_generate_study_factor_retries_vary_temperature_instead_of_repeating_the_identical_call():
+    """Real gap found live: two real studies (10.3389/fmicb.2017.01135,
+    10.1186/s40168-020-00877-y) still came back empty even after the
+    retry-on-empty fix was added. Root cause: every retry attempt reused
+    temperature=0 -- a deterministic call, so if the model declines once
+    for a given prompt, an identical temperature=0 retry just asks the
+    exact same question the exact same way and gets the exact same empty
+    answer, making the retry pure waste rather than a genuine second
+    chance. Confirms retries now actually vary the sampling temperature."""
+    backend = MockLLMBackend(responses=[json.dumps({"study_factor": ""})])
+    generate_study_factor(backend, _ABSTRACT_XML, locator_prefix="test")
+    assert len(backend.calls) == 3
+    temperatures = [call["temperature"] for call in backend.calls]
+    assert temperatures[0] == 0
+    assert len(set(temperatures)) > 1
+
+
 def test_generate_study_target_taxonomic_scope_empty_value_returns_no_facts():
     response = json.dumps({"study_target_taxonomic_scope": ""})
     backend = MockLLMBackend(responses=[response])
