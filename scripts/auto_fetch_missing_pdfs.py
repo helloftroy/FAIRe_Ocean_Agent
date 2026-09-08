@@ -62,6 +62,25 @@ def main() -> None:
         help="suppress the per-study '[n/total] checking ...' progress lines and the underlying "
         "fetch-attempt log lines -- just the final summary, same as this script's old behavior",
     )
+    # Real gap found live: every run re-queries and re-checks EVERY
+    # candidate study from the start, with no persisted record of "already
+    # checked, found nothing" -- so a run that got through ~6000/~9400
+    # before stopping on repeated 429s had to redo all 6000 already-cheap-
+    # skipped/already-attempted studies before reaching new ground again.
+    # No DB-level tracking exists yet to distinguish "never checked" from
+    # "checked, genuinely nothing found" (that's a bigger follow-up); this
+    # is the fast, immediate fix -- resume past a known position instead.
+    # Only meaningful paired with the query's own explicit, stable
+    # ordering below (Study.study_id) -- position N means the same study
+    # on every run, not whatever order the database happened to return.
+    parser.add_argument(
+        "--skip",
+        type=int,
+        default=0,
+        help="skip this many studies (matching the '[n/total]' progress index from a previous run) "
+        "before checking any -- resume past a position you already got through, without "
+        "re-attempting studies your last run already checked (successfully or not)",
+    )
     args = parser.parse_args()
 
     # Real gap found live: with no logging configured at all, this script's
@@ -88,10 +107,16 @@ def main() -> None:
 
     with session_scope() as session:
         studies = session.scalars(
-            select(Study).where(Study.canonical_status == CanonicalStatus.CANDIDATE.value)
+            select(Study)
+            .where(Study.canonical_status == CanonicalStatus.CANDIDATE.value)
+            .order_by(Study.study_id)
         ).all()
         total = len(studies)
+        if args.skip:
+            print(f"Skipping the first {args.skip}/{total} studies (already checked in a previous run)...")
         for index, study in enumerate(studies, start=1):
+            if index <= args.skip:
+                continue
             has_pmcid = _identifier_value(session, study.study_id, IdentifierType.PMCID) is not None
             had_pdf_before = _local_pdf_path_for_study(session, study) is not None
             if has_pmcid or had_pdf_before:
@@ -128,6 +153,8 @@ def main() -> None:
                 print(f"fetched: {study.title or study.study_id}")
 
     print()
+    if args.skip:
+        print(f"Skipped via --skip (from a previous run):  {min(args.skip, total)}")
     print(f"Already covered (PMCID or existing PDF): {already_covered}")
     print(f"Checked (no PMCID, no PDF):               {checked}")
     print(f"Newly auto-fetched:                        {fetched}")
