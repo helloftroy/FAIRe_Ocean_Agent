@@ -1885,6 +1885,21 @@ CONTROLLED_SEARCH_FIELDS: tuple[ControlledSearchField, ...] = (
 
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
+_AMP_VIS_METHOD_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("agarose gel electrophoresis", re.compile(r"\bagarose\s+gel\s+electrophoresis\b", re.IGNORECASE)),
+    ("gel electrophoresis", re.compile(r"\bgel\s+electrophoresis\b", re.IGNORECASE)),
+    ("capillary electrophoresis", re.compile(r"\bcapillary\s+electrophoresis\b", re.IGNORECASE)),
+    ("Bioanalyzer", re.compile(r"\bBioanalyzer\b", re.IGNORECASE)),
+    ("TapeStation", re.compile(r"\bTapeStation\b", re.IGNORECASE)),
+)
+_AMP_VIS_PRODUCT_CONTEXT_RE = re.compile(
+    r"\b(?:"
+    r"PCR\s+products?|PCR\s+amplicons?|amplicons?|amplicon\s+bands?|PCR\s+bands?|"
+    r"amplification\s+products?|desired\s+PCR\s+products?"
+    r")\b",
+    re.IGNORECASE,
+)
+
 _ASSAY_TYPE_CUES: tuple[tuple[str, tuple[re.Pattern[str], ...]], ...] = (
     (
         "targeted",
@@ -3817,6 +3832,48 @@ def _barcoding_pcr_appr_keyword_match(
     return None
 
 
+def _amp_vis_method_keyword_match(texts: tuple[tuple[str, str], ...]) -> tuple[str, str] | None:
+    for _title, text in texts:
+        for _index, snippet in _snippets(text):
+            if not _AMP_VIS_PRODUCT_CONTEXT_RE.search(snippet):
+                continue
+            for value, pattern in _AMP_VIS_METHOD_PATTERNS:
+                if pattern.search(snippet):
+                    return value, snippet
+    return None
+
+
+def _amp_vis_method_fallback_fact(
+    *,
+    texts: tuple[tuple[str, str], ...],
+    locator_prefix: str,
+    existing_fact_types: frozenset[str],
+    exclude_field_names: frozenset[str],
+) -> RawFactCandidate | None:
+    if "amp_vis_method" in exclude_field_names or "amp_vis_method" in existing_fact_types:
+        return None
+    keyword_match = _amp_vis_method_keyword_match(texts)
+    if keyword_match is None:
+        return None
+    value, evidence_sentence = keyword_match
+    return RawFactCandidate(
+        entity_level=EntityLevel.STUDY,
+        fact_type_candidate="amp_vis_method",
+        raw_field_name="amp_vis_method",
+        raw_value=value,
+        source_locator=f"{locator_prefix}:llm_judged_search:amp_vis_method:keyword_fallback",
+        support_type=SupportType.DETERMINISTICALLY_DERIVED,
+        evidence_quote=evidence_sentence,
+        confidence_metadata={
+            "detector": "amp_vis_method_keyword_fallback",
+            "description": (
+                "No quote-judged amp_vis_method was extracted by the LLM; matched a PCR product "
+                "visualization method deterministically from the source sentence."
+            ),
+        },
+    )
+
+
 def _barcoding_one_step_fallback_fact(
     *,
     texts: tuple[tuple[str, str], ...],
@@ -4032,6 +4089,14 @@ def detect_llm_judged_search_facts(
         )
         if barcoding_fallback:
             facts.append(barcoding_fallback)
+        amp_vis_fallback = _amp_vis_method_fallback_fact(
+            texts=reusable_texts,
+            locator_prefix=locator_prefix,
+            existing_fact_types=frozenset(fact.fact_type_candidate for fact in facts),
+            exclude_field_names=exclude_field_names,
+        )
+        if amp_vis_fallback:
+            facts.append(amp_vis_fallback)
         facts.extend(
             _control_not_found_fallback_facts(
                 locator_prefix=locator_prefix,
@@ -4076,6 +4141,15 @@ def detect_llm_judged_search_facts(
     )
     if barcoding_fallback:
         facts.append(barcoding_fallback)
+        existing_fact_types = frozenset(fact.fact_type_candidate for fact in facts)
+    amp_vis_fallback = _amp_vis_method_fallback_fact(
+        texts=reusable_texts,
+        locator_prefix=locator_prefix,
+        existing_fact_types=existing_fact_types,
+        exclude_field_names=exclude_field_names,
+    )
+    if amp_vis_fallback:
+        facts.append(amp_vis_fallback)
         existing_fact_types = frozenset(fact.fact_type_candidate for fact in facts)
     facts.extend(
         _control_not_found_fallback_facts(

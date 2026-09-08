@@ -1675,6 +1675,28 @@ def test_detect_llm_judged_search_facts_handles_frontiers_atri578_probe_and_gel(
     assert "(HRP)-labeled Atri578 probe" in by_type["targeted_detection_method_additional"]
 
 
+def test_amp_vis_method_keyword_fallback_catches_purified_pcr_products_gel():
+    text = (
+        "After purification of the desired PCR products by agarose gel electrophoresis, index and adapter "
+        "were added to the purified product during the eight cycles of second-round PCR using KAPA HiFi "
+        "HotStart Ready mix."
+    )
+
+    def respond(prompt: str) -> str:
+        assert "amp_vis_method" in prompt
+        return "[]"
+
+    backend = MockLLMBackend(label="judge", responses=respond)
+    facts = detect_llm_judged_search_facts(backend, (("Methods", text),), locator_prefix="paper:PMC5476839")
+
+    by_type = {fact.fact_type_candidate: fact for fact in facts}
+    assert by_type["amp_vis_method"].raw_value == "agarose gel electrophoresis"
+    assert by_type["amp_vis_method"].support_type.value == "deterministically_derived"
+    assert "desired PCR products by agarose gel electrophoresis" in (
+        by_type["amp_vis_method"].evidence_quote or ""
+    )
+
+
 def test_detect_llm_judged_search_facts_accepts_multiple_bracketed_fields_from_one_quote():
     """Same class of fix as section_category_extraction.py's own
     multi-field prompt clarification: "OTUs were clustered using UPARSE
