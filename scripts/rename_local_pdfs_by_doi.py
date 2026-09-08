@@ -25,11 +25,18 @@ find them. Handles three real, confirmed-live problems in one pass:
      insensitive) before matching, since zip member names and a CSV
      export don't always survive round-tripping through the same Unicode
      form.
-  2. Falling back to the PDF's own first-page text (most journal PDFs
-     print their DOI in a running header/footer or title block),
+  2. The PDF's own metadata/links -- a "/doi" document-metadata field, a
+     "doi:..." mention in the "/Subject" field, or a doi.org URL inside a
+     page-1 hyperlink annotation. Real gap found live: some publisher
+     templates (confirmed for Elsevier) render the DOI as a header/footer
+     GRAPHIC with zero extractable page text at all, yet still embed the
+     same DOI in one of these three places -- the publisher's own
+     embedded value, so (like the CSV) no database-tracking check needed.
+  3. Falling back to the PDF's own first-page text (most other journal
+     PDFs print their DOI in a running header/footer or title block),
      verified against a study this pipeline already tracks (so a cited
      reference's DOI on the same page is never mistaken for the paper's
-     own) -- used only for files the CSV doesn't cover.
+     own) -- used only when neither of the above found anything.
 
 Dry-run by default -- prints exactly what would happen to every file
 without touching anything. Pass --apply to actually rename/move files.
@@ -52,6 +59,8 @@ import unicodedata
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
+
+from pypdf import PdfReader
 
 from fair_ocean_agent.config import REPO_ROOT
 from fair_ocean_agent.database.enums import IdentifierType
@@ -150,24 +159,90 @@ def _colon_doi_candidate(name: str) -> str | None:
     return stem.replace(":", "/")
 
 
+def _clean_doi_match(raw: str) -> str:
+    # Real gap found live: a hyperlink icon glyph immediately after a DOI
+    # (e.g. a trailing "⟩" from a PDF's own clickable-link rendering)
+    # survived an ASCII-only rstrip and made an otherwise-real DOI never
+    # match its own tracked study -- DOIs themselves always end
+    # alphanumeric, so strip anything trailing that isn't, ASCII or not.
+    return re.sub(r"[^0-9A-Za-z]+$", "", raw.rstrip(".,;:)]"))
+
+
+def _doi_candidates_from_text(text: str) -> list[str]:
+    seen: list[str] = []
+    for match in _DOI_IN_TEXT_RE.finditer(text):
+        candidate = _clean_doi_match(match.group(0))
+        if candidate and candidate not in seen:
+            seen.append(candidate)
+    return seen
+
+
+# Real gap found live: a real, downloaded Elsevier PDF ("Adebayo et al.
+# 2024 - 1-s2.0-...-main.pdf") had ZERO "doi" mentions in its own
+# extracted page text at all (confirmed live, 10 pages, all empty) --
+# some publisher templates render the DOI as a header/footer GRAPHIC, not
+# extractable text -- yet the exact same DOI was sitting in three other
+# places pypdf can read directly, with no page-text extraction at all: a
+# `/doi` key in the PDF's own document metadata, a doi.org URL inside a
+# clickable-link annotation on page 1, and a "doi:..." mention buried in
+# the `/Subject` metadata field. All three are the PUBLISHER's own
+# embedded value (not scraped from a rendered page), so a match here
+# needs no database-tracking cross-check the way a free-text page scan
+# does -- there's no cited-reference-DOI ambiguity to guard against.
+def _high_confidence_doi_from_pdf_bytes(content: bytes) -> str | None:
+    try:
+        reader = PdfReader(io.BytesIO(content))
+    except Exception:  # noqa: BLE001 -- a malformed/encrypted PDF must not abort the whole batch
+        return None
+
+    candidates: list[str] = []
+    try:
+        metadata = reader.metadata
+    except Exception:  # noqa: BLE001
+        metadata = None
+    if metadata:
+        doi_field = metadata.get("/doi")
+        if doi_field:
+            candidates.append(_clean_doi_match(str(doi_field)))
+        subject = metadata.get("/Subject")
+        if subject:
+            candidates.extend(_doi_candidates_from_text(str(subject)))
+
+    try:
+        pages = reader.pages
+    except Exception:  # noqa: BLE001
+        pages = []
+    for page in pages[:_PAGES_TO_SCAN]:
+        try:
+            annots = page.get("/Annots")
+        except Exception:  # noqa: BLE001
+            annots = None
+        if not annots:
+            continue
+        for annot in annots:
+            try:
+                action = annot.get_object().get("/A")
+                uri = action.get("/URI") if action else None
+            except Exception:  # noqa: BLE001
+                uri = None
+            if uri and "doi.org/" in str(uri):
+                candidates.extend(_doi_candidates_from_text(str(uri)))
+
+    for raw in candidates:
+        try:
+            return normalize_doi(raw)
+        except IdentifierError:
+            continue
+    return None
+
+
 def _doi_candidates_from_pdf_bytes(content: bytes) -> list[str]:
     try:
         pages = extract_pdf_pages(content)
     except Exception:  # noqa: BLE001 -- a malformed/encrypted PDF must not abort the whole batch
         return []
     text = "\n".join(page.text for page in pages[:_PAGES_TO_SCAN])
-    seen: list[str] = []
-    for match in _DOI_IN_TEXT_RE.finditer(text):
-        # Real gap found live: a hyperlink icon glyph immediately after a
-        # DOI (e.g. a trailing "⟩" from a PDF's own clickable-link
-        # rendering) survived the ASCII-only rstrip below and made an
-        # otherwise-real DOI never match its own tracked study --
-        # DOIs themselves always end alphanumeric, so strip anything
-        # trailing that isn't, ASCII or not.
-        candidate = re.sub(r"[^0-9A-Za-z]+$", "", match.group(0).rstrip(".,;:)]"))
-        if candidate and candidate not in seen:
-            seen.append(candidate)
-    return seen
+    return _doi_candidates_from_text(text)
 
 
 def _first_tracked_doi(session, candidates: list[str]) -> str | None:
@@ -204,15 +279,17 @@ def _plan_via_csv(
 def _plan_for_pdf_bytes(
     session, source_label: Path, content: bytes, target_dir: Path
 ) -> Plan:
-    candidates = _doi_candidates_from_pdf_bytes(content)
-    if not candidates:
-        return Plan(source_label, None, "no_doi_found", "no DOI-shaped text on the first pages")
-    doi = _first_tracked_doi(session, candidates)
+    doi = _high_confidence_doi_from_pdf_bytes(content)
     if doi is None:
-        return Plan(
-            source_label, None, "doi_not_tracked",
-            f"found {candidates[0]!r} (and {len(candidates) - 1} more) but none match a tracked study",
-        )
+        candidates = _doi_candidates_from_pdf_bytes(content)
+        if not candidates:
+            return Plan(source_label, None, "no_doi_found", "no DOI found in metadata, links, or page text")
+        doi = _first_tracked_doi(session, candidates)
+        if doi is None:
+            return Plan(
+                source_label, None, "doi_not_tracked",
+                f"found {candidates[0]!r} (and {len(candidates) - 1} more) but none match a tracked study",
+            )
     target = target_dir / _doi_pdf_filename(doi)
     if target.exists() and target.resolve() != source_label.resolve():
         return Plan(source_label, target, "target_exists", f"{target.name} already present")
