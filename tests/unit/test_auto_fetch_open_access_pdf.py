@@ -2,6 +2,7 @@
 many papers with no PMCID at all are still genuinely open-access, and
 OpenAlex's own best_oa_location.pdf_url (already fetched during ordinary
 discovery) often points straight at a real, freely-downloadable copy."""
+import time
 from datetime import datetime, timezone
 
 import httpx
@@ -226,3 +227,64 @@ def test_skips_when_unpaywall_also_reports_closed_access(db_session, monkeypatch
     handlers._auto_fetch_open_access_pdf(db_session, study, adapters)
 
     assert list(tmp_path.iterdir()) == []
+
+
+def test_call_with_hard_timeout_returns_the_real_result_when_fast_enough():
+    def quick(x):
+        return x * 2
+
+    assert handlers._call_with_hard_timeout(quick, 21, timeout_seconds=5) == 42
+
+
+def test_call_with_hard_timeout_raises_and_returns_promptly_on_a_genuine_hang():
+    """Real gap found live: a real ~9746-study batch hung indefinitely
+    partway through, well past every RateLimitedClient's own configured
+    60s httpx timeout -- httpx's per-phase timeouts don't bound every
+    failure mode (a firewall silently dropping packets, a stuck DNS
+    resolution, a deliberately slow "tarpit" response). This is the core
+    mechanism that now bounds any single external call no matter what's
+    actually happening underneath it -- confirmed here that the call
+    returns promptly (not blocked for the full duration of the hang) and
+    that the abandoned background thread doesn't keep the process alive
+    (see this test file's own successful exit as proof: a non-daemon
+    thread left running would hang pytest's own process teardown)."""
+    def hangs_forever(x):
+        time.sleep(999)
+        return x
+
+    start = time.monotonic()
+    with pytest.raises(TimeoutError, match="did not respond within"):
+        handlers._call_with_hard_timeout(hangs_forever, "x", timeout_seconds=0.2)
+    assert time.monotonic() - start < 2.0  # returned promptly, not after the full 999s
+
+
+def test_call_with_hard_timeout_reraises_the_real_exception_when_fast_enough():
+    def quick_failure(x):
+        raise ValueError(f"bad input: {x}")
+
+    with pytest.raises(ValueError, match="bad input: x"):
+        handlers._call_with_hard_timeout(quick_failure, "x", timeout_seconds=5)
+
+
+def test_open_access_pdf_candidate_urls_skips_a_hanging_unpaywall_lookup(monkeypatch):
+    """A hanging Unpaywall lookup must not prevent OpenAlex's own
+    (working) candidate from still being tried."""
+    def fake_hard_timeout(func, *args, timeout_seconds=90, **kwargs):
+        if getattr(func, "__self__", None).__class__.__name__ == "FakeUnpaywallAdapter":
+            raise TimeoutError("unpaywall.fetch_record did not respond within 90s")
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(handlers, "_call_with_hard_timeout", fake_hard_timeout)
+    adapters = {
+        "openalex": FakeOpenAlexAdapter(best_oa_location={"is_oa": True, "pdf_url": "http://openalex-works/x.pdf"}),
+        "unpaywall": FakeUnpaywallAdapter(is_oa=True, url_for_pdf="http://never-returns/x.pdf"),
+    }
+    assert handlers._open_access_pdf_candidate_urls("10.1234/x", adapters) == ["http://openalex-works/x.pdf"]
+
+
+def test_try_fetch_and_save_oa_pdf_treats_a_hanging_download_as_a_skip(monkeypatch):
+    def fake_hard_timeout(func, *args, **kwargs):
+        raise TimeoutError("get_binary did not respond within 90s")
+
+    monkeypatch.setattr(handlers, "_call_with_hard_timeout", fake_hard_timeout)
+    assert handlers._try_fetch_and_save_oa_pdf("10.1234/x", "http://never-returns/x.pdf") is False

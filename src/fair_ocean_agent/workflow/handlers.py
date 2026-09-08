@@ -9,6 +9,8 @@ imported once from cli.py before the worker runs.
 from __future__ import annotations
 
 import os
+import queue
+import threading
 from pathlib import Path
 from typing import Callable
 
@@ -1045,6 +1047,51 @@ def _local_pdf_path_for_study(session: Session, study: Study) -> Path | None:
     return candidate if candidate.exists() else None
 
 
+# Real gap found live: a run against a real ~9746-study batch hung
+# indefinitely partway through, blocking every study behind it, well past
+# every RateLimitedClient's own configured 60s httpx timeout (and that
+# timeout's own 4-attempt retry budget) -- httpx's per-phase timeouts
+# don't bound every possible failure mode (a firewall silently dropping
+# packets with no clean RST/FIN, a stuck DNS resolution, a deliberately
+# slow "tarpit" anti-scraping response trickling bytes just fast enough
+# to dodge each individual read timeout). This is this pipeline's one
+# best-effort, arbitrary-external-host auxiliary step (a PDF from
+# whatever domain a publisher happens to use, or an OpenAlex/Unpaywall
+# lookup) -- unlike the rest of this pipeline's discovery work, a hang
+# here is never worth the whole run stalling for.
+_HARD_TIMEOUT_SECONDS = 90
+
+
+def _call_with_hard_timeout(func: Callable, /, *args, timeout_seconds: float = _HARD_TIMEOUT_SECONDS, **kwargs):
+    """Runs `func(*args, **kwargs)` on a daemon thread with a hard
+    wall-clock ceiling, raising TimeoutError if it doesn't return in time.
+    Deliberately a raw threading.Thread(daemon=True), never
+    concurrent.futures.ThreadPoolExecutor -- ThreadPoolExecutor's own
+    worker threads are joined by a module-level atexit hook regardless of
+    shutdown(wait=False), a well-known gotcha that would just defer the
+    exact same hang to the very end of the whole run (waiting to exit)
+    instead of at the one stuck study. A daemon thread is abandoned
+    outright if it never finishes -- never joined, never blocks this
+    process's own exit -- the correct tradeoff for a best-effort external
+    call this pipeline was always prepared to skip on failure anyway."""
+    result_queue: queue.Queue = queue.Queue(maxsize=1)
+
+    def worker() -> None:
+        try:
+            result_queue.put(("ok", func(*args, **kwargs)))
+        except BaseException as exc:  # noqa: BLE001 -- handed back to the caller below, never swallowed
+            result_queue.put(("error", exc))
+
+    threading.Thread(target=worker, daemon=True).start()
+    try:
+        outcome, payload = result_queue.get(timeout=timeout_seconds)
+    except queue.Empty:
+        raise TimeoutError(f"{getattr(func, '__qualname__', func)} did not respond within {timeout_seconds:.0f}s")
+    if outcome == "error":
+        raise payload
+    return payload
+
+
 def _try_fetch_and_save_oa_pdf(doi: str, pdf_url: str) -> bool:
     """One candidate open-access PDF URL: fetch it with this project's own
     honestly-identifying User-Agent (never a spoofed browser one -- a
@@ -1057,9 +1104,12 @@ def _try_fetch_and_save_oa_pdf(doi: str, pdf_url: str) -> bool:
     retrieval_config = load_config().retrieval
     fetch_client = RateLimitedClient("open_access_pdf_fetch", retrieval_config, rate_limit_per_second=1)
     try:
-        content, _from_cache = fetch_client.get_binary(pdf_url)
+        content, _from_cache = _call_with_hard_timeout(fetch_client.get_binary, pdf_url)
     except SourceRecordNotFoundError:
         logger.info("open-access PDF URL for %s 404s: %s", doi, pdf_url)
+        return False
+    except TimeoutError as exc:
+        logger.info("open-access PDF fetch for %s gave up (%s): %s", doi, exc, pdf_url)
         return False
     except httpx.HTTPError as exc:
         logger.info("open-access PDF fetch for %s was blocked or failed (%s): %s", doi, exc, pdf_url)
@@ -1104,9 +1154,11 @@ def _open_access_pdf_candidate_urls(doi: str, adapters: dict[str, SourceAdapter]
     unpaywall = adapters.get("unpaywall")
     if isinstance(unpaywall, UnpaywallAdapter):
         try:
-            record = unpaywall.fetch_record(doi)
+            record = _call_with_hard_timeout(unpaywall.fetch_record, doi)
         except SourceRecordNotFoundError:
             pass
+        except TimeoutError as exc:
+            logger.info("unpaywall lookup for %s gave up (%s)", doi, exc)
         else:
             if record.raw.get("is_oa"):
                 urls.extend(oa_pdf_urls(record))
@@ -1114,9 +1166,11 @@ def _open_access_pdf_candidate_urls(doi: str, adapters: dict[str, SourceAdapter]
     openalex = adapters.get("openalex")
     if isinstance(openalex, OpenAlexAdapter):
         try:
-            record = openalex.fetch_record(doi)
+            record = _call_with_hard_timeout(openalex.fetch_record, doi)
         except SourceRecordNotFoundError:
             pass
+        except TimeoutError as exc:
+            logger.info("openalex lookup for %s gave up (%s)", doi, exc)
         else:
             best_oa = record.raw.get("best_oa_location") or {}
             if best_oa.get("is_oa") and best_oa.get("pdf_url"):
