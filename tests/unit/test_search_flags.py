@@ -1697,6 +1697,25 @@ def test_amp_vis_method_keyword_fallback_catches_purified_pcr_products_gel():
     )
 
 
+def test_amp_vis_method_keyword_fallback_catches_pcr_products_run_through_agarose_gel():
+    text = (
+        "Pooled PCR products were then run through an agarose gel to confirm target amplification and "
+        "lack of off-target amplification across environmental samples and lack of amplification in NTC."
+    )
+
+    def respond(prompt: str) -> str:
+        assert "amp_vis_method" in prompt
+        return "[]"
+
+    backend = MockLLMBackend(label="judge", responses=respond)
+    facts = detect_llm_judged_search_facts(backend, (("Methods", text),), locator_prefix="paper:PMC1")
+
+    by_type = {fact.fact_type_candidate: fact for fact in facts}
+    assert by_type["amp_vis_method"].raw_value == "agarose gel"
+    assert by_type["amp_vis_method"].support_type.value == "deterministically_derived"
+    assert "run through an agarose gel" in (by_type["amp_vis_method"].evidence_quote or "")
+
+
 def test_detect_llm_judged_search_facts_accepts_multiple_bracketed_fields_from_one_quote():
     """Same class of fix as section_category_extraction.py's own
     multi-field prompt clarification: "OTUs were clustered using UPARSE

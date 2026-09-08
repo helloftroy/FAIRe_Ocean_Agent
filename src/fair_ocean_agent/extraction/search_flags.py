@@ -1887,6 +1887,7 @@ _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
 _AMP_VIS_METHOD_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("agarose gel electrophoresis", re.compile(r"\bagarose\s+gel\s+electrophoresis\b", re.IGNORECASE)),
+    ("agarose gel", re.compile(r"\bagarose\s+gel\b", re.IGNORECASE)),
     ("gel electrophoresis", re.compile(r"\bgel\s+electrophoresis\b", re.IGNORECASE)),
     ("capillary electrophoresis", re.compile(r"\bcapillary\s+electrophoresis\b", re.IGNORECASE)),
     ("Bioanalyzer", re.compile(r"\bBioanalyzer\b", re.IGNORECASE)),
