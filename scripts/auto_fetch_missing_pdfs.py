@@ -21,11 +21,13 @@ result.
 Usage:
     python scripts/auto_fetch_missing_pdfs.py
     FAIR_OCEAN_LOCAL_PDF_DIR=data/PDFs python scripts/auto_fetch_missing_pdfs.py
+    python scripts/auto_fetch_missing_pdfs.py --quiet   # only the final summary, no per-study lines
 """
 from __future__ import annotations
 
 import argparse
 import logging
+import sys
 
 from sqlalchemy import select
 
@@ -54,7 +56,27 @@ def main() -> None:
         help="Stop the whole run once this many studies in a row fail with 429 Too Many Requests. "
         "0 disables this (never stop early).",
     )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="suppress the per-study '[n/total] checking ...' progress lines and the underlying "
+        "fetch-attempt log lines -- just the final summary, same as this script's old behavior",
+    )
     args = parser.parse_args()
+
+    # Real gap found live: with no logging configured at all, this script's
+    # own fetch-attempt outcomes (workflow/handlers.py's "no open-access
+    # location found for %s" / "all N open-access candidate(s) ... were
+    # blocked or failed" / "auto-fetched open-access PDF for %s -> %s") are
+    # all logged at INFO level, well below the logging module's own default
+    # WARNING threshold -- so a run with nothing yet fetched (the common
+    # case for a batch dominated by paywalled/blocked papers) produced
+    # total silence for its entire duration, indistinguishable from a hung
+    # process. stream=sys.stdout (not logging's own default stderr) so
+    # these interleave in reading order with this script's own print()
+    # calls below, in the same terminal.
+    if not args.quiet:
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", stream=sys.stdout)
 
     adapters = _build_enabled_adapters()
     fetched = 0
@@ -68,13 +90,16 @@ def main() -> None:
         studies = session.scalars(
             select(Study).where(Study.canonical_status == CanonicalStatus.CANDIDATE.value)
         ).all()
-        for study in studies:
+        total = len(studies)
+        for index, study in enumerate(studies, start=1):
             has_pmcid = _identifier_value(session, study.study_id, IdentifierType.PMCID) is not None
             had_pdf_before = _local_pdf_path_for_study(session, study) is not None
             if has_pmcid or had_pdf_before:
                 already_covered += 1
                 continue
             checked += 1
+            if not args.quiet:
+                print(f"[{index}/{total}] checking {study.title or study.study_id}...")
             try:
                 _auto_fetch_open_access_pdf(session, study, adapters)
             except Exception as exc:

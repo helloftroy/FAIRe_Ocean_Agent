@@ -1149,9 +1149,17 @@ def _auto_fetch_open_access_pdf(session: Session, study: Study, adapters: dict[s
     if not doi:
         return
 
-    for pdf_url in _open_access_pdf_candidate_urls(doi, adapters):
+    candidate_urls = _open_access_pdf_candidate_urls(doi, adapters)
+    if not candidate_urls:
+        logger.info("no open-access location found for %s (checked OpenAlex + Unpaywall)", doi)
+        return
+    for pdf_url in candidate_urls:
         if _try_fetch_and_save_oa_pdf(doi, pdf_url):
             return
+    logger.info(
+        "all %d open-access candidate(s) for %s were blocked or failed -- staying manual",
+        len(candidate_urls), doi,
+    )
 
 
 def _fetch_and_persist_repository_record(
