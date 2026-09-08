@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 import xml.etree.ElementTree as ET
+from typing import Iterable
 
 from fair_ocean_agent.database.enums import IdentifierType, RelationshipType, SupportType
 from fair_ocean_agent.discovery.sequence_accessions import (
@@ -92,6 +93,37 @@ _FIGSHARE_DOI_PATTERN = re.compile(r"\b10\.6084/m9\.figshare\.\d+(?:\.v\d+)?\b",
 _OSF_DOI_PATTERN = re.compile(r"\b10\.17605/OSF\.IO/[A-Z0-9]+\b", re.IGNORECASE)
 
 
+# Same set and same reasoning as extraction/sections.py's own
+# _INLINE_TRANSPARENT_TAGS (duplicated rather than cross-imported --
+# these two modules have never cross-imported, same precedent as
+# section_category_extraction.py/search_flags.py's own independent
+# duplicate list-marker helper): a plain flat itertext() join can't tell
+# "this inline tag sits mid-word, no space belongs here" (e.g. a bolded
+# degenerate base inside a primer sequence) apart from "this is a
+# genuinely separate block of content, a space belongs here" (e.g. a
+# <caption> immediately following a <p> with zero whitespace between them
+# in compact XML). Real whitespace already in the source is untouched
+# either way; a redundant forced space collapses away in the final
+# `.split()`/`" ".join()` normalization below.
+_INLINE_TRANSPARENT_TAGS = frozenset(
+    {"bold", "italic", "underline", "sup", "sub", "sc", "monospace", "styled-content", "xref"}
+)
+
+
+def _itertext_with_block_boundaries(element: ET.Element) -> Iterable[str]:
+    if element.text:
+        yield element.text
+    for child in element:
+        inline = child.tag in _INLINE_TRANSPARENT_TAGS
+        if not inline:
+            yield " "
+        yield from _itertext_with_block_boundaries(child)
+        if not inline:
+            yield " "
+        if child.tail:
+            yield child.tail
+
+
 def xml_to_text(xml: str) -> str:
     """Collapse JATS/XML text content into a searchable plain-text string.
 
@@ -102,7 +134,7 @@ def xml_to_text(xml: str) -> str:
         root = ET.fromstring(xml)
     except ET.ParseError:
         return xml
-    return " ".join((text or "").strip() for text in root.itertext() if (text or "").strip())
+    return " ".join("".join(_itertext_with_block_boundaries(root)).split())
 
 
 def _expand_sra_accession_range(prefix: str, start_digits: str, end_digits: str) -> list[str]:

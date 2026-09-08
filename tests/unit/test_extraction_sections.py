@@ -44,6 +44,27 @@ See <xref rid="F2" ref-type="fig">Fig. 2</xref> for the phylogenetic tree.</p>
 """
 
 
+MID_SEQUENCE_INLINE_TAG_JATS_XML = """<article>
+  <body>
+    <sec>
+      <title>Methods</title>
+      <p>16S rRNA gene amplification was performed using V4-5 region primers 515F-4Y (5'-GTG<bold>Y</bold>CAGCMGCCGCGGTAA)
+and 926R (5'-CCGYCAATTYMTTTRAGTTT), as previously described.</p>
+    </sec>
+  </body>
+</article>
+"""
+
+
+BLOCK_LEVEL_NO_WHITESPACE_JATS_XML = (
+    "<article><body><sec><title>Methods</title>"
+    "<p>Custom scripts are available in Supplemental Information 1.</p>"
+    "<caption><title>Rarefaction analysis and results</title>"
+    "<p>SI_cca_rarefaction.pl: Perl script.</p></caption>"
+    "</sec></body></article>"
+)
+
+
 EMPTY_PARENTHETICAL_XML = """<article>
   <body>
     <sec>
@@ -106,6 +127,33 @@ def test_strips_bibliography_citation_reference_numbers_from_section_text():
     assert "71" not in text
     assert "70" not in text
     assert "Fig. 2" in text
+
+
+def test_mid_sequence_inline_tag_does_not_break_a_primer_sequence():
+    """Real gap found live (10.1186/s40168-020-00877-y, STUDY-01f941d6d759):
+    "515F-4Y (5'-GTG<bold>Y</bold>CAGCMGCCGCGGTAA)", a real primer's own
+    degenerate base bolded mid-sequence for emphasis, used to come out as
+    "GTG Y CAGCMGCCGCGGTAA" -- a spurious space inserted at the inline-tag
+    boundary even though the source XML had none there at all, breaking
+    the sequence into three pieces for any downstream nucleotide-sequence
+    validation."""
+    sections = select_relevant_sections(MID_SEQUENCE_INLINE_TAG_JATS_XML)
+    text = sections[0]["text"]
+    assert "GTGYCAGCMGCCGCGGTAA" in text
+    assert "GTG Y CAGCMGCCGCGGTAA" not in text
+
+
+def test_separate_blocks_with_no_source_whitespace_still_get_a_boundary():
+    """The inline-tag fix above must not over-correct: two genuinely
+    separate blocks of content (here, a <p> immediately followed by a
+    <caption>, with zero whitespace between them in this compact XML)
+    must still end up with a real boundary between them, not glued into
+    one run-on sentence."""
+    sections = select_relevant_sections(BLOCK_LEVEL_NO_WHITESPACE_JATS_XML)
+    text = sections[0]["text"]
+    assert "Supplemental Information 1. Rarefaction analysis" in text or "Supplemental Information 1. Rarefaction " in text
+    assert "Supplemental Information 1.Rarefaction" not in text
+    assert "Supplemental Information 1.SI_cca_rarefaction" not in text
 
 
 def test_selects_only_relevant_leaf_sections():

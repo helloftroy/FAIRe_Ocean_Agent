@@ -77,6 +77,26 @@ def test_xml_to_text_collapses_article_xml():
     assert "BioProject PRJNA996732" in xml_to_text(xml)
 
 
+def test_xml_to_text_does_not_split_a_mid_word_inline_tag():
+    """Real gap found live (10.1186/s40168-020-00877-y, STUDY-01f941d6d759):
+    a bolded degenerate base mid-sequence ("GTG<bold>Y</bold>CAGC...") used
+    to come out with a spurious space inserted at the inline-tag boundary."""
+    xml = "<article><sec><p>primer 515F-4Y (5'-GTG<bold>Y</bold>CAGCMGCCGCGGTAA)</p></sec></article>"
+
+    assert "GTGYCAGCMGCCGCGGTAA" in xml_to_text(xml)
+
+
+def test_xml_to_text_still_separates_adjacent_blocks_with_no_source_whitespace():
+    """The inline-tag fix above must not glue two genuinely separate
+    blocks together when the compact source XML has zero whitespace
+    between them."""
+    xml = "<article><sec><p>Custom scripts are available in SI 1.</p><caption><p>Rarefaction script.</p></caption></sec></article>"
+
+    text = xml_to_text(xml)
+    assert "SI 1.Rarefaction" not in text
+    assert "SI 1. Rarefaction" in text
+
+
 def test_extract_repository_identifiers_from_text_tags_tier_2_confidence():
     text = "Raw reads are under NCBI BioProject PRJNA515494."
     related = extract_repository_identifiers_from_text(text, source_name="paper_scan")

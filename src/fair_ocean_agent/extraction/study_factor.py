@@ -46,6 +46,35 @@ _ABSTRACT_END_HEADING_RE = re.compile(
     r"(?im)^\s*(?:keywords?|introduction|background|materials?\s+and\s+methods?|methods?|results?)\b"
 )
 
+# Same set and same reasoning as extraction/sections.py's own
+# _INLINE_TRANSPARENT_TAGS (duplicated rather than cross-imported --
+# these two modules have never cross-imported, same precedent as
+# section_category_extraction.py/search_flags.py's own independent
+# duplicate list-marker helper): a plain flat itertext() join can't tell
+# "this inline tag sits mid-word, no space belongs here" (e.g. a bolded
+# degenerate base inside a primer sequence, or a structured abstract's
+# own emphasis) apart from "this is a genuinely separate block of
+# content, a space belongs here" (e.g. a structured abstract's separate
+# Background/Results/Conclusions <p> elements sitting immediately
+# adjacent with zero whitespace between them in compact XML).
+_INLINE_TRANSPARENT_TAGS = frozenset(
+    {"bold", "italic", "underline", "sup", "sub", "sc", "monospace", "styled-content", "xref"}
+)
+
+
+def _itertext_with_block_boundaries(element: ET.Element):
+    if element.text:
+        yield element.text
+    for child in element:
+        inline = child.tag in _INLINE_TRANSPARENT_TAGS
+        if not inline:
+            yield " "
+        yield from _itertext_with_block_boundaries(child)
+        if not inline:
+            yield " "
+        if child.tail:
+            yield child.tail
+
 
 def _abstract_from_jats(fulltext_xml: str | None) -> str | None:
     if not fulltext_xml:
@@ -57,7 +86,7 @@ def _abstract_from_jats(fulltext_xml: str | None) -> str | None:
     abstract_el = root.find(".//abstract")
     if abstract_el is None:
         return None
-    text = " ".join(" ".join(abstract_el.itertext()).split())
+    text = " ".join("".join(_itertext_with_block_boundaries(abstract_el)).split())
     return text or None
 
 

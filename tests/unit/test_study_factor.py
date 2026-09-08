@@ -35,6 +35,30 @@ def test_generate_study_factor_returns_generated_sentence_from_abstract():
     assert "habitat types" in fact.evidence_quote
 
 
+def test_generate_study_factor_jats_abstract_keeps_a_mid_word_inline_tag_intact():
+    """Real gap found live (10.1186/s40168-020-00877-y, STUDY-01f941d6d759):
+    a naive itertext() join used to insert a spurious space at every
+    inline-tag boundary, even a mid-word one (e.g. a bolded degenerate
+    base in a primer sequence quoted in an abstract), while genuinely
+    separate <p> blocks (a structured Background/Results abstract) must
+    still keep a real boundary between them."""
+    abstract_xml = (
+        "<article><front><article-meta><abstract>"
+        "<p>We used primer 515F-4Y (5'-GTG<bold>Y</bold>CAGCMGCCGCGGTAA) to profile the community.</p>"
+        "<p>Results showed high diversity.</p>"
+        "</abstract></article-meta></front></article>"
+    )
+    summary = "Community diversity as profiled by 16S rRNA sequencing."
+    backend = MockLLMBackend(responses=[json.dumps({"study_factor": summary})])
+
+    facts = generate_study_factor(backend, abstract_xml, locator_prefix="test")
+
+    assert len(facts) == 1
+    quote = facts[0].evidence_quote
+    assert "GTGYCAGCMGCCGCGGTAA" in quote
+    assert "community. Results showed" in quote
+
+
 def test_generate_study_factor_accepts_pdf_plain_text_abstract():
     summary = "Habitat type and season as predictors of microbial community structure."
     backend = MockLLMBackend(responses=[json.dumps({"study_factor": summary})])

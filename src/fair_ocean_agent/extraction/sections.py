@@ -104,16 +104,45 @@ _EMPTY_PARENTHETICAL_RE = re.compile(r"\(\s*\)")
 _EMPTY_BRACKET_RE = re.compile(r"\[\s*\]")
 
 
+# Tags whose own text is meant to sit flush against its surroundings, no
+# forced separator -- real gap found live (10.1186/s40168-020-00877-y,
+# STUDY-01f941d6d759): "515F-4Y (5'-GTG<bold>Y</bold>CAGCMGCCGCGGTAA)", a
+# real primer's own degenerate base bolded mid-sequence for emphasis, used
+# to come out as "GTG Y CAGCMGCCGCGGTAA" -- a plain flat itertext() join
+# has no way to tell "this inline tag sits mid-word, no space belongs
+# here" apart from "this is a genuinely separate block of content, a
+# space belongs here" (e.g. a <caption> immediately following a <p> with
+# no whitespace between them in compact/non-pretty-printed XML -- a real
+# case this module's own code_repo tests exercise). Every other tag
+# (paragraph/section/caption/title/list/... or anything not in this set)
+# gets a forced boundary space on both sides of its own subtree instead,
+# so two genuinely separate blocks can never end up glued together even
+# when the source XML has zero whitespace between them.
+_INLINE_TRANSPARENT_TAGS = frozenset(
+    {"bold", "italic", "underline", "sup", "sub", "sc", "monospace", "styled-content", "xref"}
+)
+
+
 def _itertext_excluding_citations(element: ET.Element) -> Iterable[str]:
     """Same traversal as Element.itertext(), except the inner text of a
     <xref ref-type="bibr"> is skipped -- only the citation number itself
     is dropped, its own tail text (whatever immediately follows it, e.g.
-    a period or space) is still yielded in place."""
+    a period or space) is still yielded in place. Also inserts a forced
+    boundary space around any child that ISN'T a plain inline-formatting
+    tag (see _INLINE_TRANSPARENT_TAGS) -- real whitespace already present
+    in the source is untouched either way; a redundant forced space
+    collapses away in this module's own final `.split()`/`" ".join()`
+    normalization pass."""
     if element.text:
         yield element.text
     for child in element:
+        inline = child.tag in _INLINE_TRANSPARENT_TAGS
         if not (child.tag == "xref" and child.get("ref-type") in _CITATION_XREF_REF_TYPES):
+            if not inline:
+                yield " "
             yield from _itertext_excluding_citations(child)
+            if not inline:
+                yield " "
         if child.tail:
             yield child.tail
 
@@ -122,7 +151,10 @@ def _title_for(sec: ET.Element) -> str:
     title_el = sec.find("title")
     if title_el is None:
         return ""
-    return " ".join(t.strip() for t in _itertext_excluding_citations(title_el) if t.strip())
+    # Same fix as select_relevant_sections' own text-joining below (see
+    # its comment) -- concatenate raw fragments as the source XML gives
+    # them, only collapse real whitespace runs once at the end.
+    return " ".join("".join(_itertext_excluding_citations(title_el)).split())
 
 
 def _is_relevant_title(title: str) -> bool:
@@ -221,7 +253,22 @@ def select_relevant_sections(fulltext_xml: str, max_chars: int = 40000) -> list[
         if not title or not (relevant_by_title or relevant_by_parent):
             continue
 
-        text = " ".join(t.strip() for t in _itertext_excluding_citations(sec) if t.strip())
+        # Real gap found live (10.1186/s40168-020-00877-y, STUDY-01f941d6d759):
+        # "515F-4Y (5'-GTG<bold>Y</bold>CAGCMGCCGCGGTAA)" -- a real
+        # primer's own degenerate base bolded mid-sequence for emphasis --
+        # used to come out as "GTG Y CAGCMGCCGCGGTAA", a spurious space
+        # inserted at the inline-tag boundary even though the source XML
+        # had none there at all. Joining each RAW itertext() fragment with
+        # ".strip()" first threw away the very whitespace information
+        # (or lack of it) needed to know whether a space belonged at each
+        # boundary, then unconditionally forced one in anyway. Concatenate
+        # the fragments exactly as the source XML provides them instead
+        # (preserving real whitespace, inserting none), and only collapse
+        # whitespace RUNS (real spaces/newlines from pretty-printed XML)
+        # to single spaces once, at the end -- the same idiom already used
+        # on the next two lines for the parenthetical/bracket cleanup.
+        text = "".join(_itertext_excluding_citations(sec))
+        text = " ".join(text.split())
         text = " ".join(_EMPTY_PARENTHETICAL_RE.sub(" ", text).split())
         text = " ".join(_EMPTY_BRACKET_RE.sub(" ", text).split())
         if not text:
