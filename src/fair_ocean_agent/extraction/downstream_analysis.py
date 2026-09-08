@@ -94,6 +94,10 @@ _DOWNSTREAM_TECHNIQUE_TERMS: tuple[str, ...] = (
     "Student's t-test", "ANOVA", "one-way ANOVA", "Tukey post hoc test", "Kruskal-Wallis test",
     "Dunn's test", "Conover-Iman test", "Fisher's LSD test", "Bonferroni correction",
     "Neighbor-joining", "phylogenetic tree", "bootstrap analysis", "forward selection", "backward selection",
+    "power analysis", "piecewise linear regression", "square-root transformation", "community composition",
+    "detection probability", "presence/absence", "abundance", "sampling effort", "taxonomic resolution",
+    "temporal distribution", "spatial distribution", "temporal/spatial distribution", "asymptotic richness",
+    "haplotype richness", "haplotype identity", "sampling range",
 )
 
 
@@ -112,7 +116,8 @@ _DOWNSTREAM_ALIASES: dict[str, tuple[str, ...]] = {
     "Fisher's LSD test": ("Fishers LSD test",),
     "Random Forest": ("random forests",),
     "Hellinger transformation": ("Hellinger transformed",),
-    "presence-absence transformation": ("presence-absence", "presence absence"),
+    "square-root transformation": ("square root transformation", "square-root transformed", "square root transformed"),
+    "presence/absence": ("presence-absence", "presence absence"),
     "rarefaction": ("rarefied", "rarefying"),
     "rarefaction curve": ("rarefaction curves",),
     "PERMANOVA": ("permutation multivariate analysis of variance", "permutational multivariate analysis of variance"),
@@ -125,6 +130,15 @@ _DOWNSTREAM_ALIASES: dict[str, tuple[str, ...]] = {
     "RDA": ("redundancy analysis",),
     "dbRDA": ("distance-based redundancy analysis",),
     "CCA": ("canonical correspondence analysis",),
+    "community composition": ("community compositions",),
+    "sampling effort": ("sampling efforts",),
+    "temporal/spatial distribution": (
+        "temporal-spatial distribution",
+        "temporal and spatial distribution",
+        "spatial and temporal distribution",
+        "spatio-temporal distribution",
+        "spatiotemporal distribution",
+    ),
     "generalized linear model": ("generalised linear model",),
     "generalized additive model": ("generalised additive model",),
     "generalized linear mixed model": ("generalised linear mixed model",),

@@ -85,4 +85,28 @@ def test_detect_downstream_analysis_techniques_uses_strict_ambiguous_acronyms():
     )
 
     assert len(facts) == 1
-    assert facts[0].raw_value == "CCA | ANCOM-BC | differential abundance analysis"
+    assert facts[0].raw_value == "CCA | abundance | ANCOM-BC | differential abundance analysis"
+
+
+def test_detect_downstream_analysis_techniques_matches_added_broad_terms_and_variants():
+    facts = detect_downstream_analysis_techniques(
+        [
+            (
+                "Data Analysis",
+                "Power analysis and piecewise linear regression were used to evaluate sampling effort. "
+                "Community composition, detection probability, presence-absence, abundance, and "
+                "taxonomic resolution were compared across temporal and spatial distribution patterns. "
+                "Square root transformed values were used to estimate asymptotic richness, haplotype "
+                "richness, haplotype identity, and sampling range.",
+            )
+        ],
+        locator_prefix="test",
+    )
+
+    assert len(facts) == 1
+    assert facts[0].raw_value == (
+        "power analysis | piecewise linear regression | sampling effort | community composition | "
+        "detection probability | presence/absence | abundance | taxonomic resolution | "
+        "temporal/spatial distribution | square-root transformation | asymptotic richness | "
+        "haplotype richness | haplotype identity | sampling range"
+    )
