@@ -3191,6 +3191,21 @@ def _llm_judged_field_matches_snippet(field: LLMJudgedSearchField, snippet: str,
         return bool(_PROBE_ASSAY_CONTEXT_RE.search(snippet) and _PROBE_REF_CONTEXT_RE.search(snippet))
     if field.term_name == "probe_conc":
         return bool(_PROBE_ASSAY_CONTEXT_RE.search(snippet) and _PROBE_CONC_CONTEXT_RE.search(snippet))
+    # probe_seq/probe_name/probe_target_taxon's own search_terms include a
+    # bare "probe" (and probe_target_taxon also bare "target") with no
+    # extra gate -- real gap found live: "In situ bottom water temperature
+    # (6.5C) was measured with a ProODO probe (YSI, USA)" (a physical
+    # water-quality sensor, not a molecular detection/hybridization probe
+    # at all) incorrectly generated probe_seq/probe_name/probe_target_taxon
+    # candidates. Same _PROBE_ASSAY_CONTEXT_RE gate already used for
+    # probe_ref/probe_conc above -- targeted_detection_method deliberately
+    # excluded from this list: its own search_terms (qPCR/ddPCR/FISH/...)
+    # are already specific assay-type phrases, and SYBR Green qPCR/generic
+    # species-specific PCR are legitimate targeted_detection_method values
+    # that use no probe chemistry at all, so gating it the same way would
+    # wrongly exclude them.
+    if field.term_name in {"probe_seq", "probe_name", "probe_target_taxon"}:
+        return bool(_PROBE_ASSAY_CONTEXT_RE.search(snippet))
     if field.term_name == "targeted_detection_method_additional":
         return bool(_TARGETED_DETECTION_METHOD_CONTEXT_RE.search(snippet))
     if field.term_name == "detection_criteria":

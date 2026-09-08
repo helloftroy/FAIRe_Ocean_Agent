@@ -396,6 +396,23 @@ def _pulled_env_var_entry_formatter(display_name: str) -> Callable[[str], str | 
     return _format
 
 
+# probe_name/targeted_detection_method (search_flags.py's own
+# LLMJudgedSearchField entries) aren't real FAIRe checklist fields on
+# their own -- confirmed live against the vendored schema, neither name
+# appears anywhere in it. Per an explicit user decision, both merge into
+# the real, existing targeted_detection_method_additional free-text field
+# instead of being invented as new non-schema columns, labeled so they
+# stay recognizable once pipe-joined alongside that field's own narrative
+# sentences (mapping/faire.py's own _PIPE_UNION_TARGET_FIELDS covers this
+# field now too, so all three sources merge rather than racing).
+def _labeled_narrative_entry_formatter(label: str) -> Callable[[str], str | None]:
+    def _format(value: str) -> str | None:
+        value = value.strip()
+        return f"{label}: {value}" if value else None
+
+    return _format
+
+
 @dataclass(frozen=True)
 class MappingRule:
     source_fact_type: str
@@ -857,6 +874,27 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("targeted_detection_method_additional", EntityLevel.STUDY.value, "projectMetadata",
                 "targeted_detection_method_additional", MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
+    # probe_target_taxon: not a real FAIRe field on its own (confirmed live
+    # against the vendored schema) -- per an explicit user decision, merges
+    # into the real, existing assay_target_taxa field instead, since
+    # that field's own context regex already explicitly covers "probes"
+    # as one of the things an assay/probe can target (see
+    # _TARGET_TAXONOMIC_ASSAY_CONTEXT_RE in search_flags.py). Targets the
+    # SAME real schema field name (targetTaxonomicAssay) assay_target_taxa
+    # itself resolves to via the v3 registry-driven generator.
+    MappingRule("probe_target_taxon", EntityLevel.STUDY.value, "projectMetadata", "targetTaxonomicAssay",
+                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
+    # probe_name/targeted_detection_method: see
+    # _labeled_narrative_entry_formatter's own comment for the real gap
+    # this closes and why these merge into targeted_detection_method_
+    # additional's real, existing free-text field rather than becoming
+    # new non-schema columns.
+    MappingRule("probe_name", EntityLevel.STUDY.value, "projectMetadata", "targeted_detection_method_additional",
+                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True,
+                transform=_labeled_narrative_entry_formatter("probe name")),
+    MappingRule("targeted_detection_method", EntityLevel.STUDY.value, "projectMetadata",
+                "targeted_detection_method_additional", MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True,
+                transform=_labeled_narrative_entry_formatter("detection method")),
     MappingRule("otu_clust_tool", EntityLevel.STUDY.value, "projectMetadata", "otu_clust_tool",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
     MappingRule("otu_db", EntityLevel.STUDY.value, "projectMetadata", "otu_db",

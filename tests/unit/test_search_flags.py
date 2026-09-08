@@ -2421,6 +2421,36 @@ def test_dna_cleanup_fields_map_onto_sample_metadata():
     assert "Genomic DNA Clean and Concentrator kit" in by_type["dna_cleanup_method"]
 
 
+def test_probe_fields_require_a_real_molecular_probe_context():
+    """Real gap found live: probe_seq/probe_name/probe_target_taxon's own
+    search_terms include a bare "probe" (and probe_target_taxon also bare
+    "target") with no extra gate, unlike probe_ref/probe_conc's own
+    established _PROBE_ASSAY_CONTEXT_RE requirement. "In situ bottom water
+    temperature (6.5C) was measured with a ProODO probe (YSI, USA)" -- a
+    physical water-quality sensor, not a molecular detection/hybridization
+    probe at all -- incorrectly generated probe_seq/probe_name/
+    probe_target_taxon candidates. targeted_detection_method deliberately
+    stays ungated: its own search_terms (qPCR/ddPCR/FISH/...) are already
+    specific assay-type phrases, and SYBR Green qPCR/species-specific PCR
+    are legitimate values that use no probe chemistry at all."""
+    sensor_sentence = (
+        "In situ bottom water temperature (6.5C) was measured with a ProODO probe (YSI, USA) and "
+        "CTD CastAway CTD (SonTek, USA)."
+    )
+    real_probe_sentence = (
+        "We designed a new oligonucleotide probe for detecting Atribacteria using the catalyzed "
+        "reporter deposition-fluorescence in situ hybridization (CARD-FISH)."
+    )
+
+    sensor_candidates = quote_candidates_for_llm_judged_search([("Methods", sensor_sentence)])
+    sensor_fields = {name for c in sensor_candidates for name in c.field_names}
+    assert not {"probe_seq", "probe_name", "probe_target_taxon"} & sensor_fields
+
+    probe_candidates = quote_candidates_for_llm_judged_search([("Methods", real_probe_sentence)])
+    probe_fields = {name for c in probe_candidates for name in c.field_names}
+    assert {"probe_seq", "probe_name", "probe_target_taxon", "targeted_detection_method"} <= probe_fields
+
+
 def test_detect_llm_judged_search_facts_extracts_in_situ_temp_salinity_verbatim():
     """Real audit (10.1093/ismejo/wrae013, STUDY-295abf4a8f43): "In situ
     bottom water temperature (6.5C) and salinity (6.4 PSU) were measured
