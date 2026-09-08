@@ -1546,6 +1546,24 @@ def test_targeted_detection_rejects_probe_ref_and_additional_without_probe_or_ta
     assert "targeted_detection_method_additional" not in field_names
 
 
+def test_probe_conc_rejects_lowercase_fish_and_primer_concentrations():
+    text = (
+        "Fish DNA was amplified using 0.1 μM forward primer and 0.1 μM reverse primer. "
+        "Additional samples targeted fish mitochondrial markers."
+    )
+
+    candidates = quote_candidates_for_llm_judged_search((("Methods", text),))
+    field_names = {
+        field_name
+        for candidate in candidates
+        for field_name in candidate.field_names
+    }
+
+    assert "probe_conc" not in field_names
+    assert "probe_ref" not in field_names
+    assert "targeted_detection_method_additional" not in field_names
+
+
 def test_targeted_detection_rejects_bad_block_taxa_probe_conc_and_probe_ref_values():
     text = (
         "A host-blocking primer 5'-ACGTACGTACGT-3' was used to suppress fish DNA amplification. "

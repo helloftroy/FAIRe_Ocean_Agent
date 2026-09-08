@@ -3073,7 +3073,7 @@ _PROBE_ASSAY_CONTEXT_RE = re.compile(
     r"\b(?:"
     r"TaqMan|hydrolysis\s+probe|molecular\s+beacon|reporter\s+dye|fluorophore|"
     r"FAM|HEX|VIC|Cy5|TET|TAMRA|ROX|JOE|BHQ|ZEN|MGB|"
-    r"FISH|CARD[-\s]?FISH|oligonucleotide\s+probe|hybridization\s+probe|"
+    r"(?-i:FISH)|(?-i:CARD[-\s]?FISH)|oligonucleotide\s+probe|hybridization\s+probe|"
     r"HRP[-\s]?labeled|horseradish\s+peroxidase"
     r")\b",
     re.IGNORECASE,
@@ -3106,7 +3106,7 @@ _TARGETED_DETECTION_METHOD_CONTEXT_RE = re.compile(
     r"\b(?:"
     r"qPCR|quantitative\s+PCR|real[-\s]?time\s+PCR|digital\s+PCR|dPCR|ddPCR|targeted\s+detection|"
     r"probe[-\s]+based\s+detection|TaqMan|hydrolysis\s+probe|molecular\s+beacon|"
-    r"FISH|CARD[-\s]?FISH|fluorescence\s+in\s+situ\s+hybridization|oligonucleotide\s+probe|"
+    r"(?-i:FISH)|(?-i:CARD[-\s]?FISH)|fluorescence\s+in\s+situ\s+hybridization|oligonucleotide\s+probe|"
     r"hybridization\s+probe|HRP[-\s]?labeled|horseradish\s+peroxidase|"
     r"blocking\s+(?:oligo|oligos|oligonucleotide|oligonucleotides|primer|primers)|"
     r"detection\s+criteri(?:on|a)|limit\s+of\s+detection|limit\s+of\s+quantification|\bLOD\b|\bLOQ\b|"
@@ -3419,6 +3419,8 @@ def _valid_llm_judged_entry(field: LLMJudgedSearchField, value: str, quote: str)
             (_PROBE_ASSAY_CONTEXT_RE.search(quote) and _PROBE_REF_CONTEXT_RE.search(quote))
             or _OLIGO_PROBE_ROW_CONTEXT_RE.search(quote)
         )
+    if field.term_name == "probe_conc":
+        return bool(_PROBE_ASSAY_CONTEXT_RE.search(quote) and _PROBE_CONC_CONTEXT_RE.search(quote))
     if field.term_name == "block_taxa":
         return bool(_BLOCK_TAXA_INTENT_CONTEXT_RE.search(quote) and value.casefold() in quote.casefold())
     if field.term_name == "targeted_detection_method_additional":
