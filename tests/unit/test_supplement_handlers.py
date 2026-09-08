@@ -345,6 +345,48 @@ def test_retrieve_prepares_docx_text_without_calling_llm(db_session, monkeypatch
     assert db_session.query(RawFact).filter_by(study_id=study.study_id).count() == 0
 
 
+def test_retrieve_prepares_r_script_text_without_calling_llm(db_session, monkeypatch):
+    """Regression guard for a real gap found live (10.7717/peerj.17091,
+    STUDY-0161dd80b492): "peerj-12-17091-s010.r", the paper's own
+    supplementary R analysis script, used to fall into the generic
+    "unsupported file type, not parsed" branch -- silently never scanned
+    for anything, even though it's plain UTF-8 text (like a .txt/.md
+    supplement) that often names the exact statistical/bioinformatics
+    methods used. Mirrors test_retrieve_prepares_docx_text_without_calling_llm."""
+    study = _seeded_study_with_pmcid(db_session)
+    small_xml = """<article><supplementary-material id="TS1"><media xmlns:xlink="http://www.w3.org/1999/xlink"
+    xlink:href="peerj-12-17091-s010.r" mimetype="text" mime-subtype="plain"><?size 40?></media></supplementary-material></article>"""
+    buf = io.BytesIO()
+    r_script = b"library(vegan)\nlibrary(mvabund)\nadonis2(community ~ method, data = env)\n"
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("peerj-12-17091-s010.r", r_script)
+    monkeypatch.setattr(
+        supplement_handlers, "_build_enabled_adapters",
+        lambda: {"europe_pmc": FakeEuropePmcAdapter(fulltext_xml=small_xml, bundle=buf.getvalue())},
+    )
+    monkeypatch.setattr(
+        supplement_handlers,
+        "_build_llm_backend_cached",
+        lambda: (_ for _ in ()).throw(AssertionError("LLM backend should not be built")),
+    )
+    discover_task = _discover_task(db_session, study)
+    supplement_handlers.handle_discover_supplements(db_session, discover_task)
+    db_session.commit()
+
+    retrieve_task = _retrieve_task(db_session, study)
+    supplement_handlers.handle_retrieve_supplements(db_session, retrieve_task)
+    db_session.commit()
+
+    asset = db_session.query(DataAsset).filter_by(study_id=study.study_id, file_name="peerj-12-17091-s010.r").one()
+    assert asset.access_status == "open"
+    assert asset.inspection_level == "lightweight"
+    assert "text_ready" in asset.description
+    prepared = db_session.query(PreparedSourceText).filter_by(data_asset_id=asset.asset_id).one()
+    assert prepared.text_content == r_script.decode("utf-8").strip()
+    assert prepared.preparation_method == "r_decode_utf8"
+    assert db_session.query(RawFact).filter_by(study_id=study.study_id).count() == 0
+
+
 def test_supplement_llm_pass_targets_fields_still_missing_after_paper(db_session, monkeypatch):
     study = _seeded_study_with_pmcid(db_session)
     paper_source = Source(

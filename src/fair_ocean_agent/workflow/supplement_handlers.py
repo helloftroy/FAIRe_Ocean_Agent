@@ -351,7 +351,15 @@ def _process_member(
     failure abort the whole study."""
     extension = _extension(file_name)
     config = load_config()
-    text_preparation = extension in ("txt", "md", "pdf", "docx")
+    # "r" (an R analysis script, e.g. peerj-12-17091-s010.r): real gap
+    # found live -- a paper's own supplementary analysis code is plain
+    # UTF-8 text, same as a .txt/.md supplement, and often names the exact
+    # statistical/bioinformatics methods used (library calls, function
+    # names, parameters) that this pipeline's downstream_analysis
+    # extraction otherwise has to infer from prose alone. Previously fell
+    # straight to the "unsupported file type, not parsed" branch below,
+    # same treatment as a genuinely unparseable binary format.
+    text_preparation = extension in ("txt", "md", "pdf", "docx", "r")
 
     try:
         if extension == "csv":
@@ -370,7 +378,7 @@ def _process_member(
             facts, summary = _parsed_result_summary(
                 parse_zip_supplement(content, file_name, max_member_bytes=config.supplements.max_member_bytes)
             )
-        elif extension in ("txt", "md"):
+        elif extension in ("txt", "md", "r"):
             text = content.decode("utf-8", errors="replace")
             prepared = _prepare_source_text(
                 session,
