@@ -675,24 +675,90 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
         ),
     ),
     LLMJudgedSearchField(
-        term_name="pcr_assay_lod",
+        term_name="targeted_detection_method",
         section="Targeted detection",
-        description="Numerical assay limit of detection.",
-        output_instructions=(
-            "Return only the numerical LOD value explicitly reported by the quote, without the unit. Do not "
-            "return the LOD method or infer an LOD from a dilution series."
+        description=(
+            "Targeted assay/detection approach used to detect a specific taxon, target, or sequence, "
+            "not general metabarcoding or shotgun sequencing."
         ),
-        search_terms=("limit of detection", "LOD", "detection limit"),
+        output_instructions=(
+            "Return only the targeted detection method. Use one of the allowed values when directly supported. "
+            "Do not return general PCR, metabarcoding, amplicon sequencing, shotgun sequencing, or downstream "
+            "bioinformatics as a targeted detection method."
+        ),
+        search_terms=(
+            "qPCR",
+            "quantitative PCR",
+            "real-time PCR",
+            "ddPCR",
+            "digital PCR",
+            "TaqMan qPCR",
+            "SYBR Green qPCR",
+            "species-specific PCR",
+            "targeted PCR",
+            "FISH",
+            "CARD-FISH",
+            "fluorescence in situ hybridization",
+            "catalyzed reporter deposition-FISH",
+            "probe-based detection",
+        ),
+        allowed_values=(
+            "qPCR",
+            "quantitative PCR",
+            "real-time PCR",
+            "ddPCR",
+            "digital PCR",
+            "TaqMan qPCR",
+            "SYBR Green qPCR",
+            "species-specific PCR",
+            "targeted PCR",
+            "FISH",
+            "CARD-FISH",
+            "fluorescence in situ hybridization",
+            "catalyzed reporter deposition-FISH",
+        ),
     ),
     LLMJudgedSearchField(
-        term_name="pcr_assay_lod_unit",
+        term_name="probe_name",
         section="Targeted detection",
-        description="Unit corresponding to the assay limit of detection.",
+        description="Name or identifier of an oligonucleotide probe used for targeted detection.",
         output_instructions=(
-            "Return only the LOD unit explicitly reported by the quote, such as copies/reaction, copies/uL, "
-            "copies/L, gene copies, or cells/reaction. Keep the paper's unit wording."
+            "Return only the explicit probe name/identifier, such as Atri578, TaqMan probe P1, or VIC-Probe-2. "
+            "Do not return probe sequences, primer names, host taxa, or whole sentences."
         ),
-        search_terms=("limit of detection", "LOD", "detection limit", "copies/reaction", "copies/uL", "gene copies"),
+        search_terms=(
+            "probe name",
+            "TaqMan probe",
+            "hydrolysis probe",
+            "molecular beacon",
+            "FISH probe",
+            "CARD-FISH probe",
+            "oligonucleotide probe",
+            "hybridization probe",
+            "HRP-labeled",
+            "horseradish peroxidase",
+            "probe",
+        ),
+    ),
+    LLMJudgedSearchField(
+        term_name="probe_target_taxon",
+        section="Targeted detection",
+        description="Taxonomic group that the detection probe is intended to detect.",
+        output_instructions=(
+            "Return only the biological taxon targeted by the probe, preferring the most specific level "
+            "explicitly stated. Do not return the sample host, environmental source, marker gene, primer/probe "
+            "name, or sequencing target region."
+        ),
+        search_terms=(
+            "probe target",
+            "probe targeting",
+            "targeted by the probe",
+            "specific probe",
+            "specific for",
+            "designed to target",
+            "target",
+            "probe",
+        ),
     ),
     LLMJudgedSearchField(
         term_name="probe_seq",
@@ -3176,7 +3242,7 @@ def quote_candidates_for_llm_judged_search(
     return tuple(candidates)
 
 
-def build_llm_judged_search_prompt(candidates: tuple[QuoteCandidate, ...]) -> str:
+def build_llm_judged_search_prompt(candidates: tuple[QuoteCandidate, ...], *, recall_pass: bool = False) -> str:
     field_reference = "\n".join(
         (
             f"- {field.term_name}: {field.description} "
@@ -3189,7 +3255,17 @@ def build_llm_judged_search_prompt(candidates: tuple[QuoteCandidate, ...]) -> st
         f"{candidate.quote_id} [{', '.join(candidate.field_names)}] {candidate.title}: {candidate.text}"
         for candidate in candidates
     )
-    return f"""You are judging candidate source quotes for FAIRe projectMetadata targeted-search fields.
+    # recall_pass=True: these quotes were dropped entirely from a larger
+    # first pass (see _recall_unanswered_llm_judged_candidates's own
+    # comment) -- a much smaller, focused re-ask, so give each one real
+    # attention this time instead of treating a short list as low-priority.
+    intro = (
+        "This is a smaller, focused recall pass: these candidate quotes were never addressed at all in a "
+        "larger first pass over the same paper. Give each one your full attention.\n\n"
+        if recall_pass
+        else ""
+    )
+    return f"""{intro}You are judging candidate source quotes for FAIRe projectMetadata targeted-search fields.
 
 Use only the candidate quotes below. Do not use outside knowledge. Do not infer from a keyword alone.
 Return a field only if a quote explicitly supports it. For free-text fields, keep raw_value as close as possible to
@@ -3897,6 +3973,57 @@ def _split_fused_adapter_primer_facts(facts: list[RawFactCandidate]) -> list[Raw
     return result
 
 
+# Real gap found live (10.1038/s41598-021-93859-5, STUDY-01a5e9aa6491): "We
+# also amplified two negative extraction controls and three PCR controls
+# and sequenced them in parallel with the 49 samples" correctly generated a
+# neg_cont_0_1 candidate quote (confirmed live -- quote_candidates_for_llm_
+# judged_search tags it), but the field came back empty regardless --
+# _control_not_found_fallback_facts' own comment already documents this
+# same class of miss for a different real study (STUDY-0161dd80b492), a
+# "real partial-completion miss" this single big judgement call has no way
+# to recover from: one call can carry up to 40 candidate quotes across ~15
+# different fields at once (quote_candidates_for_llm_judged_search's own
+# max_candidates), and unlike the checklist-based mechanism in text.py,
+# there's no closed list of "concepts that should always be evaluated" to
+# diff accepted answers against -- omitting a quote entirely and correctly
+# judging "none of its fields apply" produce the exact same (lack of)
+# output, so a genuine per-field completeness recall isn't safe to build
+# here. What IS safe and cheap: a quote_id the model's own raw response
+# never mentions AT ALL (not even to reject it) is a strong, distinct
+# signal of "skipped", not "considered and rejected" -- per an explicit
+# user instruction that more LLM calls to recover more real data are
+# worth it, one bounded recall pass re-asks about exactly those dropped
+# quotes (a much smaller prompt than the original, so a model that lost
+# track partway through a large batch gets a real, focused second look).
+def _recall_unanswered_llm_judged_candidates(
+    backend: LLMBackend,
+    parsed: object,
+    candidates: tuple[QuoteCandidate, ...],
+    *,
+    locator_prefix: str,
+    max_output_tokens: int | None = MIN_LLM_MAX_OUTPUT_TOKENS,
+) -> list[RawFactCandidate]:
+    answered_quote_ids = {
+        str(item.get("quote_id") or item.get("evidence_id") or "").strip()
+        for item in parsed
+        if isinstance(item, dict)
+    } if isinstance(parsed, list) else set()
+    unanswered = tuple(candidate for candidate in candidates if candidate.quote_id not in answered_quote_ids)
+    if not unanswered:
+        return []
+    recall_parsed, _recall_response = backend.generate_json(
+        build_llm_judged_search_prompt(unanswered, recall_pass=True),
+        system="You extract FAIRe library-preparation facts from supplied quote IDs only.",
+        temperature=0,
+        max_tokens=max_output_tokens,
+    )
+    if recall_parsed is None:
+        return []
+    return _facts_from_llm_judgement(
+        recall_parsed, unanswered, locator_prefix=f"{locator_prefix}:recall"
+    )
+
+
 def detect_llm_judged_search_facts(
     backend: LLMBackend,
     texts: Iterable[tuple[str, str]],
@@ -3963,6 +4090,7 @@ def detect_llm_judged_search_facts(
             f"{backend.label}: library-prep quote judgement returned invalid JSON after retries"
         )
     facts = _facts_from_llm_judgement(parsed, candidates, locator_prefix=locator_prefix)
+    facts.extend(_recall_unanswered_llm_judged_candidates(backend, parsed, candidates, locator_prefix=locator_prefix))
     facts = _mirror_not_a_control_to_sibling_field(facts)
     facts = _split_fused_adapter_primer_facts(facts)
     existing_fact_types = frozenset(fact.fact_type_candidate for fact in facts)

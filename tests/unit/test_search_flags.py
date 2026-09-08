@@ -1363,6 +1363,8 @@ def test_detect_llm_judged_search_facts_restores_sequencing_methodology():
     )
 
     def respond(prompt: str) -> str:
+        if "recall pass" in prompt:
+            return "[]"
         assert "sequencing_methodology" in prompt
         assert "Q001 [" in prompt
         assert "The PCR product was sequenced by the MiSeq platform" in prompt
@@ -1407,6 +1409,8 @@ def test_detect_llm_judged_search_facts_extracts_targeted_detection_bundle():
     )
 
     def respond(prompt: str) -> str:
+        if "recall pass" in prompt:
+            return "[]"
         assert "amp_vis_method" in prompt
         assert "probe_seq" in prompt
         assert "block_seq" in prompt
@@ -1645,6 +1649,8 @@ def test_detect_llm_judged_search_facts_handles_frontiers_atri578_probe_and_gel(
     )
 
     def respond(prompt: str) -> str:
+        if "recall pass" in prompt:
+            return "[]"
         assert "probe_seq" in prompt
         assert "amp_vis_method" in prompt
         assert "targeted_detection_method_additional" in prompt
@@ -2288,6 +2294,67 @@ def test_detect_llm_judged_search_facts_rejects_bad_quote_ids_and_vocab_values()
     )
 
     assert facts == []
+
+
+def test_detect_llm_judged_search_facts_recalls_a_quote_the_first_pass_never_answered():
+    """Real gap found live (10.1038/s41598-021-93859-5, STUDY-01a5e9aa6491):
+    "We also amplified two negative extraction controls and three PCR
+    controls and sequenced them in parallel with the 49 samples." reliably
+    generates a real neg_cont_0_1 candidate quote (confirmed live), but the
+    field came back empty regardless -- a single big judgement call can
+    silently drop a candidate quote entirely somewhere in a large batch,
+    with no way to tell "considered and rejected" apart from "skipped" in
+    the response alone. A quote_id the model's own response never
+    mentions AT ALL is a strong, distinct signal of "skipped" -- this
+    triggers one bounded, focused recall pass asking about exactly that
+    dropped quote."""
+    text = (
+        "We also amplified two negative extraction controls and three PCR controls and sequenced them "
+        "in parallel with the 49 samples. "
+        "OTUs were clustered using UPARSE."
+    )
+
+    def respond(prompt: str) -> str:
+        if "recall pass" in prompt:
+            assert "Q001" in prompt
+            assert "Q002" not in prompt
+            return json.dumps([{"field": "neg_cont_0_1", "raw_value": "1", "quote_id": "Q001"}])
+        # Main pass answers only the OTU-clustering candidate (Q002),
+        # leaving the negative-control candidate (Q001) entirely
+        # unaddressed.
+        return json.dumps([{"field": "otu_clust_tool", "raw_value": "UPARSE", "quote_id": "Q002"}])
+
+    backend = MockLLMBackend(responses=respond)
+    facts = detect_llm_judged_search_facts(backend, (("Methods", text),), locator_prefix="paper:PMC1")
+
+    by_type = {fact.fact_type_candidate: fact.raw_value for fact in facts}
+    assert by_type["otu_clust_tool"] == "UPARSE"
+    assert by_type["neg_cont_0_1"].startswith("1")
+    assert len(backend.calls) == 2
+
+
+def test_detect_llm_judged_search_facts_skips_recall_when_every_quote_was_answered():
+    """No wasted recall call when the model's response already accounted
+    for every candidate quote_id, even if it judged some of them as not
+    supporting any field (i.e. simply didn't return an object for them --
+    the point is the model's response referenced them, just via other
+    objects for the SAME quote)."""
+    text = "OTUs were clustered using UPARSE."
+
+    def respond(prompt: str) -> str:
+        assert "recall pass" not in prompt
+        return json.dumps([{"field": "otu_clust_tool", "raw_value": "UPARSE", "quote_id": "Q001"}])
+
+    backend = MockLLMBackend(responses=respond)
+    facts = detect_llm_judged_search_facts(
+        backend,
+        (("Methods", text),),
+        locator_prefix="paper:PMC1",
+        exclude_field_names=frozenset({"neg_cont_0_1", "pos_cont_0_1", "assay_target_taxa"}),
+    )
+
+    assert {fact.fact_type_candidate for fact in facts} == {"otu_clust_tool"}
+    assert len(backend.calls) == 1
 
 
 def test_detect_llm_judged_search_facts_extracts_in_situ_temp_salinity_verbatim():
