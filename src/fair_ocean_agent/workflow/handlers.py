@@ -945,6 +945,76 @@ def _resolve_repository_sources(
     return study
 
 
+# Real gap found live (10.1111/1462-2920.14870, STUDY-017230ae34c4,
+# PRJNA517146): NCBI's own bioproject<->biosample elink cross-reference is
+# not always COMPLETE, only sometimes fully empty -- confirmed live
+# against the real NCBI API that elink returns only 37 linked BioSamples
+# for this project's real UID, even though the study has 142+ real
+# BioSample accessions (the rest discovered independently via ENA's own
+# sample-accession cross-reference, which runs AFTER the NCBI BioSample
+# fetch above in handle_discover_identifiers). The existing fallback
+# (_fetch_ncbi_record_with_biosample_fallback) only activates on a total
+# SourceRecordNotFoundError, never on a partial list, so those extra,
+# independently-discovered accessions never get their own BioSample
+# attribute data (lat_lon, collection_date, host, isolation_source,
+# geo_loc_name, ...) fetched at all.
+def _biosample_accessions_missing_facts(session: Session, study_id: str, known_accessions: list[str]) -> list[str]:
+    if not known_accessions:
+        return []
+    entities_with_facts = set(
+        session.scalars(
+            select(Entity.external_identifier)
+            .join(RawFact, RawFact.entity_id == Entity.entity_id)
+            .where(
+                Entity.study_id == study_id,
+                Entity.entity_level == EntityLevel.SAMPLE.value,
+                Entity.external_identifier.in_(known_accessions),
+            )
+            .distinct()
+        ).all()
+    )
+    return [accession for accession in known_accessions if accession not in entities_with_facts]
+
+
+def _reconcile_missing_biosample_accessions(
+    session: Session, study: Study, bioproject_accession: str
+) -> Study:
+    """Fetches BioSample attribute data for any known accession that
+    slipped through NCBI's own elink incompleteness -- see this module's
+    own comment above _biosample_accessions_missing_facts for the real
+    gap this closes. Reuses the exact same known-accessions fallback path
+    already built for a fully-empty elink result, just triggered by a
+    partial gap instead."""
+    adapter = _build_enabled_adapters().get("ncbi_biosample")
+    # Duck-typed guard, not an isinstance check: several existing tests
+    # register a bare stand-in under the "ncbi_biosample" config key that
+    # only implements the plain fetch_record shape, not this fallback-
+    # specific method -- same tolerance _fetch_ncbi_record_with_biosample_
+    # fallback's own callers already need.
+    if adapter is None or not hasattr(adapter, "fetch_record_by_accessions"):
+        return study
+    known_accessions = _identifier_values(session, study.study_id, IdentifierType.BIOSAMPLE_ACCESSION)
+    missing_accessions = _biosample_accessions_missing_facts(session, study.study_id, known_accessions)
+    if not missing_accessions:
+        return study
+    try:
+        record = adapter.fetch_record_by_accessions(bioproject_accession, missing_accessions)
+    except SourceRecordNotFoundError:
+        logger.info(
+            "none of %d BioSample accession(s) missing facts for %s resolved on reconciliation fetch",
+            len(missing_accessions), bioproject_accession,
+        )
+        return study
+    logger.info(
+        "reconciliation fetch recovered %d of %d BioSample accession(s) elink never linked for %s",
+        len(record.raw.get("samples", [])), len(missing_accessions), bioproject_accession,
+    )
+    _created, source = _persist_source_and_facts(
+        session, study, adapter, SourceType.REPOSITORY_API, bioproject_accession, record
+    )
+    return _apply_related_identifiers(session, study, adapter.find_related(record), "ncbi_biosample", source)
+
+
 def _identifier_values(session: Session, study_id: str, identifier_type: IdentifierType) -> list[str]:
     rows = session.scalars(
         select(ExternalIdentifier.identifier_value)
@@ -1416,6 +1486,13 @@ def handle_discover_identifiers(session: Session, task: Task) -> None:
                 session, study, adapter, SourceType.REPOSITORY_API, bioproject_accession, record
             )
             study = _apply_related_identifiers(session, study, adapter.find_related(record), name, source)
+    # Real gap found live (STUDY-017230ae34c4): every BioProject accession
+    # known by this point (including ones the ENA/SRA passes above just
+    # surfaced) may still have known BioSample accessions NCBI's own
+    # elink never linked -- see _biosample_accessions_missing_facts's own
+    # comment for the confirmed-live real gap this closes.
+    for bioproject_accession in refreshed_bioproject_accessions:
+        study = _reconcile_missing_biosample_accessions(session, study, bioproject_accession)
     for dataset_doi in dataset_dois:
         study = _resolve_dataset_sources(
             session,

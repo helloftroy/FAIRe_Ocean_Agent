@@ -16,7 +16,7 @@ from fair_ocean_agent.database.enums import (
     RelationshipType,
     SupportType,
 )
-from fair_ocean_agent.database.models import DataAsset, ExternalIdentifier, RawFact, Source, Study, StudySource
+from fair_ocean_agent.database.models import DataAsset, Entity, ExternalIdentifier, RawFact, Source, Study, StudySource
 from fair_ocean_agent.identity.identifiers import normalize_doi
 from fair_ocean_agent.sources.base import RawFactCandidate, RelatedIdentifier, SourceRecord, SourceRecordNotFoundError
 from fair_ocean_agent.sources.datacite import DataCiteAdapter
@@ -734,3 +734,85 @@ def test_ncbi_bioproject_never_uses_fallback_even_when_not_found(db_session):
     result = handlers._fetch_ncbi_record_with_biosample_fallback(db_session, study, "ncbi_bioproject", adapter, "PRJNA1")
 
     assert result is None
+
+
+def _sample_entity_with_fact(session, study, external_identifier: str) -> Entity:
+    entity = Entity(study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier=external_identifier)
+    session.add(entity)
+    session.flush()
+    session.add(
+        RawFact(
+            study_id=study.study_id,
+            entity_id=entity.entity_id,
+            raw_field_name="geo_loc_name",
+            raw_value="USA: California",
+            fact_type_candidate="geo_loc_name",
+            entity_level=EntityLevel.SAMPLE.value,
+            support_type=SupportType.STRUCTURED_SOURCE.value,
+        )
+    )
+    return entity
+
+
+def test_biosample_accessions_missing_facts_finds_only_the_gap(db_session):
+    """Real gap found live (10.1111/1462-2920.14870, STUDY-017230ae34c4,
+    PRJNA517146): NCBI's own elink cross-reference linked only 37 of this
+    project's 142+ real BioSamples (confirmed live against the real NCBI
+    API), so any accession never covered by that elink-based fetch has an
+    Entity (created via a different discovery pass, e.g. ENA) but no
+    RawFact of its own at all."""
+    study = Study(title="Partial elink coverage")
+    db_session.add(study)
+    db_session.flush()
+    _sample_entity_with_fact(db_session, study, "SAMN1")
+    db_session.add(Entity(study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN2"))
+    db_session.commit()
+
+    missing = handlers._biosample_accessions_missing_facts(db_session, study.study_id, ["SAMN1", "SAMN2", "SAMN3"])
+
+    # SAMN1 has a real fact (already fetched), SAMN2 has an Entity but no
+    # fact (elink never linked it), SAMN3 has no Entity at all yet either --
+    # both SAMN2 and SAMN3 are genuine gaps.
+    assert missing == ["SAMN2", "SAMN3"]
+
+
+def test_reconcile_missing_biosample_accessions_fetches_only_the_gap(db_session, monkeypatch):
+    """The reconciliation step reuses the exact same known-accessions
+    fallback path already built for a fully-empty elink result (see
+    test_ncbi_biosample_fallback_used_when_elink_empty_and_accessions_known
+    above), just triggered by a partial gap instead of a total miss."""
+    study = Study(title="Reconciliation fetch")
+    db_session.add(study)
+    db_session.flush()
+    _sample_entity_with_fact(db_session, study, "SAMN1")
+    db_session.add(
+        ExternalIdentifier(study_id=study.study_id, identifier_type=IdentifierType.BIOSAMPLE_ACCESSION.value, identifier_value="SAMN1")
+    )
+    db_session.add(
+        ExternalIdentifier(study_id=study.study_id, identifier_type=IdentifierType.BIOSAMPLE_ACCESSION.value, identifier_value="SAMN2")
+    )
+    db_session.commit()
+    reconciled_record = _make_record("ncbi_biosample")
+    adapter = FakeNcbiBioSampleAdapter(name="ncbi_biosample", fallback_record=reconciled_record)
+    monkeypatch.setattr(handlers, "_build_enabled_adapters", lambda: {"ncbi_biosample": adapter})
+
+    handlers._reconcile_missing_biosample_accessions(db_session, study, "PRJNA1")
+
+    assert adapter.fallback_calls == [("PRJNA1", ["SAMN2"])]
+
+
+def test_reconcile_missing_biosample_accessions_no_op_when_nothing_missing(db_session, monkeypatch):
+    study = Study(title="Nothing missing")
+    db_session.add(study)
+    db_session.flush()
+    _sample_entity_with_fact(db_session, study, "SAMN1")
+    db_session.add(
+        ExternalIdentifier(study_id=study.study_id, identifier_type=IdentifierType.BIOSAMPLE_ACCESSION.value, identifier_value="SAMN1")
+    )
+    db_session.commit()
+    adapter = FakeNcbiBioSampleAdapter(name="ncbi_biosample")
+    monkeypatch.setattr(handlers, "_build_enabled_adapters", lambda: {"ncbi_biosample": adapter})
+
+    handlers._reconcile_missing_biosample_accessions(db_session, study, "PRJNA1")
+
+    assert adapter.fallback_calls == []
