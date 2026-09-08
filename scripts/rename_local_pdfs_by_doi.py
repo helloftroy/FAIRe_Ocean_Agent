@@ -13,11 +13,23 @@ find them. Handles three real, confirmed-live problems in one pass:
   ".pdf".
 - Non-DOI names (e.g. Paperpile's own "Author et al. YYYY - Title.pdf"
   export convention, individually or bundled in a "paperpile-files.zip")
-  -- these need their real DOI recovered from the PDF's own first-page
-  text (most journal PDFs print it in a running header/footer or title
-  block), verified against a study this pipeline already tracks (so a
-  cited reference's DOI on the same page is never mistaken for the
-  paper's own), then renamed to match.
+  -- these need their real DOI recovered somehow, then renamed to match.
+  Two sources, tried in this order:
+  1. A Paperpile "Export as CSV" reference list (--csv), if you have one --
+     its own "Attachments" column names the exact same file its "DOI"
+     column belongs to, Paperpile's own authoritative metadata, so this
+     is tried first, requires no PDF parsing at all, and needs no
+     database-tracking check (unlike the fallback below, there's no
+     ambiguity to guard against -- the CSV row already names this exact
+     file). Filenames are normalized (accents/diacritics stripped, case-
+     insensitive) before matching, since zip member names and a CSV
+     export don't always survive round-tripping through the same Unicode
+     form.
+  2. Falling back to the PDF's own first-page text (most journal PDFs
+     print their DOI in a running header/footer or title block),
+     verified against a study this pipeline already tracks (so a cited
+     reference's DOI on the same page is never mistaken for the paper's
+     own) -- used only for files the CSV doesn't cover.
 
 Dry-run by default -- prints exactly what would happen to every file
 without touching anything. Pass --apply to actually rename/move files.
@@ -27,13 +39,16 @@ reported and skipped so you can look at both copies yourself.
 Usage:
     python scripts/rename_local_pdfs_by_doi.py
     python scripts/rename_local_pdfs_by_doi.py --dir data/auto_fetched_pdfs --apply
+    python scripts/rename_local_pdfs_by_doi.py --csv "data/auto_fetched_pdfs/Paperpile - References.csv" --apply
     FAIR_OCEAN_DATABASE_URL=sqlite:////path/to/other.db python scripts/rename_local_pdfs_by_doi.py
 """
 from __future__ import annotations
 
 import argparse
+import csv
 import io
 import re
+import unicodedata
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -57,6 +72,50 @@ _DOI_IN_TEXT_RE = re.compile(r"10\.\d{4,9}/[^\s\"'<>()\[\]]+")
 # (_doi_pdf_filename's output) -- nothing to do for these.
 _ALREADY_CORRECT_RE = re.compile(r"^10\.\d{4,9}_[^:/]+\.pdf$", re.IGNORECASE)
 _PAGES_TO_SCAN = 2
+_NON_ALNUM_SPACE_RE = re.compile(r"[^a-z0-9 ]+")
+
+
+def _normalize_filename_for_matching(name: str) -> str:
+    """Strips extension, decomposes accented characters and drops the
+    combining marks (e.g. "Galià" -> "Galia"), lowercases, and collapses
+    everything else down to bare alphanumerics-and-spaces. Real gap found
+    live: a zip's own member names and a Paperpile CSV export don't
+    always survive round-tripping through the same Unicode normalization
+    form (e.g. "Galià-Camps" vs a decomposed "Galià-Camps"), so an exact
+    string match would silently miss real, correct matches."""
+    stem = Path(name).stem
+    decomposed = unicodedata.normalize("NFKD", stem)
+    without_marks = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    return _NON_ALNUM_SPACE_RE.sub(" ", without_marks.lower()).strip()
+
+
+def load_csv_doi_lookup(csv_path: Path) -> dict[str, str]:
+    """Paperpile's own "Export as CSV" reference list: the "Attachments"
+    column names the exact file(s) that row's "DOI" belongs to (Paperpile's
+    own authoritative metadata, not a guess) -- semicolon-joined when a
+    reference has more than one attachment. Keyed by normalized basename
+    (see _normalize_filename_for_matching) so a Unicode-form or case
+    mismatch between the CSV and an actual zip member doesn't silently
+    miss a real match. A row with no DOI or no attachment is skipped."""
+    lookup: dict[str, str] = {}
+    with csv_path.open(newline="", encoding="utf-8-sig") as f:
+        for row in csv.DictReader(f):
+            doi = (row.get("DOI") or "").strip()
+            attachments = (row.get("Attachments") or "").strip()
+            if not doi or not attachments:
+                continue
+            try:
+                normalized_doi = normalize_doi(doi)
+            except IdentifierError:
+                continue
+            for attachment in attachments.split(";"):
+                basename = Path(attachment.strip()).name
+                if not basename:
+                    continue
+                key = _normalize_filename_for_matching(basename)
+                if key:
+                    lookup.setdefault(key, normalized_doi)
+    return lookup
 
 
 @dataclass
@@ -126,6 +185,22 @@ def _first_tracked_doi(session, candidates: list[str]) -> str | None:
     return None
 
 
+def _plan_via_csv(
+    original_filename: str, source_label: Path, csv_map: dict[str, str], target_dir: Path, action: str
+) -> Plan | None:
+    """None means "not in the CSV, fall back to a content-based scan" --
+    every other outcome is a real Plan; no database-tracking check needed
+    here, unlike _plan_for_pdf_bytes's own fallback -- the CSV row already
+    names this exact file, no ambiguity to guard against."""
+    doi = csv_map.get(_normalize_filename_for_matching(original_filename))
+    if doi is None:
+        return None
+    target = target_dir / _doi_pdf_filename(doi)
+    if target.exists() and target.resolve() != source_label.resolve():
+        return Plan(source_label, target, "target_exists", f"{target.name} already present")
+    return Plan(source_label, target, action)
+
+
 def _plan_for_pdf_bytes(
     session, source_label: Path, content: bytes, target_dir: Path
 ) -> Plan:
@@ -144,7 +219,8 @@ def _plan_for_pdf_bytes(
     return Plan(source_label, target, "rename")
 
 
-def build_plan(session, directory: Path) -> list[Plan]:
+def build_plan(session, directory: Path, csv_map: dict[str, str] | None = None) -> list[Plan]:
+    csv_map = csv_map or {}
     plans: list[Plan] = []
     for entry in sorted(directory.iterdir()):
         if entry.is_dir():
@@ -154,29 +230,36 @@ def build_plan(session, directory: Path) -> list[Plan]:
                 for info in zf.infolist():
                     if info.is_dir() or not info.filename.lower().endswith(".pdf"):
                         continue
-                    content = zf.read(info)
                     member = (entry.name, info.filename)
+                    member_basename = Path(info.filename).name
                     # Label used only for the human-readable report --
                     # apply_plan never re-derives the zip/member pair from
                     # this, it uses `member` (Plan.zip_member) directly.
-                    label = Path(f"{entry.name}:{Path(info.filename).name}")
-                    colon_doi = _colon_doi_candidate(Path(info.filename).name)
+                    label = Path(f"{entry.name}:{member_basename}")
+                    colon_doi = _colon_doi_candidate(member_basename)
                     if colon_doi:
                         try:
                             normalized = normalize_doi(colon_doi)
                         except IdentifierError:
-                            plan = _plan_for_pdf_bytes(session, label, content, directory)
-                            plan.zip_member = member
-                            plans.append(plan)
+                            pass
+                        else:
+                            target = directory / _doi_pdf_filename(normalized)
+                            plans.append(
+                                Plan(label, target, "extract_and_rename", zip_member=member)
+                                if not target.exists()
+                                else Plan(label, target, "target_exists", f"{target.name} already present", zip_member=member)
+                            )
                             continue
-                        target = directory / _doi_pdf_filename(normalized)
-                        plans.append(
-                            Plan(label, target, "extract_and_rename", zip_member=member)
-                            if not target.exists()
-                            else Plan(label, target, "target_exists", f"{target.name} already present", zip_member=member)
-                        )
+                    # CSV lookup is tried next, before ever reading the
+                    # member's bytes at all -- real, valuable speedup for a
+                    # batch this size (487 PDFs across two zips): no PDF
+                    # parsing needed for anything the CSV already covers.
+                    csv_plan = _plan_via_csv(member_basename, label, csv_map, directory, "extract_and_rename")
+                    if csv_plan is not None:
+                        csv_plan.zip_member = member
+                        plans.append(csv_plan)
                         continue
-                    plan = _plan_for_pdf_bytes(session, label, content, directory)
+                    plan = _plan_for_pdf_bytes(session, label, zf.read(info), directory)
                     plan.action = "extract_and_rename" if plan.action == "rename" else plan.action
                     plan.zip_member = member
                     plans.append(plan)
@@ -200,8 +283,11 @@ def build_plan(session, directory: Path) -> list[Plan]:
             else:
                 plans.append(Plan(entry, target, "rename"))
             continue
-        content = entry.read_bytes()
-        plans.append(_plan_for_pdf_bytes(session, entry, content, directory))
+        csv_plan = _plan_via_csv(entry.name, entry, csv_map, directory, "rename")
+        if csv_plan is not None:
+            plans.append(csv_plan)
+            continue
+        plans.append(_plan_for_pdf_bytes(session, entry, entry.read_bytes(), directory))
     return plans
 
 
@@ -227,14 +313,26 @@ def apply_plan(plans: list[Plan], directory: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dir", type=Path, default=DEFAULT_DIR)
+    parser.add_argument(
+        "--csv", type=Path, default=None,
+        help="a Paperpile 'Export as CSV' reference list -- matched by filename (via its own "
+        "Attachments column) before falling back to scanning each PDF's own first-page text",
+    )
     parser.add_argument("--apply", action="store_true", help="actually rename/extract files (default: dry-run report only)")
     args = parser.parse_args()
 
     if not args.dir.is_dir():
         raise SystemExit(f"not a directory: {args.dir}")
 
+    csv_map: dict[str, str] = {}
+    if args.csv:
+        if not args.csv.is_file():
+            raise SystemExit(f"not a file: {args.csv}")
+        csv_map = load_csv_doi_lookup(args.csv)
+        print(f"Loaded {len(csv_map)} filename -> DOI entries from {args.csv}\n")
+
     with session_scope() as session:
-        plans = build_plan(session, args.dir)
+        plans = build_plan(session, args.dir, csv_map)
 
     by_action: dict[str, list[Plan]] = {}
     for plan in plans:
