@@ -351,6 +351,26 @@ def _control_sample_category(value: str) -> str | None:
     return None
 
 
+# in_situ_temp/in_situ_salinity used to target "temp"/"salinity" directly --
+# a real, confirmed dead end found live (STUDY-0049c7972ece): those two
+# columns are unconditionally suppressed at export time
+# (exports/faire.py's SAMPLE_METADATA_SUPPRESSED_FIELDS), per the same
+# explicit user request that bundled all 18 physicochemical fields into
+# x_env_var_block instead, so a value mapped straight to "temp"/"salinity"
+# could never reach a CSV no matter how well it was extracted. Reformats
+# into x_env_var_block's own documented "name: value" shape instead, so it
+# pipe-joins correctly alongside any other x_env_var_block facts
+# (_PIPE_UNION_TARGET_FIELDS in mapping/faire.py already handles the join).
+def _format_in_situ_temp_as_env_var_block_entry(value: str) -> str | None:
+    value = value.strip()
+    return f"temperature: {value}" if value else None
+
+
+def _format_in_situ_salinity_as_env_var_block_entry(value: str) -> str | None:
+    value = value.strip()
+    return f"salinity: {value}" if value else None
+
+
 @dataclass(frozen=True)
 class MappingRule:
     source_fact_type: str
@@ -542,11 +562,16 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
     # reading is typically reported once for the whole site, not per
     # sample; broadcasts into every sample's row exactly like other
     # STUDY-level sampleMetadata facts (see exports/faire.py's own
-    # broadcast-as-default docstring).
-    MappingRule("in_situ_temp", EntityLevel.STUDY.value, "sampleMetadata", "temp",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
-    MappingRule("in_situ_salinity", EntityLevel.STUDY.value, "sampleMetadata", "salinity",
-                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True),
+    # broadcast-as-default docstring). Targets x_env_var_block, not
+    # "temp"/"salinity" directly -- those two columns are unconditionally
+    # suppressed at export (see _format_in_situ_temp_as_env_var_block_entry's
+    # own comment for the real gap this fixed).
+    MappingRule("in_situ_temp", EntityLevel.STUDY.value, "sampleMetadata", "x_env_var_block",
+                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True,
+                transform=_format_in_situ_temp_as_env_var_block_entry),
+    MappingRule("in_situ_salinity", EntityLevel.STUDY.value, "sampleMetadata", "x_env_var_block",
+                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True,
+                transform=_format_in_situ_salinity_as_env_var_block_entry),
     # biological_rep_relation: emitted by sources/replicate_grouping.py's
     # sample-name-suffix detector (via supplement_parsing.py and ncbi.py),
     # never a literal source column -- review_required=True since this is a

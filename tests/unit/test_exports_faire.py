@@ -1344,7 +1344,16 @@ def test_in_situ_temp_salinity_export_suppresses_removed_env_columns(db_session,
     every sample's own sampleMetadata row, exactly like other STUDY-level
     broadcast defaults. These legacy standalone environmental columns are
     now suppressed from export entirely, replaced by x_env_var_block, per
-    explicit user requests."""
+    explicit user requests.
+
+    Real gap found live (STUDY-0049c7972ece): this test only ever checked
+    that "temp"/"salinity" were ABSENT as their own columns -- it never
+    checked that the same value actually reached x_env_var_block instead,
+    so it kept passing even while in_situ_temp/in_situ_salinity's own
+    MappingRule still pointed straight at "temp"/"salinity" (silently
+    dropped at export, this test's own docstring's stated intent
+    notwithstanding). Now also asserts the value lands in x_env_var_block,
+    not just that the old columns are gone."""
     study = Study(title="In-situ broadcast test")
     db_session.add(study)
     db_session.flush()
@@ -1378,6 +1387,8 @@ def test_in_situ_temp_salinity_export_suppresses_removed_env_columns(db_session,
     assert "diss_oxygen" not in rows["SAMN1"]
     assert "nitro_unit" not in rows["SAMN1"]
     assert "tot_inorg_nitro" not in rows["SAMN1"]
+    assert "temperature: 6.5C" in rows["SAMN1"]["x_env_var_block"]
+    assert "salinity: 6.4 PSU" in rows["SAMN1"]["x_env_var_block"]
 
 
 def test_x_pulled_env_var_broadcasts_into_every_sample_row_alongside_x_env_var_block(db_session, tmp_path):

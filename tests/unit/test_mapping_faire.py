@@ -579,7 +579,15 @@ def test_maps_in_situ_temp_salinity_to_sample_metadata_fields_at_study_level(db_
     collection -- the first TEXT-based source for these fields (previously
     structured-BioSample-only). STUDY-level since one collection event's
     in-situ reading is typically reported once for the whole site, not per
-    sample."""
+    sample.
+
+    Real gap found live (STUDY-0049c7972ece): this used to assert the
+    value landed in "temp"/"salinity" directly -- both unconditionally
+    suppressed at export (exports/faire.py's SAMPLE_METADATA_SUPPRESSED_
+    FIELDS), so a real extracted in-situ reading could never actually
+    reach a CSV. Now targets x_env_var_block instead, formatted to match
+    its own "name: value" convention, so it pipe-joins with any other
+    x_env_var_block content instead of disappearing."""
     study = _study(db_session, title="In-situ measurements from text")
     _fact(db_session, study, field="in_situ_temp", value="6.5C", entity_level="study", support=SupportType.EXPLICIT)
     _fact(db_session, study, field="in_situ_salinity", value="6.4 PSU", entity_level="study", support=SupportType.EXPLICIT)
@@ -592,8 +600,9 @@ def test_maps_in_situ_temp_salinity_to_sample_metadata_fields_at_study_level(db_
         sv.target_field: sv.standardized_value
         for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id, entity_id=None)
     }
-    assert values["temp"] == "6.5C"
-    assert values["salinity"] == "6.4 PSU"
+    assert "temp" not in values
+    assert "salinity" not in values
+    assert values["x_env_var_block"] == "temperature: 6.5C | salinity: 6.4 PSU"
 
 
 # Real FAIRe Environment-subset fields deliberately dropped entirely per
