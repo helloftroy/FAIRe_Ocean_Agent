@@ -888,9 +888,8 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
             "Return a concise source-faithful sentence or semicolon-separated phrase preserving useful targeted "
             "detection methodology. Use this when the quote contains important qPCR, dPCR/ddPCR, FISH, CARD-FISH, "
             "blocking-oligo, assay-validation, standard-curve, detection-limit, inhibition-test, probe, or "
-            "adapter/indexing detail that is not fully captured by another field. Do not include generic PCR, "
-            "sequencing, sample collection, or downstream bioinformatics unless the sentence is specifically "
-            "part of targeted detection or adapter/index addition without explicit adapter sequences."
+            "other targeted-detection detail that is not fully captured by another field. Do not include generic "
+            "PCR, sequencing, library adapter/indexing, sample collection, or downstream bioinformatics."
         ),
         search_terms=(
             "qPCR",
@@ -925,9 +924,6 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
             "limit of quantification",
             "standard curve",
             "PCR inhibition",
-            "index adapter",
-            "adapter were added",
-            "adapters were added",
         ),
     ),
     LLMJudgedSearchField(
@@ -3087,6 +3083,19 @@ _PROBE_CONC_VALUE_RE = re.compile(
     r"^\s*(?:~|≈|about\s+|approximately\s+)?\d+(?:\.\d+)?\s*(?:nM|uM|µM|μM|nmol/L|umol/L|µmol/L|μmol/L)\s*$",
     re.IGNORECASE,
 )
+_TARGETED_DETECTION_METHOD_CONTEXT_RE = re.compile(
+    r"\b(?:"
+    r"qPCR|quantitative\s+PCR|real[-\s]?time\s+PCR|digital\s+PCR|dPCR|ddPCR|targeted\s+detection|"
+    r"probe[-\s]+based\s+detection|TaqMan|hydrolysis\s+probe|molecular\s+beacon|"
+    r"FISH|CARD[-\s]?FISH|fluorescence\s+in\s+situ\s+hybridization|oligonucleotide\s+probe|"
+    r"hybridization\s+probe|HRP[-\s]?labeled|horseradish\s+peroxidase|"
+    r"blocking\s+(?:oligo|oligos|oligonucleotide|oligonucleotides|primer|primers)|"
+    r"detection\s+criteri(?:on|a)|limit\s+of\s+detection|limit\s+of\s+quantification|\bLOD\b|\bLOQ\b|"
+    r"standard\s+curves?|PCR\s+inhibition|inhibition\s+(?:test|check|assay)|"
+    r"internal\s+(?:positive|amplification)\s+control|spike[-\s]?in\s+control"
+    r")\b",
+    re.IGNORECASE,
+)
 _DETECTION_CRITERIA_CONTEXT_RE = re.compile(
     r"\b(?:"
     r"(?:considered|scored|called|accepted|counted)\s+(?:as\s+)?positive|"
@@ -3135,6 +3144,10 @@ _OLIGO_TABLE_ROW_CANDIDATE_RE = re.compile(
     r"(?P<reference>[^.]{1,120})",
     re.IGNORECASE,
 )
+_OLIGO_PROBE_ROW_CONTEXT_RE = re.compile(
+    r"\|[^|]*[ACGTRYSWKMBDHVN]{10,}[^|]*\|[^|]*\|[^|]*\b(?:C|FISH|CARD[-\s]?FISH)\b[^|]*\|",
+    re.IGNORECASE,
+)
 
 
 def _llm_judged_field_matches_snippet(field: LLMJudgedSearchField, snippet: str, window: str | None = None) -> bool:
@@ -3156,6 +3169,8 @@ def _llm_judged_field_matches_snippet(field: LLMJudgedSearchField, snippet: str,
         return bool(_PROBE_ASSAY_CONTEXT_RE.search(snippet) and _PROBE_REF_CONTEXT_RE.search(snippet))
     if field.term_name == "probe_conc":
         return bool(_PROBE_ASSAY_CONTEXT_RE.search(snippet) and _PROBE_CONC_CONTEXT_RE.search(snippet))
+    if field.term_name == "targeted_detection_method_additional":
+        return bool(_TARGETED_DETECTION_METHOD_CONTEXT_RE.search(snippet))
     if field.term_name == "detection_criteria":
         return bool(_DETECTION_CRITERIA_CONTEXT_RE.search(snippet))
     if field.term_name == "assay_target_taxa":
@@ -3375,6 +3390,19 @@ def _valid_llm_judged_value(field: LLMJudgedSearchField, value: str) -> bool:
     )
 
 
+def _valid_llm_judged_entry(field: LLMJudgedSearchField, value: str, quote: str) -> bool:
+    if not _valid_llm_judged_value(field, value):
+        return False
+    if field.term_name == "probe_ref":
+        return bool(
+            (_PROBE_ASSAY_CONTEXT_RE.search(quote) and _PROBE_REF_CONTEXT_RE.search(quote))
+            or _OLIGO_PROBE_ROW_CONTEXT_RE.search(quote)
+        )
+    if field.term_name == "targeted_detection_method_additional":
+        return bool(_TARGETED_DETECTION_METHOD_CONTEXT_RE.search(quote))
+    return True
+
+
 def _clean_assay_name_parts(value: str) -> list[str]:
     cleaned: list[str] = []
     seen: set[str] = set()
@@ -3549,7 +3577,7 @@ def _facts_from_llm_judgement(
         quote_id = str(item.get("quote_id") or item.get("evidence_id") or "").strip()
         field = fields.get(field_name)
         candidate = candidates_by_id.get(quote_id)
-        if field is None or candidate is None or not _valid_llm_judged_value(field, value):
+        if field is None or candidate is None or not _valid_llm_judged_entry(field, value, candidate.text):
             continue
         # Mirrors the same fix in section_category_extraction.py's Stage 3
         # guard: the verbatim check alone doesn't stop the model from

@@ -925,6 +925,7 @@ def test_quote_candidates_for_llm_judged_barcoding_maps_second_round_pcr():
         )
     )
     assert any("barcoding_pcr_appr" in c.field_names for c in candidates)
+    assert all("targeted_detection_method_additional" not in c.field_names for c in candidates)
 
 
 def test_barcoding_pcr_appr_keyword_fallback_matches_second_round_pcr():
@@ -1522,8 +1523,27 @@ def test_targeted_detection_candidates_reject_non_blocking_taxonomy_and_probe_no
     }
 
     assert "block_taxa" not in field_names
+    assert "targeted_detection_method_additional" not in field_names
     assert "probe_conc" not in field_names
     assert "probe_ref" not in field_names
+
+
+def test_targeted_detection_rejects_probe_ref_and_additional_without_probe_or_targeted_context():
+    text = (
+        "Environmental variables were measured using a YSI Pro Plus, Yellow Springs, Ohio, USA. "
+        "Sequence reads were processed with USEARCH and OTUs were assigned using the SILVA database."
+    )
+
+    candidates = quote_candidates_for_llm_judged_search(
+        (("Methods", text),),
+    )
+    field_names = {
+        field_name
+        for candidate in candidates
+        for field_name in candidate.field_names
+    }
+    assert "probe_ref" not in field_names
+    assert "targeted_detection_method_additional" not in field_names
 
 
 def test_targeted_detection_rejects_bad_block_taxa_probe_conc_and_probe_ref_values():
