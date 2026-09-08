@@ -1569,6 +1569,7 @@ def test_targeted_detection_rejects_bad_block_taxa_probe_conc_and_probe_ref_valu
                     "quote_id": "Q002",
                 },
                 {"field": "probe_ref", "raw_value": "YSI Pro Plus, Yellow Springs, Ohio, USA", "quote_id": "Q002"},
+                {"field": "block_taxa", "raw_value": "chloroplasts", "quote_id": "Q001"},
                 {"field": "block_taxa", "raw_value": "fish DNA", "quote_id": "Q001"},
                 {"field": "probe_conc", "raw_value": "0.5 μM", "quote_id": "Q002"},
                 {"field": "probe_ref", "raw_value": "designed in this study", "quote_id": "Q002"},
@@ -1582,6 +1583,29 @@ def test_targeted_detection_rejects_bad_block_taxa_probe_conc_and_probe_ref_valu
     assert by_type["block_taxa"] == "fish DNA"
     assert by_type["probe_conc"] == "0.5 μM"
     assert by_type["probe_ref"] == "designed in this study"
+
+
+def test_block_taxa_requires_blocker_suppression_target_context():
+    text = (
+        "A blocking primer 5'-ACGTACGTACGT-3' was included in the PCR reaction. "
+        "Chloroplasts and mitochondria were removed from the taxonomic table after classification."
+    )
+
+    def respond(prompt: str) -> str:
+        assert "block_taxa" in prompt
+        return json.dumps(
+            [
+                {"field": "block_seq", "raw_value": "ACGTACGTACGT", "quote_id": "Q001"},
+                {"field": "block_taxa", "raw_value": "chloroplasts", "quote_id": "Q001"},
+            ]
+        )
+
+    backend = MockLLMBackend(label="judge", responses=respond)
+    facts = detect_llm_judged_search_facts(backend, (("Methods", text),), locator_prefix="paper:PMC1")
+    by_type = {fact.fact_type_candidate: fact.raw_value for fact in facts}
+
+    assert by_type["block_seq"] == "ACGTACGTACGT"
+    assert "block_taxa" not in by_type
 
 
 def test_detect_llm_judged_search_facts_handles_frontiers_atri578_probe_and_gel():

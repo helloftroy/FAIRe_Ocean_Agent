@@ -625,9 +625,6 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
             "suppress amplification",
             "inhibit amplification",
             "block host",
-            "host DNA",
-            "chloroplast",
-            "mitochondrial",
             "predator DNA",
         ),
     ),
@@ -3050,6 +3047,28 @@ _BLOCKING_OLIGO_CONTEXT_RE = re.compile(
     r")\b",
     re.IGNORECASE,
 )
+_BLOCK_TAXA_INTENT_CONTEXT_RE = re.compile(
+    r"\b(?:"
+    r"(?:blocking\s+(?:primer|primers|oligo|oligos|oligonucleotide|oligonucleotides)|"
+    r"host[-\s]+blocking\s+primer|blocker(?:\s+(?:primer|oligo|oligonucleotide))?|"
+    r"suppressor\s+oligonucleotide).{0,160}\b(?:suppress|inhibit|block|avoid|prevent|reduce|minimi[sz]e|"
+    r"limit)\b.{0,160}\b(?:amplification|hybridization|DNA|template|host|predator|non[-\s]?target|"
+    r"chloroplast|mitochondri)|"
+    r"(?:suppress|inhibit|block|avoid|prevent|reduce|minimi[sz]e|limit)\b.{0,160}\b"
+    r"(?:host|predator|non[-\s]?target|chloroplast|mitochondri|DNA|template).{0,160}\b"
+    r"(?:blocking\s+(?:primer|primers|oligo|oligos|oligonucleotide|oligonucleotides)|"
+    r"host[-\s]+blocking\s+primer|blocker|suppressor\s+oligonucleotide)"
+    r")",
+    re.IGNORECASE,
+)
+_BLOCK_TAXA_REJECT_VALUE_RE = re.compile(
+    r"\b(?:"
+    r"OTUs?|ASVs?|reads?|sequences?|representative\s+sequences|unidentified\s+sequences|"
+    r"abundance|taxonom(?:y|ic)|classified|assigned|removed|filtered|discarded|database|"
+    r"non[-\s]?target\s+taxa|contaminants?|metazoa|eukaryotes?|archaea|bacteria"
+    r")\b",
+    re.IGNORECASE,
+)
 _PROBE_ASSAY_CONTEXT_RE = re.compile(
     r"\b(?:"
     r"TaqMan|hydrolysis\s+probe|molecular\s+beacon|reporter\s+dye|fluorophore|"
@@ -3367,7 +3386,9 @@ def _valid_llm_judged_value(field: LLMJudgedSearchField, value: str) -> bool:
         return _looks_like_nucleotide_sequence(stripped)
     if field.term_name == "block_taxa":
         lowered = stripped.casefold()
-        if any(term in lowered for term in ("otu", "asv", "abundance", "representative sequences", "unidentified sequences")):
+        if "|" in stripped or "," in stripped or ";" in stripped:
+            return False
+        if _BLOCK_TAXA_REJECT_VALUE_RE.search(lowered):
             return False
         return len(stripped.split()) <= 8
     if field.term_name == "probe_conc":
@@ -3398,6 +3419,8 @@ def _valid_llm_judged_entry(field: LLMJudgedSearchField, value: str, quote: str)
             (_PROBE_ASSAY_CONTEXT_RE.search(quote) and _PROBE_REF_CONTEXT_RE.search(quote))
             or _OLIGO_PROBE_ROW_CONTEXT_RE.search(quote)
         )
+    if field.term_name == "block_taxa":
+        return bool(_BLOCK_TAXA_INTENT_CONTEXT_RE.search(quote) and value.casefold() in quote.casefold())
     if field.term_name == "targeted_detection_method_additional":
         return bool(_TARGETED_DETECTION_METHOD_CONTEXT_RE.search(quote))
     return True
