@@ -150,7 +150,17 @@ _ALIAS_MERGE_EXCLUDED_FIELDS = frozenset({"samp_name", "materialSampleID"})
 # text (mapping/faire.py's own pipe-union already merges multiple paper
 # paragraphs' worth of samp_mat_process text into one broadcast value),
 # both are kept side by side here.
-_BROADCAST_ENTITY_PIPE_JOIN_FIELDS = frozenset({"samp_mat_process"})
+#
+# x_env_var_block/x_pulled_env_var: same reasoning, added per an explicit
+# user request that EVERY env variable -- whichever source produced it
+# (paper prose, a structured NCBI BioSample attribute, or GOLD enrichment)
+# -- surface through this pair of columns rather than winning outright and
+# discarding the other. Without this, a sample-level structured value
+# (e.g. a real per-BioSample chlorophyll reading) would silently overwrite
+# a study-wide paper-text broadcast (e.g. "temperature: 28.1 C" from the
+# Methods section) for that one sample's row via the plain dict update
+# above, losing the broadcast half entirely instead of combining both.
+_BROADCAST_ENTITY_PIPE_JOIN_FIELDS = frozenset({"samp_mat_process", "x_env_var_block", "x_pulled_env_var"})
 
 # extraction/section_categories.py's per-category "<name>_0_1" detection
 # facts (e.g. "sample_prep_0_1") -- a diagnostic coverage

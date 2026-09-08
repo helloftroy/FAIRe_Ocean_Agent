@@ -17,7 +17,12 @@ from fair_ocean_agent.database.models import (
 from fair_ocean_agent.extraction.faire_fields import assay_scoped_field_names, native_name_to_faire_hint
 from fair_ocean_agent.mapping.envo import expand_envo_terms
 from fair_ocean_agent.mapping.faire import map_study_to_faire, resolve_project_id
-from fair_ocean_agent.mapping.rules import _ADDITIONAL_ENVIRONMENTAL_SAMPLE_ATTRIBUTES, RULES, rules_for
+from fair_ocean_agent.mapping.rules import (
+    _ADDITIONAL_ENVIRONMENTAL_SAMPLE_ATTRIBUTES,
+    _PHYSICOCHEMICAL_ENV_VAR_ATTRIBUTES,
+    RULES,
+    rules_for,
+)
 
 
 def _home_entity_study(entity: Entity) -> EntityStudy:
@@ -543,7 +548,16 @@ def test_maps_sample_level_biosample_attributes_not_previously_covered(db_sessio
     """elev/samp_collect_device/samp_size/samp_size_unit/temp/salinity/ph
     all arrive through the exact same NCBI BioSample
     Attributes/Attribute passthrough as collection_date/depth/geo_loc_name
-    above (sources/ncbi.py) -- these rules just hadn't been added yet."""
+    above (sources/ncbi.py) -- these rules just hadn't been added yet.
+
+    Real gap found live (STUDY-0049c7972ece): temp/salinity/ph used to
+    assert the value landed in "temp"/"salinity"/"ph" directly -- all
+    three unconditionally suppressed at export (exports/faire.py's
+    SAMPLE_METADATA_SUPPRESSED_FIELDS), so a real structured BioSample
+    reading could never actually reach a CSV. Now targets
+    x_env_var_block/x_pulled_env_var instead, per an explicit user
+    request that every env variable surface through that same pair of
+    columns regardless of source."""
     study = _study(db_session, title="More BioSample attributes")
     sample = Entity(study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN1")
     db_session.add(sample)
@@ -568,9 +582,11 @@ def test_maps_sample_level_biosample_attributes_not_previously_covered(db_sessio
     assert values["samp_collect_device"] == "Niskin bottle"
     assert values["samp_size"] == "500"
     assert values["samp_size_unit"] == "mL"
-    assert values["temp"] == "18.5"
-    assert values["salinity"] == "35"
-    assert values["ph"] == "8.1"
+    assert "temp" not in values
+    assert "salinity" not in values
+    assert "ph" not in values
+    assert values["x_env_var_block"] == "temperature: 18.5 | salinity: 35 | pH: 8.1"
+    assert values["x_pulled_env_var"] == "temperature = 18.5 | salinity = 35 | pH = 8.1"
 
 
 def test_maps_in_situ_temp_salinity_to_sample_metadata_fields_at_study_level(db_session):
@@ -617,7 +633,7 @@ def test_maps_in_situ_temp_salinity_to_sample_metadata_fields_at_study_level(db_
 # see extraction/api_verification.py.
 _DELIBERATELY_UNMAPPED_ENVIRONMENT_FIELDS = frozenset(
     {
-        "diss_oxygen", "nitro", "nitro_unit", "org_carb", "org_nitro",
+        "nitro", "nitro_unit", "org_carb", "org_nitro",
         "tot_inorg_nitro", "tot_nitro_cont_meth", "tot_nitro_content", "tot_org_c_meth",
         # Removed entirely per an explicit user request ("negligible...
         # don't want to waste compute on them or clutter the code with
@@ -626,17 +642,30 @@ _DELIBERATELY_UNMAPPED_ENVIRONMENT_FIELDS = frozenset(
     }
 )
 
+# Physicochemical FAIRe Environment fields that DO have a SAMPLE-level
+# rule -- just not one whose target_field equals the field's own name.
+# Per an explicit user request, every env variable (whichever source
+# produced it) surfaces through the bundled x_env_var_block/
+# x_pulled_env_var pair instead of its own now-suppressed dedicated
+# column (see mapping/rules.py's own _PHYSICOCHEMICAL_ENV_VAR_ATTRIBUTES
+# comment for the real gap this fixed), so these are expected to be
+# absent from sample_level_target_fields below even though they're
+# genuinely, correctly mapped.
+_FIELDS_BUNDLED_INTO_ENV_VAR_BLOCK = frozenset(field for field, _ in _PHYSICOCHEMICAL_ENV_VAR_ATTRIBUTES)
+
 
 def test_every_faire_environment_field_has_a_sample_level_rule():
     """Systematic guard: every FAIRe field tagged in_subset: Environment in
     the vendored schema (70 total) must be reachable *as a target_field* by
     some SAMPLE-level rule -- either an explicit rule above
-    (minimumDepthInMeters/maximumDepthInMeters via "depth", elev/temp/
-    salinity/ph via their own name) or the generated
-    _ADDITIONAL_ENVIRONMENTAL_SAMPLE_ATTRIBUTES batch, except the handful
-    deliberately dropped entirely (_DELIBERATELY_UNMAPPED_ENVIRONMENT_
-    FIELDS). Catches a future schema update silently adding a new
-    environmental field this table never learns about."""
+    (minimumDepthInMeters/maximumDepthInMeters via "depth", elev via its
+    own name) or the generated _ADDITIONAL_ENVIRONMENTAL_SAMPLE_ATTRIBUTES
+    batch, except the handful deliberately dropped entirely
+    (_DELIBERATELY_UNMAPPED_ENVIRONMENT_FIELDS) or bundled into
+    x_env_var_block/x_pulled_env_var instead of their own column
+    (_FIELDS_BUNDLED_INTO_ENV_VAR_BLOCK). Catches a future schema update
+    silently adding a new environmental field this table never learns
+    about."""
     import yaml
 
     from fair_ocean_agent.database.enums import EntityLevel as _EntityLevel
@@ -650,11 +679,21 @@ def test_every_faire_environment_field_has_a_sample_level_rule():
         rule.target_field for rule in RULES
         if rule.source_entity_level == _EntityLevel.SAMPLE.value
     }
-    missing = env_fields - sample_level_target_fields - _DELIBERATELY_UNMAPPED_ENVIRONMENT_FIELDS
+    missing = (
+        env_fields
+        - sample_level_target_fields
+        - _DELIBERATELY_UNMAPPED_ENVIRONMENT_FIELDS
+        - _FIELDS_BUNDLED_INTO_ENV_VAR_BLOCK
+    )
     assert not missing, f"FAIRe Environment fields with no SAMPLE-level rule: {sorted(missing)}"
 
 
 def test_maps_a_sample_of_the_generated_environmental_attributes(db_session):
+    """Real gap found live (STUDY-0049c7972ece): chlorophyll used to assert
+    the value landed in "chlorophyll" directly -- unconditionally
+    suppressed at export (exports/faire.py's SAMPLE_METADATA_SUPPRESSED_
+    FIELDS), so a real GOLD-sourced reading could never actually reach a
+    CSV. Now targets x_env_var_block/x_pulled_env_var instead."""
     study = _study(db_session, title="Additional environmental attributes")
     sample = Entity(study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN1")
     db_session.add(sample)
@@ -672,10 +711,12 @@ def test_maps_a_sample_of_the_generated_environmental_attributes(db_session):
         sv.target_field: sv.standardized_value
         for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id, entity_id=sample.entity_id)
     }
-    assert values["chlorophyll"] == "0.8 mg/m3"
-    assert values["host_species"] == "Thunnus albacares"
-    assert values["tot_nitro"] == "2.3 mg/L"
+    assert "chlorophyll" not in values
+    assert "tot_nitro" not in values
     assert "tot_nitro_unit" not in values
+    assert values["x_env_var_block"] == "chlorophyll: 0.8 mg/m3 | total nitrogen: 2.3 mg/L"
+    assert values["x_pulled_env_var"] == "chlorophyll = 0.8 mg/m3 | total nitrogen = 2.3 mg/L"
+    assert values["host_species"] == "Thunnus albacares"
 
 
 def test_generated_environmental_attribute_names_have_no_duplicates():

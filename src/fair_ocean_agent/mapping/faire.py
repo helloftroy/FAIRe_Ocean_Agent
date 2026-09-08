@@ -149,7 +149,15 @@ def _resolve_entity_id(session: Session, study_id: str, fact: RawFact, rule: Map
 # True too), and a paper can report different environmental measurements
 # in more than one paragraph or in a separate supplement table -- every
 # contributing quote should show up in the pipe-joined value, not just
-# the first one found.
+# the first one found. x_pulled_env_var joins the same way per an explicit
+# user request: it's the clean "name = value" companion column
+# (extraction/section_category_extraction.py::extract_pulled_env_var_facts
+# for free-text quotes; mapping/rules.py's own temp/salinity/ph/
+# chlorophyll/diss_oxygen/in_situ_temp/in_situ_salinity formatters for
+# already-structured sources), and multiple distinct sources (e.g. a
+# structured NCBI temp attribute AND a separate GOLD-sourced chlorophyll
+# reading, both STUDY- or SAMPLE-level facts targeting this same field)
+# must all show up rather than one silently overwriting the rest.
 # spreadsheet_headers unions for a related but simpler reason: a study can
 # have more than one structured supplement file (e.g. one sample-metadata
 # table, one separate environmental-data table), and each file's own
@@ -170,7 +178,7 @@ def _resolve_entity_id(session: Session, study_id: str, fact: RawFact, rule: Map
 _PIPE_UNION_TARGET_FIELDS = frozenset(
     {
         "targetTaxonomicAssay", "targetTaxonomicScope", "platform", "instrument", "samp_mat_process", "otu_db",
-        "size_frac", "x_env_var_block", "spreadsheet_headers",
+        "size_frac", "x_env_var_block", "x_pulled_env_var", "spreadsheet_headers",
         "assay_name", "assay_type", "target_gene", "target_subfragment",
         "pcr_primer_forward", "pcr_primer_reverse", "pcr_primer_name_forward", "pcr_primer_name_reverse",
         "pcr_primer_reference_forward", "pcr_primer_reference_reverse",
@@ -284,7 +292,15 @@ def _append_collapsed_unit(
 ) -> str:
     if rule.target_table != "sampleMetadata":
         return value
-    unit_field = _COLLAPSED_SAMPLE_UNIT_FIELDS.get(rule.target_field)
+    # Keyed on the rule's SOURCE fact type, not its target_field -- the
+    # physicochemical family (diss_inorg_carb, nitrate, tot_nitro, etc.)
+    # now targets the bundled x_env_var_block/x_pulled_env_var columns
+    # instead of their own name (mapping/rules.py's
+    # _PHYSICOCHEMICAL_ENV_VAR_ATTRIBUTES), but their own raw unit fact is
+    # still reported under the ORIGINAL field's name -- looking this up by
+    # target_field would silently stop collapsing the unit in for every
+    # one of them the moment their target changed.
+    unit_field = _COLLAPSED_SAMPLE_UNIT_FIELDS.get(rule.source_fact_type)
     if not unit_field:
         return value
     unit = unit_lookup.get((unit_field, source_fact.entity_id)) or unit_lookup.get((unit_field, None))

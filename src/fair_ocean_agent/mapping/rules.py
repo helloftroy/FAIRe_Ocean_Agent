@@ -16,14 +16,18 @@ adding a new mapped field should only ever mean adding a rule here.
   whatever MIxS/INSDC attribute name a real BioSample XML record carries):
   `collection_date`, `depth`, `env_broad_scale`, `env_local_scale`,
   `env_medium`, `geo_loc_name`, `lat_lon`, `collection_method`,
-  `elev`, `samp_collect_device`, `samp_size`, `samp_size_unit`, `temp`,
-  `salinity`, `ph`, plus selected FAIRe fields tagged
-  `in_subset: Environment` in the vendored schema
-  (`_ADDITIONAL_ENVIRONMENTAL_SAMPLE_ATTRIBUTES`: `chlorophyll`,
-  `nitrate`/`nitrite`, `host_species`/`host_length`/`host_tot_mass`/...).
-  Separate `_unit` companions for chemistry measurements are intentionally
-  not emitted as FAIRe columns; `mapping/faire.py` folds them into the value
-  fields when the raw source provides both parts.
+  `elev`, `samp_collect_device`, `samp_size`, `samp_size_unit`, plus
+  selected FAIRe fields tagged `in_subset: Environment` in the vendored
+  schema (`_ADDITIONAL_ENVIRONMENTAL_SAMPLE_ATTRIBUTES`:
+  `host_species`/`host_length`/`host_tot_mass`/...). Physicochemical
+  variables (`temp`, `salinity`, `ph`, `chlorophyll`, `nitrate`/`nitrite`,
+  and the rest of the carbon/nitrogen family --
+  `_PHYSICOCHEMICAL_ENV_VAR_ATTRIBUTES`) route into `x_env_var_block`/
+  `x_pulled_env_var` instead of their own column, per an explicit user
+  request that every env variable surface the same way regardless of
+  source. Separate `_unit` companions for chemistry measurements are
+  intentionally not emitted as FAIRe columns; `mapping/faire.py` folds
+  them into the value fields when the raw source provides both parts.
   None of these -- not even the original 8 -- produce a StandardizedValue
   for a given sample unless that sample's real BioSample record actually
   reported that attribute; a rule existing here only means one is captured
@@ -351,24 +355,45 @@ def _control_sample_category(value: str) -> str | None:
     return None
 
 
-# in_situ_temp/in_situ_salinity used to target "temp"/"salinity" directly --
-# a real, confirmed dead end found live (STUDY-0049c7972ece): those two
-# columns are unconditionally suppressed at export time
-# (exports/faire.py's SAMPLE_METADATA_SUPPRESSED_FIELDS), per the same
-# explicit user request that bundled all 18 physicochemical fields into
-# x_env_var_block instead, so a value mapped straight to "temp"/"salinity"
-# could never reach a CSV no matter how well it was extracted. Reformats
-# into x_env_var_block's own documented "name: value" shape instead, so it
-# pipe-joins correctly alongside any other x_env_var_block facts
-# (_PIPE_UNION_TARGET_FIELDS in mapping/faire.py already handles the join).
-def _format_in_situ_temp_as_env_var_block_entry(value: str) -> str | None:
-    value = value.strip()
-    return f"temperature: {value}" if value else None
+# Several individually-dedicated physicochemical columns (temp, salinity,
+# ph, chlorophyll, diss_oxygen, and text-sourced in_situ_temp/in_situ_
+# salinity) used to target their own column directly -- a real, confirmed
+# dead end found live (STUDY-0049c7972ece): every one of those columns is
+# unconditionally suppressed at export time (exports/faire.py's
+# SAMPLE_METADATA_SUPPRESSED_FIELDS), per an explicit user request that
+# bundles physicochemical variables into x_env_var_block instead, so a
+# value mapped straight to one of these columns could never reach a CSV no
+# matter how well it was extracted -- true even for chlorophyll/diss_oxygen,
+# which had been given their own column specifically so GOLD-sourced
+# structured data would have "a real target column, not a bundled
+# free-text one," without anyone noticing the target column was itself
+# dead. Per an explicit user request, EVERY env variable (whichever source
+# produced it -- paper prose, a structured NCBI BioSample attribute, or
+# GOLD enrichment) should surface the same two-stage way: a raw "name:
+# value" quote in x_env_var_block, and a clean "name = value" pair in
+# x_pulled_env_var (its own documented format, extraction/section_category_
+# extraction.py::extract_pulled_env_var_facts). For a structured/
+# deterministic source there's no ambiguity for an LLM to resolve (unlike a
+# noisy free-text quote, which still needs that function's own judgment
+# call to separate a bare mention from a genuine value), so these two
+# formatters emit both representations directly instead of waiting on that
+# LLM pass. Both x_env_var_block and x_pulled_env_var are pipe-union target
+# fields (mapping/faire.py's _PIPE_UNION_TARGET_FIELDS), so every source's
+# contribution merges cleanly rather than racing to overwrite the others.
+def _env_var_block_entry_formatter(display_name: str) -> Callable[[str], str | None]:
+    def _format(value: str) -> str | None:
+        value = value.strip()
+        return f"{display_name}: {value}" if value else None
+
+    return _format
 
 
-def _format_in_situ_salinity_as_env_var_block_entry(value: str) -> str | None:
-    value = value.strip()
-    return f"salinity: {value}" if value else None
+def _pulled_env_var_entry_formatter(display_name: str) -> Callable[[str], str | None]:
+    def _format(value: str) -> str | None:
+        value = value.strip()
+        return f"{display_name} = {value}" if value else None
+
+    return _format
 
 
 @dataclass(frozen=True)
@@ -535,24 +560,13 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
                 MappingMethod.EXACT_LABEL.value),
     MappingRule("samp_size_unit", EntityLevel.SAMPLE.value, "sampleMetadata", "samp_size_unit",
                 MappingMethod.EXACT_LABEL.value, enum_name="samp_size_unit_enum"),
-    MappingRule("temp", EntityLevel.SAMPLE.value, "sampleMetadata", "temp",
-                MappingMethod.EXACT_LABEL.value),
-    MappingRule("salinity", EntityLevel.SAMPLE.value, "sampleMetadata", "salinity",
-                MappingMethod.EXACT_LABEL.value),
-    MappingRule("ph", EntityLevel.SAMPLE.value, "sampleMetadata", "ph",
-                MappingMethod.EXACT_LABEL.value),
-    # chlorophyll/diss_oxygen: real FAIRe sampleMetadata fields
-    # (faire:chlorophyll mixs:0000177, faire:diss_oxygen) that had no
-    # MappingRule at any level before -- the LLM-extraction path only ever
-    # bundled them into x_env_var_block's own catch-all STUDY-level field,
-    # never gave them a real per-column mapping. Added alongside
-    # scripts/apply_gold_physicochemical_enrichment.py, whose structured,
-    # per-BioSample GOLD data needs a real target column, not a bundled
-    # free-text one.
-    MappingRule("chlorophyll", EntityLevel.SAMPLE.value, "sampleMetadata", "chlorophyll",
-                MappingMethod.EXACT_LABEL.value),
-    MappingRule("diss_oxygen", EntityLevel.SAMPLE.value, "sampleMetadata", "diss_oxygen",
-                MappingMethod.EXACT_LABEL.value),
+    # temp/salinity/ph/chlorophyll/diss_oxygen and the rest of the
+    # physicochemical family (dissolved/particulate/total carbon and
+    # nitrogen species, nitrate/nitrite, organic matter, suspended
+    # particulate matter) are generated below rather than listed here --
+    # see _PHYSICOCHEMICAL_ENV_VAR_ATTRIBUTES for why (every one of their
+    # own dedicated columns is suppressed at export) and where they
+    # actually go (x_env_var_block/x_pulled_env_var, not their own name).
     # in_situ_temp/in_situ_salinity: a real paper's own
     # methods text describing conditions measured at the time/site of
     # sample collection (search_flags.py's own LLMJudgedSearchField
@@ -562,16 +576,23 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
     # reading is typically reported once for the whole site, not per
     # sample; broadcasts into every sample's row exactly like other
     # STUDY-level sampleMetadata facts (see exports/faire.py's own
-    # broadcast-as-default docstring). Targets x_env_var_block, not
-    # "temp"/"salinity" directly -- those two columns are unconditionally
-    # suppressed at export (see _format_in_situ_temp_as_env_var_block_entry's
-    # own comment for the real gap this fixed).
+    # broadcast-as-default docstring). Targets x_env_var_block/
+    # x_pulled_env_var, not "temp"/"salinity" directly -- those two
+    # columns are unconditionally suppressed at export (see
+    # _env_var_block_entry_formatter's own comment for the real gap this
+    # fixed).
     MappingRule("in_situ_temp", EntityLevel.STUDY.value, "sampleMetadata", "x_env_var_block",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True,
-                transform=_format_in_situ_temp_as_env_var_block_entry),
+                transform=_env_var_block_entry_formatter("temperature")),
+    MappingRule("in_situ_temp", EntityLevel.STUDY.value, "sampleMetadata", "x_pulled_env_var",
+                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True,
+                transform=_pulled_env_var_entry_formatter("temperature")),
     MappingRule("in_situ_salinity", EntityLevel.STUDY.value, "sampleMetadata", "x_env_var_block",
                 MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True,
-                transform=_format_in_situ_salinity_as_env_var_block_entry),
+                transform=_env_var_block_entry_formatter("salinity")),
+    MappingRule("in_situ_salinity", EntityLevel.STUDY.value, "sampleMetadata", "x_pulled_env_var",
+                MappingMethod.SUGGESTED_SEMANTIC.value, review_required=True,
+                transform=_pulled_env_var_entry_formatter("salinity")),
     # biological_rep_relation: emitted by sources/replicate_grouping.py's
     # sample-name-suffix detector (via supplement_parsing.py and ncbi.py),
     # never a literal source column -- review_required=True since this is a
@@ -1106,12 +1127,10 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
 # output. Fields the user explicitly removed from sampleMetadata are absent,
 # and chemistry `_unit` companions are folded into their value fields by
 # mapping/faire.py instead of being exported as separate columns.
+# Physicochemical variables (chlorophyll, the carbon/nitrogen family, etc.)
+# are deliberately NOT here -- see _PHYSICOCHEMICAL_ENV_VAR_ATTRIBUTES
+# below for why and where they actually go.
 _ADDITIONAL_ENVIRONMENTAL_SAMPLE_ATTRIBUTES: tuple[tuple[str, str | None], ...] = (
-    ("chlorophyll", None),
-    ("diss_inorg_carb", None),
-    ("diss_inorg_nitro", None),
-    ("diss_org_carb", None),
-    ("diss_org_nitro", None),
     ("host_height", None),
     ("host_height_unit", "host_height_unit_enum"),
     ("host_length", None),
@@ -1120,18 +1139,7 @@ _ADDITIONAL_ENVIRONMENTAL_SAMPLE_ATTRIBUTES: tuple[tuple[str, str | None], ...] 
     ("host_species", None),
     ("host_tot_mass", None),
     ("host_tot_mass_unit", "host_tot_mass_unit_enum"),
-    ("nitrate", None),
-    ("nitrite", None),
-    ("org_matter", None),
-    ("part_org_carb", None),
-    ("part_org_nitro", None),
-    ("suspend_part_matter", None),
-    ("tot_carb", None),
     ("tot_depth_water_col", None),
-    ("tot_diss_nitro", None),
-    ("tot_nitro", None),
-    ("tot_org_carb", None),
-    ("tot_part_carb", None),
 )
 
 
@@ -1140,6 +1148,63 @@ def _generated_environmental_sample_rules() -> tuple[MappingRule, ...]:
         MappingRule(field, EntityLevel.SAMPLE.value, "sampleMetadata", field, MappingMethod.EXACT_LABEL.value, enum_name=enum_name)
         for field, enum_name in _ADDITIONAL_ENVIRONMENTAL_SAMPLE_ATTRIBUTES
     )
+
+
+# Real, confirmed dead ends found live (STUDY-0049c7972ece): every one of
+# these 20 fields (structured, per-sample readings -- a real NCBI
+# BioSample attribute via sources/ncbi.py's generic attribute loop, or
+# GOLD-enrichment data via scripts/apply_gold_physicochemical_enrichment.py)
+# used to have its own MappingRule targeting its own literal FAIRe column
+# name, and every one of those columns is unconditionally suppressed at
+# export (exports/faire.py's SAMPLE_METADATA_SUPPRESSED_FIELDS) --
+# confirmed exhaustively by cross-referencing every RULES entry's
+# target_field against that suppression set, not just the ones a user
+# happened to notice missing. SAMPLE-level since, unlike a paper's
+# one-time in-situ statement, different samples can genuinely report
+# different structured readings. Per an explicit user request, every one
+# of these surfaces through x_env_var_block (the raw "name: value" quote)
+# and x_pulled_env_var (the clean "name = value" pair) instead of its own
+# dead column -- the same treatment as in_situ_temp/in_situ_salinity
+# above, for text-sourced readings. Display names match x_env_var_block's
+# own CategoryTerm vocabulary (extraction/section_categories.py) so a
+# value extracted straight from paper prose and one generated here read
+# the same way.
+_PHYSICOCHEMICAL_ENV_VAR_ATTRIBUTES: tuple[tuple[str, str], ...] = (
+    ("temp", "temperature"),
+    ("salinity", "salinity"),
+    ("ph", "pH"),
+    ("chlorophyll", "chlorophyll"),
+    ("diss_oxygen", "dissolved oxygen"),
+    ("diss_inorg_carb", "dissolved inorganic carbon"),
+    ("diss_inorg_nitro", "dissolved inorganic nitrogen"),
+    ("diss_org_carb", "dissolved organic carbon"),
+    ("diss_org_nitro", "dissolved organic nitrogen"),
+    ("nitrate", "nitrate"),
+    ("nitrite", "nitrite"),
+    ("org_matter", "organic matter"),
+    ("part_org_carb", "particulate organic carbon"),
+    ("part_org_nitro", "particulate organic nitrogen"),
+    ("suspend_part_matter", "suspended particulate matter"),
+    ("tot_carb", "total carbon"),
+    ("tot_diss_nitro", "total dissolved nitrogen"),
+    ("tot_nitro", "total nitrogen"),
+    ("tot_org_carb", "total organic carbon"),
+    ("tot_part_carb", "total particulate carbon"),
+)
+
+
+def _generated_physicochemical_env_var_rules() -> tuple[MappingRule, ...]:
+    rules: list[MappingRule] = []
+    for field, display_name in _PHYSICOCHEMICAL_ENV_VAR_ATTRIBUTES:
+        rules.append(
+            MappingRule(field, EntityLevel.SAMPLE.value, "sampleMetadata", "x_env_var_block",
+                        MappingMethod.EXACT_LABEL.value, transform=_env_var_block_entry_formatter(display_name))
+        )
+        rules.append(
+            MappingRule(field, EntityLevel.SAMPLE.value, "sampleMetadata", "x_pulled_env_var",
+                        MappingMethod.EXACT_LABEL.value, transform=_pulled_env_var_entry_formatter(display_name))
+        )
+    return tuple(rules)
 
 
 # FAIRe fields can appear in multiple checklist classes. A model-extracted
@@ -1269,7 +1334,10 @@ def _generated_v3_llm_rules() -> tuple[MappingRule, ...]:
 
 
 RULES: tuple[MappingRule, ...] = (
-    _EXPLICIT_RULES + _generated_environmental_sample_rules() + _generated_v3_llm_rules()
+    _EXPLICIT_RULES
+    + _generated_environmental_sample_rules()
+    + _generated_physicochemical_env_var_rules()
+    + _generated_v3_llm_rules()
 )
 
 
