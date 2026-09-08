@@ -556,6 +556,68 @@ def test_export_emits_one_project_row_per_assay_with_distinct_values(db_session,
     assert by_assay["18S-V9"]["annealingTemp"] == "60C"
 
 
+def test_export_per_assay_rows_show_their_own_name_not_the_study_wide_broadcast(db_session, tmp_path):
+    """Real gap found live (STUDY-0049c7972ece, a real two-assay paper:
+    16S rRNA + cbbL): assay_name was extracted only as a STUDY-level
+    broadcast fact ("16S rRNA assay | cbbL assay", never per-assay-tagged),
+    while OTHER fields (annealing_temperature/pcr_cycle_count) WERE
+    correctly assay-tagged to two real ASSAY entities. Both resulting
+    projectMetadata rows showed the exact same pipe-joined assay_name
+    string, making them look like accidental duplicates -- the only
+    visibly different columns (annealingTemp/pcr_cycles) are easy to miss
+    in a 100+ column CSV -- even though the underlying per-assay data was
+    genuinely different the whole time."""
+    study = Study(title="Two assays, broadcast-only assay_name")
+    db_session.add(study)
+    db_session.flush()
+    assay_16s = Entity(study_id=study.study_id, entity_level=EntityLevel.ASSAY.value, external_identifier="16S rRNA assay")
+    assay_cbbl = Entity(study_id=study.study_id, entity_level=EntityLevel.ASSAY.value, external_identifier="cbbL assay")
+    db_session.add_all([assay_16s, assay_cbbl])
+    db_session.flush()
+    db_session.add(
+        RawFact(
+            study_id=study.study_id, entity_id=None, raw_field_name="assay_name",
+            raw_value="16S rRNA assay", fact_type_candidate="assay_name", entity_level="study",
+            support_type=SupportType.EXPLICIT.value,
+        )
+    )
+    db_session.add(
+        RawFact(
+            study_id=study.study_id, entity_id=None, raw_field_name="assay_name",
+            raw_value="cbbL assay", fact_type_candidate="assay_name", entity_level="study",
+            support_type=SupportType.EXPLICIT.value,
+        )
+    )
+    db_session.add(
+        RawFact(
+            study_id=study.study_id, entity_id=assay_16s.entity_id, raw_field_name="annealing_temperature",
+            raw_value="52C", fact_type_candidate="annealing_temperature", entity_level="assay",
+            support_type=SupportType.EXPLICIT.value,
+        )
+    )
+    db_session.add(
+        RawFact(
+            study_id=study.study_id, entity_id=assay_cbbl.entity_id, raw_field_name="annealing_temperature",
+            raw_value="55C", fact_type_candidate="annealing_temperature", entity_level="assay",
+            support_type=SupportType.EXPLICIT.value,
+        )
+    )
+    db_session.commit()
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    counts = export_faire(db_session, tmp_path)
+
+    assert counts["projectMetadata"] == 2
+    with (tmp_path / "projectMetadata.csv").open() as f:
+        rows = list(csv.DictReader(f))
+    assay_names = {row["assay_name"] for row in rows}
+    assert assay_names == {"16S rRNA assay", "cbbL assay"}  # each row shows ITS OWN name, not the pipe-joined broadcast
+    by_assay = {row["assay_name"]: row for row in rows}
+    assert by_assay["16S rRNA assay"]["annealingTemp"] == "52C"
+    assert by_assay["cbbL assay"]["annealingTemp"] == "55C"
+
+
 def test_export_emits_one_library_row_each_when_libraries_share_a_sequencing_run(db_session, tmp_path):
     study = Study(title="Multiplexed libraries")
     db_session.add(study)

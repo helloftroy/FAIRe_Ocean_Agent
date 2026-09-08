@@ -939,6 +939,22 @@ def export_faire(session: Session, output_dir: str | Path, *, study_ids: list[st
             continue
         for assay in assays_with_values:
             row = dict(broadcast)
+            # Real gap found live (STUDY-0049c7972ece, a real two-assay
+            # paper: 16S rRNA + cbbL): broadcast's own assay_name is the
+            # study-wide pipe-joined list ("16S rRNA assay | cbbL assay"),
+            # which unconditionally seeds row["assay_name"] here -- the
+            # setdefault(...) fallback below can then never actually fire
+            # (the key is never absent), so every per-assay row showed the
+            # SAME full pipe-joined list instead of its own distinct
+            # assay's name, making the two rows look like accidental
+            # duplicates with no visible difference (their real,
+            # genuinely-different per-assay fields like annealingTemp/
+            # pcr_cycles/pcr_rep are easy to miss in a 100+ column CSV).
+            # Popped before the per-assay _entity_values overlay below, so
+            # a real entity-scoped assay_name (when extraction properly
+            # assay-tagged the fact) still wins, and the setdefault
+            # fallback correctly applies otherwise.
+            row.pop("assay_name", None)
             row.update(_entity_values(session, assay.entity_id))
             row.setdefault("assay_name", assay.external_identifier or assay.label or assay.entity_id)
             row["project_id"] = project_id or ""
