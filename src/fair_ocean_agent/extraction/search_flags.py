@@ -675,50 +675,6 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
         ),
     ),
     LLMJudgedSearchField(
-        term_name="lod_method",
-        section="Targeted detection",
-        description="How the assay limit of detection was determined.",
-        output_instructions=(
-            "Return the method used to determine LOD, such as dilution series, replicate detection probability, "
-            "lowest standard consistently detected, probit/logistic model, synthetic target dilution, or "
-            "genomic DNA dilution. Do not infer the method from an LOD value alone."
-        ),
-        search_terms=(
-            "limit of detection",
-            "LOD",
-            "detection limit",
-            "dilution series",
-            "lowest standard",
-            "consistently detected",
-            "probit",
-            "logistic model",
-            "synthetic target dilution",
-            "genomic DNA dilution",
-        ),
-    ),
-    LLMJudgedSearchField(
-        term_name="loq_method",
-        section="Targeted detection",
-        description="How the assay limit of quantification was determined.",
-        output_instructions=(
-            "Return the method used to determine LOQ, such as lowest standard meeting precision criteria, "
-            "coefficient-of-variation threshold, standard-curve based determination, or replicate "
-            "quantification criterion. Do not infer the method from an LOQ value alone."
-        ),
-        search_terms=(
-            "limit of quantification",
-            "LOQ",
-            "quantification limit",
-            "lowest standard",
-            "precision criteria",
-            "coefficient of variation",
-            "coefficient-of-variation",
-            "CV threshold",
-            "standard curve",
-            "replicate quantification",
-        ),
-    ),
-    LLMJudgedSearchField(
         term_name="pcr_assay_lod",
         section="Targeted detection",
         description="Numerical assay limit of detection.",
@@ -737,25 +693,6 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
             "copies/L, gene copies, or cells/reaction. Keep the paper's unit wording."
         ),
         search_terms=("limit of detection", "LOD", "detection limit", "copies/reaction", "copies/uL", "gene copies"),
-    ),
-    LLMJudgedSearchField(
-        term_name="pcr_assay_loq",
-        section="Targeted detection",
-        description="Numerical assay limit of quantification.",
-        output_instructions=(
-            "Return only the numerical LOQ value explicitly reported by the quote, without the unit. Do not "
-            "return the LOQ method or infer an LOQ from a standard curve."
-        ),
-        search_terms=("limit of quantification", "LOQ", "quantification limit"),
-    ),
-    LLMJudgedSearchField(
-        term_name="pcr_assay_loq_unit",
-        section="Targeted detection",
-        description="Unit corresponding to the assay limit of quantification.",
-        output_instructions=(
-            "Return only the LOQ unit explicitly reported by the quote. Keep the paper's unit wording."
-        ),
-        search_terms=("limit of quantification", "LOQ", "quantification limit", "copies/reaction", "copies/uL"),
     ),
     LLMJudgedSearchField(
         term_name="probe_seq",
@@ -829,57 +766,12 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
         ),
     ),
     LLMJudgedSearchField(
-        term_name="std_source",
-        section="Targeted detection",
-        description="Source/material used to create an assay standard or standard curve.",
-        output_instructions=(
-            "Return the material/source used for assay calibration or the standard curve, such as plasmid "
-            "containing target sequence, synthetic gBlock, genomic DNA, purified PCR product, cloned target "
-            "sequence, or cultured organism DNA. Do not treat cloned material as a qPCR standard unless the "
-            "quote explicitly uses it for assay calibration/quantification."
-        ),
-        search_terms=(
-            "standard curve",
-            "standard curves",
-            "assay standard",
-            "calibration standard",
-            "plasmid standard",
-            "synthetic gBlock",
-            "gBlock",
-            "genomic DNA standard",
-            "purified PCR product",
-            "cloned target",
-            "serial dilution",
-            "known copy number",
-        ),
-    ),
-    LLMJudgedSearchField(
-        term_name="thresholdQuantificationCycle",
-        section="Targeted detection",
-        description="Explicit fluorescence threshold parameter used to determine qPCR Cq/Ct.",
-        output_instructions=(
-            "Return only the actual fluorescence threshold parameter used to determine Cq/Ct, if explicitly "
-            "stated. Do not populate with sample Cq values, Ct positivity cutoffs, number of PCR cycles, or "
-            "detection criteria."
-        ),
-        search_terms=(
-            "fluorescence threshold",
-            "threshold quantification cycle",
-            "quantification cycle threshold",
-            "Ct threshold",
-            "Cq threshold",
-            "threshold cycle",
-            "baseline threshold",
-        ),
-    ),
-    LLMJudgedSearchField(
         term_name="targeted_detection_method_additional",
         section="Targeted detection",
         description=(
             "Useful targeted-detection details that do not fit cleanly elsewhere, including qPCR/ddPCR/FISH/"
             "CARD-FISH chemistry, probe names, hybridization conditions, labels, counterstains, validation, "
-            "blocking oligos, detection rules, standard-curve details, and adapter/index addition when "
-            "sequences are unavailable."
+            "blocking oligos, detection rules, and standard-curve details."
         ),
         output_instructions=(
             "Return a concise source-faithful sentence or semicolon-separated phrase preserving useful targeted "
@@ -1502,53 +1394,6 @@ CONTROLLED_SEARCH_FIELDS: tuple[ControlledSearchField, ...] = (
             "trnL",
             "psbK",
             "D-loop",
-        ),
-    ),
-    ControlledSearchField(
-        term_name="probeReporter",
-        section="PCR",
-        description="Field type: free text, Type of fluorophore (reporter) used.",
-        required_any_flags=frozenset({"pcr_0_1", "probe_based_qPCR_ddPCR_assay_0_1"}),
-        search_terms=(
-            "Texas Red",
-            "fluorescent dye",
-            "fluorophore",
-            "reporter",
-            "FAM",
-            "HEX",
-            "VIC",
-            "Cy5",
-            "TET",
-            "TAMRA",
-            "ROX",
-            "JOE",
-            "HRP",
-            "HRP-labeled",
-            "horseradish peroxidase",
-        ),
-    ),
-    ControlledSearchField(
-        term_name="probeQuencher",
-        section="PCR",
-        description="Field type: free text, Type of quencher used.",
-        required_any_flags=frozenset({"pcr_0_1", "probe_based_qPCR_ddPCR_assay_0_1"}),
-        search_terms=(
-            "Zero-End Quencher (ZEN)",
-            "Black Hole Quencher (BHQ)",
-            "Minor Groove Binder (MGB)",
-            "Iowa Black FQ",
-            "Iowa Black",
-            "lowa Black",
-            "minor groove binder",
-            "quencher",
-            "BHQ-1",
-            "BHQ-2",
-            "BHQ1",
-            "BHQ2",
-            "BHQ",
-            "ZEN",
-            "TAMRA",
-            "MGB",
         ),
     ),
     ControlledSearchField(
@@ -3413,7 +3258,7 @@ def _valid_llm_judged_value(field: LLMJudgedSearchField, value: str) -> bool:
         lowered = stripped.casefold()
         if any(term in lowered for term in ("ysi", "yellow springs", "http://www.drive5.com", "usearch")):
             return False
-    if field.term_name in ("pcr_assay_lod", "pcr_assay_loq"):
+    if field.term_name == "pcr_assay_lod":
         return bool(re.search(r"\d", stripped))
     if field.term_name == "detection_criteria":
         return bool(_DETECTION_CRITERIA_VALUE_RE.search(stripped))

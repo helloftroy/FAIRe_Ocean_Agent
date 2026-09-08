@@ -868,19 +868,37 @@ def fact_type_names_for_focus(
 # own docstring: retrying whenever ANY fact was found would double call
 # volume for little benefit, since most sections never mention every
 # checklist concept) -- but that blanket gate means a model that answers
-# the atomic sibling and then (incorrectly) treats the narrative field as
-# "already covered" never gets asked again. This maps each narrative
-# field to its own atomic sibling(s): when at least one sibling succeeded
-# but the narrative field itself didn't, a scoped recall pass asks ONLY
-# about that specific narrative field (not the whole checklist), keeping
-# the general cost-saving behavior intact for every other field.
-_NARRATIVE_COMPANION_FIELD_ATOMIC_SIBLINGS: dict[str, frozenset[str]] = {
+# one sibling and then (incorrectly) treats the whole concept as "already
+# covered" never gets asked again about the other. This maps each field
+# to its own sibling(s): when at least one sibling succeeded but this
+# field itself didn't, a scoped recall pass asks ONLY about that specific
+# field (not the whole checklist), keeping the general cost-saving
+# behavior intact for every other field.
+#
+# forward_primer_sequence/reverse_primer_sequence <-> forward_primer_name/
+# reverse_primer_name: a second, structurally identical real gap found
+# live (10.1038/s41598-021-93859-5, STUDY-01a5e9aa6491) -- "...Fluidigm
+# CS1 + MiFish-U-F ACACTGACGACATGGTTCTACA GTCGGTAAAACTCGTGCCAGC and
+# Fluidigm CS2 + MiFish-U-R TACGGTAGCAGAGACTTGGTCT
+# CATAGTGGGGTATCTAATCCCAGTTTG" -- the primer NAMES are easy to spot
+# (clearly labeled, "MiFish-U-F"/"MiFish-U-R"), while the SEQUENCES
+# require correctly discarding the Fluidigm adapter tail that precedes
+# each real primer-specific sequence; a model that confidently answers
+# the name and then skips the harder sequence (or vice versa) hits the
+# exact same blanket "any fact found" gate. Bidirectional: whichever of
+# the pair is missing gets the scoped recall, using whichever sibling(s)
+# did succeed.
+_RECALL_COMPANION_FIELD_SIBLINGS: dict[str, frozenset[str]] = {
     "PCR_amplification_conditions": frozenset(
         {"annealing_temperature", "pcr_cycle_count", "commercial_master_mix", "custom_master_mix"}
     ),
     "second_pcr_amplification_conditions": frozenset(
         {"second_pcr_annealing_temperature", "second_pcr_cycle_count"}
     ),
+    "forward_primer_sequence": frozenset({"forward_primer_name"}),
+    "forward_primer_name": frozenset({"forward_primer_sequence"}),
+    "reverse_primer_sequence": frozenset({"reverse_primer_name"}),
+    "reverse_primer_name": frozenset({"reverse_primer_sequence"}),
 }
 
 
@@ -1010,19 +1028,26 @@ def extract_facts_from_section(
                 continue
             accepted_types = {fact.fact_type_candidate for fact in accepted_facts}
             if accepted_facts:
-                # See _NARRATIVE_COMPANION_FIELD_ATOMIC_SIBLINGS's own
-                # comment: the general "did we miss anything" recall below
-                # stays skipped once any fact was found, but a narrative
-                # field whose atomic sibling just succeeded still gets one
-                # narrow, targeted recall attempt.
+                # See _RECALL_COMPANION_FIELD_SIBLINGS's own comment: the
+                # general "did we miss anything" recall below stays
+                # skipped once any fact was found, but a field whose
+                # sibling just succeeded still gets one narrow, targeted
+                # recall attempt.
                 focus_fact_types = fact_type_names_for_focus(focus, exclude_faire_hints, active_flags=active_flags)
                 missing_types = frozenset(
-                    narrative
-                    for narrative, atomic_siblings in _NARRATIVE_COMPANION_FIELD_ATOMIC_SIBLINGS.items()
-                    if narrative in focus_fact_types
-                    and narrative not in accepted_types
-                    and atomic_siblings & accepted_types
+                    companion_field
+                    for companion_field, siblings in _RECALL_COMPANION_FIELD_SIBLINGS.items()
+                    if companion_field in focus_fact_types
+                    and companion_field not in accepted_types
+                    and siblings & accepted_types
                 )
+                # Same guard as recall_missing_fact_types' own primer-
+                # sequence carve-out below: a name-only mention (no
+                # nucleotide-like token anywhere in the source) can never
+                # actually support a sequence value, so don't spend a
+                # recall call chasing one.
+                if not _source_has_nucleotide_sequence(focused_segments):
+                    missing_types = missing_types - {"forward_primer_sequence", "reverse_primer_sequence"}
                 if not missing_types:
                     continue
             else:

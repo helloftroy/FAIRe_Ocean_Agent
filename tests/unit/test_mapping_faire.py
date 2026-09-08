@@ -15,6 +15,7 @@ from fair_ocean_agent.database.models import (
     Study,
 )
 from fair_ocean_agent.extraction.faire_fields import assay_scoped_field_names, native_name_to_faire_hint
+from fair_ocean_agent.exports.faire import PROJECT_METADATA_COLUMN_ORDER
 from fair_ocean_agent.mapping.envo import expand_envo_terms
 from fair_ocean_agent.mapping.faire import map_study_to_faire, resolve_project_id
 from fair_ocean_agent.mapping.rules import (
@@ -43,6 +44,24 @@ def _home_entity_study(entity: Entity) -> EntityStudy:
         relationship_type=RelationshipType.IS_HOME_OF.value,
         confidence=SupportType.STRUCTURED_SOURCE.value,
     )
+
+
+def test_removed_targeted_detection_fields_are_not_searched_mapped_or_exported():
+    removed = {
+        "probeReporter",
+        "probeQuencher",
+        "std_source",
+        "thresholdQuantificationCycle",
+        "lod_method",
+        "loq_method",
+        "pcr_assay_loq",
+        "pcr_assay_loq_unit",
+    }
+    mapped_fields = {rule.source_fact_type for rule in RULES} | {rule.target_field for rule in RULES}
+
+    assert removed.isdisjoint(native_name_to_faire_hint())
+    assert removed.isdisjoint(mapped_fields)
+    assert removed.isdisjoint(PROJECT_METADATA_COLUMN_ORDER)
 
 
 def _study(session, **kwargs) -> Study:
@@ -2193,8 +2212,8 @@ def test_controlled_text_search_project_facts_map_to_faire_with_review(db_sessio
     }
     assert values["seq_kit"].standardized_value == "MiSeq Reagent Kit v3"
     assert "sequencing_location" not in values
-    assert values["probeReporter"].standardized_value == "FAM"
-    assert values["probeQuencher"].standardized_value == "BHQ-1 | quencher"
+    assert "probeReporter" not in values
+    assert "probeQuencher" not in values
     assert values["commercial_mm"].standardized_value == "TaqMan"
     assert values["custom_mm"].standardized_value == "N/A see commercial_mm"
     assert values["sterilise_method"].standardized_value == "Bottles were rinsed with bleach."

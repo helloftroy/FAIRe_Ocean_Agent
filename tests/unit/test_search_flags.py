@@ -2,6 +2,8 @@ import json
 
 from fair_ocean_agent.config import MIN_LLM_MAX_OUTPUT_TOKENS
 from fair_ocean_agent.extraction.search_flags import (
+    CONTROLLED_SEARCH_FIELDS,
+    LLM_JUDGED_SEARCH_FIELDS,
     _barcoding_pcr_appr_keyword_match,
     confirm_value_described_as_depth,
     detect_controlled_search_facts,
@@ -12,6 +14,24 @@ from fair_ocean_agent.extraction.search_flags import (
 )
 from fair_ocean_agent.extraction.section_categories import derive_pcr_0_1_from_category_detection
 from fair_ocean_agent.llm.mock import MockLLMBackend
+
+
+def test_removed_targeted_detection_fields_are_not_in_search_definitions():
+    removed = {
+        "probeReporter",
+        "probeQuencher",
+        "std_source",
+        "thresholdQuantificationCycle",
+        "lod_method",
+        "loq_method",
+        "pcr_assay_loq",
+        "pcr_assay_loq_unit",
+    }
+    searched = {field.term_name for field in LLM_JUDGED_SEARCH_FIELDS} | {
+        field.term_name for field in CONTROLLED_SEARCH_FIELDS
+    }
+
+    assert removed.isdisjoint(searched)
 
 
 def test_detect_phix_percentage_facts_matches_common_real_phrasings():
@@ -332,8 +352,8 @@ def test_detect_controlled_search_facts_uses_active_flags_and_pipe_delimited_mat
 
     by_type = {fact.fact_type_candidate: fact for fact in controlled}
     assert by_type["target_gene"].raw_value == "12S rRNA | COI"
-    assert by_type["probeReporter"].raw_value == "FAM | reporter"
-    assert by_type["probeQuencher"].raw_value == "BHQ-1 | quencher"
+    assert "probeReporter" not in by_type
+    assert "probeQuencher" not in by_type
     assert by_type["seq_kit"].raw_value == "MiSeq Reagent Kit v3"
     assert by_type["sample_type"].raw_value == "water | sediment"
     assert by_type["target_gene"].entity_level.value == "study"
@@ -1400,18 +1420,8 @@ def test_detect_llm_judged_search_facts_extracts_targeted_detection_bundle():
                 {"field": "block_seq", "raw_value": "ACGTACGTACGT", "quote_id": "Q003"},
                 {"field": "block_taxa", "raw_value": "fish DNA", "quote_id": "Q003"},
                 {"field": "detection_criteria", "raw_value": "Cq < 40 in two of three replicates", "quote_id": "Q004"},
-                {"field": "lod_method", "raw_value": "dilution series", "quote_id": "Q005"},
                 {"field": "pcr_assay_lod", "raw_value": "3", "quote_id": "Q005"},
                 {"field": "pcr_assay_lod_unit", "raw_value": "copies/reaction", "quote_id": "Q005"},
-                {
-                    "field": "loq_method",
-                    "raw_value": "lowest standard meeting precision criteria",
-                    "quote_id": "Q006",
-                },
-                {"field": "pcr_assay_loq", "raw_value": "30", "quote_id": "Q006"},
-                {"field": "pcr_assay_loq_unit", "raw_value": "copies/reaction", "quote_id": "Q006"},
-                {"field": "std_source", "raw_value": "plasmid containing the target sequence", "quote_id": "Q007"},
-                {"field": "thresholdQuantificationCycle", "raw_value": "0.02", "quote_id": "Q007"},
                 {
                     "field": "targeted_detection_method_additional",
                     "raw_value": "CARD-FISH was performed with probe Atri578 at 0.5 uM.",
@@ -1431,14 +1441,8 @@ def test_detect_llm_judged_search_facts_extracts_targeted_detection_bundle():
     assert by_type["block_seq"] == "ACGTACGTACGT"
     assert by_type["block_taxa"] == "fish DNA"
     assert by_type["detection_criteria"] == "Cq < 40 in two of three replicates"
-    assert by_type["lod_method"] == "dilution series"
     assert by_type["pcr_assay_lod"] == "3"
     assert by_type["pcr_assay_lod_unit"] == "copies/reaction"
-    assert by_type["loq_method"] == "lowest standard meeting precision criteria"
-    assert by_type["pcr_assay_loq"] == "30"
-    assert by_type["pcr_assay_loq_unit"] == "copies/reaction"
-    assert by_type["std_source"] == "plasmid containing the target sequence"
-    assert by_type["thresholdQuantificationCycle"] == "0.02"
     assert by_type["targeted_detection_method_additional"] == "CARD-FISH was performed with probe Atri578 at 0.5 uM."
 
 

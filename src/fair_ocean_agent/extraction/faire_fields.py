@@ -458,11 +458,9 @@ FIELD_GROUPS: dict[str, tuple[FaireExtractionField, ...]] = {
         FaireExtractionField("pcr_replicate_count", "number of PCR technical replicates per sample", "pcr_rep", "3", required_any_flags=frozenset({"pcr_0_1"})),
     ),
     "qPCR / standard curve": (
-        FaireExtractionField("quantification_cycle_threshold", "the fluorescence threshold value used for Cq/Ct", "thresholdQuantificationCycle"),
         FaireExtractionField("quantification_cycle", "a reported quantification cycle (Cq/Ct) value", "quantificationCycle"),
         FaireExtractionField("qpcr_standard_concentration", "input quantity of the qPCR standard", "std_conc"),
         FaireExtractionField("qpcr_standard_concentration_unit", "unit for qpcr_standard_concentration", "std_conc_unit", "copies/uL"),
-        FaireExtractionField("qpcr_standard_source", "source/supplier of the qPCR standard", "std_source"),
         FaireExtractionField("standard_curve_slope", "slope of the qPCR standard curve", "slope"),
         FaireExtractionField("standard_curve_intercept", "intercept of the qPCR standard curve", "intercept"),
         FaireExtractionField("standard_curve_r_squared", "R-squared value of the qPCR standard curve", "r2"),
@@ -472,8 +470,6 @@ FIELD_GROUPS: dict[str, tuple[FaireExtractionField, ...]] = {
         FaireExtractionField("estimated_copy_number_method", "method used to estimate target copy number", "estimatedNumberOfCopies_method"),
         FaireExtractionField("assay_limit_of_detection", "assay's limit of detection (LOD)", "pcr_assay_lod"),
         FaireExtractionField("assay_limit_of_detection_unit", "unit for assay_limit_of_detection", "pcr_assay_lod_unit"),
-        FaireExtractionField("assay_limit_of_quantification", "assay's limit of quantification (LOQ)", "pcr_assay_loq"),
-        FaireExtractionField("assay_limit_of_quantification_unit", "unit for assay_limit_of_quantification", "pcr_assay_loq_unit"),
     ),
     "Sequencing / library prep": (
         FaireExtractionField("sequencing_platform_general", "general sequencing platform (e.g. Illumina, PacBio, Oxford Nanopore)", "platform"),

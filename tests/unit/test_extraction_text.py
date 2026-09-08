@@ -475,6 +475,68 @@ def test_recall_second_pass_stays_scoped_when_narrative_pcr_field_already_found(
     assert len(backend.calls) == 1
 
 
+def test_recall_second_pass_fires_a_scoped_retry_for_a_missed_primer_sequence():
+    """Real gap found live (10.1038/s41598-021-93859-5, STUDY-01a5e9aa6491):
+    "...Fluidigm CS1 + MiFish-U-F ACACTGACGACATGGTTCTACA
+    GTCGGTAAAACTCGTGCCAGC and Fluidigm CS2 + MiFish-U-R
+    TACGGTAGCAGAGACTTGGTCT CATAGTGGGGTATCTAATCCCAGTTTG." -- clearly-labeled
+    primer names sit right next to their sequences, but the sequences
+    require correctly discarding the Fluidigm adapter tail that precedes
+    each real primer-specific sequence. A model that confidently names the
+    primer and then skips the harder sequence hit the same blanket "any
+    fact found" gate that blocked the PCR narrative companion fields
+    above -- this is the same fix, applied to primer name/sequence
+    pairs."""
+    section_text = (
+        "Primary PCR primers were as follows, listed in 5′ to 3′ direction: Fluidigm CS1 + "
+        "MiFish-U-F ACACTGACGACATGGTTCTACA GTCGGTAAAACTCGTGCCAGC and Fluidigm CS2 + MiFish-U-R "
+        "TACGGTAGCAGAGACTTGGTCT CATAGTGGGGTATCTAATCCCAGTTTG."
+    )
+
+    def respond(prompt):
+        if "[recall]" in prompt:
+            assert "forward_primer_sequence" in prompt
+            assert "forward_primer_name" not in prompt
+            return json.dumps(
+                [
+                    {
+                        "fact_type_candidate": "forward_primer_sequence",
+                        "raw_value": "GTCGGTAAAACTCGTGCCAGC",
+                        "evidence_id": "PCR.P001",
+                    }
+                ]
+            )
+        return json.dumps(
+            [{"fact_type_candidate": "forward_primer_name", "raw_value": "MiFish-U-F", "evidence_id": "PCR.P001"}]
+        )
+
+    backend = MockLLMBackend(responses=respond)
+    facts, _ = extract_facts_from_section(backend, "PCR", section_text, active_flags=frozenset({"pcr_0_1"}))
+
+    fact_types = {fact.fact_type_candidate for fact in facts}
+    assert fact_types == {"forward_primer_name", "forward_primer_sequence"}
+    assert len(backend.calls) == 2
+    sequence_fact = next(f for f in facts if f.fact_type_candidate == "forward_primer_sequence")
+    assert sequence_fact.raw_value == "GTCGGTAAAACTCGTGCCAGC"
+
+
+def test_recall_second_pass_skips_primer_sequence_recall_without_nucleotide_text():
+    """The nucleotide-sequence guard applies to the scoped companion
+    recall too: a name-only mention with no sequence-like token anywhere
+    in the source can never support a sequence value, so no wasted recall
+    call happens chasing one."""
+    section_text = "PCR reactions used MiFish-U-F and MiFish-U-R primers at 54 C."
+    response = json.dumps(
+        [{"fact_type_candidate": "forward_primer_name", "raw_value": "MiFish-U-F", "evidence_id": "PCR.P001"}]
+    )
+    backend = MockLLMBackend(responses=[response])
+
+    facts, _ = extract_facts_from_section(backend, "PCR", section_text, active_flags=frozenset({"pcr_0_1"}))
+
+    assert [fact.fact_type_candidate for fact in facts] == ["forward_primer_name"]
+    assert len(backend.calls) == 1
+
+
 def test_extraction_filters_model_invented_fact_type_names():
     section_text = "Surface sediment from the upper few millimeters was collected with a van Veen grab."
     response = json.dumps(
