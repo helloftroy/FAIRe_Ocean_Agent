@@ -400,6 +400,81 @@ def test_recall_second_pass_fires_only_when_first_pass_finds_nothing():
     assert "Never return placeholder absence values" in backend.calls[1]["prompt"]
 
 
+def test_recall_second_pass_fires_a_scoped_retry_for_a_missed_narrative_pcr_companion():
+    """Real gap found live (10.3389/fmicb.2017.01135, STUDY-012e2a73836d):
+    "...during the eight cycles of second-round PCR using KAPA HiFi
+    HotStart Ready mix..." correctly produced second_pcr_cycle_count=8 on
+    the first pass, but second_pcr_amplification_conditions (its
+    narrative companion, pcr2_method_additional's own source) stayed
+    empty -- the blanket "any fact found -> no recall" gate meant nothing
+    ever asked about it again, even though that field's own hint text
+    says to capture it regardless of whether the atomic sibling already
+    did. Now a narrow, scoped recall (NOT the whole checklist) fires for
+    just that missing narrative field."""
+    section_text = (
+        "index and adapter were added to the purified product during the eight cycles of "
+        "second-round PCR using KAPA HiFi HotStart Ready mix (Kapa Biosystems) with 250 pg "
+        "of the purified PCR product as described elsewhere."
+    )
+    narrative_value = (
+        "index and adapter were added to the purified product during the eight cycles of "
+        "second-round PCR using KAPA HiFi HotStart Ready mix (Kapa Biosystems) with 250 pg "
+        "of the purified PCR product"
+    )
+
+    def respond(prompt):
+        if "[recall]" in prompt:
+            assert "second_pcr_amplification_conditions" in prompt
+            assert "second_pcr_cycle_count" not in prompt
+            return json.dumps(
+                [
+                    {
+                        "fact_type_candidate": "second_pcr_amplification_conditions",
+                        "raw_value": narrative_value,
+                        "evidence_id": "PCR.P001",
+                    }
+                ]
+            )
+        return json.dumps(
+            [{"fact_type_candidate": "second_pcr_cycle_count", "raw_value": "8", "evidence_id": "PCR.P001"}]
+        )
+
+    backend = MockLLMBackend(responses=respond)
+    facts, _ = extract_facts_from_section(backend, "PCR", section_text, active_flags=frozenset({"pcr_0_1"}))
+
+    fact_types = {fact.fact_type_candidate for fact in facts}
+    assert fact_types == {"second_pcr_cycle_count", "second_pcr_amplification_conditions"}
+    assert len(backend.calls) == 2
+    narrative_fact = next(f for f in facts if f.fact_type_candidate == "second_pcr_amplification_conditions")
+    assert narrative_fact.raw_value == narrative_value
+
+
+def test_recall_second_pass_stays_scoped_when_narrative_pcr_field_already_found():
+    """The scoped recall only fires for a narrative field that's actually
+    missing -- if the first pass already returned
+    second_pcr_amplification_conditions itself, no second call happens."""
+    section_text = "...during the eight cycles of second-round PCR using KAPA HiFi HotStart Ready mix..."
+    response = json.dumps(
+        [
+            {"fact_type_candidate": "second_pcr_cycle_count", "raw_value": "8", "evidence_id": "PCR.P001"},
+            {
+                "fact_type_candidate": "second_pcr_amplification_conditions",
+                "raw_value": "eight cycles of second-round PCR using KAPA HiFi HotStart Ready mix",
+                "evidence_id": "PCR.P001",
+            },
+        ]
+    )
+    backend = MockLLMBackend(responses=[response])
+
+    facts, _ = extract_facts_from_section(backend, "PCR", section_text, active_flags=frozenset({"pcr_0_1"}))
+
+    assert {fact.fact_type_candidate for fact in facts} == {
+        "second_pcr_cycle_count",
+        "second_pcr_amplification_conditions",
+    }
+    assert len(backend.calls) == 1
+
+
 def test_extraction_filters_model_invented_fact_type_names():
     section_text = "Surface sediment from the upper few millimeters was collected with a van Veen grab."
     response = json.dumps(

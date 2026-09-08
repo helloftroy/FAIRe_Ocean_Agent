@@ -856,6 +856,34 @@ def fact_type_names_for_focus(
     )
 
 
+# Real gap found live (10.3389/fmicb.2017.01135, STUDY-012e2a73836d): a
+# real passage ("...during the eight cycles of second-round PCR using
+# KAPA HiFi HotStart Ready mix...") correctly produced
+# second_pcr_cycle_count=8, but second_pcr_amplification_conditions (its
+# narrative companion, pcr2_method_additional's own source) stayed empty
+# -- despite that field's own hint text explicitly saying to capture it
+# "regardless of whether the atomic field already captured a value." The
+# main extraction pass below only ever runs its recall/second-chance pass
+# when a chunk found ZERO facts at all (see extract_facts_from_section's
+# own docstring: retrying whenever ANY fact was found would double call
+# volume for little benefit, since most sections never mention every
+# checklist concept) -- but that blanket gate means a model that answers
+# the atomic sibling and then (incorrectly) treats the narrative field as
+# "already covered" never gets asked again. This maps each narrative
+# field to its own atomic sibling(s): when at least one sibling succeeded
+# but the narrative field itself didn't, a scoped recall pass asks ONLY
+# about that specific narrative field (not the whole checklist), keeping
+# the general cost-saving behavior intact for every other field.
+_NARRATIVE_COMPANION_FIELD_ATOMIC_SIBLINGS: dict[str, frozenset[str]] = {
+    "PCR_amplification_conditions": frozenset(
+        {"annealing_temperature", "pcr_cycle_count", "commercial_master_mix", "custom_master_mix"}
+    ),
+    "second_pcr_amplification_conditions": frozenset(
+        {"second_pcr_annealing_temperature", "second_pcr_cycle_count"}
+    ),
+}
+
+
 def _source_has_nucleotide_sequence(segments: list[SourceSegment]) -> bool:
     text = " ".join(segment.text for segment in segments)
     return any(
@@ -980,18 +1008,33 @@ def extract_facts_from_section(
 
             if not recall_second_pass:
                 continue
+            accepted_types = {fact.fact_type_candidate for fact in accepted_facts}
             if accepted_facts:
-                continue  # found at least one fact already -- no automatic retry
-
-            missing_types = recall_missing_fact_types(
-                focus,
-                exclude_faire_hints,
-                {fact.fact_type_candidate for fact in accepted_facts},
-                focused_segments,
-                active_flags=active_flags,
-            )
-            if not missing_types:
-                continue
+                # See _NARRATIVE_COMPANION_FIELD_ATOMIC_SIBLINGS's own
+                # comment: the general "did we miss anything" recall below
+                # stays skipped once any fact was found, but a narrative
+                # field whose atomic sibling just succeeded still gets one
+                # narrow, targeted recall attempt.
+                focus_fact_types = fact_type_names_for_focus(focus, exclude_faire_hints, active_flags=active_flags)
+                missing_types = frozenset(
+                    narrative
+                    for narrative, atomic_siblings in _NARRATIVE_COMPANION_FIELD_ATOMIC_SIBLINGS.items()
+                    if narrative in focus_fact_types
+                    and narrative not in accepted_types
+                    and atomic_siblings & accepted_types
+                )
+                if not missing_types:
+                    continue
+            else:
+                missing_types = recall_missing_fact_types(
+                    focus,
+                    exclude_faire_hints,
+                    accepted_types,
+                    focused_segments,
+                    active_flags=active_flags,
+                )
+                if not missing_types:
+                    continue
             recall_prompt = build_prompt(
                 f"{focused_title} [recall]",
                 "",
