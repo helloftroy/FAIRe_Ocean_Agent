@@ -292,12 +292,28 @@ def _is_heading_line(line: str, *, under_methods: bool = False) -> bool:
     return False
 
 
+_HEADING_LIST_CONJUNCTION_RE = re.compile(r"^[A-Za-z][\w\s]*(?:,\s*[A-Za-z][\w\s]*)+,?\s+and\s+[A-Za-z][\w\s]*$")
+
+
 def _is_generic_methods_subheading(line: str) -> bool:
     words = line.split()
     if not (2 <= len(words) <= 10):
         return False
-    if any(char in line for char in ".,;:()=#"):
+    if any(char in line for char in ".;:()=#"):
         return False
+    if "," in line:
+        # Real gap found live (10.3390/microorganisms10030558): "2.2. DNA
+        # Extraction, Amplification, and Sequence Analysis" was never
+        # recognized as a heading -- a bare comma anywhere unconditionally
+        # rejected it, even though "X, Y, and Z" is an entirely normal way
+        # to title a methods subsection covering several steps. Left the
+        # whole Methods section (site description through bioinformatics,
+        # 40+ sentences) merged into one undifferentiated paragraph instead
+        # of splitting at this real subsection boundary. Only this narrow
+        # list-conjunction shape is allowed through; any other comma usage
+        # (a genuine running-text sentence) still gets rejected below.
+        if not _HEADING_LIST_CONJUNCTION_RE.match(line):
+            return False
     if re.search(r"\d|[<>≤≥~±×]|[α-ωΑ-Ωµ]", line):
         return False
     if not line[:1].isupper():
