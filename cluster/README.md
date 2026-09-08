@@ -351,3 +351,24 @@ you already supplied by hand is never re-fetched.
   `ingest-seeds`/`enqueue-*-backfill`/`worker --until-empty` against the
   same database only processes what's actually new or still pending), so
   a failed or interrupted job can just be resubmitted.
+- **"database is locked" on a fresh submission, even with nothing else
+  running** (real incident: a cluster-wide outage killed a job mid-run):
+  the killed process very likely left `data/fair_ocean.db-journal` (or
+  `-wal`) behind -- SQLite's own record that a write was interrupted
+  mid-transaction. First, back up: `cp data/fair_ocean.db
+  data/fair_ocean.db.bak-$(date +%Y%m%d-%H%M)`. Then let SQLite recover
+  it itself (the exact same recovery `sync_local_db_to_cluster.sh`'s own
+  `recover_and_check` already does before every sync):
+  `python3 -c "import sqlite3; c = sqlite3.connect('data/fair_ocean.db'); c.execute('PRAGMA quick_check'); c.close()"`,
+  then check `ls -la data/fair_ocean.db*` again -- the journal/WAL file
+  should be gone, and resubmitting should work. If it's still there (or
+  that connection itself hangs/errors), confirm nothing is really
+  running (`squeue -u $USER`, and `lsof data/fair_ocean.db` /
+  `fuser data/fair_ocean.db` if available -- an empty result means
+  nothing has the file open) -- if genuinely nothing is running and
+  it's still locked, `data/` is very likely on NFS-mounted cluster
+  storage, which is known to leave stale advisory locks behind after an
+  abrupt kill (SQLite's own docs warn against network filesystems for
+  exactly this reason); that needs either the cluster's own IT clearing
+  the stale NFS lock, or moving the database to local/scratch storage
+  for active writes.
