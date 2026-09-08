@@ -472,6 +472,17 @@ def _present_biosample_attribute_value(attr_name: str, value: str | None) -> str
     return cleaned
 
 
+def _put_biosample_attribute(attributes: dict[str, str], name: str | None, value: str | None) -> None:
+    if not name:
+        return
+    cleaned = _present_biosample_attribute_value(name, value)
+    if cleaned is None:
+        return
+    existing = _present_biosample_attribute_value(name, attributes.get(name))
+    if existing is None:
+        attributes[name] = cleaned
+
+
 def _uid_verification_fact(
     *,
     bioproject_accession: str,
@@ -748,28 +759,24 @@ class NcbiBioSampleAdapter(SourceAdapter):
                 contact_first = _clean_text(contact_name_el.findtext("First") if contact_name_el is not None else None)
                 contact_last = _clean_text(contact_name_el.findtext("Last") if contact_name_el is not None else None)
                 contact_name = " ".join(part for part in (contact_first, contact_last) if part)
-                # Real gap found live (SAMN08449373): the submitter used
-                # legacy pre-MIxS-5 attribute names ("env_biome"/
-                # "env_feature"/"env_material" for what are now
-                # env_broad_scale/env_local_scale/env_medium) -- NCBI's own
-                # XML already carries the harmonized/canonical name right
-                # alongside the submitter's raw one
-                # (harmonized_name="env_broad_scale" on an
-                # attribute_name="env_biome" element), but this dict used
-                # to be keyed by the raw name only, so env_broad_scale's
-                # own MappingRule (which matches on this exact literal
-                # fact_type_candidate) never found it. Preferring
-                # harmonized_name when NCBI provides one -- falling back to
-                # attribute_name for the many custom/non-MIxS attributes
-                # that have no harmonized_name at all -- fixes this
-                # specific gap and any other current/future MIxS synonym
-                # NCBI already knows how to harmonize, without needing to
-                # separately hardcode each one here.
-                attributes = {
-                    (attr.get("harmonized_name") or attr.get("attribute_name")): attr.text
-                    for attr in bs.findall("Attributes/Attribute")
-                    if attr.get("attribute_name")
-                }
+                # Keep both the submitter's raw attribute_name and NCBI's
+                # harmonized_name alias when present. A real BioSample
+                # (STUDY-012a00dba8bc) carried raw "host:
+                # Amphimedon queenslandica" plus a sibling
+                # "host_species: missing"; the old one-key dict
+                # comprehension collapsed both onto host_species and let
+                # the null token hide the real host. The helper filters
+                # absent placeholders and never overwrites an already
+                # present value with an empty/null-shaped one.
+                attributes: dict[str, str] = {}
+                for attr in bs.findall("Attributes/Attribute"):
+                    raw_name = attr.get("attribute_name")
+                    if not raw_name:
+                        continue
+                    _put_biosample_attribute(attributes, raw_name, attr.text)
+                    harmonized_name = attr.get("harmonized_name")
+                    if harmonized_name and harmonized_name != raw_name:
+                        _put_biosample_attribute(attributes, harmonized_name, attr.text)
                 # <Ids><Id db_label="Sample name">...</Id></Ids> is a
                 # standard BioSample element every record carries (never an
                 # Attribute), previously never parsed at all -- confirmed

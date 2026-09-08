@@ -173,6 +173,8 @@ BIOSAMPLE_WITH_LEGACY_ENV_ATTRIBUTE_NAMES_XML = """<?xml version="1.0" ?>
         <Attribute attribute_name="env_biome" harmonized_name="env_broad_scale" display_name="broad-scale environmental context">coral reef</Attribute>
         <Attribute attribute_name="env_feature" harmonized_name="env_local_scale" display_name="local-scale environmental context">marine benthic feature</Attribute>
         <Attribute attribute_name="env_material" harmonized_name="env_medium" display_name="environmental medium">seawater</Attribute>
+        <Attribute attribute_name="host" harmonized_name="host_species">Amphimedon queenslandica</Attribute>
+        <Attribute attribute_name="host_species">missing</Attribute>
         <Attribute attribute_name="TankReplicate">E</Attribute>
     </Attributes>
 </BioSample></BioSampleSet>"""
@@ -186,8 +188,11 @@ def test_biosample_fetch_record_prefers_harmonized_name_over_legacy_attribute_na
     the submitter's raw one, but this used to be discarded entirely, so
     env_broad_scale/env_local_scale/env_medium's own MappingRules (which
     match on that exact literal fact_type_candidate) never found these
-    real values. A custom attribute with no harmonized_name at all
-    (TankReplicate) still falls back to its own attribute_name."""
+    real values. Both raw and harmonized names are retained when useful,
+    and a null-token sibling (host_species="missing") cannot overwrite a
+    real harmonized value from host. A custom attribute with no
+    harmonized_name at all (TankReplicate) still falls back to its own
+    attribute_name."""
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
         params = dict(request.url.params)
@@ -210,10 +215,14 @@ def test_biosample_fetch_record_prefers_harmonized_name_over_legacy_attribute_na
     record = adapter.fetch_record("PRJNA432116")
 
     attributes = record.raw["samples"][0]["attributes"]
+    assert attributes["env_biome"] == "coral reef"
     assert attributes["env_broad_scale"] == "coral reef"
+    assert attributes["env_feature"] == "marine benthic feature"
     assert attributes["env_local_scale"] == "marine benthic feature"
+    assert attributes["env_material"] == "seawater"
     assert attributes["env_medium"] == "seawater"
-    assert "env_biome" not in attributes
+    assert attributes["host"] == "Amphimedon queenslandica"
+    assert attributes["host_species"] == "Amphimedon queenslandica"
     assert attributes["TankReplicate"] == "E"
     adapter.close()
 
