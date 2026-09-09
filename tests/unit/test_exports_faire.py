@@ -126,6 +126,18 @@ def test_export_faire_writes_expected_files_and_rows(db_session, tmp_path):
 
 
 def test_export_faire_suppresses_removed_project_fields_from_stale_standardized_values(db_session, tmp_path):
+    removed_fields = (
+        "probeReporter",
+        "probeQuencher",
+        "std_source",
+        "thresholdQuantificationCycle",
+        "lod_method",
+        "loq_method",
+        "pcr_assay_lod",
+        "pcr_assay_lod_unit",
+        "pcr_assay_loq",
+        "pcr_assay_loq_unit",
+    )
     study = Study(title="Stale removed fields")
     db_session.add(study)
     db_session.flush()
@@ -136,28 +148,19 @@ def test_export_faire_suppresses_removed_project_fields_from_stale_standardized_
             identifier_value="PRJNA_STALE",
         )
     )
-    db_session.add_all(
-        [
-            StandardizedValue(
+    stale_values = [
+        StandardizedValue(
                 study_id=study.study_id,
                 entity_id=None,
                 target_schema=TARGET_SCHEMA,
                 target_schema_version=TARGET_SCHEMA_VERSION,
-                target_field="pcr_assay_lod",
-                standardized_value="3",
+                target_field=field,
+                standardized_value=f"stale {field}",
                 mapping_method="suggested_semantic",
-            ),
-            StandardizedValue(
-                study_id=study.study_id,
-                entity_id=None,
-                target_schema=TARGET_SCHEMA,
-                target_schema_version=TARGET_SCHEMA_VERSION,
-                target_field="loq_method",
-                standardized_value="standard curve",
-                mapping_method="suggested_semantic",
-            ),
-        ]
-    )
+        )
+        for field in removed_fields
+    ]
+    db_session.add_all(stale_values)
     db_session.commit()
 
     export_faire(db_session, tmp_path)
@@ -165,8 +168,8 @@ def test_export_faire_suppresses_removed_project_fields_from_stale_standardized_
     with (tmp_path / "projectMetadata.csv").open() as f:
         reader = csv.DictReader(f)
         assert reader.fieldnames is not None
-        assert "pcr_assay_lod" not in reader.fieldnames
-        assert "loq_method" not in reader.fieldnames
+        for field in removed_fields:
+            assert field not in reader.fieldnames
         rows = list(reader)
 
     assert rows[0]["project_id"] == "PRJNA_STALE"
