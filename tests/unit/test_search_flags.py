@@ -504,6 +504,53 @@ def test_detect_controlled_search_facts_extracts_rrna_f_r_primer_names():
     assert by_type["reverse_primer_name"].evidence_quote == text
 
 
+def test_detect_controlled_search_facts_extracts_hyphenated_5_prime_3_prime_sequences():
+    # Real gap found live (STUDY-00a43b02c90d): "5'-SEQUENCE-3'", a hyphen
+    # right against the prime mark, is the near-universal convention --
+    # _PRIMER_SEQUENCE_RE previously only tolerated plain whitespace there
+    # and silently matched almost nothing in practice. Also exercises the
+    # generalized digit+F/R directional split (no "forward"/"reverse
+    # primer" wording anywhere in this text at all, just the standard
+    # 27F/1492R naming convention) that used to leave both directions
+    # empty since the window never even opened.
+    text = (
+        "A lack of bacterial growth on 2216E plates after 3 days of incubation "
+        "in 19°C and the absence of bands under 16S rRNA gene PCR amplification "
+        "with primers 27F (5′-AGAGTTTGATCMTGGCTCAG-3′) and 1492R "
+        "(5′-GGTTACCTTGTTACGACTT-3′) were considered confirmation of a sterile state."
+    )
+    controlled = detect_controlled_search_facts(
+        (("Methods", text),),
+        locator_prefix="paper:PMC1",
+        active_flags=frozenset({"pcr_0_1"}),
+    )
+    by_type = {fact.fact_type_candidate: fact for fact in controlled}
+    assert by_type["forward_primer_sequence"].raw_value == "AGAGTTTGATCMTGGCTCAG"
+    assert by_type["reverse_primer_sequence"].raw_value == "GGTTACCTTGTTACGACTT"
+
+
+def test_detect_controlled_search_facts_extracts_5_prime_only_sequence_with_no_closing_marker():
+    # Real gap found live (STUDY-017230ae34c4): "515F-Y: 5'-GTGYCAGC...
+    # (Parada et al., 2016)" -- states only the 5' end, then moves
+    # straight to the citation, no closing "-3'" anywhere. The primer
+    # NAME survived (a separate code path), but the sequence was silently
+    # dropped entirely since _PRIMER_SEQUENCE_RE's closing marker was
+    # mandatory.
+    text = (
+        "The Fluidgim V4 primer set 515F‐Y: 5′‐GTGYCAGCMGCCGCGGTAA "
+        "(Parada et al., 2016) and 806RB: 5′‐GGACTACNVGGGTWTCTAAT "
+        "(Apprill et al., 2015), accompanied with Illumina adapters."
+    )
+    controlled = detect_controlled_search_facts(
+        (("Methods", text),),
+        locator_prefix="paper:PMC1",
+        active_flags=frozenset({"pcr_0_1"}),
+    )
+    by_type = {fact.fact_type_candidate: fact for fact in controlled}
+    assert by_type["forward_primer_sequence"].raw_value == "GTGYCAGCMGCCGCGGTAA"
+    assert by_type["reverse_primer_sequence"].raw_value == "GGACTACNVGGGTWTCTAAT"
+
+
 def test_detect_controlled_search_facts_extracts_frontiers_primer_pair_from_table():
     text = (
         "TABLE 2. Primer | Sequence (5'-3') | Target | Use | Reference\n"
