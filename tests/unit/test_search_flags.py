@@ -551,6 +551,38 @@ def test_detect_controlled_search_facts_extracts_5_prime_only_sequence_with_no_c
     assert by_type["reverse_primer_sequence"].raw_value == "GGACTACNVGGGTWTCTAAT"
 
 
+def test_detect_controlled_search_facts_extracts_bare_fused_adapter_primer_sequences():
+    # Real gap found live (STUDY-01a5e9aa6491): "Fluidigm CS1 + MiFish-U-F
+    # ACACTGACGACATGGTTCTACA GTCGGTAAAACTCGTGCCAGC and Fluidigm CS2 +
+    # MiFish-U-R ..." -- no prime mark anywhere at all, and the primer
+    # names (MiFish-U-F/R) have no leading digits either, so neither the
+    # old digit-only directional gate nor any of the three prime-marker
+    # regexes ever fired; the whole sentence produced nothing at all.
+    # Exercises both new tiers together: _PRIMER_NAME_ALPHA_DIRECTION_RE
+    # (splitting forward/reverse by primer name alone) and
+    # _BARE_NUCLEOTIDE_RUN_RE (the shape-only last resort). The adapter
+    # tag and the gene-specific primer both land in the same field here
+    # (this deterministic path doesn't separate them) -- the dedicated
+    # adapter_forward/adapter_reverse LLM-judged fields, plus
+    # _split_fused_adapter_primer_facts, are what cleanly separate adapter
+    # from primer; this is a redundant, always-on safety net underneath
+    # that, not a replacement for it.
+    text = (
+        "Primary PCR primers were as follows, listed in 5′ to 3′ direction: "
+        "Fluidigm CS1 + MiFish-U-F ACACTGACGACATGGTTCTACA GTCGGTAAAACTCGTGCCAGC "
+        "and Fluidigm CS2 + MiFish-U-R TACGGTAGCAGAGACTTGGTCT "
+        "CATAGTGGGGTATCTAATCCCAGTTTG."
+    )
+    controlled = detect_controlled_search_facts(
+        (("Methods", text),),
+        locator_prefix="paper:PMC1",
+        active_flags=frozenset({"pcr_0_1"}),
+    )
+    by_type = {fact.fact_type_candidate: fact for fact in controlled}
+    assert by_type["forward_primer_sequence"].raw_value == "ACACTGACGACATGGTTCTACA | GTCGGTAAAACTCGTGCCAGC"
+    assert by_type["reverse_primer_sequence"].raw_value == "TACGGTAGCAGAGACTTGGTCT | CATAGTGGGGTATCTAATCCCAGTTTG"
+
+
 def test_detect_controlled_search_facts_extracts_frontiers_primer_pair_from_table():
     text = (
         "TABLE 2. Primer | Sequence (5'-3') | Target | Use | Reference\n"

@@ -2086,6 +2086,18 @@ _PRIMER_SEQUENCE_NO_CLOSING_MARKER_RE = re.compile(
     r"\b5\s*[′'’`]\s*[-–—‐]?\s*(?P<sequence>[ACGTRYSWKMBDHVN]{6,})\b",
     re.IGNORECASE,
 )
+# Real gap found live (STUDY-01a5e9aa6491): "Fluidigm CS1 + MiFish-U-F
+# ACACTGACGACATGGTTCTACA GTCGGTAAAACTCGTGCCAGC" -- no prime mark anywhere
+# at all, just the bare sequence sitting after the primer name. A run of
+# 15+ consecutive IUPAC nucleotide-code letters is, on its own, an
+# extremely reliable signal of a real sequence -- the code excludes every
+# vowel except A, plus F/J/L/P/Q/X/Z, so English prose essentially never
+# produces a run that long using only this letter subset. Deliberately
+# the most permissive of the three tiers (no decorative marker required
+# at all) -- used only as the last resort, after both marker-based
+# patterns above find nothing, and still gated behind the caller's own
+# "primer" keyword requirement.
+_BARE_NUCLEOTIDE_RUN_RE = re.compile(r"\b[ACGTRYSWKMBDHVN]{15,}\b", re.IGNORECASE)
 _PRIMER_NAME_BEFORE_DIRECTION_RE = re.compile(
     r"\b(?P<name>[A-Za-z0-9][A-Za-z0-9_.-]{1,50})\s+(?:forward|reverse)\s+primers?\b",
     re.IGNORECASE,
@@ -2461,42 +2473,59 @@ def _match_regex_phrases(
 # Gated behind the caller's own "primer" keyword requirement, so this
 # doesn't broaden matching outside an already primer-relevant sentence.
 _PRIMER_NAME_DIGIT_DIRECTION_RE = re.compile(r"\b\d{2,4}(?P<direction>[FR])", re.IGNORECASE)
+# Real gap found live (STUDY-01a5e9aa6491): "Fluidigm CS1 + MiFish-U-F
+# ACACTGACGACATGGTTCTACA GTCGGTAAAACTCGTGCCAGC and Fluidigm CS2 +
+# MiFish-U-R ..." -- a real, common alphabetic naming convention
+# (MiFish-U-F/R, COI-F/R, ...) with no leading digits at all, which
+# _PRIMER_NAME_DIGIT_DIRECTION_RE alone never recognized as directional
+# evidence.
+# The name body itself must also tolerate an internal hyphen (e.g.
+# "MiFish-U-F" has one before the final "-F" suffix, not just at the very
+# end) -- greedy backtracking finds the right split since the body class
+# below and the mandatory trailing "-[FR]" overlap in what they can match.
+_PRIMER_NAME_ALPHA_DIRECTION_RE = re.compile(r"\b[A-Za-z][A-Za-z0-9_.-]{1,30}-(?P<direction>[FR])\b")
+_PRIMER_DIRECTION_MARKER_PATTERNS = (_PRIMER_NAME_DIGIT_DIRECTION_RE, _PRIMER_NAME_ALPHA_DIRECTION_RE)
 
 
-def _has_digit_direction_marker(text: str, direction_letter: str) -> bool:
+def _has_primer_direction_marker(text: str, direction_letter: str) -> bool:
     return any(
         match.group("direction").upper() == direction_letter
-        for match in _PRIMER_NAME_DIGIT_DIRECTION_RE.finditer(text)
+        for pattern in _PRIMER_DIRECTION_MARKER_PATTERNS
+        for match in pattern.finditer(text)
     )
 
 
-def _first_digit_direction_position(text: str, direction_letter: str) -> int | None:
-    for match in _PRIMER_NAME_DIGIT_DIRECTION_RE.finditer(text):
-        if match.group("direction").upper() == direction_letter:
-            return match.start()
-    return None
+def _first_primer_direction_position(text: str, direction_letter: str) -> int | None:
+    positions = [
+        match.start()
+        for pattern in _PRIMER_DIRECTION_MARKER_PATTERNS
+        for match in pattern.finditer(text)
+        if match.group("direction").upper() == direction_letter
+    ]
+    return min(positions) if positions else None
 
 
 def _primer_window(snippet: str, direction: str) -> str | None:
     reverse_match = re.search(r"\breverse\s+primers?\b", snippet, re.IGNORECASE)
     # Without explicit "forward/reverse primer" wording to split on, a
-    # digit-named reverse primer's own position (e.g. "1492R" in "primers
-    # 27F (...) and 1492R (...)") serves the identical purpose -- without
-    # this, both directions would just see the WHOLE snippet and each
-    # incorrectly pick up BOTH primers' sequences (confirmed live: before
-    # this split, forward_primer_sequence and reverse_primer_sequence
-    # both returned the exact same two values for STUDY-00a43b02c90d).
-    split_pos = reverse_match.start() if reverse_match else _first_digit_direction_position(snippet, "R")
+    # directionally-named reverse primer's own position (e.g. "1492R" in
+    # "primers 27F (...) and 1492R (...)", or "MiFish-U-R" in a Fluidigm-
+    # tagged pair) serves the identical purpose -- without this, both
+    # directions would just see the WHOLE snippet and each incorrectly
+    # pick up BOTH primers' sequences (confirmed live: before this split,
+    # forward_primer_sequence and reverse_primer_sequence both returned
+    # the exact same two values for STUDY-00a43b02c90d).
+    split_pos = reverse_match.start() if reverse_match else _first_primer_direction_position(snippet, "R")
     if direction == "forward":
         window = snippet[:split_pos] if split_pos is not None else snippet
         if re.search(r"\bforward\s+primers?\b|\bSP[-_]?F\b|\b\d{1,2}S\s+rRNA\s+F\b", window, re.IGNORECASE):
             return window
-        return window if _has_digit_direction_marker(window, "F") else None
+        return window if _has_primer_direction_marker(window, "F") else None
     if split_pos is not None:
         window = snippet[split_pos:]
         if re.search(r"\breverse\s+primers?\b|\bSP[-_]?R\b|\b\d{1,2}S\s+rRNA\s+R\b", window, re.IGNORECASE):
             return window
-        return window if _has_digit_direction_marker(window, "R") else None
+        return window if _has_primer_direction_marker(window, "R") else None
     return snippet if re.search(r"\bSP[-_]?R\b|\b\d{1,2}S\s+rRNA\s+R\b", snippet, re.IGNORECASE) else None
 
 
@@ -2643,6 +2672,17 @@ def _match_primer_phrase(
                     matches.append(
                         (_clean_primer_sequence(match.group("sequence")), _PRIMER_SEQUENCE_NO_CLOSING_MARKER_RE.pattern)
                     )
+                    covered_spans.append(match.span())
+                # Last-resort tier: no prime mark or hyphen at all required,
+                # just a long enough bare nucleotide run (see
+                # _BARE_NUCLEOTIDE_RUN_RE's own comment for why that alone
+                # is reliable signal). Only ever adds what the two more
+                # specific tiers above didn't already find.
+                for match in _BARE_NUCLEOTIDE_RUN_RE.finditer(window):
+                    if any(start <= match.start() < end for start, end in covered_spans):
+                        continue
+                    matches.append((_clean_primer_sequence(match.group(0)), _BARE_NUCLEOTIDE_RUN_RE.pattern))
+                    covered_spans.append(match.span())
             else:
                 name_matches: list[tuple[str, str]] = []
                 for pattern in (_PRIMER_NAME_BEFORE_DIRECTION_RE, _PRIMER_NAME_MATCHES_RE):
