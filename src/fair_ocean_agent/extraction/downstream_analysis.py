@@ -28,6 +28,17 @@ _NON_METHODS_TITLE_RE = re.compile(
     re.IGNORECASE,
 )
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9(])")
+_METHODS_ANALYSIS_SENTENCE_RE = re.compile(
+    r"\b(?:"
+    r"statistical\s+(?:analysis|analyses|approaches?|methods?)|data\s+analys(?:is|es)|"
+    r"multivariate\s+(?:statistical\s+)?(?:analysis|analyses|approaches?)|"
+    r"(?:were|was)\s+(?:performed|calculated|computed|estimated|tested|assessed|visuali[sz]ed|"
+    r"compared|analy[sz]ed|based)\b|"
+    r"\b(?:vegan|phyloseq|PAST)\s+(?:package|function|software)|"
+    r"\b(?:R|PAST)\s+\d+(?:\.\d+)*"
+    r")\b",
+    re.IGNORECASE,
+)
 
 @dataclass(frozen=True)
 class _TechniquePattern:
@@ -207,10 +218,13 @@ def detect_downstream_analysis_techniques(
     seen: set[str] = set()
 
     for title, text in texts:
-        if not _is_methods_section(title):
+        methods_title = _is_methods_section(title)
+        if not methods_title and title and _NON_METHODS_TITLE_RE.search(title):
             continue
         sentences = _sentences(text)
         for sentence in sentences:
+            if not methods_title and not _METHODS_ANALYSIS_SENTENCE_RE.search(sentence):
+                continue
             for match in _matches_for_sentence(sentence):
                 key = match.canonical.casefold()
                 if key not in seen:
