@@ -1240,6 +1240,47 @@ def test_quote_candidates_for_adapter_fields_accept_overhang_and_tailed_primer_t
     assert "adapter_reverse" in candidates[0].field_names
 
 
+def test_quote_candidates_for_adapter_fields_trigger_on_shape_alone_for_an_unnamed_tag_system():
+    # Real gap found live (STUDY-01a5e9aa6491): naming Fluidigm CS1/CS2
+    # explicitly as search_terms only ever covers that one named system --
+    # per explicit user feedback, that's not robust, since the next paper
+    # can use any other commercial tag name. A completely made-up tag
+    # name proves the trigger no longer depends on any brand vocabulary
+    # at all -- just two bare nucleotide runs sitting next to each other,
+    # next to the word "primer".
+    candidates = quote_candidates_for_llm_judged_search(
+        (
+            (
+                "Methods",
+                "PCR primers were tailed as follows: XYZ-Tag1 + SomeGeneF "
+                "ACACTGACGACATGGTTCTACA GTCGGTAAAACTCGTGCCAGC and XYZ-Tag2 + SomeGeneR "
+                "TACGGTAGCAGAGACTTGGTCT CATAGTGGGGTATCTAATCCCAGTTTG.",
+            ),
+        )
+    )
+    assert any("adapter_forward" in c.field_names and "adapter_reverse" in c.field_names for c in candidates)
+
+
+def test_quote_candidates_for_adapter_fields_do_not_trigger_on_an_ordinary_primer_table_row():
+    # Real gap found live: the first version of the shape-based adapter
+    # trigger fired on ANY single bare nucleotide run near "primer" --
+    # wrongly tagging an ordinary probe/primer sequence table row (one
+    # sequence, no adapter concept at all) as an adapter_forward/
+    # adapter_reverse candidate. A genuine fusion is TWO bare runs
+    # sitting next to each other, not just one.
+    candidates = quote_candidates_for_llm_judged_search(
+        (
+            (
+                "Methods",
+                "TABLE 2. Oligonucleotide primers and Atribacteria-specific probe used in this study. "
+                "Primer | Sequence (5'-3') | Target | Use | Reference "
+                "Atri578 | ACTTTTAAGACCGCCTACGA | Atribacteria | C | This study.",
+            ),
+        )
+    )
+    assert not any("adapter_forward" in c.field_names or "adapter_reverse" in c.field_names for c in candidates)
+
+
 def test_clean_fused_sequence_part_strips_prime_markers_in_either_digit_quote_order():
     """A real paper's own fusion-primer notation used "5´–" (digit,
     prime mark, dash) for the leading boundary but "–3´" (dash, digit,

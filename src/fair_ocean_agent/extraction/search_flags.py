@@ -2098,6 +2098,22 @@ _PRIMER_SEQUENCE_NO_CLOSING_MARKER_RE = re.compile(
 # patterns above find nothing, and still gated behind the caller's own
 # "primer" keyword requirement.
 _BARE_NUCLEOTIDE_RUN_RE = re.compile(r"\b[ACGTRYSWKMBDHVN]{15,}\b", re.IGNORECASE)
+# A single bare run alone (see _BARE_NUCLEOTIDE_RUN_RE just above) is too
+# permissive a signal for "this mentions a fused adapter" specifically --
+# real gap found live: an ordinary probe/primer sequence table row (e.g.
+# "Atri578 | ACTTTTAAGACCGCCTACGA | Atribacteria | C | This study") has
+# exactly the same shape (one bare run, the word "primer" nearby in the
+# table's own caption) but no adapter concept anywhere in it at all, and
+# got wrongly tagged as an adapter_forward/adapter_reverse candidate. A
+# genuine fused adapter+primer citation is TWO bare runs sitting right
+# next to each other (the adapter tag, then the gene-specific primer) --
+# the same "two chunks side by side" shape _fused_sequence_split already
+# relies on to split them apart later. Requiring that pair, not just one
+# run, is what actually distinguishes "this is a fusion" from "this is
+# just some sequence."
+_FUSED_ADAPTER_PRIMER_SHAPE_RE = re.compile(
+    r"[ACGTRYSWKMBDHVN]{15,}[\s-][ACGTRYSWKMBDHVN]{15,}", re.IGNORECASE
+)
 _PRIMER_NAME_BEFORE_DIRECTION_RE = re.compile(
     r"\b(?P<name>[A-Za-z0-9][A-Za-z0-9_.-]{1,50})\s+(?:forward|reverse)\s+primers?\b",
     re.IGNORECASE,
@@ -3299,6 +3315,22 @@ _OLIGO_PROBE_ROW_CONTEXT_RE = re.compile(
 
 
 def _llm_judged_field_matches_snippet(field: LLMJudgedSearchField, snippet: str, window: str | None = None) -> bool:
+    # adapter_forward/adapter_reverse: real gap found live (STUDY-
+    # 01a5e9aa6491, a Fluidigm-tagged primer) -- enumerating adapter/tag
+    # brand names one at a time (Fluidigm CS1/CS2, Nextera, TruSeq, ...)
+    # only ever covers the specific systems already seen live; the next
+    # paper's differently-named commercial tag system fails the exact
+    # same way again. Two bare nucleotide runs sitting right next to each
+    # other (see _FUSED_ADAPTER_PRIMER_SHAPE_RE's own comment for why
+    # that pair specifically, not just any one sequence) is a brand-
+    # agnostic, reliable signal of a genuine fusion on its own, so it's
+    # treated as sufficient trigger evidence in its own right here,
+    # standing alongside (not replacing) the field's own named
+    # search_terms -- a sentence that names an adapter system without
+    # giving its actual sequence still benefits from those.
+    if field.term_name in {"adapter_forward", "adapter_reverse"} and "primer" in snippet.casefold():
+        if _FUSED_ADAPTER_PRIMER_SHAPE_RE.search(snippet):
+            return True
     if not any(_term_pattern(term).search(snippet) for term in field.search_terms):
         return False
     if field.term_name in _SAMPLING_TIME_WINDOW_FIELDS:
