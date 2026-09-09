@@ -60,6 +60,13 @@ fi
 # shellcheck source=/dev/null
 source cluster/env_activate.sh
 
+# Per an explicit user request (checking whether smaller LLM-judged
+# field batches -- see search_flags.py's own detect_llm_judged_search_facts
+# -- are worth the extra wall-clock time): seconds-since-epoch so total
+# elapsed time can be computed and printed as the very last line below,
+# not just human-readable start/finish timestamps someone would otherwise
+# have to subtract by hand.
+JOB_START_EPOCH=$(date +%s)
 echo "Job started: $(date)"
 echo "Host: $(hostname)"
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"
@@ -232,3 +239,7 @@ echo "FAIRe CSVs (if the export phase ran): ${LLM_TEST_EXPORT_DIR} -- scp that d
 echo "  scp -r <cluster>:$(pwd)/${LLM_TEST_EXPORT_DIR} ./"
 echo "Isolated test database: ${LLM_TEST_DB} (main pipeline database untouched: ${MAIN_DB})"
 echo "Manifest: ${LLM_TEST_MANIFEST}"
+# Deliberately the very last line of the log -- see JOB_START_EPOCH's own
+# comment above for why.
+JOB_ELAPSED_SECONDS=$(($(date +%s) - JOB_START_EPOCH))
+echo "Total job time: $((JOB_ELAPSED_SECONDS / 3600))h $(((JOB_ELAPSED_SECONDS % 3600) / 60))m $((JOB_ELAPSED_SECONDS % 60))s (${JOB_ELAPSED_SECONDS}s)"
