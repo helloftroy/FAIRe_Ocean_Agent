@@ -1694,6 +1694,34 @@ def test_block_taxa_requires_blocker_suppression_target_context():
     assert "block_taxa" not in by_type
 
 
+def test_block_taxa_rejects_downstream_taxa_even_when_quote_window_has_blocker_sentence():
+    text = (
+        "A blocking primer 5'-ACGTACGTACGT-3' was included in the PCR reaction to reduce host amplification. "
+        "Mitochondria, chloroplasts, archaea, eukaryotes, unidentified sequences, and OTUs with abundances "
+        "below 0.005% (minimum number of representative sequences) were removed after taxonomic assignment."
+    )
+
+    def respond(prompt: str) -> str:
+        assert "block_taxa" in prompt
+        return json.dumps(
+            [
+                {
+                    "field": "block_taxa",
+                    "raw_value": "Mitochondria, chloroplasts, archaea, eukaryotes, unidentified sequences, and OTUs",
+                    "quote_id": "Q001",
+                },
+                {"field": "block_taxa", "raw_value": "chloroplasts", "quote_id": "Q001"},
+                {"field": "block_taxa", "raw_value": "eukaryotes", "quote_id": "Q001"},
+            ]
+        )
+
+    backend = MockLLMBackend(label="judge", responses=respond)
+    facts = detect_llm_judged_search_facts(backend, (("Methods", text),), locator_prefix="paper:PMC1")
+    by_type = {fact.fact_type_candidate: fact.raw_value for fact in facts}
+
+    assert "block_taxa" not in by_type
+
+
 def test_detect_llm_judged_search_facts_handles_frontiers_atri578_probe_and_gel():
     text = (
         "TABLE 2. Oligonucleotide primers and Atribacteria-specific probe used in this study. "

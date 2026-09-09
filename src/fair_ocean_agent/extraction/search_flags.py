@@ -692,7 +692,8 @@ LLM_JUDGED_SEARCH_FIELDS: tuple[LLMJudgedSearchField, ...] = (
             "host, chloroplast, mitochondrial, predator DNA, or another explicitly stated target. Do not infer "
             "the taxon from the sample type alone. Omit taxonomy-filtering or contaminant-removal sentences "
             "that mention chloroplasts, mitochondria, host reads, or non-target taxa but do not describe a "
-            "blocking primer/oligo."
+            "blocking primer/oligo. The returned taxon must be in the same sentence as the blocking oligo/"
+            "primer AND a suppression/blocking intent, not merely elsewhere in a quote window."
         ),
         search_terms=(
             "blocking primer",
@@ -3536,6 +3537,16 @@ def _valid_llm_judged_value(field: LLMJudgedSearchField, value: str) -> bool:
     )
 
 
+def _block_taxa_value_has_intent_context(value: str, quote: str) -> bool:
+    value_key = value.casefold()
+    for _index, sentence in _snippets(quote):
+        if value_key not in sentence.casefold():
+            continue
+        if _BLOCK_TAXA_INTENT_CONTEXT_RE.search(sentence):
+            return True
+    return False
+
+
 def _valid_llm_judged_entry(field: LLMJudgedSearchField, value: str, quote: str) -> bool:
     if not _valid_llm_judged_value(field, value):
         return False
@@ -3552,7 +3563,7 @@ def _valid_llm_judged_entry(field: LLMJudgedSearchField, value: str, quote: str)
             and value.casefold() in quote.casefold()
         )
     if field.term_name == "block_taxa":
-        return bool(_BLOCK_TAXA_INTENT_CONTEXT_RE.search(quote) and value.casefold() in quote.casefold())
+        return _block_taxa_value_has_intent_context(value, quote)
     if field.term_name == "targeted_detection_method":
         return bool(_TARGETED_DETECTION_METHOD_CONTEXT_RE.search(quote))
     if field.term_name == "targeted_detection_method_additional":
