@@ -1,4 +1,5 @@
 import json
+import re
 
 from fair_ocean_agent.config import MIN_LLM_MAX_OUTPUT_TOKENS
 from fair_ocean_agent.extraction.search_flags import (
@@ -14,6 +15,33 @@ from fair_ocean_agent.extraction.search_flags import (
 )
 from fair_ocean_agent.extraction.section_categories import derive_pcr_0_1_from_category_detection
 from fair_ocean_agent.llm.mock import MockLLMBackend
+
+_PROMPT_QUOTE_LINE_RE = re.compile(r"^(Q\d+) \[(.*?)\]", re.MULTILINE)
+
+
+def _quote_id_for_field(prompt: str, field_name: str, containing: str | None = None) -> str | None:
+    """detect_llm_judged_search_facts now splits fields into several
+    smaller batches (see its own comment), each with its own candidate
+    quotes numbered from Q001 -- a mock respond() can no longer assume a
+    fixed quote_id for a given field the way a single big call could.
+    Scans a batch's own prompt for the real quote_id its own bracketed
+    field list actually includes `field_name` under. The same field can
+    legitimately be offered on more than one candidate quote at once
+    (e.g. a probe-related field tagged on several probe-context
+    sentences) -- pass `containing` (a substring only the intended
+    quote's own text has) to disambiguate; otherwise the first match
+    wins, same as detect_llm_judged_search_facts's own real behavior."""
+    for line in prompt.splitlines():
+        match = _PROMPT_QUOTE_LINE_RE.match(line)
+        if not match:
+            continue
+        quote_id, bracket = match.groups()
+        if field_name not in [name.strip() for name in bracket.split(",")]:
+            continue
+        if containing is not None and containing not in line:
+            continue
+        return quote_id
+    return None
 
 
 def test_removed_targeted_detection_fields_are_not_in_search_definitions():
@@ -1491,9 +1519,8 @@ def test_detect_llm_judged_search_facts_restores_sequencing_methodology():
     )
 
     def respond(prompt: str) -> str:
-        if "recall pass" in prompt:
+        if "recall pass" in prompt or "sequencing_methodology" not in prompt:
             return "[]"
-        assert "sequencing_methodology" in prompt
         assert "Q001 [" in prompt
         assert "The PCR product was sequenced by the MiSeq platform" in prompt
         return json.dumps(
@@ -1536,35 +1563,35 @@ def test_detect_llm_judged_search_facts_extracts_targeted_detection_bundle():
         "Standard curves used a plasmid containing the target sequence and the fluorescence threshold was set to 0.02."
     )
 
+    answers = {
+        "amp_vis_method": "agarose gel electrophoresis",
+        "targeted_detection_method": "CARD-FISH",
+        "probe_name": "Atri578",
+        "probe_target_taxon": "Atribacteria",
+        "probe_seq": "ACTTTTAAGACCGCCTACGA",
+        "probe_conc": "0.5 uM",
+        "probe_ref": "designed in this study",
+        "block_seq": "ACGTACGTACGT",
+        "block_taxa": "fish DNA",
+        "detection_criteria": "Cq < 40 in two of three replicates",
+        "targeted_detection_method_additional": "CARD-FISH was performed with probe Atri578 at 0.5 uM.",
+    }
+
     def respond(prompt: str) -> str:
         if "recall pass" in prompt:
             return "[]"
-        assert "amp_vis_method" in prompt
-        assert "targeted_detection_method" in prompt
-        assert "probe_name" in prompt
-        assert "probe_target_taxon" in prompt
-        assert "probe_seq" in prompt
-        assert "block_seq" in prompt
-        assert "targeted_detection_method_additional" in prompt
-        return json.dumps(
-            [
-                {"field": "amp_vis_method", "raw_value": "agarose gel electrophoresis", "quote_id": "Q001"},
-                {"field": "targeted_detection_method", "raw_value": "CARD-FISH", "quote_id": "Q002"},
-                {"field": "probe_name", "raw_value": "Atri578", "quote_id": "Q002"},
-                {"field": "probe_target_taxon", "raw_value": "Atribacteria", "quote_id": "Q002"},
-                {"field": "probe_seq", "raw_value": "ACTTTTAAGACCGCCTACGA", "quote_id": "Q002"},
-                {"field": "probe_conc", "raw_value": "0.5 uM", "quote_id": "Q002"},
-                {"field": "probe_ref", "raw_value": "designed in this study", "quote_id": "Q002"},
-                {"field": "block_seq", "raw_value": "ACGTACGTACGT", "quote_id": "Q003"},
-                {"field": "block_taxa", "raw_value": "fish DNA", "quote_id": "Q003"},
-                {"field": "detection_criteria", "raw_value": "Cq < 40 in two of three replicates", "quote_id": "Q004"},
-                {
-                    "field": "targeted_detection_method_additional",
-                    "raw_value": "CARD-FISH was performed with probe Atri578 at 0.5 uM.",
-                    "quote_id": "Q002",
-                },
-            ]
-        )
+        # Batched across several smaller calls now (see
+        # detect_llm_judged_search_facts's own comment) -- each call only
+        # ever offers a subset of these 11 fields, with its own Q-id
+        # numbering, so look up the real quote_id this specific prompt
+        # assigned to each field this test cares about, rather than
+        # assuming a fixed one.
+        response = []
+        for field_name, raw_value in answers.items():
+            quote_id = _quote_id_for_field(prompt, field_name)
+            if quote_id is not None:
+                response.append({"field": field_name, "raw_value": raw_value, "quote_id": quote_id})
+        return json.dumps(response)
 
     backend = MockLLMBackend(label="judge", responses=respond)
     facts = detect_llm_judged_search_facts(backend, (("Targeted detection", text),), locator_prefix="paper:PMC1")
@@ -1711,29 +1738,29 @@ def test_targeted_detection_rejects_bad_block_taxa_probe_conc_and_probe_ref_valu
         "CARD-FISH was performed with HRP-labeled probe Atri578 at 0.5 μM, designed in this study."
     )
 
+    # Each of these is a (field, raw_value, quote_id-lookup-key) triple: a
+    # "bad" value the real logic must reject, then the real, good value
+    # under the SAME field -- both attached to whichever real quote_id
+    # this batch's own prompt assigned to that field (see
+    # _quote_id_for_field's own comment; batching means that's no longer
+    # a fixed Q-number).
+    bad_and_good = [
+        ("block_taxa", "Mitochondria, chloroplasts, archaea, eukaryotes, unidentified sequences, and OTUs"),
+        ("probe_conc", "For each eDNA sample, 1 L of water was filtered onto a 0.22 μm filter."),
+        ("probe_ref", "YSI Pro Plus, Yellow Springs, Ohio, USA"),
+        ("block_taxa", "chloroplasts"),
+        ("block_taxa", "fish DNA"),
+        ("probe_conc", "0.5 μM"),
+        ("probe_ref", "designed in this study"),
+    ]
+
     def respond(prompt: str) -> str:
-        assert "block_taxa" in prompt
-        assert "probe_conc" in prompt
-        assert "probe_ref" in prompt
-        return json.dumps(
-            [
-                {
-                    "field": "block_taxa",
-                    "raw_value": "Mitochondria, chloroplasts, archaea, eukaryotes, unidentified sequences, and OTUs",
-                    "quote_id": "Q001",
-                },
-                {
-                    "field": "probe_conc",
-                    "raw_value": "For each eDNA sample, 1 L of water was filtered onto a 0.22 μm filter.",
-                    "quote_id": "Q002",
-                },
-                {"field": "probe_ref", "raw_value": "YSI Pro Plus, Yellow Springs, Ohio, USA", "quote_id": "Q002"},
-                {"field": "block_taxa", "raw_value": "chloroplasts", "quote_id": "Q001"},
-                {"field": "block_taxa", "raw_value": "fish DNA", "quote_id": "Q001"},
-                {"field": "probe_conc", "raw_value": "0.5 μM", "quote_id": "Q002"},
-                {"field": "probe_ref", "raw_value": "designed in this study", "quote_id": "Q002"},
-            ]
-        )
+        response = []
+        for field_name, raw_value in bad_and_good:
+            quote_id = _quote_id_for_field(prompt, field_name)
+            if quote_id is not None:
+                response.append({"field": field_name, "raw_value": raw_value, "quote_id": quote_id})
+        return json.dumps(response)
 
     backend = MockLLMBackend(label="judge", responses=respond)
     facts = detect_llm_judged_search_facts(backend, (("Targeted detection", text),), locator_prefix="paper:PMC1")
@@ -1751,13 +1778,14 @@ def test_block_taxa_requires_blocker_suppression_target_context():
     )
 
     def respond(prompt: str) -> str:
-        assert "block_taxa" in prompt
-        return json.dumps(
-            [
-                {"field": "block_seq", "raw_value": "ACGTACGTACGT", "quote_id": "Q001"},
-                {"field": "block_taxa", "raw_value": "chloroplasts", "quote_id": "Q001"},
-            ]
-        )
+        if "recall pass" in prompt:
+            return "[]"
+        response = []
+        for field_name, raw_value in (("block_seq", "ACGTACGTACGT"), ("block_taxa", "chloroplasts")):
+            quote_id = _quote_id_for_field(prompt, field_name)
+            if quote_id is not None:
+                response.append({"field": field_name, "raw_value": raw_value, "quote_id": quote_id})
+        return json.dumps(response)
 
     backend = MockLLMBackend(label="judge", responses=respond)
     facts = detect_llm_judged_search_facts(backend, (("Methods", text),), locator_prefix="paper:PMC1")
@@ -1775,16 +1803,20 @@ def test_block_taxa_rejects_downstream_taxa_even_when_quote_window_has_blocker_s
     )
 
     def respond(prompt: str) -> str:
-        assert "block_taxa" in prompt
+        if "recall pass" in prompt:
+            return "[]"
+        quote_id = _quote_id_for_field(prompt, "block_taxa")
+        if quote_id is None:
+            return "[]"
         return json.dumps(
             [
                 {
                     "field": "block_taxa",
                     "raw_value": "Mitochondria, chloroplasts, archaea, eukaryotes, unidentified sequences, and OTUs",
-                    "quote_id": "Q001",
+                    "quote_id": quote_id,
                 },
-                {"field": "block_taxa", "raw_value": "chloroplasts", "quote_id": "Q001"},
-                {"field": "block_taxa", "raw_value": "eukaryotes", "quote_id": "Q001"},
+                {"field": "block_taxa", "raw_value": "chloroplasts", "quote_id": quote_id},
+                {"field": "block_taxa", "raw_value": "eukaryotes", "quote_id": quote_id},
             ]
         )
 
@@ -1809,35 +1841,35 @@ def test_detect_llm_judged_search_facts_handles_frontiers_atri578_probe_and_gel(
         "of the HRP-labeled Atri578 probe at 35°C for 2 h."
     )
 
+    answers = {
+        "probe_name": "Atri578",
+        "probe_target_taxon": "Atribacteria",
+        "probe_seq": "ACTTTTAAGACCGCCTACGA",
+        "probe_ref": "This study",
+        "amp_vis_method": "agarose gel electrophoresis",
+        "probe_conc": "0.5 μM",
+        "targeted_detection_method_additional": (
+            "horseradish peroxidase (HRP)-labeled Atri578 probe; hybridization buffer "
+            "containing 10% formamide and 0.5 μM probe at 35°C for 2 h"
+        ),
+    }
+
+    # targeted_detection_method_additional is offered on more than one
+    # candidate quote (the probe table row AND the actual hybridization
+    # sentence) -- disambiguate to the one whose own text really supports
+    # this specific value, or the anti-hallucination check in
+    # _facts_from_llm_judgement rejects it outright.
+    disambiguate = {"targeted_detection_method_additional": "hybridization buffer"}
+
     def respond(prompt: str) -> str:
         if "recall pass" in prompt:
             return "[]"
-        assert "probe_seq" in prompt
-        assert "probe_name" in prompt
-        assert "probe_target_taxon" in prompt
-        assert "amp_vis_method" in prompt
-        assert "targeted_detection_method_additional" in prompt
-        assert "Atri578 | ACTTTTAAGACCGCCTACGA" in prompt
-        assert "agarose gel electrophoresis" in prompt
-        assert "HRP-labeled Atri578 probe" in prompt
-        return json.dumps(
-            [
-                {"field": "probe_name", "raw_value": "Atri578", "quote_id": "Q001"},
-                {"field": "probe_target_taxon", "raw_value": "Atribacteria", "quote_id": "Q001"},
-                {"field": "probe_seq", "raw_value": "ACTTTTAAGACCGCCTACGA", "quote_id": "Q001"},
-                {"field": "probe_ref", "raw_value": "This study", "quote_id": "Q001"},
-                {"field": "amp_vis_method", "raw_value": "agarose gel electrophoresis", "quote_id": "Q002"},
-                {"field": "probe_conc", "raw_value": "0.5 μM", "quote_id": "Q004"},
-                {
-                    "field": "targeted_detection_method_additional",
-                    "raw_value": (
-                        "horseradish peroxidase (HRP)-labeled Atri578 probe; hybridization buffer "
-                        "containing 10% formamide and 0.5 μM probe at 35°C for 2 h"
-                    ),
-                    "quote_id": "Q003",
-                },
-            ]
-        )
+        response = []
+        for field_name, raw_value in answers.items():
+            quote_id = _quote_id_for_field(prompt, field_name, containing=disambiguate.get(field_name))
+            if quote_id is not None:
+                response.append({"field": field_name, "raw_value": raw_value, "quote_id": quote_id})
+        return json.dumps(response)
 
     backend = MockLLMBackend(label="judge", responses=respond)
     facts = detect_llm_judged_search_facts(backend, (("Methods", text),), locator_prefix="paper:PMC5476839")
@@ -1859,11 +1891,7 @@ def test_amp_vis_method_keyword_fallback_catches_purified_pcr_products_gel():
         "HotStart Ready mix."
     )
 
-    def respond(prompt: str) -> str:
-        assert "amp_vis_method" in prompt
-        return "[]"
-
-    backend = MockLLMBackend(label="judge", responses=respond)
+    backend = MockLLMBackend(label="judge", responses=lambda prompt: "[]")
     facts = detect_llm_judged_search_facts(backend, (("Methods", text),), locator_prefix="paper:PMC5476839")
 
     by_type = {fact.fact_type_candidate: fact for fact in facts}
@@ -2482,14 +2510,23 @@ def test_detect_llm_judged_search_facts_recalls_a_quote_the_first_pass_never_ans
     )
 
     def respond(prompt: str) -> str:
+        # Batched now (see detect_llm_judged_search_facts's own comment),
+        # so neg_cont_0_1 and otu_clust_tool may land in different
+        # batches with their own independent Q-id numbering -- look each
+        # up by field rather than assuming a fixed quote_id or that both
+        # are offered together in one call.
         if "recall pass" in prompt:
-            assert "Q001" in prompt
-            assert "Q002" not in prompt
-            return json.dumps([{"field": "neg_cont_0_1", "raw_value": "1", "quote_id": "Q001"}])
-        # Main pass answers only the OTU-clustering candidate (Q002),
-        # leaving the negative-control candidate (Q001) entirely
-        # unaddressed.
-        return json.dumps([{"field": "otu_clust_tool", "raw_value": "UPARSE", "quote_id": "Q002"}])
+            quote_id = _quote_id_for_field(prompt, "neg_cont_0_1")
+            if quote_id is None:
+                return "[]"
+            return json.dumps([{"field": "neg_cont_0_1", "raw_value": "1", "quote_id": quote_id}])
+        # Main pass deliberately never answers neg_cont_0_1, even in a
+        # batch that offers it -- leaving it entirely unaddressed is what
+        # should trigger the recall pass above.
+        quote_id = _quote_id_for_field(prompt, "otu_clust_tool")
+        if quote_id is None:
+            return "[]"
+        return json.dumps([{"field": "otu_clust_tool", "raw_value": "UPARSE", "quote_id": quote_id}])
 
     backend = MockLLMBackend(responses=respond)
     facts = detect_llm_judged_search_facts(backend, (("Methods", text),), locator_prefix="paper:PMC1")
@@ -2497,7 +2534,13 @@ def test_detect_llm_judged_search_facts_recalls_a_quote_the_first_pass_never_ans
     by_type = {fact.fact_type_candidate: fact.raw_value for fact in facts}
     assert by_type["otu_clust_tool"] == "UPARSE"
     assert by_type["neg_cont_0_1"].startswith("1")
-    assert len(backend.calls) == 2
+    # Batching (see detect_llm_judged_search_facts's own comment) means
+    # the total call count now depends on how many field-batches this
+    # text's candidates happen to span, not a fixed number -- what this
+    # test actually cares about is that exactly ONE bounded recall pass
+    # fired (not zero, and not one per batch).
+    recall_calls = [call for call in backend.calls if "recall pass" in call["prompt"]]
+    assert len(recall_calls) == 1
 
 
 def test_detect_llm_judged_search_facts_skips_recall_when_every_quote_was_answered():

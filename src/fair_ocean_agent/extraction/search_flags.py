@@ -3496,6 +3496,13 @@ def quote_candidates_for_llm_judged_search(
 
 
 def build_llm_judged_search_prompt(candidates: tuple[QuoteCandidate, ...], *, recall_pass: bool = False) -> str:
+    # Only describes fields actually represented in `candidates` -- real
+    # gap found live: this used to list all 31 LLM_JUDGED_SEARCH_FIELDS'
+    # full descriptions unconditionally, so batching candidates down to a
+    # handful of fields (see detect_llm_judged_search_facts's own
+    # batching above) wouldn't have actually shrunk the prompt at all,
+    # the field-reference block being the bulk of it.
+    relevant_field_names = {name for candidate in candidates for name in candidate.field_names}
     field_reference = "\n".join(
         (
             f"- {field.term_name}: {field.description} "
@@ -3503,6 +3510,7 @@ def build_llm_judged_search_prompt(candidates: tuple[QuoteCandidate, ...], *, re
             + (f" Allowed values: {', '.join(field.allowed_values)}." if field.allowed_values else "")
         )
         for field in LLM_JUDGED_SEARCH_FIELDS
+        if field.term_name in relevant_field_names
     )
     quotes = "\n".join(
         f"{candidate.quote_id} [{', '.join(candidate.field_names)}] {candidate.title}: {candidate.text}"
@@ -4302,6 +4310,25 @@ def _recall_unanswered_llm_judged_candidates(
     )
 
 
+# Per an explicit user request: judging up to 40 quote candidates against
+# as many as 31 different fields in ONE call is a real, confirmed source
+# of failures on its own -- there's already a documented live case of a
+# dense, candidate-rich paper's response getting cut off mid-object at
+# the token limit, silently dropping an already-in-progress field's
+# answer (see max_output_tokens's own comment below). Splitting into
+# several smaller, field-scoped calls trades wall-clock time for each
+# individual call having far less to attend to at once. Deliberately not
+# yet a config value: this is a specific, bounded experiment (starting at
+# 5) to see whether that tradeoff is actually worth it before committing
+# to a permanent default either way.
+_DEFAULT_LLM_JUDGED_FIELDS_PER_BATCH = 5
+
+
+def _llm_judged_field_batches(exclude_field_names: frozenset[str], batch_size: int) -> list[frozenset[str]]:
+    eligible = [field.term_name for field in LLM_JUDGED_SEARCH_FIELDS if field.term_name not in exclude_field_names]
+    return [frozenset(eligible[i : i + batch_size]) for i in range(0, len(eligible), batch_size)]
+
+
 def detect_llm_judged_search_facts(
     backend: LLMBackend,
     texts: Iterable[tuple[str, str]],
@@ -4315,60 +4342,41 @@ def detect_llm_judged_search_facts(
     max_output_tokens: int | None = MIN_LLM_MAX_OUTPUT_TOKENS,
     active_flags: frozenset[str] = frozenset(),
     exclude_field_names: frozenset[str] = frozenset(),
+    max_fields_per_batch: int = _DEFAULT_LLM_JUDGED_FIELDS_PER_BATCH,
 ) -> list[RawFactCandidate]:
     reusable_texts = tuple(texts)
-    candidates = quote_candidates_for_llm_judged_search(reusable_texts, exclude_field_names=exclude_field_names)
-    if not candidates:
-        facts = []
-        facts.extend(
-            _not_found_fallback_facts(
-                field_names=(
-                    "assay_target_taxa",
-                ),
-                candidates=candidates,
-                locator_prefix=locator_prefix,
-                existing_fact_types=frozenset(),
-                exclude_field_names=exclude_field_names,
+    all_field_names = frozenset(field.term_name for field in LLM_JUDGED_SEARCH_FIELDS)
+    facts: list[RawFactCandidate] = []
+    all_candidates: list[QuoteCandidate] = []
+    for batch_field_names in _llm_judged_field_batches(exclude_field_names, max_fields_per_batch):
+        # Excludes everything NOT in this batch (on top of the caller's
+        # own exclude_field_names, already respected by only drawing
+        # batch_field_names from the already-filtered eligible list
+        # above) so this batch's candidates -- and build_llm_judged_
+        # search_prompt's own field reference section, which only
+        # describes fields actually present in candidates -- are scoped
+        # to just these few fields, not all 31.
+        batch_candidates = quote_candidates_for_llm_judged_search(
+            reusable_texts, exclude_field_names=all_field_names - batch_field_names
+        )
+        all_candidates.extend(batch_candidates)
+        if not batch_candidates:
+            continue
+        parsed, response = backend.generate_json(
+            build_llm_judged_search_prompt(batch_candidates),
+            system="You extract FAIRe library-preparation facts from supplied quote IDs only.",
+            temperature=0,
+            max_tokens=max_output_tokens,
+        )
+        if parsed is None:
+            raise LLMBackendError(
+                f"{backend.label}: library-prep quote judgement returned invalid JSON after retries"
             )
-        )
-        barcoding_fallback = _barcoding_one_step_fallback_fact(
-            texts=reusable_texts,
-            locator_prefix=locator_prefix,
-            active_flags=active_flags,
-            existing_fact_types=frozenset(),
-            exclude_field_names=exclude_field_names,
-        )
-        if barcoding_fallback:
-            facts.append(barcoding_fallback)
-        amp_vis_fallback = _amp_vis_method_fallback_fact(
-            texts=reusable_texts,
-            locator_prefix=locator_prefix,
-            existing_fact_types=frozenset(fact.fact_type_candidate for fact in facts),
-            exclude_field_names=exclude_field_names,
-        )
-        if amp_vis_fallback:
-            facts.append(amp_vis_fallback)
+        facts.extend(_facts_from_llm_judgement(parsed, batch_candidates, locator_prefix=locator_prefix))
         facts.extend(
-            _control_not_found_fallback_facts(
-                locator_prefix=locator_prefix,
-                existing_fact_types=frozenset(),
-                exclude_field_names=exclude_field_names,
-                candidates=candidates,
-            )
+            _recall_unanswered_llm_judged_candidates(backend, parsed, batch_candidates, locator_prefix=locator_prefix)
         )
-        return facts
-    parsed, response = backend.generate_json(
-        build_llm_judged_search_prompt(candidates),
-        system="You extract FAIRe library-preparation facts from supplied quote IDs only.",
-        temperature=0,
-        max_tokens=max_output_tokens,
-    )
-    if parsed is None:
-        raise LLMBackendError(
-            f"{backend.label}: library-prep quote judgement returned invalid JSON after retries"
-        )
-    facts = _facts_from_llm_judgement(parsed, candidates, locator_prefix=locator_prefix)
-    facts.extend(_recall_unanswered_llm_judged_candidates(backend, parsed, candidates, locator_prefix=locator_prefix))
+    candidates = tuple(all_candidates)
     facts = _mirror_not_a_control_to_sibling_field(facts)
     facts = _split_fused_adapter_primer_facts(facts)
     existing_fact_types = frozenset(fact.fact_type_candidate for fact in facts)
