@@ -37,6 +37,15 @@ find them. Handles three real, confirmed-live problems in one pass:
      verified against a study this pipeline already tracks (so a cited
      reference's DOI on the same page is never mistaken for the paper's
      own) -- used only when neither of the above found anything.
+  4. A title-keyed CSV (--title-csv) -- e.g. this project's own paper
+     classification export, which has no per-file "Attachments" column
+     the way Paperpile's export does, only a "title"/"doi" pair -- matched
+     against the title parsed out of Paperpile's "Author et al. YYYY -
+     Title.pdf" naming convention (its own filename truncation, marked
+     with " ... ", is handled by a prefix/suffix match). Used only when
+     nothing above found anything; an ambiguous truncated match (more
+     than one CSV title fits the same prefix/suffix) is skipped rather
+     than guessed.
 
 Dry-run by default -- prints exactly what would happen to every file
 without touching anything. Pass --apply to actually rename/move files.
@@ -82,6 +91,23 @@ _DOI_IN_TEXT_RE = re.compile(r"10\.\d{4,9}/[^\s\"'<>()\[\]]+")
 _ALREADY_CORRECT_RE = re.compile(r"^10\.\d{4,9}_[^:/]+\.pdf$", re.IGNORECASE)
 _PAGES_TO_SCAN = 2
 _NON_ALNUM_SPACE_RE = re.compile(r"[^a-z0-9 ]+")
+# Paperpile's own "Author et al. YYYY - Title.pdf" naming convention --
+# strips the leading author/year segment off to recover just the title.
+_TITLE_FROM_FILENAME_RE = re.compile(r"^.*?\d{4}[a-z]?\s*-\s*(.*)$")
+# Paperpile's own filename-truncation marker for an overlong title.
+_TRUNCATION_MARKER = " ... "
+# How much of the (normalized) prefix/suffix around a truncation marker
+# to require for a match -- long enough that an unrelated paper sharing a
+# few words at the start/end of its title can't collide, short enough to
+# survive Paperpile's own truncation point moving by a few characters.
+_TITLE_PREFIX_MATCH_LEN = 40
+_TITLE_SUFFIX_MATCH_LEN = 30
+
+
+def _title_from_filename(name: str) -> str:
+    stem = Path(name).stem
+    match = _TITLE_FROM_FILENAME_RE.match(stem)
+    return match.group(1) if match else stem
 
 
 def _normalize_filename_for_matching(name: str) -> str:
@@ -125,6 +151,72 @@ def load_csv_doi_lookup(csv_path: Path) -> dict[str, str]:
                 if key:
                     lookup.setdefault(key, normalized_doi)
     return lookup
+
+
+def _normalize_title_for_matching(title: str) -> str:
+    """Same normalization as _normalize_filename_for_matching, minus the
+    filename-specific Path(...).stem step -- a title has no extension to
+    strip, and stripping after its last "." would wrongly truncate a
+    title that happens to end in an abbreviation."""
+    decomposed = unicodedata.normalize("NFKD", title)
+    without_marks = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    return _NON_ALNUM_SPACE_RE.sub(" ", without_marks.lower()).strip()
+
+
+def load_title_doi_lookup(csv_path: Path) -> dict[str, str]:
+    """A CSV keyed by "title"/"doi" columns (this project's own paper
+    classification exports have this shape, not Paperpile's per-file
+    "Attachments" column) -- keyed by normalized title. A title that maps
+    to two different DOIs across rows is dropped entirely rather than
+    guessed at (real, if rare, possibility with a large classification
+    export); a row with no title or no valid DOI is skipped."""
+    lookup: dict[str, str] = {}
+    ambiguous_keys: set[str] = set()
+    with csv_path.open(newline="", encoding="utf-8-sig") as f:
+        for row in csv.DictReader(f):
+            title = (row.get("title") or "").strip()
+            doi = (row.get("doi") or "").strip()
+            if not title or not doi:
+                continue
+            try:
+                normalized_doi = normalize_doi(doi)
+            except IdentifierError:
+                continue
+            key = _normalize_title_for_matching(title)
+            if not key:
+                continue
+            existing = lookup.get(key)
+            if existing is not None and existing != normalized_doi:
+                ambiguous_keys.add(key)
+                continue
+            lookup[key] = normalized_doi
+    for key in ambiguous_keys:
+        lookup.pop(key, None)
+    return lookup
+
+
+def _doi_from_title_lookup(filename: str, title_map: dict[str, str]) -> str | None:
+    """Matches the title parsed out of a Paperpile-style filename against
+    a title-keyed CSV lookup. Paperpile itself truncates an overlong
+    title in the filename (marked with _TRUNCATION_MARKER), so a
+    truncated title is matched by requiring both a normalized prefix and
+    suffix to line up -- and, if more than one CSV title fits that same
+    prefix/suffix, treated as ambiguous and skipped rather than guessed."""
+    if not title_map:
+        return None
+    title = _title_from_filename(filename)
+    if _TRUNCATION_MARKER in title:
+        prefix, _, suffix = title.partition(_TRUNCATION_MARKER)
+        prefix_key = _normalize_title_for_matching(prefix)[:_TITLE_PREFIX_MATCH_LEN]
+        suffix_key = _normalize_title_for_matching(suffix)[-_TITLE_SUFFIX_MATCH_LEN:]
+        if not prefix_key or not suffix_key:
+            return None
+        candidates = {
+            doi for key, doi in title_map.items()
+            if key.startswith(prefix_key) and key.endswith(suffix_key)
+        }
+        return candidates.pop() if len(candidates) == 1 else None
+    return title_map.get(_normalize_title_for_matching(title))
 
 
 @dataclass
@@ -277,26 +369,33 @@ def _plan_via_csv(
 
 
 def _plan_for_pdf_bytes(
-    session, source_label: Path, content: bytes, target_dir: Path
+    session, source_label: Path, content: bytes, target_dir: Path, original_filename: str,
+    title_map: dict[str, str] | None = None,
 ) -> Plan:
     doi = _high_confidence_doi_from_pdf_bytes(content)
+    candidates: list[str] = []
     if doi is None:
         candidates = _doi_candidates_from_pdf_bytes(content)
-        if not candidates:
-            return Plan(source_label, None, "no_doi_found", "no DOI found in metadata, links, or page text")
-        doi = _first_tracked_doi(session, candidates)
-        if doi is None:
+        if candidates:
+            doi = _first_tracked_doi(session, candidates)
+    if doi is None:
+        doi = _doi_from_title_lookup(original_filename, title_map or {})
+    if doi is None:
+        if candidates:
             return Plan(
                 source_label, None, "doi_not_tracked",
                 f"found {candidates[0]!r} (and {len(candidates) - 1} more) but none match a tracked study",
             )
+        return Plan(source_label, None, "no_doi_found", "no DOI found in metadata, links, page text, or title match")
     target = target_dir / _doi_pdf_filename(doi)
     if target.exists() and target.resolve() != source_label.resolve():
         return Plan(source_label, target, "target_exists", f"{target.name} already present")
     return Plan(source_label, target, "rename")
 
 
-def build_plan(session, directory: Path, csv_map: dict[str, str] | None = None) -> list[Plan]:
+def build_plan(
+    session, directory: Path, csv_map: dict[str, str] | None = None, title_map: dict[str, str] | None = None
+) -> list[Plan]:
     csv_map = csv_map or {}
     plans: list[Plan] = []
     for entry in sorted(directory.iterdir()):
@@ -336,7 +435,7 @@ def build_plan(session, directory: Path, csv_map: dict[str, str] | None = None) 
                         csv_plan.zip_member = member
                         plans.append(csv_plan)
                         continue
-                    plan = _plan_for_pdf_bytes(session, label, zf.read(info), directory)
+                    plan = _plan_for_pdf_bytes(session, label, zf.read(info), directory, member_basename, title_map)
                     plan.action = "extract_and_rename" if plan.action == "rename" else plan.action
                     plan.zip_member = member
                     plans.append(plan)
@@ -364,7 +463,7 @@ def build_plan(session, directory: Path, csv_map: dict[str, str] | None = None) 
         if csv_plan is not None:
             plans.append(csv_plan)
             continue
-        plans.append(_plan_for_pdf_bytes(session, entry, entry.read_bytes(), directory))
+        plans.append(_plan_for_pdf_bytes(session, entry, entry.read_bytes(), directory, entry.name, title_map))
     return plans
 
 
@@ -395,6 +494,12 @@ def main() -> None:
         help="a Paperpile 'Export as CSV' reference list -- matched by filename (via its own "
         "Attachments column) before falling back to scanning each PDF's own first-page text",
     )
+    parser.add_argument(
+        "--title-csv", type=Path, default=None,
+        help="a title/doi-keyed CSV (e.g. this project's own paper classification export) -- "
+        "tried last, after --csv, PDF metadata/links, and page-text scanning all come up empty, "
+        "by matching the title parsed out of a Paperpile-style filename",
+    )
     parser.add_argument("--apply", action="store_true", help="actually rename/extract files (default: dry-run report only)")
     args = parser.parse_args()
 
@@ -408,8 +513,15 @@ def main() -> None:
         csv_map = load_csv_doi_lookup(args.csv)
         print(f"Loaded {len(csv_map)} filename -> DOI entries from {args.csv}\n")
 
+    title_map: dict[str, str] = {}
+    if args.title_csv:
+        if not args.title_csv.is_file():
+            raise SystemExit(f"not a file: {args.title_csv}")
+        title_map = load_title_doi_lookup(args.title_csv)
+        print(f"Loaded {len(title_map)} title -> DOI entries from {args.title_csv}\n")
+
     with session_scope() as session:
-        plans = build_plan(session, args.dir, csv_map)
+        plans = build_plan(session, args.dir, csv_map, title_map)
 
     by_action: dict[str, list[Plan]] = {}
     for plan in plans:
