@@ -125,6 +125,53 @@ def test_export_faire_writes_expected_files_and_rows(db_session, tmp_path):
     assert rows[0]["input_read_count"] == "1000"
 
 
+def test_export_faire_suppresses_removed_project_fields_from_stale_standardized_values(db_session, tmp_path):
+    study = Study(title="Stale removed fields")
+    db_session.add(study)
+    db_session.flush()
+    db_session.add(
+        ExternalIdentifier(
+            study_id=study.study_id,
+            identifier_type=IdentifierType.BIOPROJECT_ACCESSION.value,
+            identifier_value="PRJNA_STALE",
+        )
+    )
+    db_session.add_all(
+        [
+            StandardizedValue(
+                study_id=study.study_id,
+                entity_id=None,
+                target_schema=TARGET_SCHEMA,
+                target_schema_version=TARGET_SCHEMA_VERSION,
+                target_field="pcr_assay_lod",
+                standardized_value="3",
+                mapping_method="suggested_semantic",
+            ),
+            StandardizedValue(
+                study_id=study.study_id,
+                entity_id=None,
+                target_schema=TARGET_SCHEMA,
+                target_schema_version=TARGET_SCHEMA_VERSION,
+                target_field="loq_method",
+                standardized_value="standard curve",
+                mapping_method="suggested_semantic",
+            ),
+        ]
+    )
+    db_session.commit()
+
+    export_faire(db_session, tmp_path)
+
+    with (tmp_path / "projectMetadata.csv").open() as f:
+        reader = csv.DictReader(f)
+        assert reader.fieldnames is not None
+        assert "pcr_assay_lod" not in reader.fieldnames
+        assert "loq_method" not in reader.fieldnames
+        rows = list(reader)
+
+    assert rows[0]["project_id"] == "PRJNA_STALE"
+
+
 def _minimal_mapped_study(session, *, bioproject: str, biosample: str, run_accession: str) -> Study:
     study = Study(title=f"Study {bioproject}")
     session.add(study)

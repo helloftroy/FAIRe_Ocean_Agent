@@ -3105,6 +3105,14 @@ _PROBE_CONC_VALUE_RE = re.compile(
     r"^\s*(?:~|≈|about\s+|approximately\s+)?\d+(?:\.\d+)?\s*(?:nM|uM|µM|μM|nmol/L|umol/L|µmol/L|μmol/L)\s*$",
     re.IGNORECASE,
 )
+_PROBE_SHORT_VALUE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/() -]{0,80}$")
+_PROBE_TARGET_TAXON_REJECT_VALUE_RE = re.compile(
+    r"\b(?:"
+    r"sample|seawater|sediment|soil|water|host|primer|probe|gene|marker|locus|region|sequence|"
+    r"rRNA|16S|18S|12S|28S|COI|ITS|amplicon"
+    r")\b",
+    re.IGNORECASE,
+)
 _TARGETED_DETECTION_METHOD_CONTEXT_RE = re.compile(
     r"\b(?:"
     r"qPCR|quantitative\s+PCR|real[-\s]?time\s+PCR|digital\s+PCR|dPCR|ddPCR|targeted\s+detection|"
@@ -3206,6 +3214,8 @@ def _llm_judged_field_matches_snippet(field: LLMJudgedSearchField, snippet: str,
     # wrongly exclude them.
     if field.term_name in {"probe_seq", "probe_name", "probe_target_taxon"}:
         return bool(_PROBE_ASSAY_CONTEXT_RE.search(snippet))
+    if field.term_name == "targeted_detection_method":
+        return bool(_TARGETED_DETECTION_METHOD_CONTEXT_RE.search(snippet))
     if field.term_name == "targeted_detection_method_additional":
         return bool(_TARGETED_DETECTION_METHOD_CONTEXT_RE.search(snippet))
     if field.term_name == "detection_criteria":
@@ -3254,7 +3264,9 @@ def _oligo_table_quote_candidates(
         if (
             "probe" in folded or match.group("use").strip().casefold() in {"c", "fish", "card-fish"}
         ):
-            field_names.extend(["probe_seq", "probe_ref", "targeted_detection_method_additional"])
+            field_names.extend(
+                ["probe_name", "probe_target_taxon", "probe_seq", "probe_ref", "targeted_detection_method_additional"]
+            )
         if "block" in folded or "blocking" in folded or "blocker" in folded:
             field_names.extend(["block_seq", "block_ref", "block_taxa", "targeted_detection_method_additional"])
         field_names = [name for name in field_names if name not in exclude_field_names]
@@ -3425,8 +3437,16 @@ def _valid_llm_judged_value(field: LLMJudgedSearchField, value: str) -> bool:
         lowered = stripped.casefold()
         if any(term in lowered for term in ("ysi", "yellow springs", "http://www.drive5.com", "usearch")):
             return False
-    if field.term_name == "pcr_assay_lod":
-        return bool(re.search(r"\d", stripped))
+    if field.term_name == "probe_name":
+        if "|" in stripped or "," in stripped or ";" in stripped or "." in stripped:
+            return False
+        return len(stripped.split()) <= 5 and bool(_PROBE_SHORT_VALUE_RE.fullmatch(stripped))
+    if field.term_name == "probe_target_taxon":
+        if "|" in stripped or "," in stripped or ";" in stripped or "." in stripped:
+            return False
+        if _PROBE_TARGET_TAXON_REJECT_VALUE_RE.search(stripped):
+            return False
+        return len(stripped.split()) <= 8 and bool(_PROBE_SHORT_VALUE_RE.fullmatch(stripped))
     if field.term_name == "detection_criteria":
         return bool(_DETECTION_CRITERIA_VALUE_RE.search(stripped))
     if not field.allowed_values:
@@ -3449,8 +3469,15 @@ def _valid_llm_judged_entry(field: LLMJudgedSearchField, value: str, quote: str)
         )
     if field.term_name == "probe_conc":
         return bool(_PROBE_ASSAY_CONTEXT_RE.search(quote) and _PROBE_CONC_CONTEXT_RE.search(quote))
+    if field.term_name in {"probe_name", "probe_target_taxon"}:
+        return bool(
+            (_PROBE_ASSAY_CONTEXT_RE.search(quote) or _OLIGO_PROBE_ROW_CONTEXT_RE.search(quote))
+            and value.casefold() in quote.casefold()
+        )
     if field.term_name == "block_taxa":
         return bool(_BLOCK_TAXA_INTENT_CONTEXT_RE.search(quote) and value.casefold() in quote.casefold())
+    if field.term_name == "targeted_detection_method":
+        return bool(_TARGETED_DETECTION_METHOD_CONTEXT_RE.search(quote))
     if field.term_name == "targeted_detection_method_additional":
         return bool(_TARGETED_DETECTION_METHOD_CONTEXT_RE.search(quote))
     return True

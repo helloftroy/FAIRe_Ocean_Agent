@@ -255,11 +255,12 @@ PROJECT_METADATA_COLUMN_ORDER = (
     "block_seq",
     "block_ref",
     "block_taxa",
+    "targeted_detection_method",
+    "probe_name",
+    "probe_target_taxon",
     "probe_seq",
     "probe_conc",
     "probe_ref",
-    "pcr_assay_lod",
-    "pcr_assay_lod_unit",
     "targeted_detection_method_additional",
     "barcoding_pcr_appr",
     "pcr2_annealingTemp",
@@ -498,9 +499,22 @@ PROJECT_METADATA_SUPPRESSED_FIELDS = frozenset(
         "automaticBaselineValue",
         "automaticThresholdQuantificationCycle",
         "baselineValue",
+        "probeReporter",
+        "probeQuencher",
+        "std_source",
+        "thresholdQuantificationCycle",
+        "lod_method",
+        "loq_method",
+        "pcr_assay_lod",
+        "pcr_assay_lod_unit",
         "pcr_assay_lod_LL",
         "pcr_assay_lod_UL",
         "pcr_assay_lod_techreps",
+        "pcr_assay_loq",
+        "pcr_assay_loq_unit",
+        "pcr_assay_loq_LL",
+        "pcr_assay_loq_UL",
+        "pcr_assay_loq_techreps",
         "std_seq",
         "std_type",
     }
@@ -644,7 +658,11 @@ def _study_wide_values(session: Session, study_id: str) -> dict[str, str]:
             StandardizedValue.entity_id.is_(None),
         )
     ).all()
-    return {field: value for field, value in rows if value is not None}
+    return {
+        field: value
+        for field, value in rows
+        if value is not None and field not in PROJECT_METADATA_SUPPRESSED_FIELDS
+    }
 
 
 def _linked_study_ids(session: Session, entity_id: str) -> list[str]:
@@ -677,7 +695,14 @@ def _entity_values(session: Session, entity_id: str) -> dict[str, str]:
             StandardizedValue.target_schema == TARGET_SCHEMA,
         )
     ).all()
-    return {field: value for field, value in rows if value is not None}
+    return {
+        field: value
+        for field, value in rows
+        if value is not None
+        and field not in PROJECT_METADATA_SUPPRESSED_FIELDS
+        and field not in SAMPLE_METADATA_SUPPRESSED_FIELDS
+        and field not in EXPERIMENT_RUN_METADATA_SUPPRESSED_FIELDS
+    }
 
 
 def _linked_entity(

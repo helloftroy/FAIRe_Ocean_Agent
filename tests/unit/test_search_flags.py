@@ -24,8 +24,16 @@ def test_removed_targeted_detection_fields_are_not_in_search_definitions():
         "thresholdQuantificationCycle",
         "lod_method",
         "loq_method",
+        "pcr_assay_lod",
+        "pcr_assay_lod_unit",
+        "pcr_assay_lod_LL",
+        "pcr_assay_lod_UL",
+        "pcr_assay_lod_techreps",
         "pcr_assay_loq",
         "pcr_assay_loq_unit",
+        "pcr_assay_loq_LL",
+        "pcr_assay_loq_UL",
+        "pcr_assay_loq_techreps",
     }
     searched = {field.term_name for field in LLM_JUDGED_SEARCH_FIELDS} | {
         field.term_name for field in CONTROLLED_SEARCH_FIELDS
@@ -1412,20 +1420,24 @@ def test_detect_llm_judged_search_facts_extracts_targeted_detection_bundle():
         if "recall pass" in prompt:
             return "[]"
         assert "amp_vis_method" in prompt
+        assert "targeted_detection_method" in prompt
+        assert "probe_name" in prompt
+        assert "probe_target_taxon" in prompt
         assert "probe_seq" in prompt
         assert "block_seq" in prompt
         assert "targeted_detection_method_additional" in prompt
         return json.dumps(
             [
                 {"field": "amp_vis_method", "raw_value": "agarose gel electrophoresis", "quote_id": "Q001"},
+                {"field": "targeted_detection_method", "raw_value": "CARD-FISH", "quote_id": "Q002"},
+                {"field": "probe_name", "raw_value": "Atri578", "quote_id": "Q002"},
+                {"field": "probe_target_taxon", "raw_value": "Atribacteria", "quote_id": "Q002"},
                 {"field": "probe_seq", "raw_value": "ACTTTTAAGACCGCCTACGA", "quote_id": "Q002"},
                 {"field": "probe_conc", "raw_value": "0.5 uM", "quote_id": "Q002"},
                 {"field": "probe_ref", "raw_value": "designed in this study", "quote_id": "Q002"},
                 {"field": "block_seq", "raw_value": "ACGTACGTACGT", "quote_id": "Q003"},
                 {"field": "block_taxa", "raw_value": "fish DNA", "quote_id": "Q003"},
                 {"field": "detection_criteria", "raw_value": "Cq < 40 in two of three replicates", "quote_id": "Q004"},
-                {"field": "pcr_assay_lod", "raw_value": "3", "quote_id": "Q005"},
-                {"field": "pcr_assay_lod_unit", "raw_value": "copies/reaction", "quote_id": "Q005"},
                 {
                     "field": "targeted_detection_method_additional",
                     "raw_value": "CARD-FISH was performed with probe Atri578 at 0.5 uM.",
@@ -1439,14 +1451,15 @@ def test_detect_llm_judged_search_facts_extracts_targeted_detection_bundle():
 
     by_type = {fact.fact_type_candidate: fact.raw_value for fact in facts}
     assert by_type["amp_vis_method"] == "agarose gel electrophoresis"
+    assert by_type["targeted_detection_method"] == "CARD-FISH"
+    assert by_type["probe_name"] == "Atri578"
+    assert by_type["probe_target_taxon"] == "Atribacteria"
     assert by_type["probe_seq"] == "ACTTTTAAGACCGCCTACGA"
     assert by_type["probe_conc"] == "0.5 uM"
     assert by_type["probe_ref"] == "designed in this study"
     assert by_type["block_seq"] == "ACGTACGTACGT"
     assert by_type["block_taxa"] == "fish DNA"
     assert by_type["detection_criteria"] == "Cq < 40 in two of three replicates"
-    assert by_type["pcr_assay_lod"] == "3"
-    assert by_type["pcr_assay_lod_unit"] == "copies/reaction"
     assert by_type["targeted_detection_method_additional"] == "CARD-FISH was performed with probe Atri578 at 0.5 uM."
 
 
@@ -1652,6 +1665,8 @@ def test_detect_llm_judged_search_facts_handles_frontiers_atri578_probe_and_gel(
         if "recall pass" in prompt:
             return "[]"
         assert "probe_seq" in prompt
+        assert "probe_name" in prompt
+        assert "probe_target_taxon" in prompt
         assert "amp_vis_method" in prompt
         assert "targeted_detection_method_additional" in prompt
         assert "Atri578 | ACTTTTAAGACCGCCTACGA" in prompt
@@ -1659,17 +1674,19 @@ def test_detect_llm_judged_search_facts_handles_frontiers_atri578_probe_and_gel(
         assert "HRP-labeled Atri578 probe" in prompt
         return json.dumps(
             [
+                {"field": "probe_name", "raw_value": "Atri578", "quote_id": "Q001"},
+                {"field": "probe_target_taxon", "raw_value": "Atribacteria", "quote_id": "Q001"},
                 {"field": "probe_seq", "raw_value": "ACTTTTAAGACCGCCTACGA", "quote_id": "Q001"},
                 {"field": "probe_ref", "raw_value": "This study", "quote_id": "Q001"},
-                {"field": "amp_vis_method", "raw_value": "agarose gel electrophoresis", "quote_id": "Q003"},
-                {"field": "probe_conc", "raw_value": "0.5 μM", "quote_id": "Q005"},
+                {"field": "amp_vis_method", "raw_value": "agarose gel electrophoresis", "quote_id": "Q002"},
+                {"field": "probe_conc", "raw_value": "0.5 μM", "quote_id": "Q004"},
                 {
                     "field": "targeted_detection_method_additional",
                     "raw_value": (
                         "horseradish peroxidase (HRP)-labeled Atri578 probe; hybridization buffer "
                         "containing 10% formamide and 0.5 μM probe at 35°C for 2 h"
                     ),
-                    "quote_id": "Q004",
+                    "quote_id": "Q003",
                 },
             ]
         )
@@ -1678,6 +1695,8 @@ def test_detect_llm_judged_search_facts_handles_frontiers_atri578_probe_and_gel(
     facts = detect_llm_judged_search_facts(backend, (("Methods", text),), locator_prefix="paper:PMC5476839")
 
     by_type = {fact.fact_type_candidate: fact.raw_value for fact in facts}
+    assert by_type["probe_name"] == "Atri578"
+    assert by_type["probe_target_taxon"] == "Atribacteria"
     assert by_type["probe_seq"] == "ACTTTTAAGACCGCCTACGA"
     assert by_type["probe_ref"] == "This study"
     assert by_type["amp_vis_method"] == "agarose gel electrophoresis"

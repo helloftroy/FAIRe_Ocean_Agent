@@ -468,8 +468,6 @@ FIELD_GROUPS: dict[str, tuple[FaireExtractionField, ...]] = {
         FaireExtractionField("estimated_copy_number", "estimated concentration of target molecules/copies", "estimatedNumberOfCopies"),
         FaireExtractionField("estimated_copy_number_unit", "unit for estimated_copy_number", "estimatedNumberOfCopies_unit", "copies/reaction"),
         FaireExtractionField("estimated_copy_number_method", "method used to estimate target copy number", "estimatedNumberOfCopies_method"),
-        FaireExtractionField("assay_limit_of_detection", "assay's limit of detection (LOD)", "pcr_assay_lod"),
-        FaireExtractionField("assay_limit_of_detection_unit", "unit for assay_limit_of_detection", "pcr_assay_lod_unit"),
     ),
     "Sequencing / library prep": (
         FaireExtractionField("sequencing_platform_general", "general sequencing platform (e.g. Illumina, PacBio, Oxford Nanopore)", "platform"),

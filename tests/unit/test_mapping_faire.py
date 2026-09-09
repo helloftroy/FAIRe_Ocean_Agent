@@ -54,8 +54,16 @@ def test_removed_targeted_detection_fields_are_not_searched_mapped_or_exported()
         "thresholdQuantificationCycle",
         "lod_method",
         "loq_method",
+        "pcr_assay_lod",
+        "pcr_assay_lod_unit",
+        "pcr_assay_lod_LL",
+        "pcr_assay_lod_UL",
+        "pcr_assay_lod_techreps",
         "pcr_assay_loq",
         "pcr_assay_loq_unit",
+        "pcr_assay_loq_LL",
+        "pcr_assay_loq_UL",
+        "pcr_assay_loq_techreps",
     }
     mapped_fields = {rule.source_fact_type for rule in RULES} | {rule.target_field for rule in RULES}
 
@@ -667,20 +675,16 @@ def test_maps_dna_cleanup_fields_to_sample_metadata_at_study_level(db_session):
     assert values["dna_cleanup_method"] == "Genomic DNA Clean and Concentrator kit"
 
 
-def test_maps_probe_name_and_detection_method_into_the_real_narrative_field(db_session):
-    """Real gap found live: probe_name/targeted_detection_method
-    (search_flags.py's own LLMJudgedSearchField entries) aren't real
-    FAIRe checklist fields on their own -- confirmed live against the
-    vendored schema, neither name appears anywhere in it -- so a
-    MappingRule targeting either literally would still never reach any
-    CSV. Per an explicit user decision, both merge into the real,
-    existing targeted_detection_method_additional free-text field
-    instead, labeled so they stay recognizable once pipe-joined."""
+def test_maps_probe_name_detection_method_and_target_taxon_into_direct_fields(db_session):
     study = _study(db_session, title="Probe detection method")
     _fact(db_session, study, field="probe_name", value="Atri578", entity_level="study", support=SupportType.EXPLICIT)
     _fact(
         db_session, study, field="targeted_detection_method",
         value="CARD-FISH", entity_level="study", support=SupportType.EXPLICIT,
+    )
+    _fact(
+        db_session, study, field="probe_target_taxon",
+        value="Atribacteria", entity_level="study", support=SupportType.EXPLICIT,
     )
     _fact(
         db_session, study, field="targeted_detection_method_additional",
@@ -695,30 +699,10 @@ def test_maps_probe_name_and_detection_method_into_the_real_narrative_field(db_s
         sv.target_field: sv.standardized_value
         for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id, entity_id=None)
     }
-    merged = values["targeted_detection_method_additional"]
-    assert "probe name: Atri578" in merged
-    assert "detection method: CARD-FISH" in merged
-    assert "hybridization buffer containing 10% formamide" in merged
-
-
-def test_maps_probe_target_taxon_into_the_real_assay_target_taxa_field(db_session):
-    """Real gap found live: probe_target_taxon isn't a real FAIRe
-    checklist field on its own. Per an explicit user decision, merges
-    into the real, existing assay_target_taxa field instead -- that
-    field's own context regex already explicitly covers "probes" as one
-    of the things an assay/probe can target."""
-    study = _study(db_session, title="Probe target taxon")
-    _fact(db_session, study, field="probe_target_taxon", value="Atribacteria", entity_level="study", support=SupportType.EXPLICIT)
-    db_session.commit()
-
-    map_study_to_faire(db_session, study.study_id)
-    db_session.commit()
-
-    values = {
-        sv.target_field: sv.standardized_value
-        for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id, entity_id=None)
-    }
-    assert values["targetTaxonomicAssay"] == "Atribacteria"
+    assert values["probe_name"] == "Atri578"
+    assert values["targeted_detection_method"] == "CARD-FISH"
+    assert values["probe_target_taxon"] == "Atribacteria"
+    assert values["targeted_detection_method_additional"] == "hybridization buffer containing 10% formamide"
 
 
 # Real FAIRe Environment-subset fields deliberately dropped entirely per

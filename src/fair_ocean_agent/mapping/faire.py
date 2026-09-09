@@ -206,15 +206,9 @@ _PIPE_UNION_TARGET_FIELDS = frozenset(
         # for assay_name/target_gene/primers/pcr_method_additional. size_frac
         # (pore size) already has this fix.
         "filter_name", "filter_diameter", "filter_material",
-        # targeted_detection_method_additional: probe_name/targeted_detection_method
-        # (search_flags.py's own LLMJudgedSearchField entries) aren't real
-        # FAIRe checklist fields on their own -- per an explicit user
-        # decision, both merge into this real, existing free-text field
-        # instead of being invented as new non-schema columns. Without
-        # pipe-union, whichever of the three sources (this field's own
-        # narrative sentence, a bare probe name, a bare detection-method
-        # name) happened to be produced first would silently win, dropping
-        # the others -- the same "first wins" race already fixed above.
+        # targeted_detection_method_additional: papers can provide multiple
+        # useful targeted-detection narrative details, so keep all distinct
+        # supporting snippets rather than letting the first one win.
         "targeted_detection_method_additional",
     }
 )
