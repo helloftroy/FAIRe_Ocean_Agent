@@ -50,12 +50,17 @@ find them. Handles three real, confirmed-live problems in one pass:
 Dry-run by default -- prints exactly what would happen to every file
 without touching anything. Pass --apply to actually rename/move files.
 Never overwrites an existing correctly-named file; such a case is
-reported and skipped so you can look at both copies yourself.
+reported and skipped ("target already exists") so you can look at both
+copies yourself -- or pass --delete-duplicates (with --apply) to delete
+the old-named loose copy once its DOI-named counterpart is confirmed
+present. Only ever deletes the old-named side, never a zip member (that
+would mean rewriting the whole archive) and never the DOI-named file.
 
 Usage:
     python scripts/rename_local_pdfs_by_doi.py
     python scripts/rename_local_pdfs_by_doi.py --dir data/auto_fetched_pdfs --apply
     python scripts/rename_local_pdfs_by_doi.py --csv "data/auto_fetched_pdfs/Paperpile - References.csv" --apply
+    python scripts/rename_local_pdfs_by_doi.py --apply --delete-duplicates
     FAIR_OCEAN_DATABASE_URL=sqlite:////path/to/other.db python scripts/rename_local_pdfs_by_doi.py
 """
 from __future__ import annotations
@@ -486,6 +491,27 @@ def apply_plan(plans: list[Plan], directory: Path) -> None:
             zf.close()
 
 
+def delete_duplicate_plans(plans: list[Plan]) -> tuple[int, int]:
+    """Deletes the *source* side of every "target_exists" plan whose
+    source is a real loose file on disk (never a zip member -- deleting
+    one entry out of a zip would mean rewriting the whole archive, not
+    worth it for a handful of already-redundant zips), and only after
+    re-confirming the DOI-named target is still actually there. Never
+    touches plan.target itself. Returns (files deleted, bytes freed)."""
+    deleted = 0
+    freed_bytes = 0
+    for plan in plans:
+        if plan.action != "target_exists" or plan.zip_member is not None:
+            continue
+        assert plan.target is not None
+        if not plan.target.is_file() or not plan.source.is_file():
+            continue
+        freed_bytes += plan.source.stat().st_size
+        plan.source.unlink()
+        deleted += 1
+    return deleted, freed_bytes
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dir", type=Path, default=DEFAULT_DIR)
@@ -501,7 +527,16 @@ def main() -> None:
         "by matching the title parsed out of a Paperpile-style filename",
     )
     parser.add_argument("--apply", action="store_true", help="actually rename/extract files (default: dry-run report only)")
+    parser.add_argument(
+        "--delete-duplicates", action="store_true",
+        help="also delete the old-named loose file for every 'target already exists' case, once its "
+        "DOI-named counterpart is confirmed present -- never deletes a zip member or a DOI-named file "
+        "itself; requires --apply",
+    )
     args = parser.parse_args()
+
+    if args.delete_duplicates and not args.apply:
+        raise SystemExit("--delete-duplicates requires --apply")
 
     if not args.dir.is_dir():
         raise SystemExit(f"not a directory: {args.dir}")
@@ -554,9 +589,15 @@ def main() -> None:
         apply_plan(plans, args.dir)
         renamed = len(by_action.get("rename", [])) + len(by_action.get("extract_and_rename", []))
         print(f"Applied: renamed/extracted {renamed} file(s).")
+        if args.delete_duplicates:
+            deleted, freed_bytes = delete_duplicate_plans(plans)
+            print(f"Deleted {deleted} old-named duplicate(s), freeing {freed_bytes / 1e9:.2f} GB.")
     else:
         actionable = len(by_action.get("rename", [])) + len(by_action.get("extract_and_rename", []))
         print(f"Dry run only -- {actionable} file(s) would be renamed/extracted. Re-run with --apply to do it.")
+        if args.delete_duplicates:
+            dup_candidates = [p for p in by_action.get("target_exists", []) if p.zip_member is None]
+            print(f"Would also delete {len(dup_candidates)} old-named duplicate(s) (--apply not set, nothing done).")
 
 
 if __name__ == "__main__":
