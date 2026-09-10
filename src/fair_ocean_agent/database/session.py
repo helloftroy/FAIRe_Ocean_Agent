@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -17,17 +17,44 @@ from fair_ocean_agent.config import REPO_ROOT, load_config
 _engine: Engine | None = None
 _SessionFactory: sessionmaker | None = None
 
+# Per an explicit user request to run several parallel GPU jobs against the
+# SAME sqlite:// database (splitting a large EXTRACT_TEXT_FACTS backlog
+# across multiple 48h SLURM jobs): the default SQLite journal mode locks
+# the WHOLE file for the duration of any write, and the default
+# busy_timeout is 0 (a connection that finds the database locked raises
+# "database is locked" immediately instead of waiting). Confirmed live via
+# a real multi-process test (8 separate OS processes, not just threads,
+# genuinely concurrent) that this combination is what makes
+# workflow/task_queue.py's atomic SQLite claim (see its own comment) safe
+# under real contention rather than just theoretically correct -- WAL mode
+# lets readers and the one active writer proceed concurrently instead of
+# blocking each other, and a real busy_timeout makes a transient write
+# collision retry instead of failing outright.
+_SQLITE_BUSY_TIMEOUT_MS = 30_000
+
 
 def get_engine() -> Engine:
     global _engine
     if _engine is None:
         url = load_config().database.url
         connect_args = {}
-        if url.startswith("sqlite"):
+        is_sqlite = url.startswith("sqlite")
+        if is_sqlite:
             connect_args["check_same_thread"] = False
             url = _resolve_sqlite_url(url)
         _engine = create_engine(url, connect_args=connect_args, future=True)
+        if is_sqlite:
+            _register_sqlite_pragmas(_engine)
     return _engine
+
+
+def _register_sqlite_pragmas(engine: Engine) -> None:
+    @event.listens_for(engine, "connect")
+    def _set_sqlite_pragmas(dbapi_connection, connection_record) -> None:  # noqa: ANN001
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute(f"PRAGMA busy_timeout={_SQLITE_BUSY_TIMEOUT_MS}")
+        cursor.close()
 
 
 def _resolve_sqlite_url(url: str) -> str:

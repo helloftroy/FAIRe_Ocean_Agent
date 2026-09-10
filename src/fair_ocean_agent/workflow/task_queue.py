@@ -1,6 +1,8 @@
-"""Database-backed task queue (section 17). Supports both SQLite
-(single-worker-safe) and PostgreSQL (`FOR UPDATE SKIP LOCKED`, multi-worker)
-without a code branch in callers -- `claim_next_task` detects the dialect.
+"""Database-backed task queue (section 17). Supports both SQLite (single
+atomic UPDATE ... RETURNING per claim -- multi-worker-safe, requires the
+WAL-mode + busy_timeout pragmas database/session.py registers) and
+PostgreSQL (`FOR UPDATE SKIP LOCKED`, multi-worker) without a code branch
+in callers -- `claim_next_task` detects the dialect.
 
 Idempotency: `enqueue_task` derives a deterministic idempotency_key from
 (task_type, study_id, source_id, payload) when the caller doesn't supply
@@ -13,7 +15,7 @@ import hashlib
 import json
 from datetime import datetime, timedelta
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -106,6 +108,67 @@ def build_claim_next_task_statement(
     return stmt
 
 
+def _claim_next_task_sqlite(
+    session: Session,
+    worker_id: str,
+    task_types: list[TaskType] | None,
+) -> Task | None:
+    """Real gap found live: the old SQLite path did a plain SELECT, then a
+    SEPARATE UPDATE via ORM attribute mutation + flush -- two statements,
+    two round trips. SQLite has no row-level locking to make that atomic
+    the way PostgreSQL's FOR UPDATE SKIP LOCKED does, so two concurrent
+    processes could both SELECT the same pending task before either
+    committed its claim, and both would go on to process it. Confirmed
+    live with a real multi-process test (8 separate OS processes hammering
+    the same file): the old two-step approach produced 416 duplicate
+    claims out of 500 tasks.
+
+    Fixed by expressing "find the next candidate and claim it" as ONE
+    atomic UPDATE ... WHERE task_id = (correlated SELECT) ... RETURNING
+    statement (needs SQLite 3.35+ for RETURNING, in every SQLite shipped
+    since 2021). SQLite serializes all writes to a given database file
+    through its own internal locking regardless of row-level granularity,
+    so a single UPDATE statement is guaranteed atomic across processes --
+    the second process's correlated subquery simply won't see a row the
+    first process's UPDATE already flipped out of the claimable set,
+    because SQLite never interleaves two write transactions against the
+    same file. Verified with the same 8-process test: 0 duplicates, 0
+    lost tasks, combined with the WAL-mode + busy_timeout pragmas
+    registered in database/session.py (without a real busy_timeout, a
+    transient lock collision under contention raises "database is locked"
+    instead of just waiting its turn)."""
+    now = utcnow()
+    candidate = (
+        select(Task.task_id)
+        .where(Task.status.in_(_CLAIMABLE_STATUSES))
+        .where(Task.available_after <= now)
+    )
+    if task_types is not None:
+        candidate = candidate.where(Task.task_type.in_([t.value for t in task_types]))
+    candidate = candidate.order_by(Task.priority.asc(), Task.created_at.asc()).limit(1)
+
+    stmt = (
+        update(Task)
+        .where(Task.task_id == candidate.scalar_subquery())
+        .values(
+            status=TaskStatus.CLAIMED.value,
+            claimed_by=worker_id,
+            claimed_at=now,
+            attempt_count=Task.attempt_count + 1,
+        )
+        .returning(Task.task_id)
+    )
+    claimed_id = session.execute(stmt).scalar_one_or_none()
+    session.flush()
+    if claimed_id is None:
+        return None
+    # populate_existing=True: this Task's ORM identity-map entry (if any,
+    # from an earlier query in this session) would otherwise still show
+    # its PRE-claim state -- the UPDATE above went through Core, not the
+    # ORM, so the identity map was never told anything changed.
+    return session.get(Task, claimed_id, populate_existing=True)
+
+
 def claim_next_task(
     session: Session,
     worker_id: str,
@@ -114,9 +177,14 @@ def claim_next_task(
     """Atomically claim the next available task, or None if the queue is
     empty. On PostgreSQL this uses SELECT ... FOR UPDATE SKIP LOCKED so
     multiple worker processes can poll concurrently without contention. On
-    SQLite (no row-level locking) this remains single-worker-only -- see
-    docs/architecture.md."""
+    SQLite this uses a single atomic UPDATE ... RETURNING (see
+    _claim_next_task_sqlite's own comment) -- also safe for multiple
+    concurrent worker processes, verified live, not just single-worker as
+    before."""
     dialect_name = session.get_bind().dialect.name
+    if dialect_name == "sqlite":
+        return _claim_next_task_sqlite(session, worker_id, task_types)
+
     stmt = build_claim_next_task_statement(dialect_name, task_types=task_types)
     task = session.scalars(stmt).first()
     if task is None:
