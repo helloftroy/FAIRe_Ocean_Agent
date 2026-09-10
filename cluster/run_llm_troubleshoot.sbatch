@@ -24,8 +24,17 @@
 # e.g. sources/ncbi.py's own BioProject<->BioSample resolution is NEVER
 # exercised by that loop alone, no matter how many times it's re-run.
 # rediscover/rediscover_worker force a real DISCOVER_IDENTIFIERS re-run
-# first (live NCBI/ENA/etc network calls, no GPU/LLM needed):
-#   sbatch --account=<acct> --export=ALL,LLM_TEST_PHASES="rediscover rediscover_worker remap report export" cluster/run_llm_troubleshoot.sbatch
+# first (live NCBI/ENA/etc network calls, no GPU/LLM needed) -- but real
+# gap found live: this script's own partition (gpu-a100) has NO internet
+# access on this cluster, so rediscover_worker's live HTTPS calls just
+# time out repeatedly, forever, never succeeding once. Use
+# run_llm_troubleshoot_rediscover.sbatch (partition=service, network-
+# capable) for any phase combo that doesn't include `worker`:
+#   sbatch --account=<acct> --export=ALL,LLM_TEST_PHASES="rediscover rediscover_worker remap report export" cluster/run_llm_troubleshoot_rediscover.sbatch
+#
+# This script (partition=gpu-a100) is still the right one whenever
+# `worker` IS in the phase list -- it now only starts the LLM server at
+# all when `worker` is actually requested.
 #
 # Starting over completely (re-copy from the real, current main database):
 #   sbatch --account=<acct> --export=ALL,LLM_TEST_DB_REFRESH=1 cluster/run_llm_troubleshoot.sbatch
@@ -118,14 +127,28 @@ echo "Database (isolated copy, NOT the main pipeline database): ${FAIR_OCEAN_DAT
 python -m alembic -c alembic.ini upgrade head
 
 # --- Start a local LLM server for this job (same logic as run_extraction.sbatch). ---
+# Only `worker` (EXTRACT_TEXT_FACTS) ever calls it -- real gap found
+# live: this used to start vllm/ollama unconditionally regardless of
+# which phases were actually requested, wasting GPU-node time (and, for
+# a rediscover-only run, meaning the whole job sat on the no-internet GPU
+# partition when it never needed the GPU at all -- see
+# run_llm_troubleshoot_rediscover.sbatch for that case's real fix).
+LLM_BACKEND="${LLM_BACKEND:-vllm}"
+NEEDS_LLM_SERVER=0
+for phase in ${LLM_TEST_PHASES}; do
+  if [ "${phase}" = "worker" ]; then
+    NEEDS_LLM_SERVER=1
+  fi
+done
+
+SERVER_PID=""
+if [ "${NEEDS_LLM_SERVER}" != "1" ]; then
+  echo "No 'worker' phase requested -- skipping LLM server startup entirely."
 # vllm, not ollama: confirmed live this cluster can't get ollama working
 # at all -- vllm is the actual working backend here (see the vllm branch
 # below's own comments for the cluster-specific fixes already needed to
 # get it running: flashinfer sampler / LD_LIBRARY_PATH).
-LLM_BACKEND="${LLM_BACKEND:-vllm}"
-SERVER_PID=""
-
-if [ "${LLM_BACKEND}" = "ollama" ]; then
+elif [ "${LLM_BACKEND}" = "ollama" ]; then
   if ! command -v ollama >/dev/null 2>&1; then
     echo "ollama not found on PATH. Either install it (see cluster/README.md's" >&2
     echo "'One-time model download' section), set LLM_BACKEND=vllm, or set" >&2
