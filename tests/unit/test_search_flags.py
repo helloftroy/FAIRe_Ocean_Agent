@@ -871,6 +871,41 @@ def test_detect_controlled_search_facts_classifies_assay_type_and_keeps_evidence
     )
 
 
+def test_detect_controlled_search_facts_does_not_classify_a_qpcr_platform_name_as_targeted():
+    # Real gap found live (STUDY-017230ae34c4, 10.1111/1462-2920.14870):
+    # "V4 hypervariable regions of the 16S rRNA gene were amplified using
+    # the Fluidigm microfluidics quantitative PCR platform and prepared
+    # for 2x250 bp paired-end Illumina MiSeq sequencing" wrongly added
+    # "targeted" -- unambiguously a broad-community amplicon/metabarcoding
+    # study; "quantitative PCR" here names the microfluidic library-prep
+    # PLATFORM, not the assay's own detection purpose.
+    text = (
+        "Briefly, V4 hypervariable regions of the 16S rRNA gene were amplified using the Fluidigm "
+        "microfluidics quantitative PCR platform and prepared for 2x250 bp paired-end Illumina MiSeq "
+        "sequencing. A separate metabarcoding workflow used universal primers for community profiling."
+    )
+    controlled = detect_controlled_search_facts(
+        (("Methods", text),),
+        locator_prefix="paper:PMC1",
+        active_flags=frozenset(),
+    )
+    by_type = {fact.fact_type_candidate: fact.raw_value for fact in controlled}
+    assert by_type["assay_type"] == "metabarcoding"
+
+
+def test_detect_controlled_search_facts_still_classifies_a_genuine_targeted_qpcr_assay_as_targeted():
+    # The platform-name guard must not swallow a real targeted qPCR assay
+    # just because "quantitative PCR"/"qPCR" is present.
+    text = "We used quantitative PCR (qPCR) with TaqMan probes to detect and quantify a specific pathogen in each sample."
+    controlled = detect_controlled_search_facts(
+        (("Methods", text),),
+        locator_prefix="paper:PMC1",
+        active_flags=frozenset(),
+    )
+    by_type = {fact.fact_type_candidate: fact.raw_value for fact in controlled}
+    assert by_type["assay_type"] == "targeted"
+
+
 def test_detect_controlled_search_facts_classifies_shotgun_metagenomics_alongside_a_false_metabarcoding_cue():
     """Real gap found live (PMC10988111 / ISME Communications
     10.1093/ismeco/ycae036, "Metagenomic insights into jellyfish-associated
@@ -2577,6 +2612,50 @@ def test_detect_llm_judged_search_facts_recalls_a_quote_the_first_pass_never_ans
     # fired (not zero, and not one per batch).
     recall_calls = [call for call in backend.calls if "recall pass" in call["prompt"]]
     assert len(recall_calls) == 1
+
+
+def test_detect_llm_judged_search_facts_recall_answer_replaces_an_earlier_wrong_single_best_answer():
+    """Real gap found live (STUDY-017230ae34c4): "Lastly, genomic DNA from
+    a microbial mock community ... was included in the final sample array
+    to account for amplification and sequencing error" -- a genuine
+    positive control -- never got flagged. Root cause: the main pass
+    judged a separate, unrelated "control" mention as pos_cont_0_1="0"
+    and never answered the real mock-community candidate at all in that
+    same pass; the recall pass then correctly answered "1" for it. But
+    neg_cont_0_1/pos_cont_0_1's own "highest priority wins" reduction
+    (a real "1" always beats an unrelated "0") only ever applied WITHIN
+    one _facts_from_llm_judgement call -- the main pass and the recall
+    pass are two separate calls -- so both the wrong "0" and the correct
+    "1" survived as two separate RawFacts instead of the recall's answer
+    winning."""
+    text = (
+        "A control was included in this experiment. "
+        "Lastly, genomic DNA from a microbial mock community (BEI Resources, NIAID, NIH as part of "
+        "the Human Microbiome Project: Genomic DNA from Microbial Mock Community A (Even, Low "
+        "Concentration), v3.1, HM-278D) was included in the final sample array to account for "
+        "amplification and sequencing error."
+    )
+
+    def respond(prompt: str) -> str:
+        if "recall pass" in prompt:
+            quote_id = _quote_id_for_field(prompt, "pos_cont_0_1", containing="mock community")
+            if quote_id is None:
+                return "[]"
+            return json.dumps([{"field": "pos_cont_0_1", "raw_value": "1", "quote_id": quote_id}])
+        # Main pass answers only the unrelated, ambiguous candidate,
+        # leaving the real mock-community one entirely unaddressed --
+        # that's what should trigger the recall pass above.
+        quote_id = _quote_id_for_field(prompt, "pos_cont_0_1", containing="A control was included")
+        if quote_id is None:
+            return "[]"
+        return json.dumps([{"field": "pos_cont_0_1", "raw_value": "0", "quote_id": quote_id}])
+
+    backend = MockLLMBackend(responses=respond)
+    facts = detect_llm_judged_search_facts(backend, (("Methods", text),), locator_prefix="paper:PMC1")
+
+    pos_cont_facts = [fact for fact in facts if fact.fact_type_candidate == "pos_cont_0_1"]
+    assert len(pos_cont_facts) == 1
+    assert pos_cont_facts[0].raw_value.startswith("1")
 
 
 def test_detect_llm_judged_search_facts_skips_recall_when_every_quote_was_answered():

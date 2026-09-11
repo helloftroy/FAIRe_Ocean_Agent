@@ -1889,6 +1889,28 @@ _AMP_VIS_PRODUCT_CONTEXT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Real gap found live (STUDY-017230ae34c4, 10.1111/1462-2920.14870): "V4
+# hypervariable regions of the 16S rRNA gene were amplified using the
+# Fluidigm(R) microfluidics quantitative PCR platform and prepared for
+# 2x250 bp paired-end Illumina MiSeq sequencing" wrongly added "targeted"
+# alongside "metabarcoding" -- this is unambiguously a broad-community
+# amplicon/metabarcoding study (paired-end MiSeq sequencing of a
+# hypervariable region across many samples), and "quantitative PCR" here
+# names the microfluidic PLATFORM/CHEMISTRY used to generate the
+# amplicons (Fluidigm's own qPCR-chip-based library-prep system), not a
+# single-species/targeted detection assay. Bare "quantitative PCR"/
+# "qPCR"/"digital PCR"/"ddPCR" immediately followed by a platform/
+# instrument word names the equipment, not the assay's own purpose --
+# scoped narrowly to only those four terms (not "TaqMan"/"hydrolysis
+# probe"/"targeted assay", which don't share this platform-naming
+# ambiguity) and only suppresses "targeted" when NONE of a snippet's
+# other matched terms are genuine targeted-only cues.
+_QPCR_PLATFORM_NAME_TERMS = frozenset({"quantitative pcr", "digital pcr", "qpcr", "ddpcr"})
+_QPCR_PLATFORM_NAME_CONTEXT_RE = re.compile(
+    r"\b(?:quantitative\s+PCR|digital\s+PCR|qPCR|ddPCR)\s+(?:platform|chip|system|instrument|array)\b",
+    re.IGNORECASE,
+)
+
 _ASSAY_TYPE_CUES: tuple[tuple[str, tuple[re.Pattern[str], ...]], ...] = (
     (
         "targeted",
@@ -2993,6 +3015,12 @@ def _classify_assay_type(
                 matches = _snippet_matches(patterns, snippet)
                 if not matches or assay_type in seen_values:
                     continue
+                if (
+                    assay_type == "targeted"
+                    and all(match.casefold() in _QPCR_PLATFORM_NAME_TERMS for match in matches)
+                    and _QPCR_PLATFORM_NAME_CONTEXT_RE.search(snippet)
+                ):
+                    continue
                 seen_values.add(assay_type)
                 values.append(assay_type)
                 if snippet not in evidence_quotes:
@@ -3951,6 +3979,50 @@ def _facts_from_llm_judgement(
     return facts
 
 
+def _collapse_single_best_llm_judged_duplicates(facts: list[RawFactCandidate]) -> list[RawFactCandidate]:
+    """_facts_from_llm_judgement's own "highest priority wins" reduction
+    (e.g. a genuine "1" always beating an unrelated "0" for neg_cont_0_1/
+    pos_cont_0_1) only ever applies WITHIN one call -- but
+    detect_llm_judged_search_facts calls it once per batch's main pass AND
+    again, separately, for whatever that batch's own recall pass answers.
+    Real gap found live (STUDY-017230ae34c4): the main pass judged an
+    unrelated, ambiguous "control" quote as pos_cont_0_1="0"; the model
+    never answered the paper's own genuine mock-community positive-control
+    quote in that same pass, so the recall pass asked again and correctly
+    got "1" -- but that landed as a SECOND, separate pos_cont_0_1 RawFact
+    rather than replacing the first. Neither of these fields is pipe-
+    unioned (a boolean flag pipe-joined as "0 | 1" would be nonsensical),
+    so mapping's own first-fact-wins semantics let whichever was
+    PERSISTED FIRST -- always the main pass' fact, since the recall pass
+    runs strictly after it -- permanently beat the correct answer.
+    Collapses every SINGLE_BEST_LLM_JUDGED_FIELDS field down to its one
+    highest-priority fact across the WHOLE accumulated list (spanning
+    every batch and every recall pass) before mirroring or mapping ever
+    sees more than one."""
+    fields = _allowed_field_lookup()
+    grouped: dict[str, list[RawFactCandidate]] = {}
+    other: list[RawFactCandidate] = []
+    for fact in facts:
+        if fact.fact_type_candidate in SINGLE_BEST_LLM_JUDGED_FIELDS:
+            grouped.setdefault(fact.fact_type_candidate, []).append(fact)
+        else:
+            other.append(fact)
+    collapsed: list[RawFactCandidate] = []
+    for field_name, entries in grouped.items():
+        field = fields.get(field_name)
+        if field is None or len(entries) == 1:
+            collapsed.extend(entries)
+            continue
+        best = min(
+            entries,
+            key=lambda fact: _llm_judged_value_priority(
+                field, str(fact.raw_value).split("|", 1)[0].strip(), fact.evidence_quote or ""
+            ),
+        )
+        collapsed.append(best)
+    return [*other, *collapsed]
+
+
 def _mirror_not_a_control_to_sibling_field(facts: list[RawFactCandidate]) -> list[RawFactCandidate]:
     """neg_cont_0_1/pos_cont_0_1 are always judged from the very same
     "control"/"blank" quote(s) -- a real quote the model judges as "0"
@@ -4426,6 +4498,7 @@ def detect_llm_judged_search_facts(
             _recall_unanswered_llm_judged_candidates(backend, parsed, batch_candidates, locator_prefix=locator_prefix)
         )
     candidates = tuple(all_candidates)
+    facts = _collapse_single_best_llm_judged_duplicates(facts)
     facts = _mirror_not_a_control_to_sibling_field(facts)
     facts = _split_fused_adapter_primer_facts(facts)
     existing_fact_types = frozenset(fact.fact_type_candidate for fact in facts)
