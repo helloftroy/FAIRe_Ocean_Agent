@@ -2126,7 +2126,14 @@ _PRIMER_DIRECTIONAL_NAME_RE = re.compile(
     r"\b(?P<name>\d{1,2}S\s+rRNA\s+(?P<direction>[FR]))\b",
     re.IGNORECASE,
 )
-_PRIMER_NAME_EXCLUSIONS = frozenset({"unique", "universal", "indexed", "tailed"})
+# Real gap found live: "The forward primer sequence used was..." matched
+# _PRIMER_NAME_BEFORE_DIRECTION_RE's own "<name> forward primer" shape
+# with "The" as the captured name -- a common English article/pronoun
+# immediately preceding "forward/reverse primer(s)" is never a real
+# primer name.
+_PRIMER_NAME_EXCLUSIONS = frozenset(
+    {"unique", "universal", "indexed", "tailed", "the", "this", "that", "a", "an", "each", "both", "our"}
+)
 _PRIMER_PAIR_RE = re.compile(
     r"\b(?:primers?|primer\s+pairs?)\s+"
     r"(?P<forward>[A-Za-z0-9][A-Za-z0-9_.-]{1,50}F)\s*(?:/|[-–])\s*"

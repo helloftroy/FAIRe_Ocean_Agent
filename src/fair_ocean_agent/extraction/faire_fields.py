@@ -109,6 +109,27 @@ LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS = frozenset(
         # favor of the more precise mechanism, same pattern as seq_kit.
         "adapter_forward",
         "adapter_reverse",
+        # forward_primer_sequence/reverse_primer_sequence (native names,
+        # hints pcr_primer_forward/pcr_primer_reverse) and
+        # forward_primer_name/reverse_primer_name (hints
+        # pcr_primer_name_forward/pcr_primer_name_reverse): the identical
+        # duplication risk as adapter_forward/adapter_reverse just above,
+        # for the primer itself rather than its adapter -- real gap found
+        # live (STUDY-00a43b02c90d): this generic checklist pass
+        # independently reported "CAGCMGCCGCGGTAA" for pcr_primer_forward
+        # (a truncated suffix of the real "GTGYCAGCMGCCGCGGTAA") while
+        # search_flags.py's own dedicated, quote-anchored ControlledSearchField
+        # mechanism (see search_flags.py's _PRIMER_SEQUENCE_RE and
+        # neighbors) correctly captured the whole sequence -- both landed
+        # in the same pipe-unioned pcr_primer_forward export column,
+        # confirmed live via a corrupted "GTGY | CAGCMGCCGCGGTAA"-shaped
+        # split. This generic pass has none of that mechanism's shape/
+        # context validation, so excluded outright in favor of it, same
+        # as the adapter case.
+        "pcr_primer_forward",
+        "pcr_primer_reverse",
+        "pcr_primer_name_forward",
+        "pcr_primer_name_reverse",
         # OTU/ASV clustering tool is a targeted quote-judged field: shared
         # bioinformatics terms like DADA2/QIIME/VSEARCH need a narrow,
         # evidence-cited decision so taxonomy-classification tools are not

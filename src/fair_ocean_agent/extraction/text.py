@@ -230,7 +230,6 @@ from fair_ocean_agent.extraction.faire_fields import (
     field_names_for_reference,
     render_field_reference,
 )
-from fair_ocean_agent.extraction.search_flags import _clean_fused_sequence_part
 from fair_ocean_agent.llm.base import LLMBackend, LLMResponse
 from fair_ocean_agent.mapping.faire import TARGET_SCHEMA
 from fair_ocean_agent.sources.base import RawFactCandidate
@@ -875,19 +874,12 @@ def fact_type_names_for_focus(
 # field (not the whole checklist), keeping the general cost-saving
 # behavior intact for every other field.
 #
-# forward_primer_sequence/reverse_primer_sequence <-> forward_primer_name/
-# reverse_primer_name: a second, structurally identical real gap found
-# live (10.1038/s41598-021-93859-5, STUDY-01a5e9aa6491) -- "...Fluidigm
-# CS1 + MiFish-U-F ACACTGACGACATGGTTCTACA GTCGGTAAAACTCGTGCCAGC and
-# Fluidigm CS2 + MiFish-U-R TACGGTAGCAGAGACTTGGTCT
-# CATAGTGGGGTATCTAATCCCAGTTTG" -- the primer NAMES are easy to spot
-# (clearly labeled, "MiFish-U-F"/"MiFish-U-R"), while the SEQUENCES
-# require correctly discarding the Fluidigm adapter tail that precedes
-# each real primer-specific sequence; a model that confidently answers
-# the name and then skips the harder sequence (or vice versa) hits the
-# exact same blanket "any fact found" gate. Bidirectional: whichever of
-# the pair is missing gets the scoped recall, using whichever sibling(s)
-# did succeed.
+# (forward/reverse primer name<->sequence used to have their own entries
+# here too, until that whole concept moved to search_flags.py's dedicated,
+# quote-anchored deterministic mechanism -- see
+# LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS in faire_fields.py. Those fact types
+# can no longer appear in this pass' checklist at all, so a recall siblings
+# entry for them would be unreachable.)
 _RECALL_COMPANION_FIELD_SIBLINGS: dict[str, frozenset[str]] = {
     "PCR_amplification_conditions": frozenset(
         {"annealing_temperature", "pcr_cycle_count", "commercial_master_mix", "custom_master_mix"}
@@ -895,19 +887,7 @@ _RECALL_COMPANION_FIELD_SIBLINGS: dict[str, frozenset[str]] = {
     "second_pcr_amplification_conditions": frozenset(
         {"second_pcr_annealing_temperature", "second_pcr_cycle_count"}
     ),
-    "forward_primer_sequence": frozenset({"forward_primer_name"}),
-    "forward_primer_name": frozenset({"forward_primer_sequence"}),
-    "reverse_primer_sequence": frozenset({"reverse_primer_name"}),
-    "reverse_primer_name": frozenset({"reverse_primer_sequence"}),
 }
-
-
-def _source_has_nucleotide_sequence(segments: list[SourceSegment]) -> bool:
-    text = " ".join(segment.text for segment in segments)
-    return any(
-        len(match.group(0)) >= 8
-        for match in re.finditer(r"\b[ACGTRYSWKMBDHVNacgtryswkmbdhvn]{8,}\b", text)
-    )
 
 
 def recall_missing_fact_types(
@@ -917,16 +897,7 @@ def recall_missing_fact_types(
     segments: list[SourceSegment],
     active_flags: frozenset[str] = frozenset(),
 ) -> frozenset[str]:
-    missing_types = set(fact_type_names_for_focus(focus, exclude_faire_hints, active_flags=active_flags) - accepted_fact_types)
-
-    # Small models often confuse primer names (e.g. MiFish-U-F) with primer
-    # sequences on a recall pass. Only ask for sequence fields when the text
-    # contains a nucleotide-like token long enough to plausibly be a primer.
-    if not _source_has_nucleotide_sequence(segments):
-        missing_types.discard("forward_primer_sequence")
-        missing_types.discard("reverse_primer_sequence")
-
-    return frozenset(missing_types)
+    return frozenset(fact_type_names_for_focus(focus, exclude_faire_hints, active_flags=active_flags) - accepted_fact_types)
 
 
 def extract_facts_from_section(
@@ -1041,13 +1012,6 @@ def extract_facts_from_section(
                     and companion_field not in accepted_types
                     and siblings & accepted_types
                 )
-                # Same guard as recall_missing_fact_types' own primer-
-                # sequence carve-out below: a name-only mention (no
-                # nucleotide-like token anywhere in the source) can never
-                # actually support a sequence value, so don't spend a
-                # recall call chasing one.
-                if not _source_has_nucleotide_sequence(focused_segments):
-                    missing_types = missing_types - {"forward_primer_sequence", "reverse_primer_sequence"}
                 if not missing_types:
                     continue
             else:
@@ -1121,18 +1085,17 @@ def _normalize_volume_text_for_literal_check(value: str) -> str:
     ).casefold()
 
 
-_PRIMER_SEQUENCE_FACT_TYPES = frozenset({"forward_primer_sequence", "reverse_primer_sequence"})
-# IUPAC nucleotide codes (standard + degenerate bases), the only characters
-# a real primer sequence is ever reported in.
-_NUCLEOTIDE_SEQUENCE_RE = re.compile(r"^[ACGTURYSWKMBDHVN]{6,}$", re.IGNORECASE)
+# forward_primer_sequence/reverse_primer_sequence/forward_primer_name/
+# reverse_primer_name are deliberately absent from this set now -- they
+# moved to search_flags.py's dedicated, quote-anchored deterministic
+# mechanism (see LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS in faire_fields.py) and
+# can no longer appear as a fact_type_candidate from this generic pass at
+# all. The sterility-check guard below still applies to the remaining,
+# non-excluded PCR fields here.
 _PCR_ASSAY_FACT_TYPES = frozenset(
     {
         "target_gene",
         "target_subfragment",
-        "forward_primer_sequence",
-        "reverse_primer_sequence",
-        "forward_primer_name",
-        "reverse_primer_name",
         "amplicon_size",
         "annealing_temperature",
         "pcr_cycle_count",
@@ -1150,23 +1113,9 @@ _NON_SEQUENCING_QC_PCR_CONTEXT_RE = re.compile(
 )
 
 
-def _looks_like_nucleotide_sequence(value: str) -> bool:
-    return bool(_NUCLEOTIDE_SEQUENCE_RE.match(value.strip()))
-
-
 def _candidate_value_is_supported_by_quote(fact_type: str, raw_value: object, quote: str) -> bool:
     if fact_type in _PCR_ASSAY_FACT_TYPES and _NON_SEQUENCING_QC_PCR_CONTEXT_RE.search(quote):
         return False
-    if fact_type in _PRIMER_SEQUENCE_FACT_TYPES:
-        # A real bug found live (10.1002/ece3.6071): when a paper only
-        # states a primer's NAME in the main text (its actual sequence
-        # lives in a supplementary table this pass never sees), the model
-        # substituted the name ("1389F", "mlCOIintF") for the sequence
-        # field instead of omitting it -- both are literally present in
-        # the quote, so a plain verbatim check wouldn't have caught this;
-        # the value itself needs to actually look like a sequence.
-        if not _looks_like_nucleotide_sequence(str(raw_value)):
-            return False
     if fact_type not in _LITERAL_VOLUME_FACT_TYPES:
         return True
     return _normalize_volume_text_for_literal_check(str(raw_value)) in _normalize_volume_text_for_literal_check(quote)
@@ -1193,20 +1142,6 @@ def _facts_from_candidates(
             continue
         if allowed_fact_types is not None and str(fact_type) not in allowed_fact_types:
             continue
-        if str(fact_type) in _PRIMER_SEQUENCE_FACT_TYPES and isinstance(raw_value, str):
-            # Real gap found live (10.1111/1462-2920.14870): the model
-            # copies the primer sequence "verbatim from the quote" exactly
-            # as its own prompt instructs, decorative 5'/3' boundary
-            # markers included (e.g. "5'-GTGYCAGCMGCCGCGGTAA") -- the
-            # strict nucleotide-only shape check just below would reject
-            # the whole value outright rather than see past that
-            # decoration, silently dropping a real, correctly-extracted
-            # sequence. Clean it the same way search_flags.py's own
-            # fused-adapter-primer splitting already does for the
-            # identical decoration, and use the cleaned value from here on
-            # (both for validation and as the stored fact) rather than
-            # just validating and discarding.
-            raw_value = _clean_fused_sequence_part(raw_value)
         if not _candidate_value_is_supported_by_quote(str(fact_type), raw_value, quote):
             continue
         assay_tag = _candidate_assay_tag(candidate, str(fact_type))

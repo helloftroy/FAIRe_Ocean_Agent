@@ -14,7 +14,6 @@ from fair_ocean_agent.extraction.text import (
     is_absent_raw_value,
     present_faire_fields_for_study,
     resolved_faire_fields_for_study,
-    recall_missing_fact_types,
     segment_source_text,
     segments_for_focus,
     split_section_text,
@@ -64,80 +63,12 @@ def test_hallucinated_pcr_volume_not_present_in_quote_is_dropped():
     assert facts == []
 
 
-def test_primer_name_substituted_for_sequence_is_dropped():
-    """Regression guard for a real bug found live (10.1002/ece3.6071):
-    when a paper only states a primer's NAME in the main text (its real
-    sequence lives in a supplementary table this pass never sees), the
-    model substituted the name for the sequence field instead of omitting
-    it -- both "1389F" and "mlCOIintF" are literally present in real
-    quotes, so a plain verbatim check alone wouldn't catch this; the value
-    itself must actually look like a nucleotide sequence."""
-    text = "The 18S rRNA gene was amplified using the universal primer 1389F."
-    response = json.dumps(
-        [{"fact_type_candidate": "forward_primer_sequence", "raw_value": "1389F", "evidence_id": "METHODS.P001"}]
-    )
-    backend = MockLLMBackend(responses=[response])
-
-    facts, _ = extract_facts_from_section(backend, "Methods", text, active_flags=frozenset({"pcr_0_1"}))
-
-    assert facts == []
-
-
-def test_real_primer_sequence_survives_the_nucleotide_shape_check():
-    text = "The forward primer sequence used was GGWACWGGWTGAACWGTWTAYCCYCC."
-    response = json.dumps(
-        [
-            {
-                "fact_type_candidate": "forward_primer_sequence",
-                "raw_value": "GGWACWGGWTGAACWGTWTAYCCYCC",
-                "evidence_id": "METHODS.P001",
-            }
-        ]
-    )
-    backend = MockLLMBackend(responses=[response])
-
-    facts, _ = extract_facts_from_section(backend, "Methods", text, active_flags=frozenset({"pcr_0_1"}))
-
-    assert len(facts) == 1
-    assert facts[0].raw_value == "GGWACWGGWTGAACWGTWTAYCCYCC"
-
-
-def test_primer_sequence_with_leading_prime_marker_decoration_is_cleaned_not_dropped():
-    """Real gap found live (10.1111/1462-2920.14870): "The Fluidgim V4
-    primer set 515F-Y: 5'-GTGYCAGCMGCCGCGGTAA ... and 806RB:
-    5'-GGACTACNVGGGTWTCTAAT" -- the model copied the sequence verbatim
-    from the quote per its own instructions, decorative 5'/3' boundary
-    markers included, which used to fail the strict nucleotide-only shape
-    check outright and get silently dropped entirely (the primer NAME
-    survived since it has no such check, only the sequence vanished).
-    Cleaned instead of discarded, matching search_flags.py's own
-    fused-adapter-primer cleaning for the identical decoration."""
-    text = (
-        "The Fluidgim V4 primer set 515F-Y: 5′‐GTGYCAGCMGCCGCGGTAA (Parada et al., 2016) and "
-        "806RB: 5′‐GGACTACNVGGGTWTCTAAT (Apprill et al., 2015), accompanied with Illumina "
-        "adapters, index, pad, and linker sequences, were used for amplification."
-    )
-    response = json.dumps(
-        [
-            {
-                "fact_type_candidate": "forward_primer_sequence",
-                "raw_value": "5′‐GTGYCAGCMGCCGCGGTAA",
-                "evidence_id": "METHODS.P001",
-            },
-            {
-                "fact_type_candidate": "reverse_primer_sequence",
-                "raw_value": "5′‐GGACTACNVGGGTWTCTAAT",
-                "evidence_id": "METHODS.P001",
-            },
-        ]
-    )
-    backend = MockLLMBackend(responses=[response])
-
-    facts, _ = extract_facts_from_section(backend, "Methods", text, active_flags=frozenset({"pcr_0_1"}))
-
-    by_type = {fact.fact_type_candidate: fact.raw_value for fact in facts}
-    assert by_type["forward_primer_sequence"] == "GTGYCAGCMGCCGCGGTAA"
-    assert by_type["reverse_primer_sequence"] == "GGACTACNVGGGTWTCTAAT"
+# Primer sequence/name extraction (decoration cleaning, Fluidigm-fusion
+# splitting, name-vs-sequence confusion) moved entirely to
+# search_flags.py's dedicated, quote-anchored deterministic mechanism --
+# see LLM_EXCLUDED_OPTIONAL_FAIRE_FIELDS in faire_fields.py and the primer
+# coverage in test_search_flags.py, which this generic pass' tests used to
+# duplicate.
 
 
 def test_filter_name_can_be_extracted_from_sampling_text():
@@ -328,11 +259,11 @@ def test_split_section_text_bounds_long_sections():
 
 def test_extract_facts_from_section_chunks_long_text_and_merges_facts():
     first = "Water samples were collected on 4 January 2022."
-    second = "PCR used primers 515F and 806R."
+    second = "PCR targeted the 16S rRNA gene."
     section_text = f"{first}\n\n{second}"
     responses = [
         json.dumps([{"fact_type_candidate": "collection_date", "raw_value": "2022-01-04", "evidence_id": "METHODS.P001"}]),
-        json.dumps([{"fact_type_candidate": "forward_primer_name", "raw_value": "515F", "evidence_id": "METHODS.P002"}]),
+        json.dumps([{"fact_type_candidate": "target_gene", "raw_value": "16S rRNA", "evidence_id": "METHODS.P002"}]),
     ]
     backend = MockLLMBackend(responses=responses)
 
@@ -345,7 +276,7 @@ def test_extract_facts_from_section_chunks_long_text_and_merges_facts():
         active_flags=frozenset({"pcr_0_1"}),
     )
 
-    assert [fact.fact_type_candidate for fact in facts] == ["collection_date", "forward_primer_name"]
+    assert [fact.fact_type_candidate for fact in facts] == ["collection_date", "target_gene"]
     # One call per chunk (no per-topic-focus fan-out, and no recall retry
     # since each chunk's single pass already found a fact) -- 2 chunks, 2 calls.
     assert len(backend.calls) == 2
@@ -361,32 +292,32 @@ def test_prompt_version_is_stable_constant():
 
 
 def test_recall_second_pass_does_not_fire_when_first_pass_finds_any_facts():
-    """A partial main-pass result (found forward_primer_name, missed
-    reverse_primer_name) is accepted as-is -- no automatic retry just
+    """A partial main-pass result (found target_gene, missed
+    annealing_temperature) is accepted as-is -- no automatic retry just
     because the checklist wasn't fully satisfied. Recall now only exists as
     a safety net for a pass that found literally nothing (see the sibling
     test below), not a completeness guarantee for every concept."""
-    section_text = "PCR reactions used MiFish-U-F and MiFish-U-R primers at 54 C."
+    section_text = "PCR targeted the 16S rRNA gene at an annealing temperature of 54 C."
     response = json.dumps(
-        [{"fact_type_candidate": "forward_primer_name", "raw_value": "MiFish-U-F", "evidence_id": "PCR.P001"}]
+        [{"fact_type_candidate": "target_gene", "raw_value": "16S rRNA", "evidence_id": "PCR.P001"}]
     )
     backend = MockLLMBackend(responses=[response])
 
     facts, _ = extract_facts_from_section(backend, "PCR", section_text, active_flags=frozenset({"pcr_0_1"}))
 
-    assert [fact.fact_type_candidate for fact in facts] == ["forward_primer_name"]
+    assert [fact.fact_type_candidate for fact in facts] == ["target_gene"]
     assert len(backend.calls) == 1
 
 
 def test_recall_second_pass_fires_only_when_first_pass_finds_nothing():
-    section_text = "PCR reactions used MiFish-U-F and MiFish-U-R primers at 54 C."
+    section_text = "PCR targeted the 16S rRNA gene at an annealing temperature of 54 C."
 
     def respond(prompt):
         if "[recall]" in prompt:
             return json.dumps(
                 [
-                    {"fact_type_candidate": "forward_primer_name", "raw_value": "MiFish-U-F", "evidence_id": "PCR.P001"},
-                    {"fact_type_candidate": "reverse_primer_name", "raw_value": "MiFish-U-R", "evidence_id": "PCR.P001"},
+                    {"fact_type_candidate": "target_gene", "raw_value": "16S rRNA", "evidence_id": "PCR.P001"},
+                    {"fact_type_candidate": "annealing_temperature", "raw_value": "54 C", "evidence_id": "PCR.P001"},
                 ]
             )
         return "[]"
@@ -394,7 +325,7 @@ def test_recall_second_pass_fires_only_when_first_pass_finds_nothing():
     backend = MockLLMBackend(responses=respond)
     facts, _ = extract_facts_from_section(backend, "PCR", section_text, active_flags=frozenset({"pcr_0_1"}))
 
-    assert {fact.fact_type_candidate for fact in facts} == {"forward_primer_name", "reverse_primer_name"}
+    assert {fact.fact_type_candidate for fact in facts} == {"target_gene", "annealing_temperature"}
     assert len(backend.calls) == 2
     assert "This is a recall-focused second pass" in backend.calls[1]["prompt"]
     assert "Never return placeholder absence values" in backend.calls[1]["prompt"]
@@ -475,66 +406,13 @@ def test_recall_second_pass_stays_scoped_when_narrative_pcr_field_already_found(
     assert len(backend.calls) == 1
 
 
-def test_recall_second_pass_fires_a_scoped_retry_for_a_missed_primer_sequence():
-    """Real gap found live (10.1038/s41598-021-93859-5, STUDY-01a5e9aa6491):
-    "...Fluidigm CS1 + MiFish-U-F ACACTGACGACATGGTTCTACA
-    GTCGGTAAAACTCGTGCCAGC and Fluidigm CS2 + MiFish-U-R
-    TACGGTAGCAGAGACTTGGTCT CATAGTGGGGTATCTAATCCCAGTTTG." -- clearly-labeled
-    primer names sit right next to their sequences, but the sequences
-    require correctly discarding the Fluidigm adapter tail that precedes
-    each real primer-specific sequence. A model that confidently names the
-    primer and then skips the harder sequence hit the same blanket "any
-    fact found" gate that blocked the PCR narrative companion fields
-    above -- this is the same fix, applied to primer name/sequence
-    pairs."""
-    section_text = (
-        "Primary PCR primers were as follows, listed in 5′ to 3′ direction: Fluidigm CS1 + "
-        "MiFish-U-F ACACTGACGACATGGTTCTACA GTCGGTAAAACTCGTGCCAGC and Fluidigm CS2 + MiFish-U-R "
-        "TACGGTAGCAGAGACTTGGTCT CATAGTGGGGTATCTAATCCCAGTTTG."
-    )
-
-    def respond(prompt):
-        if "[recall]" in prompt:
-            assert "forward_primer_sequence" in prompt
-            assert "forward_primer_name" not in prompt
-            return json.dumps(
-                [
-                    {
-                        "fact_type_candidate": "forward_primer_sequence",
-                        "raw_value": "GTCGGTAAAACTCGTGCCAGC",
-                        "evidence_id": "PCR.P001",
-                    }
-                ]
-            )
-        return json.dumps(
-            [{"fact_type_candidate": "forward_primer_name", "raw_value": "MiFish-U-F", "evidence_id": "PCR.P001"}]
-        )
-
-    backend = MockLLMBackend(responses=respond)
-    facts, _ = extract_facts_from_section(backend, "PCR", section_text, active_flags=frozenset({"pcr_0_1"}))
-
-    fact_types = {fact.fact_type_candidate for fact in facts}
-    assert fact_types == {"forward_primer_name", "forward_primer_sequence"}
-    assert len(backend.calls) == 2
-    sequence_fact = next(f for f in facts if f.fact_type_candidate == "forward_primer_sequence")
-    assert sequence_fact.raw_value == "GTCGGTAAAACTCGTGCCAGC"
-
-
-def test_recall_second_pass_skips_primer_sequence_recall_without_nucleotide_text():
-    """The nucleotide-sequence guard applies to the scoped companion
-    recall too: a name-only mention with no sequence-like token anywhere
-    in the source can never support a sequence value, so no wasted recall
-    call happens chasing one."""
-    section_text = "PCR reactions used MiFish-U-F and MiFish-U-R primers at 54 C."
-    response = json.dumps(
-        [{"fact_type_candidate": "forward_primer_name", "raw_value": "MiFish-U-F", "evidence_id": "PCR.P001"}]
-    )
-    backend = MockLLMBackend(responses=[response])
-
-    facts, _ = extract_facts_from_section(backend, "PCR", section_text, active_flags=frozenset({"pcr_0_1"}))
-
-    assert [fact.fact_type_candidate for fact in facts] == ["forward_primer_name"]
-    assert len(backend.calls) == 1
+# The MiFish-U-F/Fluidigm-fusion scoped-recall case (10.1038/s41598-021-93859-5,
+# STUDY-01a5e9aa6491) and its nucleotide-guard sibling used to live here;
+# both are now covered by search_flags.py's own deterministic mechanism
+# (see its bare-nucleotide-run fallback and alpha-direction name matching,
+# and test_search_flags.py's coverage of this exact case), since
+# forward_primer_sequence/forward_primer_name can no longer be a
+# fact_type_candidate from this generic pass at all.
 
 
 def test_extraction_filters_model_invented_fact_type_names():
@@ -553,15 +431,15 @@ def test_extraction_filters_model_invented_fact_type_names():
 
 
 def test_recall_second_pass_dedupes_repeated_first_pass_facts():
-    section_text = "PCR reactions used MiFish-U-F primers."
+    section_text = "PCR targeted the 16S rRNA gene."
     response = json.dumps(
-        [{"fact_type_candidate": "forward_primer_name", "raw_value": "MiFish-U-F", "evidence_id": "PCR.P001"}]
+        [{"fact_type_candidate": "target_gene", "raw_value": "16S rRNA", "evidence_id": "PCR.P001"}]
     )
     backend = MockLLMBackend(responses=[response])
 
     facts, _ = extract_facts_from_section(backend, "PCR", section_text, active_flags=frozenset({"pcr_0_1"}))
 
-    assert [fact.fact_type_candidate for fact in facts] == ["forward_primer_name"]
+    assert [fact.fact_type_candidate for fact in facts] == ["target_gene"]
 
 
 def test_recall_second_pass_failure_fails_the_extraction():
@@ -576,22 +454,13 @@ def test_recall_second_pass_failure_fails_the_extraction():
     backend = RecallFailsBackend(responses=["[]"])
 
     with pytest.raises(LLMBackendError, match="recall failed"):
-        extract_facts_from_section(backend, "PCR", "PCR reactions used MiFish-U-F primers.")
+        extract_facts_from_section(backend, "PCR", "PCR targeted the 16S rRNA gene.")
 
 
-def test_recall_missing_fact_types_skips_primer_sequences_without_nucleotide_text():
-    primer_focus = next(focus for focus in EXTRACTION_FOCUSES if focus.name == "primer_target")
-    name_only_segments = segment_source_text("PCR", "PCR used MiFish-U-F and MiFish-U-R primers.")
-    sequence_segments = segment_source_text("PCR", "PCR used primers GTGYCAGCMGCCGCGGTAA and GGACTACNVGGGTWTCTAAT.")
-
-    active_flags = frozenset({"pcr_0_1"})
-    name_only_missing = recall_missing_fact_types(primer_focus, frozenset(), set(), name_only_segments, active_flags=active_flags)
-    sequence_missing = recall_missing_fact_types(primer_focus, frozenset(), set(), sequence_segments, active_flags=active_flags)
-
-    assert "forward_primer_sequence" not in name_only_missing
-    assert "reverse_primer_sequence" not in name_only_missing
-    assert "forward_primer_sequence" in sequence_missing
-    assert "reverse_primer_sequence" in sequence_missing
+# recall_missing_fact_types' nucleotide-text guard for primer sequences
+# (the reason primer_target's EXTRACTION_FOCUSES entry was referenced here)
+# is gone along with the fact types it guarded -- see the comment above
+# _RECALL_COMPANION_FIELD_SIBLINGS in extraction/text.py.
 
 
 def test_rejects_pcr_assay_facts_from_sterility_check_sentence():

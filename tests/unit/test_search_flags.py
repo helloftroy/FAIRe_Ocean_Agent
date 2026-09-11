@@ -513,6 +513,42 @@ def test_detect_controlled_search_facts_extracts_directional_primer_names_and_se
     assert by_type["reverse_primer_name"].evidence_quote == text
 
 
+def test_detect_controlled_search_facts_does_not_capture_a_leading_article_as_primer_name():
+    # Real gap found live: "The forward primer sequence used was
+    # GGWACWGGWTGAACWGTWTAYCCYCC." matched _PRIMER_NAME_BEFORE_DIRECTION_RE's
+    # own "<name> forward primer" shape with "The" as the captured name --
+    # a common English article/pronoun immediately preceding "forward/
+    # reverse primer(s)" is never a real primer name.
+    text = "The forward primer sequence used was GGWACWGGWTGAACWGTWTAYCCYCC."
+    controlled = detect_controlled_search_facts(
+        (("Methods", text),),
+        locator_prefix="paper:PMC1",
+        active_flags=frozenset({"pcr_0_1"}),
+    )
+    by_type = {fact.fact_type_candidate: fact.raw_value for fact in controlled}
+    assert by_type["forward_primer_sequence"] == "GGWACWGGWTGAACWGTWTAYCCYCC"
+    assert "forward_primer_name" not in by_type
+
+
+def test_detect_controlled_search_facts_never_reports_a_bare_primer_name_as_a_sequence():
+    # Real gap found live (10.1002/ece3.6071): when a paper only states a
+    # primer's NAME in the main text (its real sequence lives in a
+    # supplementary table this pass never sees), a generic LLM checklist
+    # pass once substituted the name ("1389F") for the sequence field
+    # instead of omitting it. This deterministic mechanism is structurally
+    # immune -- every sequence regex here requires actual nucleotide
+    # characters, so a bare alphanumeric name can never match as a
+    # sequence -- but this locks that guarantee in as a regression test.
+    text = "The 18S rRNA gene was amplified using the universal primer 1389F."
+    controlled = detect_controlled_search_facts(
+        (("Methods", text),),
+        locator_prefix="paper:PMC1",
+        active_flags=frozenset({"pcr_0_1"}),
+    )
+    by_type = {fact.fact_type_candidate: fact.raw_value for fact in controlled}
+    assert "forward_primer_sequence" not in by_type
+
+
 def test_detect_controlled_search_facts_extracts_rrna_f_r_primer_names():
     text = (
         "The V3-V4 region of the 16S rRNA gene was amplified using universal primers "
