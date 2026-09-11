@@ -2845,6 +2845,31 @@ def test_quote_candidates_for_screen_contam_method_matches_named_process_control
     assert any("screen_contam_method" in c.field_names for c in candidates)
 
 
+def test_quote_candidates_for_screen_contam_method_matches_host_genome_removal():
+    """Real gap found live (STUDY-00a43b02c90d): "The clean reads were
+    compared with the host genome sequences to remove host contamination
+    using Bowtie2 software" -- a real, common contamination-screening
+    mechanism (removing host-organism-derived reads) that has nothing to
+    do with blanks or negative controls, so none of the existing context
+    alternatives ever matched it."""
+    text = (
+        "The clean reads were compared with the host genome sequences to remove host contamination "
+        "using Bowtie2 software."
+    )
+    candidates = quote_candidates_for_llm_judged_search((("Methods", text),))
+    assert any("screen_contam_method" in c.field_names for c in candidates)
+
+
+def test_quote_candidates_for_screen_contam_method_does_not_match_bare_host_species_mention():
+    """A bare "host species"/"host-associated" mention (no removal or
+    contamination word nearby) must not trigger screen_contam_method --
+    only the earlier real STUDY-00a43b02c90d gap (host genome/DNA/sequence
+    co-occurring with a contamination/removal word) should."""
+    text = "The host species for this study was Crassostrea gigas, and we characterized its host-associated microbiome."
+    candidates = quote_candidates_for_llm_judged_search((("Methods", text),))
+    assert not any("screen_contam_method" in c.field_names for c in candidates)
+
+
 def test_quote_candidates_for_pos_cont_0_1_matches_a_mock_community_mention():
     """Real gap found live: 'Lastly, genomic DNA from a microbial mock
     community (BEI Resources, NIAID, NIH ... Genomic DNA from Microbial

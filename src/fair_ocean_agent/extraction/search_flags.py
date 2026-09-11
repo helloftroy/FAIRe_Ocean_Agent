@@ -3171,7 +3171,21 @@ _SCREEN_CONTAM_METHOD_CONTEXT_RE = re.compile(
     r"\b(?:extraction|pooling|library|sequencing|processing)\s+controls?\b|"
     r"\bcontaminant\s+(?:sequences?|OTUs?|ASVs?|taxa|taxon|reads?)\b|"
     r"\b(?:sequences?|OTUs?|ASVs?|reads?|taxa|taxon)\s+(?:considered|flagged|identified|removed)\s+as\s+"
-    r"(?:a\s+)?contaminant",
+    r"(?:a\s+)?contaminant|"
+    # Real gap found live (STUDY-00a43b02c90d): "The clean reads were
+    # compared with the host genome sequences to remove host
+    # contamination using Bowtie2 software" -- a real, common
+    # contamination-screening mechanism (removing host-organism-derived
+    # reads, e.g. human/animal/plant host DNA contaminating a microbiome/
+    # metagenome sample) that has nothing to do with blanks or negative
+    # controls at all, so none of the branches above ever matched it,
+    # even though the field's own description explicitly names "use of
+    # dedicated contamination-screening software" as in scope. Proximity
+    # match (either order) between "host genome/DNA/sequence(s)" and a
+    # contamination/removal-related word, not a bare "host" mention
+    # (which is common in unrelated contexts like "host species").
+    r"\bhost\s+(?:genome|DNA|sequences?)\b(?:\W+\w+){0,6}?\W+(?:contamina\w+|remov\w+|filter\w+|screen\w+|deplet\w+|subtract\w+)|"
+    r"(?:contamina\w+|remov\w+|filter\w+|screen\w+|deplet\w+|subtract\w+)(?:\W+\w+){0,6}?\W+host\s+(?:genome|DNA|sequences?)",
     re.IGNORECASE,
 )
 _BLOCKING_OLIGO_CONTEXT_RE = re.compile(
