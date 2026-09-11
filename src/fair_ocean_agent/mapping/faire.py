@@ -269,6 +269,50 @@ def _pipe_union(*groups: list[str]) -> str:
     return " | ".join(merged)
 
 
+# Real gap found live (STUDY-012e2a73836d): a supplementary per-sample
+# primer-barcode table ("The Universal primers U515F-U806R ware used.",
+# repeated once per barcode across ~200 distinct reverse-primer suffixes)
+# got extracted as ~200 genuinely distinct PCR_amplification_conditions
+# facts -- distinct because only the barcode token differs, so none of
+# them collide in _pipe_union's own casefold dedup -- and pipe-joined into
+# one unreadable pcr_method_additional wall of text that buried the two
+# actually informative narrative sentences (the master-mix recipe and the
+# thermal-cycling profile) in the middle of it. Masks out digit-bearing
+# tokens (the varying barcode/ID) to find the shared sentence template,
+# and once a template has more than _MAX_TEMPLATED_DUPLICATE_VARIANTS real
+# occurrences, keeps only the first few plus an honest omitted-count note
+# instead of every single row.
+_TEMPLATE_VARIANT_TOKEN_RE = re.compile(r"\b[A-Za-z]*\d+[A-Za-z]*\b")
+_MAX_TEMPLATED_DUPLICATE_VARIANTS = 3
+
+
+def _templated_signature(value: str) -> str:
+    return _TEMPLATE_VARIANT_TOKEN_RE.sub("#", value).casefold().strip()
+
+
+def _collapse_templated_duplicates(value: str) -> str:
+    parts = _split_pipe_values(value)
+    if len(parts) <= _MAX_TEMPLATED_DUPLICATE_VARIANTS:
+        return value
+    groups: dict[str, list[str]] = {}
+    order: list[str] = []
+    for part in parts:
+        signature = _templated_signature(part)
+        if signature not in groups:
+            groups[signature] = []
+            order.append(signature)
+        groups[signature].append(part)
+    collapsed: list[str] = []
+    for signature in order:
+        members = groups[signature]
+        if len(members) > _MAX_TEMPLATED_DUPLICATE_VARIANTS:
+            collapsed.extend(members[:_MAX_TEMPLATED_DUPLICATE_VARIANTS])
+            collapsed.append(f"(+{len(members) - _MAX_TEMPLATED_DUPLICATE_VARIANTS} similar variants omitted)")
+        else:
+            collapsed.extend(members)
+    return " | ".join(collapsed)
+
+
 def _collapsed_unit_lookup(facts: list[RawFact]) -> dict[tuple[str, str | None], str]:
     """First accepted raw unit fact by (unit field, entity).
 
@@ -1534,7 +1578,7 @@ def map_study_to_faire(session: Session, study_id: str) -> int:
                 llm_values = bucket["llm"]
                 assert isinstance(api_values, list)
                 assert isinstance(llm_values, list)
-                merged_value = _pipe_union(api_values, llm_values)
+                merged_value = _collapse_templated_duplicates(_pipe_union(api_values, llm_values))
                 merged_parts = _split_pipe_values(merged_value)
                 bucket["review_required"] = bool(
                     bucket["review_required"]

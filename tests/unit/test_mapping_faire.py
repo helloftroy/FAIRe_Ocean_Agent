@@ -1511,6 +1511,41 @@ def test_pcr_method_additional_fields_have_a_real_extraction_path_and_pipe_join(
     )
 
 
+def test_pcr_method_additional_collapses_a_large_per_sample_primer_barcode_table(db_session):
+    """Real gap found live (STUDY-012e2a73836d): a supplementary per-sample
+    primer-barcode table ("The Universal primers U515F-U806R ware used.",
+    repeated once per barcode) got extracted as dozens of genuinely
+    distinct PCR_amplification_conditions facts -- distinct because only
+    the barcode token differs, so none collide in the pipe-union's own
+    dedup -- and pipe-joined into an unreadable wall of near-duplicate
+    text that buried the one actually informative narrative sentence.
+    Once a shared sentence template (masking the varying barcode) has more
+    than a few real occurrences, only a handful plus an honest omitted-
+    count note should survive, and the genuinely distinct sentence must
+    not be swept up in that collapse."""
+    study = _study(db_session, title="Large primer-barcode table")
+    for suffix in ("U806R", "U807R", "U808R", "U809R", "U810R", "U812R"):
+        _fact(db_session, study, field="PCR_amplification_conditions",
+              value=f"The Universal primers U515F-{suffix} ware used.", entity_level="study")
+    _fact(db_session, study, field="PCR_amplification_conditions",
+          value="The PCR started with 2 min at 98C followed by 30 cycles of denaturation.", entity_level="study")
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    pcr1 = db_session.query(StandardizedValue).filter_by(study_id=study.study_id, target_field="pcr_method_additional").one()
+    parts = pcr1.standardized_value.split(" | ")
+    assert len(parts) == 5
+    assert parts[:3] == [
+        "The Universal primers U515F-U806R ware used.",
+        "The Universal primers U515F-U807R ware used.",
+        "The Universal primers U515F-U808R ware used.",
+    ]
+    assert parts[3] == "(+3 similar variants omitted)"
+    assert parts[4] == "The PCR started with 2 min at 98C followed by 30 cycles of denaturation."
+
+
 def test_pipe_joins_multiple_distinct_filters_named_in_one_study_instead_of_dropping_the_rest(db_session):
     """Real gap found live (STUDY-017230ae34c4): one dense Methods
     paragraph named three distinct filters for three distinct
