@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from fair_ocean_agent.clock import as_aware_utc, utcnow
@@ -38,7 +38,14 @@ from fair_ocean_agent.database.enums import (
     TaskType,
     WorkflowRunStatus,
 )
-from fair_ocean_agent.database.models import ExternalIdentifier, Study, WorkflowRun
+from fair_ocean_agent.database.models import (
+    ExternalIdentifier,
+    RawFact,
+    Source,
+    StandardizedValueEvidence,
+    Study,
+    WorkflowRun,
+)
 from fair_ocean_agent.workflow.task_queue import enqueue_task
 
 RUN_TYPE = "quarterly_full_rediscovery"
@@ -48,6 +55,8 @@ CITATION_RUN_TYPE = "citation_rediscovery"
 CITATION_DEFAULT_INTERVAL_DAYS = 90
 
 TEXT_EXTRACTION_RUN_TYPE = "full_text_extraction_rediscovery"
+
+PUBLICATION_METADATA_RUN_TYPE = "full_publication_metadata_rediscovery"
 
 
 def is_rediscovery_due(session: Session, interval_days: int = DEFAULT_INTERVAL_DAYS) -> bool:
@@ -206,5 +215,55 @@ def enqueue_full_text_extraction_backfill(session: Session, run_id: str) -> int:
             TaskType.EXTRACT_TEXT_FACTS,
             study_id=study_id,
             idempotency_key=f"{TEXT_EXTRACTION_RUN_TYPE}:{study_id}:{run_id}",
+        )
+    return len(study_ids)
+
+
+def enqueue_full_publication_metadata_backfill(session: Session, run_id: str) -> int:
+    """A narrower, deeper version of the same gap enqueue_full_text_extraction_
+    backfill fixes for EXTRACT_TEXT_FACTS: workflow/handlers.py's
+    _discover_publication_metadata_from_sources (license/accessRights/
+    recordedBy/bibliographicCitation/code_repo) guards itself with its OWN
+    early-exit check for a "publication_metadata_extraction" Source row
+    that already exists for the study's DOI -- a check on Source EXISTENCE,
+    not on whether the extraction logic itself has since changed. Unlike
+    EXTRACT_TEXT_FACTS's own handler (which detects a new source_version
+    and clears stale facts on its own), this function has no such
+    versioning at all, so simply re-enqueuing DISCOVER_IDENTIFIERS --
+    even with a fresh, run-scoped idempotency key that bypasses the TASK's
+    own idempotency -- does nothing: the handler reaches this one function
+    and immediately no-ops again, every single time, forever.
+
+    Real gap found live (STUDY-0161dd80b492, 10.7717/peerj.17091): a
+    "Code for all analysis carried out" supplementary-material caption was
+    added as a code_repo source on 2026-09-01 (see extract_code_repo_from_
+    text's own docstring), confirmed live to correctly extract this exact
+    paper's real code_repo value today -- but this study's
+    publication_metadata_extraction Source predates that fix, so no amount
+    of re-running DISCOVER_IDENTIFIERS ever picks it up.
+
+    Deletes each affected study's stale publication_metadata_extraction
+    Source (and its RawFacts/StandardizedValueEvidence, the same manual
+    cascade this codebase already uses elsewhere for a Source with no DB-
+    level cascade) before re-enqueuing DISCOVER_IDENTIFIERS -- map_study_to_
+    faire's own "delete-then-recreate" StandardizedValue rebuild on the
+    next remap needs nothing extra once the underlying RawFacts are fresh."""
+    rows = session.execute(
+        select(Source.source_id, Source.study_id).where(Source.source_name == "publication_metadata_extraction")
+    ).all()
+    source_ids = [source_id for source_id, _ in rows]
+    study_ids = sorted({study_id for _, study_id in rows})
+    if source_ids:
+        fact_ids = list(session.scalars(select(RawFact.fact_id).where(RawFact.source_id.in_(source_ids))).all())
+        if fact_ids:
+            session.execute(delete(StandardizedValueEvidence).where(StandardizedValueEvidence.fact_id.in_(fact_ids)))
+            session.execute(delete(RawFact).where(RawFact.fact_id.in_(fact_ids)))
+        session.execute(delete(Source).where(Source.source_id.in_(source_ids)))
+    for study_id in study_ids:
+        enqueue_task(
+            session,
+            TaskType.DISCOVER_IDENTIFIERS,
+            study_id=study_id,
+            idempotency_key=f"{PUBLICATION_METADATA_RUN_TYPE}:{study_id}:{run_id}",
         )
     return len(study_ids)

@@ -8,9 +8,19 @@ from fair_ocean_agent.database.enums import (
     TaskType,
     WorkflowRunStatus,
 )
-from fair_ocean_agent.database.models import ExternalIdentifier, Study, Task, WorkflowRun
+from fair_ocean_agent.database.models import (
+    ExternalIdentifier,
+    RawFact,
+    Source,
+    StandardizedValue,
+    StandardizedValueEvidence,
+    Study,
+    Task,
+    WorkflowRun,
+)
 from fair_ocean_agent.scheduling.rediscovery import (
     enqueue_citation_rediscovery_backfill,
+    enqueue_full_publication_metadata_backfill,
     enqueue_full_rediscovery,
     is_citation_rediscovery_due,
     is_rediscovery_due,
@@ -159,3 +169,55 @@ def test_enqueue_citation_rediscovery_backfill_targets_distinct_accessions_with_
     fresh_task = next(t for t in new_tasks if t.idempotency_key == "citation_rediscovery:PRJNA1:RUN-1")
     assert fresh_task.study_id == study_a.study_id  # deterministically the FIRST study to claim this accession
     assert fresh_task.payload == {"bioproject_accession": "PRJNA1"}
+
+
+def test_enqueue_full_publication_metadata_backfill_clears_the_stale_source_and_reenqueues(db_session):
+    """Real gap found live (STUDY-0161dd80b492, 10.7717/peerj.17091):
+    _discover_publication_metadata_from_sources guards itself with a bare
+    "does a publication_metadata_extraction Source already exist for this
+    DOI" check, with no version-awareness of its own -- unlike
+    EXTRACT_TEXT_FACTS's own handler, simply re-enqueuing DISCOVER_IDENTIFIERS
+    (even with a fresh idempotency key) does nothing while that stale
+    Source row still exists. This backfill must delete it (and its
+    RawFacts/StandardizedValueEvidence) before re-enqueuing, so the next
+    DISCOVER_IDENTIFIERS run genuinely redoes the extraction."""
+    study = Study(title="Stale publication metadata")
+    other_study = Study(title="No publication metadata source at all")
+    db_session.add_all([study, other_study])
+    db_session.flush()
+
+    source = Source(
+        study_id=study.study_id, source_type="publication_api",
+        source_name="publication_metadata_extraction", external_identifier="10.7717/peerj.17091",
+    )
+    db_session.add(source)
+    db_session.flush()
+    fact = RawFact(
+        study_id=study.study_id, source_id=source.source_id, raw_field_name="code_repo",
+        raw_value="no code published", fact_type_candidate="code_repo", entity_level="study",
+        support_type="deterministically_derived",
+    )
+    db_session.add(fact)
+    db_session.flush()
+    standardized_value = StandardizedValue(
+        study_id=study.study_id, target_schema="faire", target_schema_version="v1",
+        target_field="code_repo", standardized_value="no code published",
+    )
+    db_session.add(standardized_value)
+    db_session.flush()
+    db_session.add(
+        StandardizedValueEvidence(standardized_value_id=standardized_value.standardized_value_id, fact_id=fact.fact_id)
+    )
+    db_session.commit()
+
+    count = enqueue_full_publication_metadata_backfill(db_session, run_id="RUN-1")
+    db_session.commit()
+
+    assert count == 1  # only the study with a stale Source, not other_study
+    assert db_session.get(Source, source.source_id) is None
+    assert db_session.get(RawFact, fact.fact_id) is None
+    assert db_session.query(StandardizedValueEvidence).filter_by(fact_id=fact.fact_id).first() is None
+    new_task = db_session.query(Task).filter_by(
+        study_id=study.study_id, task_type=TaskType.DISCOVER_IDENTIFIERS.value,
+    ).one()
+    assert new_task.idempotency_key == f"full_publication_metadata_rediscovery:{study.study_id}:RUN-1"

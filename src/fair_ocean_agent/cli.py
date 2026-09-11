@@ -331,6 +331,37 @@ def enqueue_full_text_extraction_backfill_command() -> None:
     console.print(f"Queued EXTRACT_TEXT_FACTS for {count} stud(y/ies) with a known PMCID.")
 
 
+@app.command("enqueue-full-publication-metadata-backfill")
+def enqueue_full_publication_metadata_backfill_command() -> None:
+    """Re-run publication-metadata extraction (license/accessRights/
+    recordedBy/bibliographicCitation/code_repo) for every study that
+    already has one, on demand. The concrete case this catches: a newly-
+    added or fixed publication-metadata capability (e.g. code_repo now
+    catching a supplementary-material caption) that already-processed
+    studies were never checked against -- unlike EXTRACT_TEXT_FACTS,
+    _discover_publication_metadata_from_sources has no version-aware
+    staleness check of its own, so re-running DISCOVER_IDENTIFIERS alone
+    never revisits it. See scheduling/rediscovery.py::
+    enqueue_full_publication_metadata_backfill's own docstring for the
+    confirmed-live example that motivated this."""
+    from fair_ocean_agent.clock import utcnow
+    from fair_ocean_agent.database.enums import WorkflowRunStatus
+    from fair_ocean_agent.scheduling.rediscovery import (
+        PUBLICATION_METADATA_RUN_TYPE,
+        enqueue_full_publication_metadata_backfill,
+    )
+
+    with session_scope() as session:
+        run = WorkflowRun(run_type=PUBLICATION_METADATA_RUN_TYPE, status=WorkflowRunStatus.RUNNING.value)
+        session.add(run)
+        session.flush()
+        count = enqueue_full_publication_metadata_backfill(session, run.run_id)
+        run.candidates_found = count
+        run.status = WorkflowRunStatus.COMPLETED.value
+        run.ended_at = utcnow()
+    console.print(f"Queued DISCOVER_IDENTIFIERS for {count} stud(y/ies) with a stale publication-metadata Source.")
+
+
 # The only three task types that ever call an LLM backend at all
 # (confirmed by reading every TASK_HANDLERS registration, not guessed):
 # EXTRACT_TEXT_FACTS and EXTRACT_SUPPLEMENT_TEXT_FACTS call the main
