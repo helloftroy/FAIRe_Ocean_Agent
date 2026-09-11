@@ -217,16 +217,43 @@ def test_generate_study_target_taxonomic_scope_empty_value_returns_no_facts():
     assert facts == []
 
 
-def test_generate_study_factor_raises_on_invalid_json_after_retries():
+def test_generate_study_factor_raises_only_after_every_temperature_saw_invalid_json():
+    """Real gap found live: the exact two studies that motivated the
+    temperature-varying retry (10.3389/fmicb.2017.01135,
+    10.1186/s40168-020-00877-y) still came back empty even after that fix
+    landed -- root cause, this used to raise the moment ANY attempt
+    returned invalid JSON, never reaching temperature=0.4/0.7 at all.
+    Invalid JSON must now be retried across every temperature exactly like
+    an empty value, raising only once all three are exhausted."""
     backend = MockLLMBackend(responses=["not json"])
     with pytest.raises(LLMBackendError):
         generate_study_factor(backend, _ABSTRACT_XML, locator_prefix="test")
+    # 3 outer temperature attempts, each exhausting generate_json's own 3
+    # inner invalid-JSON sub-retries (max_retries=2) at that temperature.
+    assert len(backend.calls) == 9
+    temperatures = [call["temperature"] for call in backend.calls]
+    assert len(set(temperatures)) > 1
 
 
-def test_generate_study_target_taxonomic_scope_raises_on_invalid_json_after_retries():
+def test_generate_study_factor_recovers_from_invalid_json_on_an_earlier_temperature():
+    """The scenario the raise-immediately bug actually blocked: the model
+    returns invalid JSON at temperature=0 (exhausting generate_json's own
+    3 inner corrective-prompt sub-attempts, all still at that same
+    temperature), but a later, higher-temperature attempt succeeds --
+    must not be treated as a hard failure."""
+    summary = "The study compares bacterial community composition across three coral reef sites."
+    backend = MockLLMBackend(responses=["not json", "not json", "not json", json.dumps({"study_factor": summary})])
+    facts = generate_study_factor(backend, _ABSTRACT_XML, locator_prefix="test")
+    assert len(facts) == 1
+    assert facts[0].raw_value == summary
+    assert len(backend.calls) == 4
+
+
+def test_generate_study_target_taxonomic_scope_raises_only_after_every_temperature_saw_invalid_json():
     backend = MockLLMBackend(responses=["not json"])
     with pytest.raises(LLMBackendError):
         generate_study_target_taxonomic_scope(backend, _ABSTRACT_XML, locator_prefix="test")
+    assert len(backend.calls) == 9
 
 
 def test_generate_study_factor_malformed_xml_returns_no_facts():

@@ -152,12 +152,31 @@ def _generate_nonempty_field(
     field_name: str,
     error_label: str,
 ) -> str:
+    # Real gap found live: even with the temperature-varying retries below,
+    # STUDY-012e2a73836d/STUDY-01f941d6d759 (10.3389/fmicb.2017.01135,
+    # 10.1186/s40168-020-00877-y -- the exact two studies that motivated
+    # this retry mechanism in the first place) still came back empty. Root
+    # cause: this used to `raise` immediately the first time
+    # generate_json returned invalid JSON (itself already the result of
+    # generate_json's OWN 3 internal sub-attempts, all at that SAME
+    # temperature), never even reaching temperature=0.4/0.7 -- the exact
+    # "stuck at one temperature" bug this retry loop was built to fix for
+    # the valid-but-empty case, left unfixed for the invalid-JSON case.
+    # Invalid JSON on one temperature now falls through to the next
+    # temperature exactly like an empty value does; only exhausting every
+    # temperature still raises.
+    saw_invalid_json = False
     for attempt, temperature in enumerate(_CONTENT_RETRY_TEMPERATURES):
         parsed, _response = backend.generate_json(
             prompt, system=system, temperature=temperature, max_tokens=max_output_tokens
         )
         if parsed is None:
-            raise LLMBackendError(f"{backend.label}: {error_label} generation returned invalid JSON after retries")
+            saw_invalid_json = True
+            logger.warning(
+                "%s: %s attempt %d/%d returned invalid JSON (temperature=%s)",
+                backend.label, error_label, attempt + 1, len(_CONTENT_RETRY_TEMPERATURES), temperature,
+            )
+            continue
         value = str(parsed.get(field_name) or "").strip() if isinstance(parsed, dict) else ""
         if value:
             return value
@@ -165,6 +184,8 @@ def _generate_nonempty_field(
             "%s: %s attempt %d/%d returned an empty value (temperature=%s)",
             backend.label, error_label, attempt + 1, len(_CONTENT_RETRY_TEMPERATURES), temperature,
         )
+    if saw_invalid_json:
+        raise LLMBackendError(f"{backend.label}: {error_label} generation returned invalid JSON after retries")
     return ""
 
 
