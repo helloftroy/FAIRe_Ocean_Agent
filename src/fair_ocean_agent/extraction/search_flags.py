@@ -3333,6 +3333,31 @@ _OLIGO_PROBE_ROW_CONTEXT_RE = re.compile(
     r"\|[^|]*[ACGTRYSWKMBDHVN]{10,}[^|]*\|[^|]*\|[^|]*\b(?:C|FISH|CARD[-\s]?FISH)\b[^|]*\|",
     re.IGNORECASE,
 )
+# pos_cont_0_1: real gap found live (STUDY-01a5e9aa6491) -- "Primary PCR
+# reactions were carried out using 1 ul DNA extract in triplicate with a
+# no-template control (NTC) run for each 96-well plate" was offered as a
+# candidate quote to pos_cont_0_1 purely because it shares neg_cont_0_1's
+# own generic "control" search term, and the model answered "1" for it --
+# an NTC is unambiguously a NEGATIVE control (it confirms the ABSENCE of
+# contamination, not that the assay worked), never a positive one. Same
+# paper also had "two negative extraction controls" and "extraction
+# negative controls" offered the same way. When a snippet uses one of
+# these unambiguous negative-only phrasings and names no positive-control-
+# specific evidence, it's excluded from pos_cont_0_1 candidacy entirely
+# rather than left to the model's own judgement -- neg_cont_0_1 is
+# unaffected and still sees the same snippet normally.
+_NEGATIVE_CONTROL_ONLY_RE = re.compile(
+    r"\b(?:"
+    r"no[-\s]template\s+controls?|ntcs?|"
+    r"extraction\s+blanks?|field\s+blanks?|reagent\s+blanks?|pcr\s+blanks?|"
+    r"negative\s+(?:extraction\s+|pcr\s+)?controls?|extraction\s+negative\s+controls?"
+    r")\b",
+    re.IGNORECASE,
+)
+_POSITIVE_CONTROL_SPECIFIC_EVIDENCE_RE = re.compile(
+    r"\b(?:positive\s+controls?|mock\s+communit(?:y|ies)|reference\s+dna|known\s+dna|synthetic\s+dna|gblocks?)\b",
+    re.IGNORECASE,
+)
 
 
 def _llm_judged_field_matches_snippet(field: LLMJudgedSearchField, snippet: str, window: str | None = None) -> bool:
@@ -3354,6 +3379,9 @@ def _llm_judged_field_matches_snippet(field: LLMJudgedSearchField, snippet: str,
             return True
     if not any(_term_pattern(term).search(snippet) for term in field.search_terms):
         return False
+    if field.term_name == "pos_cont_0_1":
+        if _NEGATIVE_CONTROL_ONLY_RE.search(snippet) and not _POSITIVE_CONTROL_SPECIFIC_EVIDENCE_RE.search(snippet):
+            return False
     if field.term_name in _SAMPLING_TIME_WINDOW_FIELDS:
         return bool(_SAMPLING_TIME_CONTEXT_RE.search(window or snippet))
     if field.term_name == "otu_clust_tool":

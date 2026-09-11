@@ -2924,3 +2924,42 @@ def test_quote_candidates_for_pos_cont_0_1_matches_a_mock_community_mention():
     )
     candidates = quote_candidates_for_llm_judged_search((("Methods", text),))
     assert any("pos_cont_0_1" in c.field_names for c in candidates)
+
+
+def test_quote_candidates_for_pos_cont_0_1_do_not_include_a_no_template_control_mention():
+    # Real gap found live (STUDY-01a5e9aa6491): "Primary PCR reactions were
+    # carried out using 1 ul DNA extract in triplicate with a no-template
+    # control (NTC) run for each 96-well plate" was offered to pos_cont_0_1
+    # purely because it shares neg_cont_0_1's own generic "control" search
+    # term, and the model answered "1" for it -- an NTC is unambiguously a
+    # NEGATIVE control, never a positive one.
+    text = (
+        "Primary PCR reactions were carried out using 1 ul DNA extract in triplicate with a "
+        "no-template control (NTC) run for each 96-well plate."
+    )
+    candidates = quote_candidates_for_llm_judged_search((("Methods", text),))
+    assert any("neg_cont_0_1" in c.field_names for c in candidates)
+    assert not any("pos_cont_0_1" in c.field_names for c in candidates)
+
+
+def test_quote_candidates_for_pos_cont_0_1_do_not_include_negative_extraction_control_mentions():
+    # Same paper, same real gap: "two negative extraction controls" and
+    # "extraction negative controls" are equally unambiguous negative-only
+    # phrasing, never a positive control.
+    text = (
+        "We also amplified two negative extraction controls and three PCR controls and sequenced "
+        "them in parallel with the 49 samples. Also amplified on each sequencing plate was a set of "
+        "three PCR no-template controls (NTCs) as well as extraction negative controls which were "
+        "extracted alongside the environmental samples on the plate."
+    )
+    candidates = quote_candidates_for_llm_judged_search((("Methods", text),))
+    assert any("neg_cont_0_1" in c.field_names for c in candidates)
+    assert not any("pos_cont_0_1" in c.field_names for c in candidates)
+
+
+def test_quote_candidates_for_pos_cont_0_1_still_matches_when_a_real_positive_control_is_named_alongside_an_ntc():
+    # The exclusion must not swallow a real positive control mentioned in
+    # the same breath as a negative one.
+    text = "Each PCR run included a positive control using synthetic DNA (gBlock) alongside the no-template control."
+    candidates = quote_candidates_for_llm_judged_search((("Methods", text),))
+    assert any("pos_cont_0_1" in c.field_names for c in candidates)
