@@ -1697,6 +1697,31 @@ def test_source_unmapped_excludes_mapped_fields_absent_placeholders_and_redundan
     ).first() is None
 
 
+def test_biosample_collection_depth_attribute_maps_to_depth_in_meters(db_session):
+    """Real gap found live (STUDY-023617f41c9e): a real BioSample's own
+    "collection_depth: 8.5" attribute -- a standard MIMARKS/host-
+    associated-package name distinct from the bare "depth"/"Depth"
+    synonyms this pipeline already recognized -- fell through to
+    source_unmapped instead of minimumDepthInMeters/maximumDepthInMeters."""
+    study = _study(db_session, title="BioSample collection_depth")
+    sample = Entity(study_id=study.study_id, entity_level=EntityLevel.SAMPLE.value, external_identifier="SAMN3")
+    db_session.add(sample)
+    db_session.flush()
+    _fact(db_session, study, entity=sample, field="collection_depth", value="8.5", entity_level="sample")
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)
+    db_session.commit()
+
+    values = {
+        sv.target_field: sv
+        for sv in db_session.query(StandardizedValue).filter_by(study_id=study.study_id, entity_id=sample.entity_id)
+    }
+    assert values["minimumDepthInMeters"].standardized_value == "8.5"
+    assert values["maximumDepthInMeters"].standardized_value == "8.5"
+    assert "source_unmapped" not in values
+
+
 def test_pipe_joins_conflicting_project_wide_instruments_with_review(db_session):
     study = _study(db_session, title="Two sequencing instruments")
     run_a = Entity(study_id=study.study_id, entity_level=EntityLevel.SEQUENCING_RUN.value, external_identifier="SRR_A")

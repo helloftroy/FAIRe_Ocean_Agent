@@ -426,6 +426,15 @@ _EXPLICIT_RULES: tuple[MappingRule, ...] = (
                 MappingMethod.DETERMINISTIC_SYNONYM.value, transform=to_min_meters),
     MappingRule("depth_(m)", EntityLevel.SAMPLE.value, "sampleMetadata", "maximumDepthInMeters",
                 MappingMethod.DETERMINISTIC_SYNONYM.value, transform=to_max_meters),
+    # Real gap found live (STUDY-023617f41c9e): a real BioSample's own
+    # "collection_depth: 8.5" attribute name -- a standard MIMARKS/host-
+    # associated-package field name distinct from the bare "depth"/"Depth"
+    # synonyms above -- fell through to source_unmapped since rules_for
+    # only matches the BioSample attribute's own name exactly.
+    MappingRule("collection_depth", EntityLevel.SAMPLE.value, "sampleMetadata", "minimumDepthInMeters",
+                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=to_min_meters),
+    MappingRule("collection_depth", EntityLevel.SAMPLE.value, "sampleMetadata", "maximumDepthInMeters",
+                MappingMethod.DETERMINISTIC_SYNONYM.value, transform=to_max_meters),
     MappingRule("samp_category", EntityLevel.SAMPLE.value, "sampleMetadata", "samp_category",
                 MappingMethod.EXACT_LABEL.value, enum_name="samp_category_enum"),
     MappingRule("sample_type", EntityLevel.SAMPLE.value, "sampleMetadata", "samp_category",
