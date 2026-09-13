@@ -96,6 +96,12 @@ _DOI_IN_TEXT_RE = re.compile(r"10\.\d{4,9}/[^\s\"'<>()\[\]]+")
 _ALREADY_CORRECT_RE = re.compile(r"^10\.\d{4,9}_[^:/]+\.pdf$", re.IGNORECASE)
 _PAGES_TO_SCAN = 2
 _NON_ALNUM_SPACE_RE = re.compile(r"[^a-z0-9 ]+")
+# macOS/browser duplicate-download marker (e.g. "Title (1).pdf" when a file
+# of that name already existed) -- real gap found live: a Paperpile CSV's
+# own "Attachments" column names the clean "Title.pdf", but the actual zip
+# member had picked up this suffix along the way, so the exact-match CSV
+# lookup silently missed several real, otherwise-unambiguous matches.
+_DUPLICATE_DOWNLOAD_SUFFIX_RE = re.compile(r"\s*\(\d+\)$")
 # Paperpile's own "Author et al. YYYY - Title.pdf" naming convention --
 # strips the leading author/year segment off to recover just the title.
 _TITLE_FROM_FILENAME_RE = re.compile(r"^.*?\d{4}[a-z]?\s*-\s*(.*)$")
@@ -122,8 +128,10 @@ def _normalize_filename_for_matching(name: str) -> str:
     live: a zip's own member names and a Paperpile CSV export don't
     always survive round-tripping through the same Unicode normalization
     form (e.g. "Galià-Camps" vs a decomposed "Galià-Camps"), so an exact
-    string match would silently miss real, correct matches."""
+    string match would silently miss real, correct matches. Also strips a
+    trailing duplicate-download marker (see _DUPLICATE_DOWNLOAD_SUFFIX_RE)."""
     stem = Path(name).stem
+    stem = _DUPLICATE_DOWNLOAD_SUFFIX_RE.sub("", stem)
     decomposed = unicodedata.normalize("NFKD", stem)
     without_marks = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
     return _NON_ALNUM_SPACE_RE.sub(" ", without_marks.lower()).strip()
