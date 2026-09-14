@@ -241,6 +241,50 @@ Worth doing in batches of a few hundred rather than all ~3000 at once,
 at least for the first real large-scale run -- easier to notice and
 retry a stuck batch than to debug a single multi-day job.
 
+## Speeding up discovery: NCBI API key + parallel workers
+
+`run_discovery.sbatch` is single-threaded and mostly network-bound, so a
+full-corpus run can take a long time. Two independent speedups:
+
+**Get a free NCBI API key.** `ncbi_bioproject`/`ncbi_biosample` share one
+rate-limited client (they hit the same eutils endpoint under one per-IP
+limit): 3 req/sec without a key, 10/sec with one. Register one at
+https://www.ncbi.nlm.nih.gov/account/settings/ (API Key Management),
+then:
+
+```bash
+export NCBI_API_KEY=your-key-here
+sbatch --account=191001-364393 --export=ALL,NCBI_API_KEY cluster/run_discovery.sbatch
+```
+
+No code changes needed to pick it up -- omit it and everything runs at
+today's exact 3 req/sec behavior.
+
+**Parallelize with `run_discovery_parallel.sbatch`.** Discovery has three
+sequential stages (identifiers, supplement discovery, supplement
+retrieval), each needing the previous stage's data first, so this script
+parallelizes ONE stage at a time via a job array -- run it three times in
+order, waiting for each to finish:
+
+```bash
+sbatch --account=191001-364393 --array=1-3 --export=ALL,NCBI_API_KEY,DISCOVERY_STAGE=identifiers cluster/run_discovery_parallel.sbatch
+# wait for all array tasks to finish, then:
+sbatch --account=191001-364393 --array=1-8 --export=ALL,DISCOVERY_STAGE=supplement-discovery cluster/run_discovery_parallel.sbatch
+sbatch --account=191001-364393 --array=1-8 --export=ALL,DISCOVERY_STAGE=supplement-retrieval cluster/run_discovery_parallel.sbatch
+# then run the ordinary run_discovery.sbatch once (no array) to pick up
+# any remainder plus auto-fetch/classify/status.
+```
+
+The `identifiers` stage's array size is capped by the same shared NCBI
+limit above -- each array task throttles independently with no
+cross-process coordination, so N tasks multiply the effective request
+rate by N. Without a key, don't parallelize that stage at all
+(`--array=1`); with a key, `--array=1-3` is a reasonable starting point.
+The other two stages mostly hit Europe PMC/publisher hosts instead, which
+tolerate more parallelism (`--array=1-8` or higher). See the script's own
+header comment for the full reasoning, and watch the per-array-task logs
+for repeated 429/rate-limit errors if you scale up.
+
 ## Closed-access papers (local PDFs)
 
 A paper with no PMCID at all (never deposited in Europe PMC/PubMed, even
