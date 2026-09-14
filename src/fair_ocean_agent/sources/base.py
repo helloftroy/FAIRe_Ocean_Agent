@@ -166,7 +166,16 @@ class RateLimitedClient:
         retrieval_config: RetrievalConfig,
         rate_limit_per_second: float,
         transport: httpx.BaseTransport | None = None,
+        default_params: dict | None = None,
     ):
+        """`default_params` (e.g. NCBI eutils' own `api_key`) is merged into
+        every live request's own params, added ONLY at the actual HTTP call
+        (see _get_bytes) -- deliberately excluded from the on-disk cache key
+        (see _cache_path) since the identifier being fetched, not the
+        caller's credentials, determines the response content; keeping the
+        cache key stable means an already-warm cache stays valid whether or
+        not a key is configured, instead of silently doubling on-disk cache
+        size the day one gets added."""
         self._client = httpx.Client(
             timeout=retrieval_config.request_timeout_seconds,
             headers={"User-Agent": retrieval_config.user_agent},
@@ -184,6 +193,7 @@ class RateLimitedClient:
         self._source_name = source_name
         self._min_interval = 1.0 / rate_limit_per_second if rate_limit_per_second > 0 else 0.0
         self._last_request_at = 0.0
+        self._default_params = default_params or {}
         self._cache_enabled = retrieval_config.cache_enabled
         self._cache_dir = REPO_ROOT / retrieval_config.cache_dir / source_name
         if self._cache_enabled:
@@ -212,8 +222,9 @@ class RateLimitedClient:
         SourceRecordNotFoundError on 404 rather than retrying (a missing
         record won't appear on retry)."""
         self._throttle()
+        request_params = {**self._default_params, **(params or {})} if self._default_params else params
         with diag_timing.record("http", self._source_name):
-            response = self._client.get(url, params=params)
+            response = self._client.get(url, params=request_params)
         self._last_request_at = time.monotonic()
         if response.status_code == 404:
             raise SourceRecordNotFoundError(f"404 Not Found: {url}")

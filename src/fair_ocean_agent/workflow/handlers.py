@@ -187,6 +187,14 @@ _REPOSITORY_ADAPTER_CLASSES: dict[str, type[SourceAdapter]] = {
 # across a run. Cleared via reset_adapter_cache() at worker shutdown.
 _adapter_cache: dict[str, SourceAdapter] | None = None
 
+# NCBI's own documented eutils policy: 3 req/sec per IP without a
+# registered API key, 10 req/sec with one -- see
+# https://www.ncbi.nlm.nih.gov/books/NBK25497/#chapter2.Usage_Guidelines_and_Requiremen
+# config/sources.yaml's own rate_limit_per_second (3) matches the no-key
+# tier; this only ever applies when NCBI_API_KEY (or whatever
+# api_key_env names) actually resolves to a non-empty value at runtime.
+_NCBI_RATE_LIMIT_WITH_API_KEY = 10.0
+
 
 def _build_enabled_adapters() -> dict[str, SourceAdapter]:
     global _adapter_cache
@@ -223,7 +231,14 @@ def _build_enabled_adapters() -> dict[str, SourceAdapter]:
     ncbi_names = [n for n in ("ncbi_bioproject", "ncbi_biosample") if is_enabled(n)]
     if ncbi_names:
         shared_entry = sources_config[ncbi_names[0]]
-        shared_http = RateLimitedClient("ncbi_eutils", retrieval_config, shared_entry.rate_limit_per_second)
+        ncbi_api_key = os.environ.get(shared_entry.api_key_env) if shared_entry.api_key_env else None
+        shared_rate_limit = _NCBI_RATE_LIMIT_WITH_API_KEY if ncbi_api_key else shared_entry.rate_limit_per_second
+        shared_http = RateLimitedClient(
+            "ncbi_eutils",
+            retrieval_config,
+            shared_rate_limit,
+            default_params={"api_key": ncbi_api_key} if ncbi_api_key else None,
+        )
         for name in ncbi_names:
             adapters[name] = _REPOSITORY_ADAPTER_CLASSES[name](make_config(name), retrieval_config, http=shared_http)
 

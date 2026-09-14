@@ -150,6 +150,69 @@ def test_rate_limiting_enforces_minimum_interval(retrieval_config, monkeypatch):
     client.close()
 
 
+def test_default_params_are_sent_on_every_request(retrieval_config):
+    seen_params = []
+
+    def handler(request):
+        seen_params.append(dict(request.url.params))
+        return httpx.Response(200, json={})
+
+    client = RateLimitedClient(
+        "test-source", retrieval_config, 1000, transport=httpx.MockTransport(handler),
+        default_params={"api_key": "secret"},
+    )
+    client.get_json("https://example.org/a", params={"id": "1"})
+    client.get_json("https://example.org/b")
+
+    assert seen_params[0] == {"id": "1", "api_key": "secret"}
+    assert seen_params[1] == {"api_key": "secret"}
+    client.close()
+
+
+def test_default_params_do_not_override_an_explicit_param_of_the_same_name(retrieval_config):
+    seen_params = []
+
+    def handler(request):
+        seen_params.append(dict(request.url.params))
+        return httpx.Response(200, json={})
+
+    client = RateLimitedClient(
+        "test-source", retrieval_config, 1000, transport=httpx.MockTransport(handler),
+        default_params={"api_key": "default"},
+    )
+    client.get_json("https://example.org/a", params={"api_key": "explicit"})
+
+    assert seen_params[0] == {"api_key": "explicit"}
+    client.close()
+
+
+def test_default_params_are_excluded_from_the_cache_key(retrieval_config, tmp_path):
+    """The cache stays valid whether or not a key is configured -- the key
+    only affects the caller's rate-limit tier, never the response content,
+    so it must not double on-disk cache size the day one gets added."""
+    calls = {"count": 0}
+
+    def handler(request):
+        calls["count"] += 1
+        return httpx.Response(200, json={"n": calls["count"]})
+
+    retrieval_config = retrieval_config.model_copy(update={"cache_enabled": True, "cache_dir": str(tmp_path)})
+    no_key_client = RateLimitedClient("test-source", retrieval_config, 1000, transport=httpx.MockTransport(handler))
+    no_key_client.get_json("https://example.org/cacheable")
+    no_key_client.close()
+
+    with_key_client = RateLimitedClient(
+        "test-source", retrieval_config, 1000, transport=httpx.MockTransport(handler),
+        default_params={"api_key": "secret"},
+    )
+    payload, from_cache = with_key_client.get_json("https://example.org/cacheable")
+
+    assert calls["count"] == 1  # the key-bearing client reused the same cache entry
+    assert from_cache is True
+    assert payload == {"n": 1}
+    with_key_client.close()
+
+
 def test_datacite_fetch_record_uses_doi_endpoint(retrieval_config):
     seen = {}
 

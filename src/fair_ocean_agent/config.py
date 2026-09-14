@@ -176,6 +176,14 @@ class SourceEntryConfig(BaseModel):
     base_url: str
     rate_limit_per_second: float = 3.0
     priority: int = 100
+    # Name of an environment variable holding an API key for this source
+    # (never the key itself, matching this codebase's own established
+    # api_key_env convention -- see BenchmarkCandidateConfig). None means
+    # this source has no key-based rate-limit tier at all. Currently only
+    # ncbi_bioproject/ncbi_biosample read this (see workflow/handlers.py's
+    # NCBI wiring in _build_enabled_adapters) -- NCBI eutils allows a
+    # higher per-IP rate limit with a free, registered API key.
+    api_key_env: str | None = None
 
 
 def load_sources_config() -> dict[str, SourceEntryConfig]:

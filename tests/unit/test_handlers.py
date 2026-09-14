@@ -619,6 +619,41 @@ def test_handler_raises_runtime_error_when_no_adapters_enabled(db_session, monke
         handlers.handle_discover_identifiers(db_session, task)
 
 
+def test_ncbi_shared_client_uses_no_key_rate_limit_by_default(monkeypatch):
+    monkeypatch.delenv("NCBI_API_KEY", raising=False)
+    handlers.reset_adapter_cache()
+    try:
+        adapters = handlers._build_enabled_adapters()
+        ncbi_biosample = adapters.get("ncbi_biosample")
+        if ncbi_biosample is None:
+            pytest.skip("ncbi_biosample adapter not enabled")
+        assert ncbi_biosample.http is adapters["ncbi_bioproject"].http  # still one shared client
+        assert ncbi_biosample.http._min_interval == pytest.approx(1.0 / 3)  # config/sources.yaml's no-key rate
+        assert ncbi_biosample.http._default_params == {}
+    finally:
+        handlers.reset_adapter_cache()
+
+
+def test_ncbi_shared_client_uses_higher_rate_limit_and_sends_the_key_when_configured(monkeypatch):
+    """Real gap found live: NCBI eutils allows 10 req/sec with a free,
+    registered API key vs. 3 req/sec without -- config/sources.yaml's own
+    rate_limit_per_second (3) only ever matches the no-key tier. When
+    NCBI_API_KEY (the env var named by ncbi_bioproject/ncbi_biosample's
+    own api_key_env) actually resolves, the shared client must both raise
+    its rate limit and send the key on every request."""
+    monkeypatch.setenv("NCBI_API_KEY", "test-key-123")
+    handlers.reset_adapter_cache()
+    try:
+        adapters = handlers._build_enabled_adapters()
+        ncbi_bioproject = adapters.get("ncbi_bioproject")
+        if ncbi_bioproject is None:
+            pytest.skip("ncbi_bioproject adapter not enabled")
+        assert ncbi_bioproject.http._min_interval == pytest.approx(1.0 / 10)
+        assert ncbi_bioproject.http._default_params == {"api_key": "test-key-123"}
+    finally:
+        handlers.reset_adapter_cache()
+
+
 def test_ncbi_biosample_fallback_not_used_when_elink_succeeds(db_session):
     """The common case: fetch_record itself succeeds, so the fallback
     (and its BIOSAMPLE_ACCESSION lookup) is never even attempted."""

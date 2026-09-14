@@ -7,7 +7,12 @@
 # runtime (workflow/handlers.py) since they both hit eutils.ncbi.nlm.nih.gov,
 # which enforces its per-IP limit across all eutils calls combined -- the
 # rate_limit_per_second below (3, matching NCBI's no-API-key guidance) is
-# the one that actually gets enforced for both.
+# the one that actually gets enforced for both, UNLESS the api_key_env
+# variable named below is actually set in the environment, in which case
+# _build_enabled_adapters bumps the shared client to NCBI's own documented
+# with-key limit (10/sec) and sends the key on every eutils request. Get a
+# free key at https://www.ncbi.nlm.nih.gov/account/settings/ (API Key
+# Management) and export it as NCBI_API_KEY before running.
 #
 # ncbi_sra is deliberately left disabled/unimplemented: run-level SRA data
 # (library strategy, platform, file accessions) is served by the `ena`
@@ -52,12 +57,14 @@ sources:
     base_url: "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
     rate_limit_per_second: 3
     priority: 4
+    api_key_env: "NCBI_API_KEY"
 
   ncbi_biosample:
     enabled: true
     base_url: "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
     rate_limit_per_second: 3
     priority: 5
+    api_key_env: "NCBI_API_KEY"
 
   ncbi_sra:
     enabled: false
