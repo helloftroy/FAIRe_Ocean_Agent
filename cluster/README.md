@@ -285,6 +285,36 @@ tolerate more parallelism (`--array=1-8` or higher). See the script's own
 header comment for the full reasoning, and watch the per-array-task logs
 for repeated 429/rate-limit errors if you scale up.
 
+## Speeding up extraction: parallel array vs. sequential rounds
+
+`run_extraction_parallel.sbatch` (each array task gets its own GPU/vLLM
+server, claiming EXTRACT_TEXT_FACTS tasks from the same shared database)
+gives a real N-way speedup -- **if** your cluster's shared filesystem
+supports SQLite file locking correctly across different compute nodes.
+Real gap found live on this cluster: a `--array=1-5` submission failed on
+every array task with `sqlite3.OperationalError: locking protocol` on a
+plain read, not even a write -- confirmed this is a Lustre/`scratch`-mount
+limitation (some mounts scope file locks to one node only), not a bug in
+the task-claim logic, which is correct regardless of journal mode (see
+`database/session.py`'s WAL-fallback comment). A single job never hits
+this, since only one process ever touches the database.
+
+**If you hit this**, use `submit_extraction_sequential.sh` instead: it
+submits `run_extraction_parallel.sbatch` as a chain of single (non-array)
+jobs via `--dependency=afterany`, so they never overlap in time and there
+is no cross-node locking to fail:
+
+```bash
+./cluster/submit_extraction_sequential.sh 10 --account=191001-364393 --export=ALL,LLM_BACKEND=vllm
+```
+
+This processes the backlog at the same per-job rate as before (no N-way
+speedup), but reliably. Revisit true array parallelism if you confirm
+with your cluster's HPC support that a different shared filesystem (or a
+different Lustre mount option) supports real cross-node POSIX locks, or
+if the database ever moves to PostgreSQL (a real client-server database
+with no filesystem-locking dependency at all).
+
 ## Closed-access papers (local PDFs)
 
 A paper with no PMCID at all (never deposited in Europe PMC/PubMed, even

@@ -36,6 +36,17 @@
 #   sbatch --account=<acct> --array=1-5 cluster/run_extraction_parallel.sbatch
 #   sbatch --account=<acct> --array=1-10 --export=ALL,EXTRACT_MAX_TASKS=300 cluster/run_extraction_parallel.sbatch
 #
+# If your cluster's shared filesystem can't coordinate SQLite locks
+# across different compute nodes (confirmed live on a real Lustre/scratch
+# mount -- every array task failed on a plain read with "OperationalError:
+# locking protocol", not a write, meaning WAL mode wasn't the issue), a
+# concurrent array is unsafe there regardless of --array size. Use
+# submit_extraction_sequential.sh instead -- same script, submitted as a
+# chain of single (non-array) jobs that never overlap in time:
+#   ./cluster/submit_extraction_sequential.sh 10 --account=<acct>
+# See cluster/README.md's "Speeding up extraction" section for the full
+# story.
+#
 # If the backlog isn't fully drained after one round (check with
 # `fair-ocean status` or the per-array-task logs), just resubmit the same
 # command -- enqueue-text-extraction-backfill is idempotent and
