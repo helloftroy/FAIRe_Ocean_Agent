@@ -346,6 +346,33 @@ filesystem (or a different Lustre mount option) supports real cross-node
 POSIX locks, or if the database ever moves to PostgreSQL (a real
 client-server database with no filesystem-locking dependency at all).
 
+**Locking errors from a single, solitary process.** Confirmed live: this
+same `locking protocol` error can also surface from a lone process with no
+concurrent access at all (e.g. `shard_extraction_prep.py` run directly on a
+login node), and can persist across every attempt of a multi-second retry
+window rather than clearing on its own -- inconsistent with ordinary
+transient contention, which should let at least one retry through. Every
+`cluster/*.sbatch` script now sets `FAIR_OCEAN_SKIP_SQLITE_WAL=1` by
+default, which skips the `PRAGMA journal_mode=WAL` attempt entirely instead
+of trying it and catching the failure (a failed attempt may itself leave
+stray `-wal`/`-shm` files next to the database on this filesystem, which
+could then confuse later connections regardless of waiting). If you're
+running a script like `shard_extraction_prep.py` or
+`merge_extraction_shards.py` directly from a login node shell rather than
+via `sbatch`, set it there too:
+
+```bash
+export FAIR_OCEAN_SKIP_SQLITE_WAL=1
+python scripts/shard_extraction_prep.py --shards 5
+```
+
+If locking errors persist even with this set, check `squeue -u $USER` for
+another job still actively writing to `data/fair_ocean.db` at the same
+time, and check `ls -la data/fair_ocean.db*` for a leftover
+`data/fair_ocean.db-wal` or `-shm` file from an earlier failed attempt --
+safe to delete only once you've confirmed nothing is actively using the
+database.
+
 ## Closed-access papers (local PDFs)
 
 A paper with no PMCID at all (never deposited in Europe PMC/PubMed, even

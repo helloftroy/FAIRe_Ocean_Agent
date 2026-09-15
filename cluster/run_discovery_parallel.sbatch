@@ -69,6 +69,7 @@ set -euo pipefail
 cd "${SLURM_SUBMIT_DIR}"
 mkdir -p logs
 export PYTHONUNBUFFERED=1
+export FAIR_OCEAN_SKIP_SQLITE_WAL=1  # this cluster's Lustre mount cannot do WAL locking -- skip the attempt outright, see database/session.py
 
 if [ ! -f cluster/env_activate.sh ]; then
   echo "cluster/env_activate.sh is missing -- run ./cluster/setup_env.sh first." >&2

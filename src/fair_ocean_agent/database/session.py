@@ -2,6 +2,7 @@
 importing this module never touches the filesystem or network."""
 from __future__ import annotations
 
+import os
 import shutil
 import sqlite3
 from contextlib import contextmanager
@@ -37,6 +38,22 @@ _wal_mode_unavailable_warned = False
 # collision retry instead of failing outright.
 _SQLITE_BUSY_TIMEOUT_MS = 30_000
 
+# A real cluster's Lustre-backed scratch mount doesn't just fail to support
+# WAL mode -- confirmed live that even the FIRST plain SELECT immediately
+# after a failed `PRAGMA journal_mode=WAL` attempt can then raise the same
+# "locking protocol" error itself, from a single solitary process, with no
+# genuine concurrent access at all (see scripts/_extraction_sharding.py's
+# with_lock_retry, added for this and confirmed insufficient on its own: 5
+# retries across ~30s still failed every single time -- inconsistent with
+# transient contention from another process, which should let at least one
+# attempt through). One real candidate: the failed WAL attempt itself may
+# leave a stray -wal/-shm file next to the database on this filesystem
+# before it errors out, and that leftover then confuses every later
+# connection. There's no reason to keep re-attempting WAL on a filesystem
+# already known not to support it, so this lets it be skipped outright
+# instead of tried-then-caught -- set on clusters where WAL is known broken.
+_SKIP_WAL_ENV_VAR = "FAIR_OCEAN_SKIP_SQLITE_WAL"
+
 
 def get_engine() -> Engine:
     global _engine
@@ -55,6 +72,18 @@ def get_engine() -> Engine:
 
 def _apply_sqlite_pragmas(cursor) -> None:  # noqa: ANN001
     global _wal_mode_unavailable_warned
+    if os.environ.get(_SKIP_WAL_ENV_VAR):
+        if not _wal_mode_unavailable_warned:
+            logger.warning(
+                "%s is set -- skipping the PRAGMA journal_mode=WAL attempt "
+                "entirely and using the default rollback journal. "
+                "Concurrent task claiming stays correct; only write "
+                "throughput under heavy contention is reduced.",
+                _SKIP_WAL_ENV_VAR,
+            )
+            _wal_mode_unavailable_warned = True
+        cursor.execute(f"PRAGMA busy_timeout={_SQLITE_BUSY_TIMEOUT_MS}")
+        return
     try:
         cursor.execute("PRAGMA journal_mode=WAL")
     except sqlite3.OperationalError:

@@ -32,6 +32,7 @@ mkdir -p logs
 # entire runtime with nothing ever reaching the .out file, looking
 # exactly like a silently-stuck job even though it's working fine.
 export PYTHONUNBUFFERED=1
+export FAIR_OCEAN_SKIP_SQLITE_WAL=1  # this cluster's Lustre mount cannot do WAL locking -- skip the attempt outright, see database/session.py
 
 if [ ! -f cluster/env_activate.sh ]; then
   echo "cluster/env_activate.sh is missing -- run ./cluster/setup_env.sh first." >&2

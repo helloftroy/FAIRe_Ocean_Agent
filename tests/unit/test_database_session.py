@@ -85,3 +85,27 @@ def test_apply_sqlite_pragmas_only_warns_once_per_process(monkeypatch, caplog):
     wal_warnings = [r for r in caplog.records if "WAL mode is not supported" in r.message]
     assert len(wal_warnings) == 1
     assert session_module._wal_mode_unavailable_warned is True
+
+
+def test_apply_sqlite_pragmas_skips_wal_attempt_entirely_when_env_var_is_set(monkeypatch):
+    """Real gap found live: even a lone process with no concurrent access at
+    all hit "locking protocol" on the very next query after a failed WAL
+    attempt, and a 5-attempt/~30s retry did not resolve it -- one candidate
+    is that the failed PRAGMA journal_mode=WAL attempt itself leaves stray
+    -wal/-shm files behind on this filesystem before it errors out. There's
+    no reason to keep re-attempting WAL on a filesystem already known not to
+    support it, so FAIR_OCEAN_SKIP_SQLITE_WAL lets it be skipped outright --
+    the PRAGMA must never even be sent."""
+    monkeypatch.setattr(session_module, "_wal_mode_unavailable_warned", False)
+    monkeypatch.setenv("FAIR_OCEAN_SKIP_SQLITE_WAL", "1")
+    cursor = _FakeCursor(raise_for="PRAGMA journal_mode=WAL")  # would raise if ever attempted
+    _apply_sqlite_pragmas(cursor)
+    assert cursor.executed == ["PRAGMA busy_timeout=30000"]
+
+
+def test_apply_sqlite_pragmas_attempts_wal_normally_when_env_var_is_unset(monkeypatch):
+    monkeypatch.setattr(session_module, "_wal_mode_unavailable_warned", False)
+    monkeypatch.delenv("FAIR_OCEAN_SKIP_SQLITE_WAL", raising=False)
+    cursor = _FakeCursor()
+    _apply_sqlite_pragmas(cursor)
+    assert cursor.executed == ["PRAGMA journal_mode=WAL", "PRAGMA busy_timeout=30000"]
