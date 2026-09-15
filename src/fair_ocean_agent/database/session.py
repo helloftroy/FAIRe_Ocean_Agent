@@ -3,6 +3,7 @@ importing this module never touches the filesystem or network."""
 from __future__ import annotations
 
 import shutil
+import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,9 +14,13 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from fair_ocean_agent.config import REPO_ROOT, load_config
+from fair_ocean_agent.logging_setup import get_logger
+
+logger = get_logger(__name__)
 
 _engine: Engine | None = None
 _SessionFactory: sessionmaker | None = None
+_wal_mode_unavailable_warned = False
 
 # Per an explicit user request to run several parallel GPU jobs against the
 # SAME sqlite:// database (splitting a large EXTRACT_TEXT_FACTS backlog
@@ -48,12 +53,42 @@ def get_engine() -> Engine:
     return _engine
 
 
+def _apply_sqlite_pragmas(cursor) -> None:  # noqa: ANN001
+    global _wal_mode_unavailable_warned
+    try:
+        cursor.execute("PRAGMA journal_mode=WAL")
+    except sqlite3.OperationalError:
+        # Real gap found live (a real SLURM job array on a Lustre-backed
+        # cluster scratch mount): WAL mode needs POSIX shared-memory-
+        # mapped file locking that many HPC/parallel filesystems (Lustre,
+        # GPFS, some NFS configurations) don't support correctly -- every
+        # single array task failed at its very first connection with
+        # "OperationalError: locking protocol". The actual correctness fix
+        # for concurrent task claims (see workflow/task_queue.py's own
+        # atomic UPDATE...RETURNING comment) does not depend on WAL at
+        # all -- it's correct under any journal mode -- so falling back to
+        # SQLite's default rollback journal here only costs some write
+        # concurrency (writers briefly block each other instead of
+        # coexisting with readers), never correctness. busy_timeout below
+        # still applies regardless, so a transient collision retries
+        # instead of failing outright either way.
+        if not _wal_mode_unavailable_warned:
+            logger.warning(
+                "SQLite WAL mode is not supported on this filesystem "
+                "(common on network/parallel filesystems such as NFS/"
+                "Lustre/GPFS) -- falling back to the default rollback "
+                "journal mode. Concurrent task claiming stays correct; "
+                "only write throughput under heavy contention is reduced."
+            )
+            _wal_mode_unavailable_warned = True
+    cursor.execute(f"PRAGMA busy_timeout={_SQLITE_BUSY_TIMEOUT_MS}")
+
+
 def _register_sqlite_pragmas(engine: Engine) -> None:
     @event.listens_for(engine, "connect")
     def _set_sqlite_pragmas(dbapi_connection, connection_record) -> None:  # noqa: ANN001
         cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute(f"PRAGMA busy_timeout={_SQLITE_BUSY_TIMEOUT_MS}")
+        _apply_sqlite_pragmas(cursor)
         cursor.close()
 
 
