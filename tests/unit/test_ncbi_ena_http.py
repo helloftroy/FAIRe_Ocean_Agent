@@ -520,6 +520,59 @@ def test_ena_fetch_record_marks_inaccessible_fastq(retrieval_config):
     adapter.close()
 
 
+def test_ena_fetch_record_caps_fastq_accessibility_checks_and_marks_the_rest_not_checked(retrieval_config):
+    """Real gap found live: url_accessible is an uncached, live HTTP HEAD
+    request per fastq file -- checking every run of a large study (up to
+    MAX_RUNS_PER_STUDY=500) made a single fetch_record call dominate a
+    whole discovery run's wall-clock time. A real ENA study's runs are
+    hosted together and consistently either all reachable or all not, so
+    a bounded sample (MAX_FASTQ_ACCESSIBILITY_CHECKS_PER_STUDY=10) is
+    enough; the rest get "not_checked", never a guessed "not_accessible"."""
+    head_calls = {"count": 0}
+    run_count = 15
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "HEAD" and request.url.host == "ftp.sra.ebi.ac.uk":
+            head_calls["count"] += 1
+            return httpx.Response(200)
+        params = dict(request.url.params)
+        if params.get("result") == "study":
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "study_accession": "PRJNA1425045", "secondary_study_accession": "SRP677779",
+                        "study_title": "t", "study_description": "d", "center_name": "c", "first_public": "2026-02-19",
+                    }
+                ],
+            )
+        if params.get("result") == "read_run":
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "run_accession": f"SRR{i}", "sample_accession": f"SAMN{i}",
+                        "fastq_ftp": f"ftp.sra.ebi.ac.uk/vol1/fastq/SRR{i:03d}/SRR{i}.fastq.gz",
+                    }
+                    for i in range(run_count)
+                ],
+            )
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    adapter = EnaAdapter(
+        SourceConfig(name="ena", enabled=True, base_url="https://www.ebi.ac.uk/ena/portal/api", rate_limit_per_second=1000),
+        retrieval_config,
+        transport=httpx.MockTransport(handler),
+    )
+    record = adapter.fetch_record("PRJNA1425045")
+
+    statuses = [run["fastq_access_status"] for run in record.raw["runs"]]
+    assert statuses[:10] == ["accessible"] * 10
+    assert statuses[10:] == ["not_checked"] * 5
+    assert head_calls["count"] == 10  # never checked past the cap
+    adapter.close()
+
+
 def test_ena_fetch_record_not_found_when_study_search_empty(retrieval_config):
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=[])

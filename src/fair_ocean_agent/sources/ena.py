@@ -49,6 +49,23 @@ RESOLUTION_FIELDS = (
 # task against very large run collections; truncation is logged, not silent.
 MAX_RUNS_PER_STUDY = 500
 
+# Real gap found live: url_accessible() is a live, uncached HTTP HEAD
+# request per fastq file (unlike the study/run listing calls just above,
+# which go through get_json's own on-disk cache) -- checking every one of
+# up to MAX_RUNS_PER_STUDY runs' fastq files made this single fetch_record
+# call dominate a whole discovery run's wall-clock time, confirmed live
+# from real per-run log lines showing this was effectively the only thing
+# a discovery job was doing. A real ENA study's runs are hosted together
+# and consistently either all reachable or all not (embargo/withdrawal
+# affects a whole study's deposit, not one run in isolation), so checking
+# a bounded sample is enough to answer "is this study's sequence data
+# actually accessible" without exhaustively verifying every single run.
+# Runs beyond the cap get "not_checked", not "not_accessible" -- and
+# mapping/faire.py's own libLayout derivation already treats anything
+# other than a confirmed "accessible" status as untrustworthy for that
+# purpose, so this introduces no new ambiguity there.
+MAX_FASTQ_ACCESSIBILITY_CHECKS_PER_STUDY = 10
+
 
 def _split_fastq_urls(fastq_ftp: str | None) -> list[str]:
     if not fastq_ftp:
@@ -105,15 +122,20 @@ class EnaAdapter(SourceAdapter):
                 identifier, MAX_RUNS_PER_STUDY, MAX_RUNS_PER_STUDY,
             )
         run_rows = run_rows[:MAX_RUNS_PER_STUDY]
+        checks_done = 0
         for run in run_rows:
             fastq_urls = _split_fastq_urls(run.get("fastq_ftp"))
             if not fastq_urls:
                 run["fastq_access_status"] = "no_fastq_url"
                 continue
+            if checks_done >= MAX_FASTQ_ACCESSIBILITY_CHECKS_PER_STUDY:
+                run["fastq_access_status"] = "not_checked"
+                continue
             checked_urls = [_fastq_check_url(url) for url in fastq_urls]
             accessible = [self.http.url_accessible(url) for url in checked_urls]
             run["fastq_access_status"] = "accessible" if all(accessible) else "not_accessible"
             run["fastq_access_checked_urls"] = ";".join(checked_urls)
+            checks_done += 1
 
         raw = {"study": study, "runs": run_rows, "truncated": truncated, "total_runs_seen": total_runs}
 

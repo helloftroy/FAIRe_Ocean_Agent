@@ -920,7 +920,31 @@ def _resolve_repository_sources(
 
     ena_adapter = adapters.get("ena")
     ena_query_identifier = bioproject_accession or ena_accession
-    if ena_adapter is not None and ena_query_identifier is not None:
+    # Real gap found live: unlike ncbi_bioproject/ncbi_biosample (backed
+    # entirely by RateLimitedClient's own on-disk-cached get_json/get_text
+    # calls, so a repeat fetch_record is already cheap), EnaAdapter's own
+    # per-run fastq accessibility check (url_accessible, see sources/ena.py)
+    # is a live, uncached HTTP HEAD request every single time -- re-running
+    # DISCOVER_IDENTIFIERS for an already-discovered study (e.g. via
+    # "rediscover") repeated this expensive check from scratch, confirmed
+    # live to dominate a whole discovery run's wall-clock time. Once this
+    # study's own ena Source row already exists, its BIOSAMPLE_ACCESSION
+    # identifiers (what the ncbi_biosample fallback below actually needs
+    # from this block) are already durably persisted from that earlier
+    # run, so skipping the re-fetch entirely loses nothing -- same
+    # early-exit shape as _discover_publication_metadata_from_sources's
+    # own "already_recorded" guard.
+    ena_already_recorded = (
+        ena_adapter is not None
+        and ena_query_identifier is not None
+        and session.query(Source.source_id)
+        .filter_by(study_id=study.study_id, source_name=ena_adapter.name, external_identifier=ena_query_identifier)
+        .first()
+        is not None
+    )
+    if ena_already_recorded:
+        logger.info("ena record for %s already discovered for study %s -- skipping re-fetch", ena_query_identifier, study.study_id)
+    if ena_adapter is not None and ena_query_identifier is not None and not ena_already_recorded:
         try:
             record = ena_adapter.fetch_record(ena_query_identifier)
         except SourceRecordNotFoundError:

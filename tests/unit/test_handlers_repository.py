@@ -377,6 +377,40 @@ def test_repository_resolution_is_idempotent_on_retry(db_session, monkeypatch):
     assert db_session.query(RawFact).filter_by(study_id=study.study_id).count() == 1
 
 
+def test_ena_already_discovered_skips_refetch_on_a_later_pass(db_session, monkeypatch):
+    """Real gap found live: unlike ncbi_bioproject/ncbi_biosample (already
+    cheap to re-fetch, backed entirely by cached get_json/get_text calls),
+    EnaAdapter.fetch_record's own per-run fastq accessibility check is a
+    live, uncached HTTP HEAD request every time -- re-running
+    DISCOVER_IDENTIFIERS for an already-discovered study (e.g. via
+    "rediscover") repeated this expensive work from scratch. Once this
+    study's own ena Source row already exists, its BIOSAMPLE_ACCESSION
+    identifiers are already durably persisted, so a later pass must skip
+    the re-fetch entirely rather than just re-deriving the same facts."""
+    study = _seeded_study(db_session, bioproject_accession="PRJNA1425045")
+    task = _task_for(db_session, study)
+
+    fetch_calls: list[str] = []
+    ena_adapter = FakeAdapter("ena", record=_make_record("ena"))
+    real_fetch_record = ena_adapter.fetch_record
+
+    def counting_fetch_record(identifier):
+        fetch_calls.append(identifier)
+        return real_fetch_record(identifier)
+
+    ena_adapter.fetch_record = counting_fetch_record
+    monkeypatch.setattr(handlers, "_build_enabled_adapters", lambda: {"ena": ena_adapter})
+
+    handlers.handle_discover_identifiers(db_session, task)
+    db_session.commit()
+    assert len(fetch_calls) == 1
+
+    handlers.handle_discover_identifiers(db_session, task)  # simulated rediscovery pass
+    db_session.commit()
+    assert len(fetch_calls) == 1  # not re-fetched -- already recorded
+    assert db_session.query(Source).filter_by(study_id=study.study_id, source_name="ena").count() == 1
+
+
 def test_ena_aliases_with_same_content_hash_do_not_duplicate_facts(db_session, monkeypatch):
     study = _seeded_study(db_session, bioproject_accession="PRJNA1425045")
     db_session.add(
