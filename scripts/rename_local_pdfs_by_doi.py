@@ -137,6 +137,25 @@ def _normalize_filename_for_matching(name: str) -> str:
     return _NON_ALNUM_SPACE_RE.sub(" ", without_marks.lower()).strip()
 
 
+# Paperpile's own "Attachments" column joins multiple real attachments with
+# a bare ";" immediately followed by the next path's own leading folder
+# (e.g. "...pdf;All Papers/L/Liu et al. 2024 - ...pdf") -- confirmed live
+# against this project's own real export. Real gap found live: a naive
+# `.split(";")` also breaks apart a SINGLE attachment whose own paper title
+# happens to contain a literal semicolon (e.g. "...nom. rev.; Agrobacterium
+# gelatinovorum sp. no[...].pdf" -- a real, valid microbiology species-name
+# title), silently losing the real match entirely since neither resulting
+# fragment is a complete filename. A semicolon inside a title is always
+# followed by a space (prose punctuation); a semicolon joining two real
+# attachments never is (immediately followed by the next path) -- this
+# only splits on the latter shape.
+_ATTACHMENT_SEPARATOR_RE = re.compile(r";(?=All Papers/)")
+
+
+def _split_attachment_paths(attachments: str) -> list[str]:
+    return _ATTACHMENT_SEPARATOR_RE.split(attachments)
+
+
 def load_csv_doi_lookup(csv_path: Path) -> dict[str, str]:
     """Paperpile's own "Export as CSV" reference list: the "Attachments"
     column names the exact file(s) that row's "DOI" belongs to (Paperpile's
@@ -156,7 +175,7 @@ def load_csv_doi_lookup(csv_path: Path) -> dict[str, str]:
                 normalized_doi = normalize_doi(doi)
             except IdentifierError:
                 continue
-            for attachment in attachments.split(";"):
+            for attachment in _split_attachment_paths(attachments):
                 basename = Path(attachment.strip()).name
                 if not basename:
                     continue
