@@ -9,9 +9,16 @@
 # worker-only (its own docstring admitted this) -- two concurrent
 # processes could both claim the same task, confirmed live producing 416
 # duplicate claims out of 500 under real 8-process contention. Fixed with
-# a single atomic UPDATE ... RETURNING claim, combined with WAL mode +
-# a real busy_timeout (database/session.py). Do not run this against a
-# checkout that predates that fix.
+# a single atomic UPDATE ... RETURNING claim, combined with a real
+# busy_timeout (database/session.py) so a transient write collision
+# retries instead of failing outright. Do not run this against a
+# checkout that predates that fix. database/session.py also tries to
+# enable WAL mode for better write throughput under contention, but
+# degrades gracefully (a one-time warning, not a crash) on filesystems
+# that don't support it (confirmed live: a real Lustre-backed cluster
+# scratch mount rejects WAL entirely) -- the atomic claim + busy_timeout
+# above stay correct either way, so this is safe on such a filesystem too,
+# just with somewhat less write concurrency under heavy contention.
 #
 # Each array task runs ONLY EXTRACT_TEXT_FACTS, bounded by
 # EXTRACT_MAX_TASKS (default 300; at ~9 min/paper that's ~45h, leaving

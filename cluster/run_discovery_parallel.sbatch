@@ -5,9 +5,12 @@
 # run_extraction_parallel.sbatch is: workflow/task_queue.py's SQLite
 # claim_next_task used to be single-worker-only (confirmed live producing
 # 416 duplicate claims out of 500 under real 8-process contention) --
-# fixed with a single atomic UPDATE ... RETURNING claim plus WAL mode and
-# a real busy_timeout. Do not run this against a checkout that predates
-# that fix.
+# fixed with a single atomic UPDATE ... RETURNING claim plus a real
+# busy_timeout. Do not run this against a checkout that predates that
+# fix. database/session.py also tries to enable WAL mode for better write
+# throughput, but degrades gracefully on filesystems that reject it
+# (confirmed live: a real Lustre-backed cluster scratch mount) -- the
+# atomic claim + busy_timeout above stay correct either way.
 #
 # Discovery has THREE sequential stages -- identifiers, then supplement
 # discovery, then supplement retrieval -- each depending on the previous
