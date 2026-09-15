@@ -51,7 +51,7 @@ import shutil
 import sqlite3
 from pathlib import Path
 
-from _extraction_sharding import DEFAULT_MANIFEST_PATH, ShardManifest
+from _extraction_sharding import DEFAULT_MANIFEST_PATH, ShardManifest, with_lock_retry
 
 from fair_ocean_agent.database.session import session_scope
 from fair_ocean_agent.mapping.faire import map_study_to_faire
@@ -173,20 +173,30 @@ def merge_shard(conn: sqlite3.Connection, shard_db_path: str, task_ids: list[str
         conn.execute("DETACH DATABASE shard")
 
 
+def _remap_touched_studies(study_ids: list[str]) -> None:
+    with session_scope() as session:
+        for study_id in study_ids:
+            map_study_to_faire(session, study_id)
+
+
 def merge_all_shards(manifest: ShardManifest) -> None:
+    # Every real DB touch below goes through with_lock_retry -- see
+    # _extraction_sharding.py's own comment: this cluster's Lustre-backed
+    # scratch mount can raise a transient "locking protocol" error even
+    # from a single, solitary process, almost certainly because some
+    # OTHER process is concurrently touching the same shared database
+    # file right now.
     conn = sqlite3.connect(manifest.main_db_path)
     try:
         for shard in manifest.shards:
             print(f"merging shard {shard.shard_index} ({shard.db_path}, {len(shard.task_ids)} task(s))...")
-            merge_shard(conn, shard.db_path, shard.task_ids)
+            with_lock_retry(merge_shard, conn, shard.db_path, shard.task_ids)
     finally:
         conn.close()
 
     study_ids = manifest.all_study_ids()
     print(f"re-mapping {len(study_ids)} touched stud(y/ies) with full cross-shard visibility...")
-    with session_scope() as session:
-        for study_id in study_ids:
-            map_study_to_faire(session, study_id)
+    with_lock_retry(_remap_touched_studies, study_ids)
 
 
 def _archive_shards(manifest: ShardManifest, shard_dir: Path) -> None:

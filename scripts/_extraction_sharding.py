@@ -11,13 +11,70 @@ operations stay easy to read top-to-bottom in one place.
 from __future__ import annotations
 
 import json
+import sqlite3
+import sys
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import Callable, TypeVar
+
+from sqlalchemy.exc import OperationalError as _SQLAlchemyOperationalError
 
 from fair_ocean_agent.config import REPO_ROOT
 from fair_ocean_agent.database.session import _resolve_sqlite_url
 
 DEFAULT_MANIFEST_PATH = REPO_ROOT / "data" / "shard_dbs" / "manifest.json"
+
+_T = TypeVar("_T")
+
+# Real gap found live: even a lone process on a login node (no concurrent
+# array tasks at all) hit "sqlite3.OperationalError: locking protocol" on
+# a plain SELECT, on the same Lustre-backed cluster scratch mount that
+# made run_extraction_parallel.sbatch's shared-file array mode unusable
+# for the same underlying reason (see database/session.py's WAL-fallback
+# comment). Since nothing about THIS process was itself concurrent, this
+# is almost certainly a still-running discovery/extraction job on some
+# OTHER node concurrently touching the same shared database file --
+# genuinely transient, timing-dependent contention, not a permanent
+# failure. "locking protocol" is SQLite's own message for
+# SQLITE_IOERR_LOCK, a lower-level fcntl() failure from the filesystem
+# itself -- distinct from SQLITE_BUSY, which PRAGMA busy_timeout
+# (database/session.py) already retries automatically on its own, so this
+# needs its own explicit retry.
+_LOCK_RETRY_ATTEMPTS = 5
+_LOCK_RETRY_BASE_DELAY_SECONDS = 3.0
+
+
+def _is_transient_locking_protocol_error(exc: BaseException) -> bool:
+    return "locking protocol" in str(exc)
+
+
+def with_lock_retry(fn: Callable[..., _T], *args, attempts: int = _LOCK_RETRY_ATTEMPTS, **kwargs) -> _T:
+    """Retries `fn(*args, **kwargs)` with a short linear backoff when it
+    fails with SQLite's own "locking protocol" error -- see this module's
+    own comment above for why. Any other exception (including a genuine
+    SQLITE_BUSY that somehow outlasts busy_timeout) is never retried here,
+    just re-raised immediately."""
+    last_exc: BaseException | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return fn(*args, **kwargs)
+        except (sqlite3.OperationalError, _SQLAlchemyOperationalError) as exc:
+            if not _is_transient_locking_protocol_error(exc):
+                raise
+            last_exc = exc
+            if attempt == attempts:
+                break
+            delay = _LOCK_RETRY_BASE_DELAY_SECONDS * attempt
+            print(
+                f"transient SQLite locking-protocol error (attempt {attempt}/{attempts}), "
+                f"retrying in {delay:.0f}s -- likely another process touching the same "
+                f"database file right now: {exc}",
+                file=sys.stderr,
+            )
+            time.sleep(delay)
+    assert last_exc is not None
+    raise last_exc
 
 
 @dataclass

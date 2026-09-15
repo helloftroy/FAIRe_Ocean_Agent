@@ -31,7 +31,13 @@ from pathlib import Path
 
 from sqlalchemy import select
 
-from _extraction_sharding import DEFAULT_MANIFEST_PATH, ShardManifest, ShardManifestEntry, sqlite_path_for_url
+from _extraction_sharding import (
+    DEFAULT_MANIFEST_PATH,
+    ShardManifest,
+    ShardManifestEntry,
+    sqlite_path_for_url,
+    with_lock_retry,
+)
 
 from fair_ocean_agent.config import REPO_ROOT, load_config
 from fair_ocean_agent.database.enums import TaskStatus, TaskType
@@ -97,11 +103,23 @@ def _filter_shard_to_its_own_tasks(shard_path: Path, keep_task_ids: set[str]) ->
         conn.close()
 
 
-def build_shards(shard_count: int, shard_dir: Path) -> ShardManifest:
+def _enqueue_backlog() -> None:
     with session_scope() as session:
         enqueue_text_extraction_backfill(session)
 
-    tasks = _pending_extract_text_facts_tasks()
+
+def build_shards(shard_count: int, shard_dir: Path) -> ShardManifest:
+    # Every real DB touch below goes through with_lock_retry -- see
+    # _extraction_sharding.py's own comment: this cluster's Lustre-backed
+    # scratch mount can raise a transient "locking protocol" error even
+    # from a single, solitary process (confirmed live from a login node,
+    # no concurrent array tasks at all), almost certainly because some
+    # OTHER process (a still-running discovery/extraction job on a
+    # compute node) is concurrently touching the same shared database
+    # file right now.
+    with_lock_retry(_enqueue_backlog)
+
+    tasks = with_lock_retry(_pending_extract_text_facts_tasks)
     if not tasks:
         raise SystemExit("No pending EXTRACT_TEXT_FACTS tasks found -- nothing to shard.")
 
@@ -114,9 +132,9 @@ def build_shards(shard_count: int, shard_dir: Path) -> ShardManifest:
     manifest = ShardManifest(main_db_path=str(main_path))
     for shard_index, shard_tasks in enumerate(partitioned, start=1):
         shard_path = shard_dir / f"shard_{shard_index}.db"
-        _snapshot_via_backup_api(main_path, shard_path)
+        with_lock_retry(_snapshot_via_backup_api, main_path, shard_path)
         task_ids = {task_id for task_id, _ in shard_tasks}
-        _filter_shard_to_its_own_tasks(shard_path, task_ids)
+        with_lock_retry(_filter_shard_to_its_own_tasks, shard_path, task_ids)
         study_ids = sorted({study_id for _, study_id in shard_tasks if study_id is not None})
         manifest.shards.append(
             ShardManifestEntry(
