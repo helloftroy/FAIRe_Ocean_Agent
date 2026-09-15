@@ -285,7 +285,7 @@ tolerate more parallelism (`--array=1-8` or higher). See the script's own
 header comment for the full reasoning, and watch the per-array-task logs
 for repeated 429/rate-limit errors if you scale up.
 
-## Speeding up extraction: parallel array vs. sequential rounds
+## Speeding up extraction: three ways to parallelize
 
 `run_extraction_parallel.sbatch` (each array task gets its own GPU/vLLM
 server, claiming EXTRACT_TEXT_FACTS tasks from the same shared database)
@@ -299,7 +299,35 @@ the task-claim logic, which is correct regardless of journal mode (see
 `database/session.py`'s WAL-fallback comment). A single job never hits
 this, since only one process ever touches the database.
 
-**If you hit this**, use `submit_extraction_sequential.sh` instead: it
+**If you hit this, prefer `run_extraction_sharded.sbatch`** -- genuinely
+parallel, but each array task works against its own ISOLATED local copy of
+the database instead of the shared file, so there's no cross-node locking
+to fail at all during the entire (slow) LLM phase. Three steps, run in
+order:
+
+```bash
+python scripts/shard_extraction_prep.py --shards 5
+sbatch --account=191001-364393 --array=1-5 --export=ALL,LLM_BACKEND=vllm cluster/run_extraction_sharded.sbatch
+# wait for every array task to finish, then:
+python scripts/merge_extraction_shards.py
+```
+
+`shard_extraction_prep.py` (single process, touches the shared DB once)
+enqueues the backlog, splits it into N independent SQLite snapshots
+(`data/shard_dbs/shard_<i>.db`, one per array task, via SQLite's own
+backup API -- safe regardless of journal mode), and writes a manifest each
+array task reads to find its own shard. `merge_extraction_shards.py`
+(single process, run once after every array task finishes) stitches each
+shard's new/changed rows back into the shared database, reconciling the
+one real edge case this design can produce -- two shards independently
+creating a duplicate `Entity` row for the same shared BioSample/run
+accession collapse to one, with every reference correctly redirected, not
+left dangling -- and finishes by re-running FAIRe mapping for every
+touched study so derived fields see full cross-shard data. Size `--shards`
+so each shard's slice fits inside the 48h time limit (~9 min/paper).
+
+**Fallback: `submit_extraction_sequential.sh`.** If you'd rather not run
+the shard/merge scripts (e.g. verifying the simpler path first), this
 submits `run_extraction_parallel.sbatch` as a chain of single (non-array)
 jobs via `--dependency=afterany`, so they never overlap in time and there
 is no cross-node locking to fail:
@@ -309,11 +337,14 @@ is no cross-node locking to fail:
 ```
 
 This processes the backlog at the same per-job rate as before (no N-way
-speedup), but reliably. Revisit true array parallelism if you confirm
-with your cluster's HPC support that a different shared filesystem (or a
-different Lustre mount option) supports real cross-node POSIX locks, or
-if the database ever moves to PostgreSQL (a real client-server database
-with no filesystem-locking dependency at all).
+speedup), but reliably -- the simplest option when you don't need the
+speed, or want a known-good baseline to diff a sharded run against.
+
+Revisit `run_extraction_parallel.sbatch`'s shared-file mode directly if
+you confirm with your cluster's HPC support that a different shared
+filesystem (or a different Lustre mount option) supports real cross-node
+POSIX locks, or if the database ever moves to PostgreSQL (a real
+client-server database with no filesystem-locking dependency at all).
 
 ## Closed-access papers (local PDFs)
 
