@@ -14,7 +14,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
-from merge_extraction_shards import merge_all_shards, merge_shard  # noqa: E402
+from merge_extraction_shards import _release_stale_claims_in_shard, merge_all_shards, merge_shard  # noqa: E402
 from shard_extraction_prep import _partition  # noqa: E402
 from _extraction_sharding import ShardManifest, ShardManifestEntry  # noqa: E402
 
@@ -180,6 +180,106 @@ def test_task_lifecycle_columns_are_synced_for_this_shards_own_tasks(tmp_path, m
     merged_task = verify_session.get(Task, task_id)
     assert merged_task.status == TaskStatus.COMPLETED.value
     assert merged_task.attempt_count == 1
+    verify_session.close()
+    verify_engine.dispose()
+
+
+def test_release_stale_claims_in_shard_resets_a_claim_orphaned_by_a_killed_array_task(tmp_path, main_path):
+    """Real gap found live: a shard's own array task got SIGTERM'd (a real
+    ~42h SLURM job cancellation, well under the 48h time limit) while
+    actively processing a task -- leaving it stuck 'claimed' in that
+    shard's own isolated database. Nothing else would ever reclaim it, so
+    merge_all_shards must release it back to retry_pending itself before
+    copying that shard's task state into the shared main database."""
+    study = _seed_main_with_one_study(main_path)
+    engine = _file_db(main_path)
+    session = _session_for(engine)
+    task = Task(
+        task_type=TaskType.EXTRACT_TEXT_FACTS.value, study_id=study.study_id,
+        status=TaskStatus.PENDING.value, idempotency_key=f"EXTRACT_TEXT_FACTS:{study.study_id}",
+    )
+    session.add(task)
+    session.commit()
+    task_id = task.task_id
+    session.close()
+    engine.dispose()
+
+    shard_path = tmp_path / "shard_1.db"
+    _copy_schema_and_rows_from(main_path, shard_path)
+    shard_engine = _file_db(shard_path)
+    shard_session = _session_for(shard_engine)
+    shard_task = shard_session.get(Task, task_id)
+    shard_task.status = TaskStatus.CLAIMED.value
+    shard_task.claimed_by = "worker-on-a-now-dead-node"
+    shard_task.claimed_at = shard_task.created_at
+    shard_task.attempt_count = 1
+    shard_session.commit()
+    shard_session.close()
+    shard_engine.dispose()
+
+    released = _release_stale_claims_in_shard(str(shard_path))
+    assert released == 1
+
+    verify_engine = _file_db(shard_path)
+    verify_session = _session_for(verify_engine)
+    released_task = verify_session.get(Task, task_id)
+    assert released_task.status == TaskStatus.RETRY_PENDING.value
+    verify_session.close()
+    verify_engine.dispose()
+
+
+def test_merge_all_shards_does_not_propagate_an_orphaned_claim_into_main(tmp_path, main_path, monkeypatch):
+    """End-to-end via the manifest-driven entry point: a task a killed array
+    task left stuck 'claimed' inside its own shard must land somewhere
+    claimable/reviewable in the merged main database -- never silently
+    copied over as still 'claimed', which nothing would ever reclaim."""
+    from fair_ocean_agent.config import reset_config_cache
+    from fair_ocean_agent.database.session import reset_engine_cache
+
+    study = _seed_main_with_one_study(main_path)
+    engine = _file_db(main_path)
+    session = _session_for(engine)
+    task = Task(
+        task_type=TaskType.EXTRACT_TEXT_FACTS.value, study_id=study.study_id,
+        status=TaskStatus.PENDING.value, idempotency_key=f"EXTRACT_TEXT_FACTS:{study.study_id}",
+    )
+    session.add(task)
+    session.commit()
+    task_id = task.task_id
+    session.close()
+    engine.dispose()
+
+    shard_path = tmp_path / "shard_1.db"
+    _copy_schema_and_rows_from(main_path, shard_path)
+    shard_engine = _file_db(shard_path)
+    shard_session = _session_for(shard_engine)
+    shard_task = shard_session.get(Task, task_id)
+    shard_task.status = TaskStatus.CLAIMED.value
+    shard_task.claimed_by = "worker-on-a-now-dead-node"
+    shard_task.claimed_at = shard_task.created_at
+    shard_task.attempt_count = 1
+    shard_session.commit()
+    shard_session.close()
+    shard_engine.dispose()
+
+    manifest = ShardManifest(
+        main_db_path=str(main_path),
+        shards=[ShardManifestEntry(shard_index=1, db_path=str(shard_path), task_ids=[task_id], study_ids=[study.study_id])],
+    )
+
+    monkeypatch.setenv("FAIR_OCEAN_DATABASE_URL", f"sqlite:///{main_path}")
+    reset_config_cache()
+    reset_engine_cache()
+    try:
+        merge_all_shards(manifest)
+    finally:
+        reset_engine_cache()
+        reset_config_cache()
+
+    verify_engine = _file_db(main_path)
+    verify_session = _session_for(verify_engine)
+    merged_task = verify_session.get(Task, task_id)
+    assert merged_task.status == TaskStatus.RETRY_PENDING.value
     verify_session.close()
     verify_engine.dispose()
 

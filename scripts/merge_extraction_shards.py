@@ -4,8 +4,17 @@ into the main shared database, in a single process (no cross-node file
 locking involved -- see that script's own docstring for why this two-step
 shard/merge design exists at all).
 
-Merge order per shard, all via one raw sqlite3 connection to the main
-database with the shard ATTACHed:
+Merge order per shard:
+0. Release any stale claims left in the SHARD'S OWN isolated database --
+   real gap found live: an array task killed mid-task (SIGTERM, preemption,
+   node failure) leaves whatever it was processing stuck 'claimed'/
+   'running' there, which nothing else would ever reclaim, and which step 4
+   below would otherwise copy verbatim into the shared main database as a
+   permanently-orphaned claim. See _release_stale_claims_in_shard's own
+   comment for why 0 minutes is the correct staleness window here.
+
+Then, all via one raw sqlite3 connection to the main database with the
+shard ATTACHed:
 1. `entities`: INSERT OR IGNORE. A shareable-level entity (SAMPLE/
    EXPERIMENT_RUN/SEQUENCING_RUN) this shard created independently for an
    accession another shard *also* independently created an entity for
@@ -51,10 +60,14 @@ import shutil
 import sqlite3
 from pathlib import Path
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
 from _extraction_sharding import DEFAULT_MANIFEST_PATH, ShardManifest, with_lock_retry
 
 from fair_ocean_agent.database.session import session_scope
 from fair_ocean_agent.mapping.faire import map_study_to_faire
+from fair_ocean_agent.workflow.task_queue import release_stale_claims
 
 _SHAREABLE_ENTITY_LEVELS_SQL = ("'sample'", "'experiment_run'", "'sequencing_run'")
 
@@ -155,6 +168,34 @@ def _sync_task_lifecycle(conn: sqlite3.Connection, task_ids: list[str]) -> None:
     )
 
 
+def _release_stale_claims_in_shard(shard_db_path: str) -> int:
+    """Real gap found live: a shard's own array task can be killed (e.g. by
+    a SLURM SIGTERM, a preemption, a node failure) mid-task, leaving
+    whatever it was actively processing stuck in 'claimed'/'running' inside
+    THAT SHARD's own isolated database -- claim_next_task never reclaims
+    those statuses on its own (see task_queue.py's own comment), so nothing
+    would ever pick that task back up. Worse, _sync_task_lifecycle below
+    copies a shard's task state verbatim into the shared main database, so
+    merging as-is would silently bake a permanently-orphaned claim into it.
+    By the time this runs, whatever array task owned this shard is long
+    since finished (successfully or not) -- there is no live process left
+    that could still be legitimately holding a claim in an ISOLATED shard
+    file the way there might be in the shared main database, so 0 minutes
+    is the correct staleness window here, not the 30-minute default used
+    elsewhere for a database still being actively worked."""
+    engine = create_engine(f"sqlite:///{shard_db_path}")
+    try:
+        session = sessionmaker(bind=engine)()
+        try:
+            released = release_stale_claims(session, stale_after_minutes=0)
+            session.commit()
+            return released
+        finally:
+            session.close()
+    finally:
+        engine.dispose()
+
+
 def merge_shard(conn: sqlite3.Connection, shard_db_path: str, task_ids: list[str]) -> None:
     conn.execute("ATTACH DATABASE ? AS shard", (shard_db_path,))
     try:
@@ -189,6 +230,13 @@ def merge_all_shards(manifest: ShardManifest) -> None:
     conn = sqlite3.connect(manifest.main_db_path)
     try:
         for shard in manifest.shards:
+            released = with_lock_retry(_release_stale_claims_in_shard, shard.db_path)
+            if released:
+                print(
+                    f"shard {shard.shard_index}: released {released} orphaned claim(s) left by a "
+                    "killed/crashed array task (e.g. a SIGTERM before it could finish) -- reset to "
+                    "retry_pending/manual_review_required so they are not lost."
+                )
             print(f"merging shard {shard.shard_index} ({shard.db_path}, {len(shard.task_ids)} task(s))...")
             with_lock_retry(merge_shard, conn, shard.db_path, shard.task_ids)
     finally:
