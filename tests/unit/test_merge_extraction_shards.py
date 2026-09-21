@@ -14,6 +14,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+import merge_extraction_shards as mes  # noqa: E402
 from merge_extraction_shards import _release_stale_claims_in_shard, merge_all_shards, merge_shard  # noqa: E402
 from shard_extraction_prep import _partition  # noqa: E402
 from _extraction_sharding import ShardManifest, ShardManifestEntry  # noqa: E402
@@ -392,6 +393,60 @@ def test_duplicate_shareable_entities_across_shards_collapse_to_one_and_referenc
     entity_studies = verify_session.query(EntityStudy).filter_by(entity_id=survivor_id).all()
     assert {es.study_id for es in entity_studies} == {study_a.study_id, study_b_id}, "both studies must still be linked to the surviving entity"
 
+    verify_session.close()
+    verify_engine.dispose()
+
+
+def test_remap_touched_studies_commits_each_study_before_moving_to_the_next(tmp_path, main_path, monkeypatch):
+    """Real gap found live: a single commit for the WHOLE remap loop made a
+    genuinely slow (1.5+ hour, 1702-study) real cluster run indistinguishable
+    from a hang -- nothing printed or persisted between studies -- and an
+    interruption at any point would have lost every study's work, not just
+    the one in flight. Each study must commit (and be visible to a fresh
+    session) as soon as it finishes."""
+    from fair_ocean_agent.config import reset_config_cache
+    from fair_ocean_agent.database.models import StandardizedValue
+    from fair_ocean_agent.database.session import reset_engine_cache
+
+    study_a = _seed_main_with_one_study(main_path)
+    engine = _file_db(main_path)
+    session = _session_for(engine)
+    study_b = Study(title="second study, deliberately made to blow up")
+    session.add(study_b)
+    session.commit()
+    for study, gene in ((study_a, "16S rRNA"), (study_b, "18S rRNA")):
+        session.add(
+            RawFact(
+                study_id=study.study_id, fact_type_candidate="target_gene", raw_field_name="target_gene",
+                raw_value=gene, entity_level=EntityLevel.PROJECT.value, support_type=SupportType.EXPLICIT.value,
+            )
+        )
+    session.commit()
+    session.close()
+    engine.dispose()
+
+    real_map_study_to_faire = mes.map_study_to_faire
+
+    def _map_or_blow_up(session, study_id):
+        if study_id == study_b.study_id:
+            raise RuntimeError("boom -- simulates an interruption partway through the remap loop")
+        return real_map_study_to_faire(session, study_id)
+
+    monkeypatch.setattr(mes, "map_study_to_faire", _map_or_blow_up)
+    monkeypatch.setenv("FAIR_OCEAN_DATABASE_URL", f"sqlite:///{main_path}")
+    reset_config_cache()
+    reset_engine_cache()
+    try:
+        with pytest.raises(RuntimeError, match="boom"):
+            mes._remap_touched_studies([study_a.study_id, study_b.study_id])
+    finally:
+        reset_engine_cache()
+        reset_config_cache()
+
+    verify_engine = _file_db(main_path)
+    verify_session = _session_for(verify_engine)
+    values = verify_session.query(StandardizedValue).filter_by(study_id=study_a.study_id, target_field="target_gene").all()
+    assert len(values) == 1  # study A's work survived study B blowing up right after it
     verify_session.close()
     verify_engine.dispose()
 

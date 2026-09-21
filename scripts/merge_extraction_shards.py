@@ -49,6 +49,18 @@ design can introduce (resolve_primer_sequences_from_corpus's whole-corpus
 primer lookup, and shared-entity-derived facts, both only ever see
 whatever existed in a shard's isolated snapshot at partition time).
 
+Real gap found live: at real scale (1702 touched studies on a real
+cluster run) this remap pass legitimately takes hours, not minutes -- each
+study runs several of its own DB round trips (entity/primer/sample-alias
+resolution, a per-fact loop, a full delete-then-recreate of its
+standardized_values), and Lustre's per-query latency adds up across
+thousands of them. A single commit for the whole loop made that
+indistinguishable from a genuine hang (nothing prints between studies) and
+would have lost all 1702 studies' worth of work on any interruption. Each
+study now commits (and prints) as soon as it finishes, so progress is
+visible in real time and only the one study in flight at the moment of an
+interruption is ever at risk.
+
 Usage:
     python scripts/merge_extraction_shards.py
     python scripts/merge_extraction_shards.py --manifest data/shard_dbs/manifest.json
@@ -58,6 +70,7 @@ from __future__ import annotations
 import argparse
 import shutil
 import sqlite3
+import time
 from pathlib import Path
 
 from sqlalchemy import create_engine
@@ -214,10 +227,33 @@ def merge_shard(conn: sqlite3.Connection, shard_db_path: str, task_ids: list[str
         conn.execute("DETACH DATABASE shard")
 
 
+def _remap_one_study(session, study_id: str) -> None:
+    map_study_to_faire(session, study_id)
+    # Real gap found live: with a single commit for the WHOLE loop, a real
+    # 1702-study remap on the cluster ran silently for 1.5+ hours with zero
+    # visible progress (nothing prints between studies) and would have lost
+    # ALL of it on any interruption (SSH drop, SIGTERM, a transient locking
+    # error) since nothing had actually been committed yet. Committing here,
+    # per study, makes each one durable as soon as it finishes -- a later
+    # interruption only ever loses the one study in flight, not the whole
+    # run -- and is what makes the print below a real, truthful progress
+    # signal rather than one big opaque transaction.
+    session.commit()
+
+
 def _remap_touched_studies(study_ids: list[str]) -> None:
+    total = len(study_ids)
+    started_all = time.monotonic()
     with session_scope() as session:
-        for study_id in study_ids:
-            map_study_to_faire(session, study_id)
+        for index, study_id in enumerate(study_ids, start=1):
+            started = time.monotonic()
+            with_lock_retry(_remap_one_study, session, study_id)
+            elapsed = time.monotonic() - started
+            total_elapsed = time.monotonic() - started_all
+            print(
+                f"  [{index}/{total}] re-mapped {study_id} ({elapsed:.1f}s, {total_elapsed / 60:.1f}m elapsed total)",
+                flush=True,
+            )
 
 
 def merge_all_shards(manifest: ShardManifest) -> None:

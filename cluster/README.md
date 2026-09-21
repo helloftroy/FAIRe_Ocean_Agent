@@ -309,7 +309,7 @@ order:
 python scripts/shard_extraction_prep.py --shards 5
 sbatch --account=191001-364393 --array=1-5 --export=ALL,LLM_BACKEND=vllm cluster/run_extraction_sharded.sbatch
 # wait for every array task to finish, then:
-python scripts/merge_extraction_shards.py
+sbatch --account=191001-364393 cluster/run_merge_extraction_shards.sbatch
 ```
 
 `shard_extraction_prep.py` (single process, touches the shared DB once)
@@ -317,14 +317,40 @@ enqueues the backlog, splits it into N independent SQLite snapshots
 (`data/shard_dbs/shard_<i>.db`, one per array task, via SQLite's own
 backup API -- safe regardless of journal mode), and writes a manifest each
 array task reads to find its own shard. `merge_extraction_shards.py`
-(single process, run once after every array task finishes) stitches each
-shard's new/changed rows back into the shared database, reconciling the
-one real edge case this design can produce -- two shards independently
-creating a duplicate `Entity` row for the same shared BioSample/run
-accession collapse to one, with every reference correctly redirected, not
-left dangling -- and finishes by re-running FAIRe mapping for every
-touched study so derived fields see full cross-shard data. Size `--shards`
-so each shard's slice fits inside the 48h time limit (~9 min/paper).
+(run via `run_merge_extraction_shards.sbatch` so a multi-hour merge
+survives an SSH drop instead of needing a live terminal the whole time --
+`python scripts/merge_extraction_shards.py` still works directly for a
+quick/small merge) stitches each shard's new/changed rows back into the
+shared database, reconciling the one real edge case this design can
+produce -- two shards independently creating a duplicate `Entity` row for
+the same shared BioSample/run accession collapse to one, with every
+reference correctly redirected, not left dangling -- and finishes by
+re-running FAIRe mapping for every touched study so derived fields see
+full cross-shard data. Size `--shards` so each shard's slice fits inside
+the 48h time limit (~9 min/paper).
+
+**A stuck-looking array task's killed-mid-task work is not lost.** If SLURM
+cancels an array task partway through (a `QOSMaxGRESPerUser` quota hit,
+preemption, a node failure -- check `sacct -j <job_id> --format=JobID,State,ExitCode,Elapsed,NodeList,Reason`
+for the real reason; it is not always the 48h time limit), whatever that
+task was actively processing is left stuck `claimed`/`running` in that
+shard's own isolated database. `merge_extraction_shards.py` now detects
+and releases these automatically before merging each shard (prints
+`released N orphaned claim(s)...` when it finds any) -- they land back at
+`retry_pending`/`manual_review_required` in the shared database, ready to
+be picked up by the next `shard_extraction_prep.py` round, not silently
+lost.
+
+**The FAIRe re-mapping pass at the end can legitimately take hours at real
+scale** (each touched study does several of its own DB round trips, and
+Lustre's per-query latency adds up across thousands of studies) -- it now
+prints a line per study as it commits (`[123/1702] re-mapped STUDY-xxxx
+(0.4s, 12.3m elapsed total)`), so a silent terminal for a few minutes is
+normal, but a genuinely stuck one should still be showing new lines every
+few seconds to at most a couple of minutes. Each study commits as it
+finishes, so an interruption here only ever risks the one study in flight,
+not the whole pass -- just resubmit `run_merge_extraction_shards.sbatch`
+and it picks up close to where it left off.
 
 **Fallback: `submit_extraction_sequential.sh`.** If you'd rather not run
 the shard/merge scripts (e.g. verifying the simpler path first), this
