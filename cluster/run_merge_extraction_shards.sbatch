@@ -4,7 +4,16 @@
 # real 1702-study remap pass took hours, with nothing printing until each
 # study committed, which is exactly the kind of run an SSH drop or a
 # terminal timeout would kill outright. No GPU needed (this is DB-only --
-# no LLM calls), same CPU-only "service" partition as run_discovery.sbatch.
+# no LLM calls at all) and, unlike run_discovery.sbatch, no network calls
+# either -- every merge/remap step is local-file SQLite work start to
+# finish. "service" (run_discovery.sbatch's own partition) is reserved for
+# jobs that genuinely need outbound internet, and on this cluster it's a
+# single, heavily-shared node (confirmed live via `sinfo`: 1 node/128 CPUs
+# total, vs. "morrill"'s 100 nodes/~6400 CPUs, almost entirely idle) --
+# putting a job that needs no network on it would just queue behind
+# genuinely internet-bound work for no reason. "morrill" (the general
+# compute partition, no special network requirement) is the right choice
+# here.
 #
 # Safe to just resubmit if this hits its walltime before finishing: the
 # merge steps themselves are already idempotent (INSERT OR IGNORE / real
@@ -18,10 +27,11 @@
 #   sbatch --account=<acct> cluster/run_merge_extraction_shards.sbatch
 #   sbatch --account=<acct> --export=ALL,MANIFEST=data/shard_dbs/manifest.json cluster/run_merge_extraction_shards.sbatch
 #
-# Partition/timing copied from run_gold_bioproject_search.sbatch -- double
-# check "service" is the right partition name for your account.
+# Double check "morrill" is a partition your account can submit non-GPU
+# CPU jobs to (`sinfo -o "%R %l %D %C"`) -- swap it for whatever your
+# cluster's own general-purpose CPU partition is called if not.
 #SBATCH --job-name=faire_merge_extraction_shards
-#SBATCH --partition=service
+#SBATCH --partition=morrill
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=8G
 #SBATCH --time=48:00:00
