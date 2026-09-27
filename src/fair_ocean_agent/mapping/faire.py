@@ -90,6 +90,27 @@ def _clear_existing_faire_mappings(session: Session, study_id: str) -> None:
     session.flush()
 
 
+def _add_evidence_for_facts(session: Session, standardized_value_id: str, facts) -> None:
+    """Real gap found live: a real cluster merge run crashed with
+    sqlalchemy.exc.IntegrityError ("UNIQUE constraint failed:
+    standardized_value_evidence.standardized_value_id,
+    standardized_value_evidence.fact_id") -- (standardized_value_id,
+    fact_id) is a real composite primary key (database/models.py), and
+    some callers here collect evidence facts from more than one grouping
+    key (e.g. one raw fact legitimately matching more than one sample_type
+    bucket, or a study-level fact shared across more than one sequencing
+    run) -- the same fact_id can genuinely show up twice in one such
+    collection. Recording the same (value, fact) link twice adds no new
+    information, so deduping here is always correct, not just a crash
+    workaround."""
+    seen_fact_ids: set[str] = set()
+    for fact in facts:
+        if fact.fact_id in seen_fact_ids:
+            continue
+        seen_fact_ids.add(fact.fact_id)
+        session.add(StandardizedValueEvidence(standardized_value_id=standardized_value_id, fact_id=fact.fact_id))
+
+
 def _find_sample_entity_by_external_id(session: Session, study_id: str, external_id: str) -> Entity | None:
     return session.scalar(
         select(Entity).where(
@@ -1277,12 +1298,7 @@ def _apply_sample_type_routed_facts(
             )
             session.add(standardized_value)
             session.flush()
-            for fact in fact_by_type.values():
-                session.add(
-                    StandardizedValueEvidence(
-                        standardized_value_id=standardized_value.standardized_value_id, fact_id=fact.fact_id
-                    )
-                )
+            _add_evidence_for_facts(session, standardized_value.standardized_value_id, fact_by_type.values())
             seen[key] = standardized_value
             created += 1
         else:
@@ -1709,13 +1725,7 @@ def map_study_to_faire(session: Session, study_id: str) -> int:
         )
         session.add(standardized_value)
         session.flush()
-        for fact in evidence_facts:
-            session.add(
-                StandardizedValueEvidence(
-                    standardized_value_id=standardized_value.standardized_value_id,
-                    fact_id=fact.fact_id,
-                )
-            )
+        _add_evidence_for_facts(session, standardized_value.standardized_value_id, evidence_facts)
         seen[lib_layout_key] = standardized_value
         created += 1
 
@@ -1740,13 +1750,7 @@ def map_study_to_faire(session: Session, study_id: str) -> int:
                     StandardizedValueEvidence.standardized_value_id == existing.standardized_value_id
                 )
             )
-            for fact in evidence_facts:
-                session.add(
-                    StandardizedValueEvidence(
-                        standardized_value_id=existing.standardized_value_id,
-                        fact_id=fact.fact_id,
-                    )
-                )
+            _add_evidence_for_facts(session, existing.standardized_value_id, evidence_facts)
         else:
             standardized_value = StandardizedValue(
                 study_id=study_id,
@@ -1761,13 +1765,7 @@ def map_study_to_faire(session: Session, study_id: str) -> int:
             )
             session.add(standardized_value)
             session.flush()
-            for fact in evidence_facts:
-                session.add(
-                    StandardizedValueEvidence(
-                        standardized_value_id=standardized_value.standardized_value_id,
-                        fact_id=fact.fact_id,
-                    )
-                )
+            _add_evidence_for_facts(session, standardized_value.standardized_value_id, evidence_facts)
             seen[key] = standardized_value
             created += 1
 

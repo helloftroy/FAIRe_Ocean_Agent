@@ -900,6 +900,50 @@ def test_splits_fused_primer_sequence_across_a_mistagged_assay_row_too(db_sessio
     assert adapter_rows == {assay.entity_id: "CCTATCCCCTGTGTGCCTTGGCAGTCTCAG"}
 
 
+def test_fused_primer_value_repeated_via_pipe_in_one_fact_does_not_crash_on_duplicate_evidence(db_session):
+    """Real gap found live: a real cluster merge run crashed with
+    sqlalchemy.exc.IntegrityError ("UNIQUE constraint failed:
+    standardized_value_evidence.standardized_value_id,
+    standardized_value_evidence.fact_id") -- (standardized_value_id,
+    fact_id) is a real composite primary key. _derive_fused_primer_adapter_values
+    groups facts by their own normalized sequence value, once per matching
+    pipe-separated part within a fact's raw_value -- a single fact whose
+    raw_value repeats the exact same fused sequence via '|' (noisy LLM
+    output, not two distinct primers) gets appended to that same list
+    twice, so its evidence would be recorded twice for the same
+    standardized_value without the fix in map_study_to_faire/
+    _add_evidence_for_facts."""
+    study = _study(db_session, title="Repeated fused primer study")
+    _fact(
+        db_session, study, field="forward_primer_sequence", value="TCTCAAAGACTAAGCCATGC",
+        entity_level="study", support=SupportType.EXPLICIT,
+    )
+    _fact(
+        db_session, study, field="forward_primer_sequence",
+        value=(
+            "CCTATCCCCTGTGTGCCTTGGCAGTCTCAG TCTCAAAGACTAAGCCATGC | "
+            "CCTATCCCCTGTGTGCCTTGGCAGTCTCAG TCTCAAAGACTAAGCCATGC"
+        ),
+        entity_level="study", support=SupportType.EXPLICIT,
+    )
+    db_session.commit()
+
+    map_study_to_faire(db_session, study.study_id)  # must not raise IntegrityError
+    db_session.commit()
+
+    adapter_value = (
+        db_session.query(StandardizedValue)
+        .filter_by(study_id=study.study_id, entity_id=None, target_field="adapter_forward")
+        .one()
+    )
+    evidence_count = (
+        db_session.query(StandardizedValueEvidence)
+        .filter_by(standardized_value_id=adapter_value.standardized_value_id)
+        .count()
+    )
+    assert evidence_count == 1
+
+
 def test_does_not_split_two_genuinely_different_primers_with_no_substring_relationship(db_session):
     """Two real, independently-designed primers of ordinary length must
     never be treated as a fusion pair just because both exist -- only an
