@@ -68,6 +68,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import sqlite3
 import time
@@ -227,6 +228,38 @@ def merge_shard(conn: sqlite3.Connection, shard_db_path: str, task_ids: list[str
         conn.execute("DETACH DATABASE shard")
 
 
+def _remap_progress_path(manifest_path: Path) -> Path:
+    """Real gap found live: restarting this WHOLE script after a crash had
+    no memory of a prior invocation -- each study's StandardizedValue rows
+    ARE already safely committed (see _remap_one_study's own comment), but
+    a fresh process re-ran _remap_touched_studies from study #1 again
+    regardless, discarding hours of already-committed, still-valid work on
+    every restart. This file is the durable record of which studies are
+    already done, checked at the START of a new process, not just within
+    one already-running one. Scoped to the manifest's own path so a
+    genuinely new shard_extraction_prep.py round (a new manifest,
+    overwritten in place at the same path) never inherits stale progress
+    left over from an old one -- see build_shards' own cleanup."""
+    return manifest_path.with_name(manifest_path.name + ".remap_progress.txt")
+
+
+def _load_remap_progress(progress_path: Path) -> set[str]:
+    if not progress_path.is_file():
+        return set()
+    return {line.strip() for line in progress_path.read_text().splitlines() if line.strip()}
+
+
+def _record_remap_progress(progress_path: Path, study_id: str) -> None:
+    # Append-and-fsync, not a rewrite-the-whole-file-each-time: durable
+    # even across a hard kill (SIGTERM/SIGKILL) right after this call, and
+    # O(1) per study instead of O(n) with the list rewritten every time
+    # across a couple thousand studies.
+    with progress_path.open("a") as f:
+        f.write(f"{study_id}\n")
+        f.flush()
+        os.fsync(f.fileno())
+
+
 def _remap_one_study(session, study_id: str) -> None:
     map_study_to_faire(session, study_id)
     # Real gap found live: with a single commit for the WHOLE loop, a real
@@ -241,22 +274,38 @@ def _remap_one_study(session, study_id: str) -> None:
     session.commit()
 
 
-def _remap_touched_studies(study_ids: list[str]) -> None:
+def _remap_touched_studies(study_ids: list[str], progress_path: Path) -> None:
     total = len(study_ids)
+    already_done = _load_remap_progress(progress_path)
+    remaining = [study_id for study_id in study_ids if study_id not in already_done]
+    skipped = total - len(remaining)
+    if skipped:
+        print(
+            f"  skipping {skipped} stud(y/ies) already re-mapped by a prior (interrupted) run of "
+            f"this same merge -- see {progress_path}",
+            flush=True,
+        )
     started_all = time.monotonic()
     with session_scope() as session:
-        for index, study_id in enumerate(study_ids, start=1):
+        for index, study_id in enumerate(remaining, start=skipped + 1):
             started = time.monotonic()
             with_lock_retry(_remap_one_study, session, study_id)
+            # Recorded only AFTER _remap_one_study's own commit succeeds --
+            # a study is never marked done until its StandardizedValue rows
+            # are actually durable.
+            _record_remap_progress(progress_path, study_id)
             elapsed = time.monotonic() - started
             total_elapsed = time.monotonic() - started_all
             print(
                 f"  [{index}/{total}] re-mapped {study_id} ({elapsed:.1f}s, {total_elapsed / 60:.1f}m elapsed total)",
                 flush=True,
             )
+    # Only reached once every study succeeded -- leave the file in place on
+    # any failure/interruption so the next run knows what to skip.
+    progress_path.unlink(missing_ok=True)
 
 
-def merge_all_shards(manifest: ShardManifest) -> None:
+def merge_all_shards(manifest: ShardManifest, manifest_path: Path) -> None:
     # Every real DB touch below goes through with_lock_retry -- see
     # _extraction_sharding.py's own comment: this cluster's Lustre-backed
     # scratch mount can raise a transient "locking protocol" error even
@@ -280,7 +329,8 @@ def merge_all_shards(manifest: ShardManifest) -> None:
 
     study_ids = manifest.all_study_ids()
     print(f"re-mapping {len(study_ids)} touched stud(y/ies) with full cross-shard visibility...")
-    with_lock_retry(_remap_touched_studies, study_ids)
+    progress_path = _remap_progress_path(manifest_path)
+    with_lock_retry(_remap_touched_studies, study_ids, progress_path)
 
 
 def _archive_shards(manifest: ShardManifest, shard_dir: Path) -> None:
@@ -305,7 +355,7 @@ def main() -> None:
         raise SystemExit(f"no manifest at {args.manifest} -- run shard_extraction_prep.py first")
     manifest = ShardManifest.read(args.manifest)
 
-    merge_all_shards(manifest)
+    merge_all_shards(manifest, args.manifest)
 
     if not args.no_archive:
         _archive_shards(manifest, args.manifest.parent)

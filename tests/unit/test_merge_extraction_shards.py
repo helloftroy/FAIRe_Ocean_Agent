@@ -272,7 +272,7 @@ def test_merge_all_shards_does_not_propagate_an_orphaned_claim_into_main(tmp_pat
     reset_config_cache()
     reset_engine_cache()
     try:
-        merge_all_shards(manifest)
+        merge_all_shards(manifest, tmp_path / "manifest.json")
     finally:
         reset_engine_cache()
         reset_config_cache()
@@ -436,12 +436,17 @@ def test_remap_touched_studies_commits_each_study_before_moving_to_the_next(tmp_
     monkeypatch.setenv("FAIR_OCEAN_DATABASE_URL", f"sqlite:///{main_path}")
     reset_config_cache()
     reset_engine_cache()
+    progress_path = tmp_path / "manifest.json.remap_progress.txt"
     try:
         with pytest.raises(RuntimeError, match="boom"):
-            mes._remap_touched_studies([study_a.study_id, study_b.study_id])
+            mes._remap_touched_studies([study_a.study_id, study_b.study_id], progress_path)
     finally:
         reset_engine_cache()
         reset_config_cache()
+
+    # The crash left the progress file in place (not cleaned up), recording
+    # exactly the one study that actually finished.
+    assert mes._load_remap_progress(progress_path) == {study_a.study_id}
 
     verify_engine = _file_db(main_path)
     verify_session = _session_for(verify_engine)
@@ -449,6 +454,42 @@ def test_remap_touched_studies_commits_each_study_before_moving_to_the_next(tmp_
     assert len(values) == 1  # study A's work survived study B blowing up right after it
     verify_session.close()
     verify_engine.dispose()
+
+
+def test_remap_touched_studies_skips_already_done_studies_on_a_fresh_call(tmp_path, main_path, monkeypatch):
+    """Real gap found live: restarting the WHOLE script after a crash had no
+    memory of a prior invocation -- a plain resubmit reprocessed every study
+    from #1 again on a real cluster run, discarding hours of already-
+    committed, still-valid work. A second, independent call with the SAME
+    progress_path (simulating a fresh process after a restart) must skip
+    whatever a prior call already finished, not redo it."""
+    from fair_ocean_agent.config import reset_config_cache
+    from fair_ocean_agent.database.session import reset_engine_cache
+
+    study = _seed_main_with_one_study(main_path)
+    progress_path = tmp_path / "manifest.json.remap_progress.txt"
+    progress_path.write_text(f"{study.study_id}\n")  # simulates a prior, already-completed run
+
+    calls = []
+    real_map_study_to_faire = mes.map_study_to_faire
+
+    def _tracking_map_study_to_faire(session, study_id):
+        calls.append(study_id)
+        return real_map_study_to_faire(session, study_id)
+
+    monkeypatch.setattr(mes, "map_study_to_faire", _tracking_map_study_to_faire)
+    monkeypatch.setenv("FAIR_OCEAN_DATABASE_URL", f"sqlite:///{main_path}")
+    reset_config_cache()
+    reset_engine_cache()
+    try:
+        mes._remap_touched_studies([study.study_id], progress_path)
+    finally:
+        reset_engine_cache()
+        reset_config_cache()
+
+    assert calls == []  # never re-invoked for the already-done study
+    # A fully-clean run (nothing left to do) still clears the file.
+    assert not progress_path.exists()
 
 
 def test_partition_splits_tasks_round_robin_and_is_deterministic():
@@ -493,7 +534,7 @@ def test_merge_all_shards_regenerates_standardized_values_with_full_visibility(t
     reset_config_cache()
     reset_engine_cache()
     try:
-        merge_all_shards(manifest)
+        merge_all_shards(manifest, tmp_path / "manifest.json")
     finally:
         reset_engine_cache()
         reset_config_cache()

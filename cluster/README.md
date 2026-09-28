@@ -343,14 +343,25 @@ lost.
 
 **The FAIRe re-mapping pass at the end can legitimately take hours at real
 scale** (each touched study does several of its own DB round trips, and
-Lustre's per-query latency adds up across thousands of studies) -- it now
-prints a line per study as it commits (`[123/1702] re-mapped STUDY-xxxx
+Lustre's per-query latency adds up across thousands of studies) -- it
+prints a line per study as it commits (`[123/2063] re-mapped STUDY-xxxx
 (0.4s, 12.3m elapsed total)`), so a silent terminal for a few minutes is
 normal, but a genuinely stuck one should still be showing new lines every
-few seconds to at most a couple of minutes. Each study commits as it
-finishes, so an interruption here only ever risks the one study in flight,
-not the whole pass -- just resubmit `run_merge_extraction_shards.sbatch`
-and it picks up close to where it left off.
+few seconds to at most a couple of minutes.
+
+Resubmitting `run_merge_extraction_shards.sbatch` after an interruption
+(a crash, an SSH drop, a SIGTERM) does **not** restart the whole merge
+from scratch -- each shard's own merge step is cheap and idempotent to
+redo, but the expensive remap loop tracks which studies actually finished
+in a small `<manifest>.remap_progress.txt` file next to the manifest,
+updated (and fsynced) right after each study's own commit succeeds. A
+fresh run reads this file first and skips everything already done,
+printing `skipping N stud(y/ies) already re-mapped by a prior
+(interrupted) run` before continuing from wherever it actually left off.
+The file is only deleted once every study finishes cleanly, so it's safe
+to resubmit as many times as needed; it's also how a transient locking
+error (see `with_lock_retry`) recovers without redoing already-committed
+studies.
 
 **Fallback: `submit_extraction_sequential.sh`.** If you'd rather not run
 the shard/merge scripts (e.g. verifying the simpler path first), this
