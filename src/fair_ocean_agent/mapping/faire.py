@@ -90,25 +90,42 @@ def _clear_existing_faire_mappings(session: Session, study_id: str) -> None:
     session.flush()
 
 
-def _add_evidence_for_facts(session: Session, standardized_value_id: str, facts) -> None:
-    """Real gap found live: a real cluster merge run crashed with
-    sqlalchemy.exc.IntegrityError ("UNIQUE constraint failed:
-    standardized_value_evidence.standardized_value_id,
-    standardized_value_evidence.fact_id") -- (standardized_value_id,
-    fact_id) is a real composite primary key (database/models.py), and
-    some callers here collect evidence facts from more than one grouping
-    key (e.g. one raw fact legitimately matching more than one sample_type
-    bucket, or a study-level fact shared across more than one sequencing
-    run) -- the same fact_id can genuinely show up twice in one such
-    collection. Recording the same (value, fact) link twice adds no new
-    information, so deduping here is always correct, not just a crash
-    workaround."""
-    seen_fact_ids: set[str] = set()
+EvidenceSeen = set  # set[tuple[str, str]] -- (standardized_value_id, fact_id) pairs already recorded
+
+
+def _add_evidence(session: Session, evidence_seen: "EvidenceSeen", standardized_value_id: str, fact_id: str) -> None:
+    """Single choke point for every StandardizedValueEvidence insert in
+    this module. Real gap found live -- TWICE, on a real cluster, each
+    costing hours of already-completed remap work: sqlalchemy.exc.
+    IntegrityError, UNIQUE constraint failed on
+    standardized_value_evidence(standardized_value_id, fact_id) -- a real
+    composite primary key (database/models.py), not just a business rule.
+    The first occurrence was traced to one specific collection
+    (_derive_fused_primer_adapter_values's evidence_facts, when a fact's
+    own raw_value repeats a fused primer sequence via a stray pipe) and
+    fixed locally there -- the SECOND occurrence, same exact fact_id, a
+    different standardized_value_id, proved a per-collection fix doesn't
+    cover every path: more than one of this function's ~10 call sites can
+    independently decide to record evidence for the same (value, fact)
+    pair within one map_study_to_faire call (e.g. a post-loop helper
+    re-deriving a field from a raw fact the main per-fact loop already
+    used as evidence for the very same standardized_value). `evidence_seen`
+    is created once per map_study_to_faire call and threaded through every
+    helper that adds evidence, exactly like `seen` (the target_field ->
+    StandardizedValue map) already is -- the one guarantee that actually
+    holds regardless of which code path produces a repeat: recording the
+    same link twice adds no information, so skipping a repeat here is
+    always correct, never a workaround that could hide a real bug."""
+    pair = (standardized_value_id, fact_id)
+    if pair in evidence_seen:
+        return
+    evidence_seen.add(pair)
+    session.add(StandardizedValueEvidence(standardized_value_id=standardized_value_id, fact_id=fact_id))
+
+
+def _add_evidence_for_facts(session: Session, evidence_seen: "EvidenceSeen", standardized_value_id: str, facts) -> None:
     for fact in facts:
-        if fact.fact_id in seen_fact_ids:
-            continue
-        seen_fact_ids.add(fact.fact_id)
-        session.add(StandardizedValueEvidence(standardized_value_id=standardized_value_id, fact_id=fact.fact_id))
+        _add_evidence(session, evidence_seen, standardized_value_id, fact.fact_id)
 
 
 def _find_sample_entity_by_external_id(session: Session, study_id: str, external_id: str) -> Entity | None:
@@ -420,6 +437,7 @@ def _annotate_project_control_values(
     study_id: str,
     facts: list[RawFact],
     seen: dict[tuple[str, str, str | None], StandardizedValue],
+    evidence_seen: "EvidenceSeen",
 ) -> None:
     """Append the quote behind neg/pos control calls to the exported value.
 
@@ -445,19 +463,7 @@ def _annotate_project_control_values(
             continue
         standardized_value.standardized_value = f"{decision} | {quote}"
         session.add(standardized_value)
-        existing_evidence = session.scalar(
-            select(StandardizedValueEvidence).where(
-                StandardizedValueEvidence.standardized_value_id == standardized_value.standardized_value_id,
-                StandardizedValueEvidence.fact_id == fact.fact_id,
-            )
-        )
-        if existing_evidence is None:
-            session.add(
-                StandardizedValueEvidence(
-                    standardized_value_id=standardized_value.standardized_value_id,
-                    fact_id=fact.fact_id,
-                )
-            )
+        _add_evidence(session, evidence_seen, standardized_value.standardized_value_id, fact.fact_id)
 
 
 def _lib_layout_from_fastq_facts(facts: list[RawFact]) -> tuple[str, bool, list[RawFact]]:
@@ -813,6 +819,7 @@ def _apply_biological_rep_relations_from_sample_categories(
     session: Session,
     study_id: str,
     seen: dict[tuple[str, str, str | None], StandardizedValue],
+    evidence_seen: "EvidenceSeen",
 ) -> int:
     """Fallback for sources that know a real sample label only as
     samp_category. NCBI and supplement parsing usually emit
@@ -882,12 +889,7 @@ def _apply_biological_rep_relations_from_sample_categories(
         session.flush()
         evidence = evidence_by_entity_id.get(entity_id)
         if evidence is not None:
-            session.add(
-                StandardizedValueEvidence(
-                    standardized_value_id=standardized_value.standardized_value_id,
-                    fact_id=evidence.fact_id,
-                )
-            )
+            _add_evidence(session, evidence_seen, standardized_value.standardized_value_id, evidence.fact_id)
         seen[key] = standardized_value
         created += 1
     return created
@@ -897,6 +899,7 @@ def _apply_biological_rep_from_relations(
     session: Session,
     study_id: str,
     seen: dict[tuple[str, str, str | None], StandardizedValue],
+    evidence_seen: "EvidenceSeen",
 ) -> int:
     """projectMetadata.biological_rep comes ONLY from this study's own
     sampleMetadata biological_rep_relation facts (each sample's real
@@ -962,12 +965,7 @@ def _apply_biological_rep_from_relations(
             existing.mapping_method = MappingMethod.DETERMINISTIC_SYNONYM.value
             existing.review_required = False
             if evidence_fact_id is not None:
-                session.add(
-                    StandardizedValueEvidence(
-                        standardized_value_id=existing.standardized_value_id,
-                        fact_id=evidence_fact_id,
-                    )
-                )
+                _add_evidence(session, evidence_seen, existing.standardized_value_id, evidence_fact_id)
         return 0
 
     standardized_value = StandardizedValue(
@@ -984,12 +982,7 @@ def _apply_biological_rep_from_relations(
     session.add(standardized_value)
     session.flush()
     if evidence_fact_id is not None:
-        session.add(
-            StandardizedValueEvidence(
-                standardized_value_id=standardized_value.standardized_value_id,
-                fact_id=evidence_fact_id,
-            )
-        )
+        _add_evidence(session, evidence_seen, standardized_value.standardized_value_id, evidence_fact_id)
     seen[key] = standardized_value
     return 1
 
@@ -1023,6 +1016,7 @@ def _apply_source_unmapped_attributes(
     session: Session,
     study_id: str,
     seen: dict[tuple[str, str, str | None], StandardizedValue],
+    evidence_seen: "EvidenceSeen",
 ) -> int:
     """Real gap found live (SAMN08449373): NCBI carries plenty of real,
     useful per-sample metadata (treatment, TankReplicate, Sampling_point,
@@ -1098,11 +1092,7 @@ def _apply_source_unmapped_attributes(
         session.add(standardized_value)
         session.flush()
         if evidence_fact_id is not None:
-            session.add(
-                StandardizedValueEvidence(
-                    standardized_value_id=standardized_value.standardized_value_id, fact_id=evidence_fact_id
-                )
-            )
+            _add_evidence(session, evidence_seen, standardized_value.standardized_value_id, evidence_fact_id)
         seen[key] = standardized_value
         created += 1
     return created
@@ -1190,6 +1180,7 @@ def _apply_sample_type_routed_facts(
     study_id: str,
     routed_facts_by_field: dict[str, list[tuple[RawFact, str]]],
     seen: dict[tuple[str, str, str | None], StandardizedValue],
+    evidence_seen: "EvidenceSeen",
 ) -> int:
     """Case 2/3 per an explicit user specification:
 
@@ -1269,11 +1260,7 @@ def _apply_sample_type_routed_facts(
                 )
                 session.add(standardized_value)
                 session.flush()
-                session.add(
-                    StandardizedValueEvidence(
-                        standardized_value_id=standardized_value.standardized_value_id, fact_id=fact.fact_id
-                    )
-                )
+                _add_evidence(session, evidence_seen, standardized_value.standardized_value_id, fact.fact_id)
                 seen[key] = standardized_value
                 created += 1
             continue
@@ -1298,7 +1285,7 @@ def _apply_sample_type_routed_facts(
             )
             session.add(standardized_value)
             session.flush()
-            _add_evidence_for_facts(session, standardized_value.standardized_value_id, fact_by_type.values())
+            _add_evidence_for_facts(session, evidence_seen, standardized_value.standardized_value_id, fact_by_type.values())
             seen[key] = standardized_value
             created += 1
         else:
@@ -1369,11 +1356,7 @@ def _apply_sample_type_routed_facts(
             )
             session.add(standardized_value)
             session.flush()
-            session.add(
-                StandardizedValueEvidence(
-                    standardized_value_id=standardized_value.standardized_value_id, fact_id=oldest.fact_id
-                )
-            )
+            _add_evidence(session, evidence_seen, standardized_value.standardized_value_id, oldest.fact_id)
             seen[key] = standardized_value
             created += 1
     return created
@@ -1505,6 +1488,10 @@ def map_study_to_faire(session: Session, study_id: str) -> int:
     # standardized_values.
     routed_facts_by_field = _detect_sample_type_routed_facts(session, study_id)
     _clear_existing_faire_mappings(session, study_id)
+    # Created once per call, threaded through every helper below that adds
+    # evidence -- see _add_evidence's own comment for why a single shared
+    # guard (not a per-collection one) is what actually closes this bug.
+    evidence_seen: "EvidenceSeen" = EvidenceSeen()
 
     # REJECTED facts (quarantined -- e.g. extracted under a since-fixed
     # bug, or from a superseded model/prompt version) are excluded from
@@ -1606,12 +1593,7 @@ def map_study_to_faire(session: Session, study_id: str) -> int:
                     if existing.standardized_value != merged_value:
                         existing.standardized_value = merged_value
                         existing.mapping_method = rule.mapping_method
-                        session.add(
-                            StandardizedValueEvidence(
-                                standardized_value_id=existing.standardized_value_id,
-                                fact_id=fact.fact_id,
-                            )
-                        )
+                        _add_evidence(session, evidence_seen, existing.standardized_value_id, fact.fact_id)
                     existing.review_required = bool(bucket["review_required"])
                     continue
                 standardized_value = StandardizedValue(
@@ -1627,12 +1609,7 @@ def map_study_to_faire(session: Session, study_id: str) -> int:
                 )
                 session.add(standardized_value)
                 session.flush()
-                session.add(
-                    StandardizedValueEvidence(
-                        standardized_value_id=standardized_value.standardized_value_id,
-                        fact_id=fact.fact_id,
-                    )
-                )
+                _add_evidence(session, evidence_seen, standardized_value.standardized_value_id, fact.fact_id)
                 seen[key] = standardized_value
                 created += 1
                 continue
@@ -1641,12 +1618,7 @@ def map_study_to_faire(session: Session, study_id: str) -> int:
             if existing is not None:
                 if existing.standardized_value != value:
                     existing.review_required = True
-                    session.add(
-                        StandardizedValueEvidence(
-                            standardized_value_id=existing.standardized_value_id,
-                            fact_id=fact.fact_id,
-                        )
-                    )
+                    _add_evidence(session, evidence_seen, existing.standardized_value_id, fact.fact_id)
                 continue
 
             standardized_value = StandardizedValue(
@@ -1662,19 +1634,14 @@ def map_study_to_faire(session: Session, study_id: str) -> int:
             )
             session.add(standardized_value)
             session.flush()
-            session.add(
-                StandardizedValueEvidence(
-                    standardized_value_id=standardized_value.standardized_value_id,
-                    fact_id=fact.fact_id,
-                )
-            )
+            _add_evidence(session, evidence_seen, standardized_value.standardized_value_id, fact.fact_id)
             seen[key] = standardized_value
             created += 1
 
-    created += _apply_biological_rep_relations_from_sample_categories(session, study_id, seen)
-    created += _apply_biological_rep_from_relations(session, study_id, seen)
+    created += _apply_biological_rep_relations_from_sample_categories(session, study_id, seen, evidence_seen)
+    created += _apply_biological_rep_from_relations(session, study_id, seen, evidence_seen)
     created += _apply_assay_name_fallback_from_target_gene(session, study_id, seen)
-    created += _apply_source_unmapped_attributes(session, study_id, seen)
+    created += _apply_source_unmapped_attributes(session, study_id, seen, evidence_seen)
 
     for entity in session.scalars(select(Entity).where(Entity.study_id == study_id)):
         if not entity.external_identifier:
@@ -1725,7 +1692,7 @@ def map_study_to_faire(session: Session, study_id: str) -> int:
         )
         session.add(standardized_value)
         session.flush()
-        _add_evidence_for_facts(session, standardized_value.standardized_value_id, evidence_facts)
+        _add_evidence_for_facts(session, evidence_seen, standardized_value.standardized_value_id, evidence_facts)
         seen[lib_layout_key] = standardized_value
         created += 1
 
@@ -1750,7 +1717,7 @@ def map_study_to_faire(session: Session, study_id: str) -> int:
                     StandardizedValueEvidence.standardized_value_id == existing.standardized_value_id
                 )
             )
-            _add_evidence_for_facts(session, existing.standardized_value_id, evidence_facts)
+            _add_evidence_for_facts(session, evidence_seen, existing.standardized_value_id, evidence_facts)
         else:
             standardized_value = StandardizedValue(
                 study_id=study_id,
@@ -1765,7 +1732,7 @@ def map_study_to_faire(session: Session, study_id: str) -> int:
             )
             session.add(standardized_value)
             session.flush()
-            _add_evidence_for_facts(session, standardized_value.standardized_value_id, evidence_facts)
+            _add_evidence_for_facts(session, evidence_seen, standardized_value.standardized_value_id, evidence_facts)
             seen[key] = standardized_value
             created += 1
 
@@ -1857,8 +1824,8 @@ def map_study_to_faire(session: Session, study_id: str) -> int:
         seen[information_withheld_key] = standardized_value
         created += 1
 
-    created += _apply_sample_type_routed_facts(session, study_id, routed_facts_by_field, seen)
-    _annotate_project_control_values(session, study_id, facts, seen)
+    created += _apply_sample_type_routed_facts(session, study_id, routed_facts_by_field, seen, evidence_seen)
+    _annotate_project_control_values(session, study_id, facts, seen, evidence_seen)
 
     return created
 
