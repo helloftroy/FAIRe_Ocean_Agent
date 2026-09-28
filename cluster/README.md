@@ -341,27 +341,34 @@ and releases these automatically before merging each shard (prints
 be picked up by the next `shard_extraction_prep.py` round, not silently
 lost.
 
-**The FAIRe re-mapping pass at the end can legitimately take hours at real
-scale** (each touched study does several of its own DB round trips, and
-Lustre's per-query latency adds up across thousands of studies) -- it
-prints a line per study as it commits (`[123/2063] re-mapped STUDY-xxxx
-(0.4s, 12.3m elapsed total)`), so a silent terminal for a few minutes is
-normal, but a genuinely stuck one should still be showing new lines every
-few seconds to at most a couple of minutes.
+**Both halves of this script can legitimately take hours at real scale --
+a single shard's own merge step, not just the remap pass.** Confirmed
+live: one shard's `INSERT OR IGNORE ... SELECT * FROM shard.raw_facts`
+took ~20 hours by itself on a real cluster run. Both halves now print
+their own progress instead of running silently:
+- Per shard, per table: `    raw_facts: 118402 new row(s) copied (612.4s)`
+  -- a silent terminal for many minutes at real scale is normal on this
+  filesystem, but a genuinely stuck run should still show a new line
+  every few minutes at most.
+- Per study, once merging is done: `[123/2063] re-mapped STUDY-xxxx
+  (0.4s, 12.3m elapsed total)`.
 
-Resubmitting `run_merge_extraction_shards.sbatch` after an interruption
-(a crash, an SSH drop, a SIGTERM) does **not** restart the whole merge
-from scratch -- each shard's own merge step is cheap and idempotent to
-redo, but the expensive remap loop tracks which studies actually finished
-in a small `<manifest>.remap_progress.txt` file next to the manifest,
-updated (and fsynced) right after each study's own commit succeeds. A
-fresh run reads this file first and skips everything already done,
-printing `skipping N stud(y/ies) already re-mapped by a prior
-(interrupted) run` before continuing from wherever it actually left off.
-The file is only deleted once every study finishes cleanly, so it's safe
-to resubmit as many times as needed; it's also how a transient locking
+Resubmitting `run_merge_extraction_shards.sbatch` after an interruption (a
+crash, an SSH drop, a SIGTERM) does **not** restart from scratch. Both the
+per-shard merge and the per-study remap track what actually finished in
+small `<manifest>.merge_progress.txt` / `<manifest>.remap_progress.txt`
+files next to the manifest, updated (and fsynced) right after each
+shard's/study's own commit succeeds -- re-running an ALREADY-merged shard
+from scratch would waste its ~20 hours again just to re-confirm every row
+already exists, since `INSERT OR IGNORE` still has to scan and check
+every row even when it inserts nothing new. A fresh run reads these files
+first and skips everything already done (`shard 1: already merged by a
+prior (interrupted) run -- skipping.` / `skipping N stud(y/ies) already
+re-mapped...`), continuing from wherever it actually left off. Each file
+is only deleted once its whole step finishes cleanly, so it's safe to
+resubmit as many times as needed; this is also how a transient locking
 error (see `with_lock_retry`) recovers without redoing already-committed
-studies.
+work.
 
 **Fallback: `submit_extraction_sequential.sh`.** If you'd rather not run
 the shard/merge scripts (e.g. verifying the simpler path first), this

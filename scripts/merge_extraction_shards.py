@@ -146,8 +146,16 @@ def _redirect_shard_entity_ids(conn: sqlite3.Connection) -> None:
 
 
 def _bulk_copy_remaining_tables(conn: sqlite3.Connection) -> None:
+    # Real gap found live: a real shard's merge step (this function is by
+    # far its most expensive part -- raw_facts especially) took ~20 hours
+    # with zero output the whole time, indistinguishable from a hang. Each
+    # table now prints its own row count and timing as it finishes, same
+    # visibility the remap loop already has.
     for table in _BULK_COPY_TABLES:
-        conn.execute(f"INSERT OR IGNORE INTO main.{table} SELECT * FROM shard.{table}")
+        started = time.monotonic()
+        cursor = conn.execute(f"INSERT OR IGNORE INTO main.{table} SELECT * FROM shard.{table}")
+        elapsed = time.monotonic() - started
+        print(f"    {table}: {cursor.rowcount} new row(s) copied ({elapsed:.1f}s)", flush=True)
 
 
 def _sync_raw_fact_review_status(conn: sqlite3.Connection) -> None:
@@ -210,15 +218,21 @@ def _release_stale_claims_in_shard(shard_db_path: str) -> int:
         engine.dispose()
 
 
+def _timed_step(label: str, fn, *args) -> None:
+    started = time.monotonic()
+    fn(*args)
+    print(f"    {label} ({time.monotonic() - started:.1f}s)", flush=True)
+
+
 def merge_shard(conn: sqlite3.Connection, shard_db_path: str, task_ids: list[str]) -> None:
     conn.execute("ATTACH DATABASE ? AS shard", (shard_db_path,))
     try:
         conn.execute("BEGIN")
-        _merge_entities_and_build_id_map(conn)
-        _redirect_shard_entity_ids(conn)
-        _bulk_copy_remaining_tables(conn)
-        _sync_raw_fact_review_status(conn)
-        _sync_task_lifecycle(conn, task_ids)
+        _timed_step("entities merged", _merge_entities_and_build_id_map, conn)
+        _timed_step("entity ids redirected", _redirect_shard_entity_ids, conn)
+        _bulk_copy_remaining_tables(conn)  # prints its own per-table progress
+        _timed_step("raw_facts review_status synced", _sync_raw_fact_review_status, conn)
+        _timed_step("task lifecycle synced", _sync_task_lifecycle, conn, task_ids)
         conn.execute("DROP TABLE IF EXISTS temp.entity_id_map")
         conn.commit()
     except Exception:
@@ -228,34 +242,32 @@ def merge_shard(conn: sqlite3.Connection, shard_db_path: str, task_ids: list[str
         conn.execute("DETACH DATABASE shard")
 
 
-def _remap_progress_path(manifest_path: Path) -> Path:
-    """Real gap found live: restarting this WHOLE script after a crash had
-    no memory of a prior invocation -- each study's StandardizedValue rows
-    ARE already safely committed (see _remap_one_study's own comment), but
-    a fresh process re-ran _remap_touched_studies from study #1 again
-    regardless, discarding hours of already-committed, still-valid work on
-    every restart. This file is the durable record of which studies are
-    already done, checked at the START of a new process, not just within
-    one already-running one. Scoped to the manifest's own path so a
-    genuinely new shard_extraction_prep.py round (a new manifest,
+def _progress_path(manifest_path: Path, suffix: str) -> Path:
+    """Real gap found live -- twice, for two different steps of this same
+    script: restarting the WHOLE process after an interruption had no
+    memory of a PRIOR invocation, so a fresh process redid a step's entire
+    (many-hour) cost again even though its actual work was already durably
+    committed. This file is the durable record of which units (shards, or
+    studies) are already done, checked at the START of a new process, not
+    just within one already-running one. Scoped to the manifest's own path
+    so a genuinely new shard_extraction_prep.py round (a new manifest,
     overwritten in place at the same path) never inherits stale progress
     left over from an old one -- see build_shards' own cleanup."""
-    return manifest_path.with_name(manifest_path.name + ".remap_progress.txt")
+    return manifest_path.with_name(f"{manifest_path.name}.{suffix}")
 
 
-def _load_remap_progress(progress_path: Path) -> set[str]:
+def _load_progress(progress_path: Path) -> set[str]:
     if not progress_path.is_file():
         return set()
     return {line.strip() for line in progress_path.read_text().splitlines() if line.strip()}
 
 
-def _record_remap_progress(progress_path: Path, study_id: str) -> None:
+def _record_progress(progress_path: Path, item: str) -> None:
     # Append-and-fsync, not a rewrite-the-whole-file-each-time: durable
     # even across a hard kill (SIGTERM/SIGKILL) right after this call, and
-    # O(1) per study instead of O(n) with the list rewritten every time
-    # across a couple thousand studies.
+    # O(1) per item instead of O(n) with the list rewritten every time.
     with progress_path.open("a") as f:
-        f.write(f"{study_id}\n")
+        f.write(f"{item}\n")
         f.flush()
         os.fsync(f.fileno())
 
@@ -276,7 +288,7 @@ def _remap_one_study(session, study_id: str) -> None:
 
 def _remap_touched_studies(study_ids: list[str], progress_path: Path) -> None:
     total = len(study_ids)
-    already_done = _load_remap_progress(progress_path)
+    already_done = _load_progress(progress_path)
     remaining = [study_id for study_id in study_ids if study_id not in already_done]
     skipped = total - len(remaining)
     if skipped:
@@ -293,7 +305,7 @@ def _remap_touched_studies(study_ids: list[str], progress_path: Path) -> None:
             # Recorded only AFTER _remap_one_study's own commit succeeds --
             # a study is never marked done until its StandardizedValue rows
             # are actually durable.
-            _record_remap_progress(progress_path, study_id)
+            _record_progress(progress_path, study_id)
             elapsed = time.monotonic() - started
             total_elapsed = time.monotonic() - started_all
             print(
@@ -312,9 +324,24 @@ def merge_all_shards(manifest: ShardManifest, manifest_path: Path) -> None:
     # from a single, solitary process, almost certainly because some
     # OTHER process is concurrently touching the same shared database
     # file right now.
+    # Real gap found live: a single shard's own merge (its raw_facts copy
+    # especially) can legitimately take ~20 hours on this cluster's
+    # Lustre mount -- exactly the kind of expensive-and-restartable step
+    # the remap loop already learned this lesson for. Re-running an
+    # ALREADY-merged shard from scratch on a restart would waste another
+    # ~20 hours just to re-confirm every row already exists (INSERT OR
+    # IGNORE still has to scan and check every row even when it inserts
+    # nothing new), so shard-level progress is tracked the same way.
+    merge_progress_path = _progress_path(manifest_path, "merge_progress.txt")
+    already_merged = _load_progress(merge_progress_path)
+
     conn = sqlite3.connect(manifest.main_db_path)
     try:
         for shard in manifest.shards:
+            shard_key = str(shard.shard_index)
+            if shard_key in already_merged:
+                print(f"shard {shard.shard_index}: already merged by a prior (interrupted) run -- skipping.")
+                continue
             released = with_lock_retry(_release_stale_claims_in_shard, shard.db_path)
             if released:
                 print(
@@ -324,13 +351,20 @@ def merge_all_shards(manifest: ShardManifest, manifest_path: Path) -> None:
                 )
             print(f"merging shard {shard.shard_index} ({shard.db_path}, {len(shard.task_ids)} task(s))...")
             with_lock_retry(merge_shard, conn, shard.db_path, shard.task_ids)
+            # Recorded only AFTER merge_shard's own commit succeeds -- a
+            # shard is never marked done until its rows are actually
+            # durable in the main database.
+            _record_progress(merge_progress_path, shard_key)
     finally:
         conn.close()
+    # Only reached once every shard merged -- leave the file in place on
+    # any failure/interruption so the next run knows what to skip.
+    merge_progress_path.unlink(missing_ok=True)
 
     study_ids = manifest.all_study_ids()
     print(f"re-mapping {len(study_ids)} touched stud(y/ies) with full cross-shard visibility...")
-    progress_path = _remap_progress_path(manifest_path)
-    with_lock_retry(_remap_touched_studies, study_ids, progress_path)
+    remap_progress_path = _progress_path(manifest_path, "remap_progress.txt")
+    with_lock_retry(_remap_touched_studies, study_ids, remap_progress_path)
 
 
 def _archive_shards(manifest: ShardManifest, shard_dir: Path) -> None:

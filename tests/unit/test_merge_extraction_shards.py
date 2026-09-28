@@ -229,6 +229,51 @@ def test_release_stale_claims_in_shard_resets_a_claim_orphaned_by_a_killed_array
     verify_engine.dispose()
 
 
+def test_merge_all_shards_skips_already_merged_shards_on_a_fresh_call(tmp_path, main_path, monkeypatch):
+    """Real gap found live: a single shard's own merge (its raw_facts copy
+    especially) can legitimately take ~20 hours on a real cluster's
+    Lustre mount -- a restart that redid an ALREADY-merged shard from
+    scratch would waste that same ~20 hours again just to re-confirm
+    every row already exists (INSERT OR IGNORE still scans and checks
+    every row even when it inserts nothing new). A prior (interrupted)
+    run's recorded progress must make a fresh call skip it entirely,
+    mirroring _remap_touched_studies' own resumability."""
+    from fair_ocean_agent.config import reset_config_cache
+    from fair_ocean_agent.database.session import reset_engine_cache
+
+    study = _seed_main_with_one_study(main_path)
+    shard_path = tmp_path / "shard_1.db"
+    _copy_schema_and_rows_from(main_path, shard_path)
+
+    manifest_path = tmp_path / "manifest.json"
+    manifest = ShardManifest(
+        main_db_path=str(main_path),
+        shards=[ShardManifestEntry(shard_index=1, db_path=str(shard_path), task_ids=[], study_ids=[study.study_id])],
+    )
+    progress_path = tmp_path / "manifest.json.merge_progress.txt"
+    progress_path.write_text("1\n")  # simulates a prior, already-completed merge of shard 1
+
+    calls = []
+    real_merge_shard = mes.merge_shard
+
+    def _tracking_merge_shard(conn, shard_db_path, task_ids):
+        calls.append(shard_db_path)
+        return real_merge_shard(conn, shard_db_path, task_ids)
+
+    monkeypatch.setattr(mes, "merge_shard", _tracking_merge_shard)
+    monkeypatch.setenv("FAIR_OCEAN_DATABASE_URL", f"sqlite:///{main_path}")
+    reset_config_cache()
+    reset_engine_cache()
+    try:
+        mes.merge_all_shards(manifest, manifest_path)
+    finally:
+        reset_engine_cache()
+        reset_config_cache()
+
+    assert calls == []  # never re-merged the already-done shard
+    assert not progress_path.exists()  # a fully clean run still clears the file
+
+
 def test_merge_all_shards_does_not_propagate_an_orphaned_claim_into_main(tmp_path, main_path, monkeypatch):
     """End-to-end via the manifest-driven entry point: a task a killed array
     task left stuck 'claimed' inside its own shard must land somewhere
@@ -446,7 +491,7 @@ def test_remap_touched_studies_commits_each_study_before_moving_to_the_next(tmp_
 
     # The crash left the progress file in place (not cleaned up), recording
     # exactly the one study that actually finished.
-    assert mes._load_remap_progress(progress_path) == {study_a.study_id}
+    assert mes._load_progress(progress_path) == {study_a.study_id}
 
     verify_engine = _file_db(main_path)
     verify_session = _session_for(verify_engine)
