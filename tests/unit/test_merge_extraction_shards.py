@@ -230,6 +230,58 @@ def test_release_stale_claims_in_shard_resets_a_claim_orphaned_by_a_killed_array
     verify_engine.dispose()
 
 
+def test_merge_progress_survives_a_remap_failure_after_merging_succeeds(tmp_path, main_path, monkeypatch):
+    """Real gap found live: merge_progress_path was deleted right after the
+    shard-merge loop finished, BEFORE the remap step even started. A real
+    job that died mid-remap (e.g. hitting its 48h SLURM time limit) had
+    already lost its record that the (multi-hour) shard merges were done,
+    so resubmitting redid every one of them from scratch even though they
+    never needed to be touched again. The file must only be cleared once
+    BOTH the merge loop and the remap step succeed."""
+    from fair_ocean_agent.config import reset_config_cache
+    from fair_ocean_agent.database.session import reset_engine_cache
+
+    study = _seed_main_with_one_study(main_path)
+    shard_path = tmp_path / "shard_1.db"
+    _copy_schema_and_rows_from(main_path, shard_path)
+    engine = _file_db(shard_path)
+    session = _session_for(engine)
+    session.add(
+        RawFact(
+            study_id=study.study_id, fact_type_candidate="target_gene", raw_field_name="target_gene",
+            raw_value="16S rRNA", entity_level=EntityLevel.PROJECT.value, support_type=SupportType.EXPLICIT.value,
+        )
+    )
+    session.commit()
+    session.close()
+    engine.dispose()
+
+    manifest_path = tmp_path / "manifest.json"
+    manifest = ShardManifest(
+        main_db_path=str(main_path),
+        shards=[ShardManifestEntry(shard_index=1, db_path=str(shard_path), task_ids=[], study_ids=[study.study_id])],
+    )
+    merge_progress_path = tmp_path / "manifest.json.merge_progress.txt"
+
+    def _blow_up(session, study_id):
+        raise RuntimeError("boom -- simulates the job dying mid-remap (e.g. the 48h SLURM time limit)")
+
+    monkeypatch.setattr(mes, "map_study_to_faire", _blow_up)
+    monkeypatch.setenv("FAIR_OCEAN_DATABASE_URL", f"sqlite:///{main_path}")
+    reset_config_cache()
+    reset_engine_cache()
+    try:
+        with pytest.raises(RuntimeError, match="boom"):
+            mes.merge_all_shards(manifest, manifest_path)
+    finally:
+        reset_engine_cache()
+        reset_config_cache()
+
+    # The shard merge itself succeeded before the remap step blew up --
+    # that must still be recorded, not silently lost.
+    assert mes._load_progress(merge_progress_path) == {"1"}
+
+
 def test_merge_all_shards_skips_already_merged_shards_on_a_fresh_call(tmp_path, main_path, monkeypatch):
     """Real gap found live: a single shard's own merge (its raw_facts copy
     especially) can legitimately take ~20 hours on a real cluster's

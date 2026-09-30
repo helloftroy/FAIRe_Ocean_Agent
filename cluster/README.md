@@ -364,8 +364,12 @@ already exists, since `INSERT OR IGNORE` still has to scan and check
 every row even when it inserts nothing new. A fresh run reads these files
 first and skips everything already done (`shard 1: already merged by a
 prior (interrupted) run -- skipping.` / `skipping N stud(y/ies) already
-re-mapped...`), continuing from wherever it actually left off. Each file
-is only deleted once its whole step finishes cleanly, so it's safe to
+re-mapped...`), continuing from wherever it actually left off. Both files
+are only deleted once the ENTIRE run (every shard merged AND every study
+remapped) finishes cleanly -- the merge-progress file specifically is
+*not* cleared just because the shard-merge loop itself finished, since a
+later failure/interruption during the (also multi-hour) remap step must
+not lose the record that the merges were already done. So it's safe to
 resubmit as many times as needed; this is also how a transient locking
 error (see `with_lock_retry`) recovers without redoing already-committed
 work.

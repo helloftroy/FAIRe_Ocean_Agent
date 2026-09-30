@@ -424,15 +424,20 @@ def merge_all_shards(manifest: ShardManifest, manifest_path: Path) -> None:
             _record_progress(merge_progress_path, shard_key)
     finally:
         conn.close()
-    # Only reached once every shard merged -- leave the file in place on
-    # any failure/interruption so the next run knows what to skip.
-    merge_progress_path.unlink(missing_ok=True)
 
     study_ids = manifest.all_study_ids()
     print(f"re-mapping {len(study_ids)} touched stud(y/ies) with full cross-shard visibility...")
     remap_progress_path = _progress_path(manifest_path, "remap_progress.txt")
     remap_timed_out_path = _progress_path(manifest_path, "remap_timed_out.txt")
     with_lock_retry(_remap_touched_studies, study_ids, remap_progress_path, remap_timed_out_path)
+
+    # Real gap found live: deleting merge_progress_path right after the
+    # shard loop above (before the remap step even started) meant a job
+    # that died mid-REMAP had already lost its record of which shards were
+    # merged -- a resubmit had no way to know the (multi-hour) shard merges
+    # were already done and redid every one of them from scratch. Only
+    # reached once BOTH the merge loop and the remap step succeed.
+    merge_progress_path.unlink(missing_ok=True)
 
 
 def _archive_shards(manifest: ShardManifest, shard_dir: Path) -> None:
