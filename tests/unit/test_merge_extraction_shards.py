@@ -7,6 +7,7 @@ big fixture.
 """
 import sqlite3
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -482,9 +483,10 @@ def test_remap_touched_studies_commits_each_study_before_moving_to_the_next(tmp_
     reset_config_cache()
     reset_engine_cache()
     progress_path = tmp_path / "manifest.json.remap_progress.txt"
+    timed_out_path = tmp_path / "manifest.json.remap_timed_out.txt"
     try:
         with pytest.raises(RuntimeError, match="boom"):
-            mes._remap_touched_studies([study_a.study_id, study_b.study_id], progress_path)
+            mes._remap_touched_studies([study_a.study_id, study_b.study_id], progress_path, timed_out_path)
     finally:
         reset_engine_cache()
         reset_config_cache()
@@ -501,6 +503,72 @@ def test_remap_touched_studies_commits_each_study_before_moving_to_the_next(tmp_
     verify_engine.dispose()
 
 
+def test_remap_touched_studies_times_out_a_stuck_study_and_continues(tmp_path, main_path, monkeypatch):
+    """Real gap found live: a real cluster run got stuck on ONE study for
+    roughly a day (average is ~1 study/minute) before its 48h SLURM time
+    limit killed the whole job -- with no per-study bound, one
+    pathological study can silently consume an entire multi-day job's
+    walltime instead of just its own share. A study whose own
+    map_study_to_faire call exceeds the configured timeout must be logged
+    and skipped, not allowed to block every study after it."""
+    from fair_ocean_agent.config import reset_config_cache
+    from fair_ocean_agent.database.models import StandardizedValue
+    from fair_ocean_agent.database.session import reset_engine_cache
+
+    study_stuck = _seed_main_with_one_study(main_path)
+    engine = _file_db(main_path)
+    session = _session_for(engine)
+    study_normal = Study(title="second study, processed normally after the stuck one")
+    session.add(study_normal)
+    session.commit()
+    session.add(
+        RawFact(
+            study_id=study_normal.study_id, fact_type_candidate="target_gene", raw_field_name="target_gene",
+            raw_value="18S rRNA", entity_level=EntityLevel.PROJECT.value, support_type=SupportType.EXPLICIT.value,
+        )
+    )
+    session.commit()
+    session.close()
+    engine.dispose()
+
+    real_map_study_to_faire = mes.map_study_to_faire
+
+    def _hang_then_normal(session, study_id):
+        if study_id == study_stuck.study_id:
+            time.sleep(5)  # longer than the 1s timeout below -- SIGALRM must interrupt this
+            return None
+        return real_map_study_to_faire(session, study_id)
+
+    monkeypatch.setattr(mes, "map_study_to_faire", _hang_then_normal)
+    monkeypatch.setenv("FAIR_OCEAN_DATABASE_URL", f"sqlite:///{main_path}")
+    monkeypatch.setenv(mes.STUDY_REMAP_TIMEOUT_ENV_VAR, "1")
+    reset_config_cache()
+    reset_engine_cache()
+    progress_path = tmp_path / "manifest.json.remap_progress.txt"
+    timed_out_path = tmp_path / "manifest.json.remap_timed_out.txt"
+    try:
+        mes._remap_touched_studies([study_stuck.study_id, study_normal.study_id], progress_path, timed_out_path)
+    finally:
+        reset_engine_cache()
+        reset_config_cache()
+
+    # The run finished cleanly (progress file cleared) instead of hanging
+    # forever on study_stuck, which is recorded separately for follow-up.
+    assert not progress_path.exists()
+    assert mes._load_progress(timed_out_path) == {study_stuck.study_id}
+
+    verify_engine = _file_db(main_path)
+    verify_session = _session_for(verify_engine)
+    values = (
+        verify_session.query(StandardizedValue)
+        .filter_by(study_id=study_normal.study_id, target_field="target_gene")
+        .all()
+    )
+    assert len(values) == 1  # the study AFTER the stuck one still got processed normally
+    verify_session.close()
+    verify_engine.dispose()
+
+
 def test_remap_touched_studies_skips_already_done_studies_on_a_fresh_call(tmp_path, main_path, monkeypatch):
     """Real gap found live: restarting the WHOLE script after a crash had no
     memory of a prior invocation -- a plain resubmit reprocessed every study
@@ -513,6 +581,7 @@ def test_remap_touched_studies_skips_already_done_studies_on_a_fresh_call(tmp_pa
 
     study = _seed_main_with_one_study(main_path)
     progress_path = tmp_path / "manifest.json.remap_progress.txt"
+    timed_out_path = tmp_path / "manifest.json.remap_timed_out.txt"
     progress_path.write_text(f"{study.study_id}\n")  # simulates a prior, already-completed run
 
     calls = []
@@ -527,7 +596,7 @@ def test_remap_touched_studies_skips_already_done_studies_on_a_fresh_call(tmp_pa
     reset_config_cache()
     reset_engine_cache()
     try:
-        mes._remap_touched_studies([study.study_id], progress_path)
+        mes._remap_touched_studies([study.study_id], progress_path, timed_out_path)
     finally:
         reset_engine_cache()
         reset_config_cache()

@@ -370,6 +370,26 @@ resubmit as many times as needed; this is also how a transient locking
 error (see `with_lock_retry`) recovers without redoing already-committed
 work.
 
+**One study genuinely hanging (not just slow) is bounded, not fatal to
+the whole job.** Confirmed live: a real run got stuck on one study for
+roughly a day (average is ~1 study/minute) before its 48h SLURM time
+limit killed the entire job -- a resubmit alone would have just retried
+the same study and risked hanging again. Each study's own
+`map_study_to_faire` call is now bounded by a 30-minute timeout
+(`FAIR_OCEAN_REMAP_STUDY_TIMEOUT_SECONDS` to override). A study that
+exceeds it prints `TIMED OUT re-mapping STUDY-xxxx...`, is recorded in
+`<manifest>.remap_timed_out.txt` for manual follow-up, and is skipped so
+the rest of the run continues -- its FAIRe mapping is left stale (not
+updated with this round's cross-shard data) rather than blocking
+everything after it. Check that file after a run finishes; a study
+listed there needs investigating by hand (what's unusual about its
+data), not just re-running, since whatever made it slow enough to hit the
+timeout is likely to still be there. Caveat: a signal-based timeout can
+only interrupt at a point Python is actually executing -- it cannot
+interrupt a single blocking C-level syscall (e.g. a `read()` truly stuck
+waiting on a filesystem lock), so it catches a genuine performance
+pathology but not every possible hang.
+
 **Fallback: `submit_extraction_sequential.sh`.** If you'd rather not run
 the shard/merge scripts (e.g. verifying the simpler path first), this
 submits `run_extraction_parallel.sbatch` as a chain of single (non-array)

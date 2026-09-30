@@ -70,6 +70,7 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
+import signal
 import sqlite3
 import time
 from pathlib import Path
@@ -272,21 +273,61 @@ def _record_progress(progress_path: Path, item: str) -> None:
         os.fsync(f.fileno())
 
 
+class StudyRemapTimedOut(Exception):
+    pass
+
+
+# Real gap found live: a real cluster run got stuck on ONE study for
+# roughly a day (average is ~1 study/minute) before its 48h SLURM time
+# limit killed the whole job -- with no per-study bound, one pathological
+# study (e.g. an unusually large raw_facts set, or a whole-corpus lookup
+# that's grown expensive as the merged database has grown) can silently
+# burn the ENTIRE job's remaining walltime instead of just its own share.
+# 30 minutes is generous against the observed ~1-136s/study range while
+# still bounding the damage from any one study to a small fraction of a
+# 48h job. Overridable via env var without a code change, matching
+# FAIR_OCEAN_SKIP_SQLITE_WAL's own precedent.
+_DEFAULT_STUDY_REMAP_TIMEOUT_SECONDS = 1800
+STUDY_REMAP_TIMEOUT_ENV_VAR = "FAIR_OCEAN_REMAP_STUDY_TIMEOUT_SECONDS"
+
+
+def _study_remap_timeout_seconds() -> int:
+    raw = os.environ.get(STUDY_REMAP_TIMEOUT_ENV_VAR)
+    return int(raw) if raw else _DEFAULT_STUDY_REMAP_TIMEOUT_SECONDS
+
+
 def _remap_one_study(session, study_id: str) -> None:
-    map_study_to_faire(session, study_id)
-    # Real gap found live: with a single commit for the WHOLE loop, a real
-    # 1702-study remap on the cluster ran silently for 1.5+ hours with zero
-    # visible progress (nothing prints between studies) and would have lost
-    # ALL of it on any interruption (SSH drop, SIGTERM, a transient locking
-    # error) since nothing had actually been committed yet. Committing here,
-    # per study, makes each one durable as soon as it finishes -- a later
-    # interruption only ever loses the one study in flight, not the whole
-    # run -- and is what makes the print below a real, truthful progress
-    # signal rather than one big opaque transaction.
-    session.commit()
+    def _raise_timeout(signum, frame):  # noqa: ANN001, ARG001
+        raise StudyRemapTimedOut(study_id)
+
+    timeout_seconds = _study_remap_timeout_seconds()
+    # SIGALRM only interrupts at a point the Python interpreter is actually
+    # running bytecode -- it cannot interrupt a single blocking C-level
+    # syscall (e.g. a read() truly stuck waiting on a filesystem lock).
+    # This catches the common case (a genuinely slow computation: a large
+    # per-fact loop, an expensive corpus-wide lookup) but not a true
+    # kernel-level hang -- for that, only the OS/SLURM killing the whole
+    # process can help, which is why this is a safety net, not a promise.
+    previous_handler = signal.signal(signal.SIGALRM, _raise_timeout)
+    signal.alarm(timeout_seconds)
+    try:
+        map_study_to_faire(session, study_id)
+        # Real gap found live: with a single commit for the WHOLE loop, a real
+        # 1702-study remap on the cluster ran silently for 1.5+ hours with zero
+        # visible progress (nothing prints between studies) and would have lost
+        # ALL of it on any interruption (SSH drop, SIGTERM, a transient locking
+        # error) since nothing had actually been committed yet. Committing here,
+        # per study, makes each one durable as soon as it finishes -- a later
+        # interruption only ever loses the one study in flight, not the whole
+        # run -- and is what makes the print below a real, truthful progress
+        # signal rather than one big opaque transaction.
+        session.commit()
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous_handler)
 
 
-def _remap_touched_studies(study_ids: list[str], progress_path: Path) -> None:
+def _remap_touched_studies(study_ids: list[str], progress_path: Path, timed_out_path: Path) -> None:
     total = len(study_ids)
     already_done = _load_progress(progress_path)
     remaining = [study_id for study_id in study_ids if study_id not in already_done]
@@ -301,7 +342,32 @@ def _remap_touched_studies(study_ids: list[str], progress_path: Path) -> None:
     with session_scope() as session:
         for index, study_id in enumerate(remaining, start=skipped + 1):
             started = time.monotonic()
-            with_lock_retry(_remap_one_study, session, study_id)
+            try:
+                with_lock_retry(_remap_one_study, session, study_id)
+            except StudyRemapTimedOut:
+                # A raised exception mid-ORM-operation leaves the session
+                # needing a rollback before it is safe to use for the next
+                # study -- session_scope()'s own rollback only fires if
+                # this propagates all the way out, which would abandon
+                # every OTHER remaining study too.
+                session.rollback()
+                elapsed = time.monotonic() - started
+                print(
+                    f"  [{index}/{total}] TIMED OUT re-mapping {study_id} after {elapsed:.0f}s "
+                    f"(limit {_study_remap_timeout_seconds()}s, see {STUDY_REMAP_TIMEOUT_ENV_VAR}) -- "
+                    f"recorded in {timed_out_path} for manual follow-up. Its FAIRe mapping is "
+                    "left stale (not updated with this round's cross-shard data) rather than "
+                    "blocking the rest of this run.",
+                    flush=True,
+                )
+                _record_progress(timed_out_path, study_id)
+                # Also recorded as "done" here -- the alternative (retrying
+                # it forever) risks the exact multi-day block this timeout
+                # exists to prevent. A human needs to look at this study
+                # specifically; skipping it silently forever is not
+                # acceptable, so it stays logged in timed_out_path above.
+                _record_progress(progress_path, study_id)
+                continue
             # Recorded only AFTER _remap_one_study's own commit succeeds --
             # a study is never marked done until its StandardizedValue rows
             # are actually durable.
@@ -312,8 +378,9 @@ def _remap_touched_studies(study_ids: list[str], progress_path: Path) -> None:
                 f"  [{index}/{total}] re-mapped {study_id} ({elapsed:.1f}s, {total_elapsed / 60:.1f}m elapsed total)",
                 flush=True,
             )
-    # Only reached once every study succeeded -- leave the file in place on
-    # any failure/interruption so the next run knows what to skip.
+    # Only reached once every study reached SOME resolution (mapped or
+    # timed-out-and-logged) -- leave the file in place on any other
+    # failure/interruption so the next run knows what to skip.
     progress_path.unlink(missing_ok=True)
 
 
@@ -364,7 +431,8 @@ def merge_all_shards(manifest: ShardManifest, manifest_path: Path) -> None:
     study_ids = manifest.all_study_ids()
     print(f"re-mapping {len(study_ids)} touched stud(y/ies) with full cross-shard visibility...")
     remap_progress_path = _progress_path(manifest_path, "remap_progress.txt")
-    with_lock_retry(_remap_touched_studies, study_ids, remap_progress_path)
+    remap_timed_out_path = _progress_path(manifest_path, "remap_timed_out.txt")
+    with_lock_retry(_remap_touched_studies, study_ids, remap_progress_path, remap_timed_out_path)
 
 
 def _archive_shards(manifest: ShardManifest, shard_dir: Path) -> None:
