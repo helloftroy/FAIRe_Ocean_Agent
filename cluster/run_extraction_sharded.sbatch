@@ -144,18 +144,33 @@ elif [ "${LLM_BACKEND}" = "vllm" ]; then
   SERVER_PID=$!
   trap '[ -n "${SERVER_PID}" ] && kill "${SERVER_PID}" 2>/dev/null || true' EXIT
 
-  echo "Waiting for vllm to respond (model loading can take a few minutes)..."
-  for _ in $(seq 1 60); do
-    if curl -s -m 5 http://localhost:8000/v1/models >/dev/null 2>&1; then
-      echo "vllm is up."
-      break
+  VLLM_STARTUP_TIMEOUT_SECONDS="${VLLM_STARTUP_TIMEOUT_SECONDS:-1800}"
+  VLLM_LOG="logs/vllm_${SLURM_ARRAY_JOB_ID:-$SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}.log"
+  echo "Waiting for vllm to respond (up to ${VLLM_STARTUP_TIMEOUT_SECONDS}s -- model loading and KV-cache profiling can take many minutes on a cold cache)..."
+  waited=0
+  until curl -s -m 5 http://localhost:8000/v1/models >/dev/null 2>&1; do
+    # Real gap found live: a fixed 5-minute wait gave up on a server that
+    # was still legitimately loading (the log showed it mid-startup, not
+    # crashed), and the job failed with no hint of why. Fail fast if the
+    # server process actually dies, otherwise wait up to the timeout, and
+    # show the log tail either way so the real cause is visible.
+    if ! kill -0 "${SERVER_PID}" 2>/dev/null; then
+      echo "vllm server process exited before becoming ready. Last log lines:" >&2
+      tail -n 30 "${VLLM_LOG}" >&2
+      exit 1
+    fi
+    if [ "${waited}" -ge "${VLLM_STARTUP_TIMEOUT_SECONDS}" ]; then
+      echo "vllm did not become responsive within ${VLLM_STARTUP_TIMEOUT_SECONDS}s. Last log lines:" >&2
+      tail -n 30 "${VLLM_LOG}" >&2
+      exit 1
+    fi
+    if [ "${waited}" -gt 0 ] && [ $((waited % 60)) -eq 0 ]; then
+      echo "  still waiting on vllm (${waited}s elapsed): $(tail -n 1 "${VLLM_LOG}" 2>/dev/null | cut -c1-200)"
     fi
     sleep 5
+    waited=$((waited + 5))
   done
-  if ! curl -s -m 5 http://localhost:8000/v1/models >/dev/null 2>&1; then
-    echo "vllm did not become responsive in time -- check the log above." >&2
-    exit 1
-  fi
+  echo "vllm is up (after ${waited}s)."
 
 elif [ "${LLM_BACKEND}" = "external" ]; then
   echo "LLM_BACKEND=external: not starting a server, trusting config/local.yaml's base_url."
