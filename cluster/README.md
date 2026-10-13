@@ -285,6 +285,32 @@ tolerate more parallelism (`--array=1-8` or higher). See the script's own
 header comment for the full reasoning, and watch the per-array-task logs
 for repeated 429/rate-limit errors if you scale up.
 
+## Pausing citation expansion to finish the studies you already have
+
+After a study's identifiers are resolved, the pipeline queues one PubMed
+"which papers cite this?" lookup (`DISCOVER_CITING_STUDIES`) per BioProject
+**and per BioSample** accession. At real scale that is the bulk of the
+queue (confirmed live: ~890,000 lookups for ~10,000 seed studies), and
+every lookup still pending keeps its study from being marked settled,
+which holds back FAIRe mapping and validation behind it.
+
+To finish the studies already in the database first, pause that step:
+
+```bash
+sbatch --account=191001-364393 \
+  --export=ALL,NCBI_API_KEY,FAIR_OCEAN_CITATION_EXPANSION_ENABLED=0,FAIR_OCEAN_LOCAL_PDF_DIR=$(pwd)/data/local_pdfs \
+  cluster/run_discovery.sbatch
+```
+
+(or set `discovery: {citation_expansion_enabled: false}` in
+`config/local.yaml`). While paused: no new lookups are queued, the worker
+never claims the ones already pending, and the settle check stops waiting
+on them. Nothing is deleted -- the pending lookups stay pending, so
+dropping the variable (or setting it to 1) resumes them where they were.
+A study whose identifiers were resolved *while paused* only gets its
+lookups queued the next time its identifier discovery runs with the
+switch back on.
+
 ## Speeding up extraction: three ways to parallelize
 
 `run_extraction_parallel.sbatch` (each array task gets its own GPU/vLLM

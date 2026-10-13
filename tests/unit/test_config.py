@@ -104,3 +104,17 @@ def test_supplement_llm_env_override_is_explicit(monkeypatch, tmp_path):
     assert config.supplements.llm_text_extraction_enabled is True
     reset_config_cache()
     monkeypatch.delenv("FAIR_OCEAN_SUPPLEMENT_LLM_ENABLED", raising=False)
+
+
+def test_citation_expansion_pause_env_override(monkeypatch, tmp_path):
+    """discovery.citation_expansion_enabled defaults on, and
+    FAIR_OCEAN_CITATION_EXPANSION_ENABLED=0 (e.g. via sbatch --export)
+    pauses it without editing config/local.yaml on the cluster."""
+    reset_config_cache()
+    monkeypatch.delenv("FAIR_OCEAN_CITATION_EXPANSION_ENABLED", raising=False)
+    assert load_config(env_file=tmp_path / "does-not-exist.env").discovery.citation_expansion_enabled is True
+
+    reset_config_cache()
+    monkeypatch.setenv("FAIR_OCEAN_CITATION_EXPANSION_ENABLED", "0")
+    assert load_config(env_file=tmp_path / "does-not-exist.env").discovery.citation_expansion_enabled is False
+    reset_config_cache()

@@ -198,3 +198,53 @@ def test_reopen_flips_settled_members_back_to_pending(db_session):
     assert study_a.entity_component_status == ComponentStatus.PENDING.value
     assert study_b.entity_component_status == ComponentStatus.PENDING.value
     assert db_session.query(Task).filter_by(task_type=TaskType.CHECK_COMPONENT_SETTLED.value).count() == 1
+
+
+def test_paused_citation_lookups_do_not_hold_a_component_open(db_session, monkeypatch):
+    """Real gap found live: ~680,000 DISCOVER_CITING_STUDIES tasks sat
+    pending behind a slow identifier queue, and every one of them counted
+    as in-flight discovery -- so no component could settle and MAP_FAIRE
+    never got queued. With citation expansion paused those tasks are never
+    going to be claimed, so they must not block settling; with it on
+    (the default) the same pending task still must."""
+    study_a = _study(db_session, title="Study A")
+    study_b = _study(db_session, title="Study B")
+    entity = _shared_entity(db_session, study_a, [study_b])
+    db_session.add(
+        RawFact(
+            study_id=study_a.study_id, entity_id=entity.entity_id, fact_type_candidate="depth", raw_value="10",
+            entity_level=EntityLevel.SAMPLE.value, support_type=SupportType.STRUCTURED_SOURCE.value,
+        )
+    )
+    db_session.add(
+        Task(
+            task_type=TaskType.DISCOVER_CITING_STUDIES.value, study_id=study_b.study_id,
+            status=TaskStatus.PENDING.value, idempotency_key="DISCOVER_CITING_STUDIES:biosample:SAMN1",
+        )
+    )
+    db_session.commit()
+    snapshot = sorted([study_a.study_id, study_b.study_id])
+
+    enabled_task = enqueue_task(
+        db_session, TaskType.CHECK_COMPONENT_SETTLED, study_id=study_a.study_id,
+        idempotency_key="settle-enabled", payload={"last_component_snapshot": snapshot, "generation": 1},
+    )
+    handle_check_component_settled(db_session, enabled_task)
+    db_session.commit()
+    db_session.refresh(study_a)
+    assert study_a.entity_component_status != ComponentStatus.SETTLED.value
+
+    monkeypatch.setattr(
+        settle_handlers, "load_config", lambda: AppConfig(discovery=DiscoveryConfig(citation_expansion_enabled=False))
+    )
+    paused_task = enqueue_task(
+        db_session, TaskType.CHECK_COMPONENT_SETTLED, study_id=study_a.study_id,
+        idempotency_key="settle-paused", payload={"last_component_snapshot": snapshot, "generation": 1},
+    )
+    handle_check_component_settled(db_session, paused_task)
+    db_session.commit()
+    db_session.refresh(study_a)
+    assert study_a.entity_component_status == ComponentStatus.SETTLED.value
+    assert db_session.query(Task).filter_by(task_type=TaskType.MAP_FAIRE.value, study_id=study_a.study_id).count() == 1
+    # The paused lookup itself is left exactly as it was, ready to resume.
+    assert db_session.query(Task).filter_by(task_type=TaskType.DISCOVER_CITING_STUDIES.value).one().status == TaskStatus.PENDING.value

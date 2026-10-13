@@ -416,6 +416,15 @@ def worker_command(
     elif no_llm:
         task_types = [t for t in TaskType if t not in _LLM_TASK_TYPES]
 
+    # discovery.citation_expansion_enabled: false pauses the whole
+    # DISCOVER_CITING_STUDIES step (see config.py's own comment) -- the
+    # tasks already queued stay pending, they just are not claimed. An
+    # explicit --task-type DISCOVER_CITING_STUDIES still wins, so one
+    # deliberate pass stays possible without flipping the switch.
+    if not load_config().discovery.citation_expansion_enabled and not task_type:
+        task_types = [t for t in (task_types or list(TaskType)) if t is not TaskType.DISCOVER_CITING_STUDIES]
+        console.print("Citation expansion is paused -- not claiming DISCOVER_CITING_STUDIES tasks.")
+
     try:
         with session_scope() as session:
             summary = run_worker(

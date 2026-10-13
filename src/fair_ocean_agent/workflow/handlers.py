@@ -1602,7 +1602,19 @@ def handle_discover_identifiers(session: Session, task: Task) -> None:
     # dedup table needed (see handle_discover_citing_studies).
     from fair_ocean_agent.workflow.task_queue import enqueue_task
 
-    for bioproject_accession in _identifier_values(session, study.study_id, IdentifierType.BIOPROJECT_ACCESSION):
+    # Skipped entirely while discovery.citation_expansion_enabled is False
+    # (see config.py's own comment) -- a later DISCOVER_IDENTIFIERS pass
+    # for the same study with the switch back on queues them then.
+    citation_expansion_enabled = load_config().discovery.citation_expansion_enabled
+    bioproject_accessions = (
+        _identifier_values(session, study.study_id, IdentifierType.BIOPROJECT_ACCESSION)
+        if citation_expansion_enabled else []
+    )
+    biosample_accessions = (
+        _identifier_values(session, study.study_id, IdentifierType.BIOSAMPLE_ACCESSION)
+        if citation_expansion_enabled else []
+    )
+    for bioproject_accession in bioproject_accessions:
         enqueue_task(
             session,
             TaskType.DISCOVER_CITING_STUDIES,
@@ -1610,7 +1622,7 @@ def handle_discover_identifiers(session: Session, task: Task) -> None:
             payload={"bioproject_accession": bioproject_accession},
             idempotency_key=f"DISCOVER_CITING_STUDIES:bioproject:{bioproject_accession}",
         )
-    for biosample_accession in _identifier_values(session, study.study_id, IdentifierType.BIOSAMPLE_ACCESSION):
+    for biosample_accession in biosample_accessions:
         enqueue_task(
             session,
             TaskType.DISCOVER_CITING_STUDIES,

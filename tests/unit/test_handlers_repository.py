@@ -179,6 +179,29 @@ def test_bioproject_resolution_enqueues_citation_discovery_once_per_accession(db
     assert len(citing_tasks_after) == 1, "same accession must not enqueue a second citation-discovery task"
 
 
+def test_paused_citation_expansion_enqueues_no_citation_discovery(db_session, monkeypatch):
+    """discovery.citation_expansion_enabled: false pauses the step at its
+    source too -- a study with thousands of BioSamples otherwise queues
+    thousands of lookups nobody is going to claim."""
+    from fair_ocean_agent.config import load_config
+    from fair_ocean_agent.database.models import Task
+
+    real_config = load_config()
+    paused = real_config.model_copy(
+        update={"discovery": real_config.discovery.model_copy(update={"citation_expansion_enabled": False})}
+    )
+    monkeypatch.setattr(handlers, "load_config", lambda: paused)
+
+    study = _seeded_study(db_session, bioproject_accession="PRJNA1425045")
+    task = _task_for(db_session, study)
+    biosample_adapter = FakeAdapter("ncbi_biosample", record=_make_record("ncbi_biosample"), facts=[])
+    monkeypatch.setattr(handlers, "_build_enabled_adapters", lambda: {"ncbi_biosample": biosample_adapter})
+    handlers.handle_discover_identifiers(db_session, task)
+    db_session.commit()
+
+    assert db_session.query(Task).filter_by(task_type=TaskType.DISCOVER_CITING_STUDIES.value).count() == 0
+
+
 def test_biosample_related_identifiers_enqueue_citation_discovery(db_session, monkeypatch):
     """BioSamples are graph expansion points too: once a repository adapter
     surfaces a BioSample accession, queue a biosample->pubmed pass so

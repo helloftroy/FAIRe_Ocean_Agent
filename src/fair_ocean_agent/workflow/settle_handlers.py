@@ -172,11 +172,20 @@ def handle_check_component_settled(session: Session, task: Task) -> None:
     anchor_study_id = task.study_id
     component = compute_study_component(session, anchor_study_id)
 
+    # While citation expansion is paused (config.py's
+    # citation_expansion_enabled), its pending lookups are never going to
+    # be claimed -- counting them as in-flight would hold every component
+    # open until it hit max_settle_check_generations and got marked
+    # stalled instead of settled.
+    discovery_task_types = _DISCOVERY_TASK_TYPES
+    if not load_config().discovery.citation_expansion_enabled:
+        discovery_task_types = (TaskType.DISCOVER_IDENTIFIERS.value,)
+
     in_flight = (
         session.query(Task.task_id)
         .filter(
             Task.study_id.in_(component),
-            Task.task_type.in_(_DISCOVERY_TASK_TYPES),
+            Task.task_type.in_(discovery_task_types),
             Task.status.in_(_IN_FLIGHT_DISCOVERY_STATUSES),
         )
         .first()

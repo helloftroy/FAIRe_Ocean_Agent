@@ -124,6 +124,16 @@ class DiscoveryConfig(BaseModel):
     # in this domain) exploding a discovery batch. The rest are recorded as
     # review-flagged RawFacts, never silently dropped.
     max_citing_papers_per_bioproject: int = 25
+    # Pause switch for the whole DISCOVER_CITING_STUDIES step. Real gap
+    # found live: one lookup is queued per BioProject AND per BioSample
+    # accession, so ~10,000 seed studies produced ~890,000 of these tasks
+    # -- and every one still pending keeps its study's component from ever
+    # settling (workflow/settle_handlers.py), which holds back MAP_FAIRE
+    # and validation behind it. False means: queue no new lookups, never
+    # claim the ones already pending (they stay pending, untouched, so
+    # flipping this back resumes them), and stop counting them as
+    # in-flight discovery in the settle check.
+    citation_expansion_enabled: bool = True
     # Caps how many hops workflow/handlers.py's handle_discover_primer_
     # reference_study will chase a primer's own citation chain (paper A
     # cites paper B for a primer's origin, B cites C, ...) before stopping
@@ -308,6 +318,12 @@ def _apply_env_overrides(raw: dict[str, Any]) -> dict[str, Any]:
     if supplement_llm_enabled:
         raw.setdefault("supplements", {})["llm_text_extraction_enabled"] = (
             supplement_llm_enabled.lower() in {"1", "true", "yes", "on"}
+        )
+
+    citation_expansion_enabled = os.environ.get("FAIR_OCEAN_CITATION_EXPANSION_ENABLED")
+    if citation_expansion_enabled:
+        raw.setdefault("discovery", {})["citation_expansion_enabled"] = (
+            citation_expansion_enabled.lower() in {"1", "true", "yes", "on"}
         )
 
     verifier_base_url = os.environ.get("LOCAL_LLM_VERIFIER_BASE_URL")
