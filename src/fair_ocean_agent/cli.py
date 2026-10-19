@@ -158,14 +158,14 @@ def enqueue_seed_backfill_command() -> None:
 
 @app.command("enqueue-text-extraction-backfill")
 def enqueue_text_extraction_backfill_command() -> None:
-    """Queue EXTRACT_TEXT_FACTS for every study with a known PMCID.
-    Separate/opt-in from enqueue-seed-backfill -- with llm.enabled: false
-    (the default), these tasks will fail against a disabled LLM backend
-    until you configure a real endpoint in config/default.yaml's llm:
+    """Queue EXTRACT_TEXT_FACTS for every study with a known PMCID or a
+    local PDF in FAIR_OCEAN_LOCAL_PDF_DIR. Separate/opt-in from
+    enqueue-seed-backfill -- with llm.enabled: false (the default), these
+    tasks will fail against a disabled LLM backend until you configure a real endpoint in config/default.yaml's llm:
     section."""
     with session_scope() as session:
         count = fair_ocean_agent.workflow.handlers.enqueue_text_extraction_backfill(session)
-    console.print(f"Queued EXTRACT_TEXT_FACTS for {count} stud(y/ies) with a known PMCID.")
+    console.print(f"Queued EXTRACT_TEXT_FACTS for {count} stud(y/ies) with a PMCID or a local PDF.")
 
 
 @app.command("enqueue-supplement-discovery-backfill")

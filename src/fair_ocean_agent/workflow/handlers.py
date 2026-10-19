@@ -2369,18 +2369,47 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
     session.flush()
 
 
+def studies_with_local_pdf(session: Session) -> set[str]:
+    """Study ids _local_pdf_path_for_study would find a PDF for, computed
+    in bulk: one directory listing plus one DOI query, instead of a query
+    and a filesystem check per study. Mirrors that function exactly -- the
+    study's oldest-recorded DOI, the same DOI-based filename, an exact
+    (case-sensitive) name match in the same directory -- so a study counted
+    here is one the extraction handler really will read a PDF for."""
+    pdf_dir = _pdf_lookup_dir()
+    if not pdf_dir.is_dir():
+        return set()
+    pdf_names = {path.name for path in pdf_dir.iterdir() if path.is_file()}
+    if not pdf_names:
+        return set()
+    first_doi_by_study: dict[str, str] = {}
+    for study_id, doi in session.execute(
+        select(ExternalIdentifier.study_id, ExternalIdentifier.identifier_value)
+        .where(ExternalIdentifier.identifier_type == IdentifierType.DOI.value)
+        .order_by(ExternalIdentifier.created_at)
+    ).all():
+        first_doi_by_study.setdefault(study_id, doi)
+    return {study_id for study_id, doi in first_doi_by_study.items() if _doi_pdf_filename(doi) in pdf_names}
+
+
 def enqueue_text_extraction_backfill(session: Session) -> int:
-    """Queue an EXTRACT_TEXT_FACTS task for every study that has a PMCID
-    (discovered via a prior DISCOVER_IDENTIFIERS run) and doesn't already
+    """Queue an EXTRACT_TEXT_FACTS task for every study with readable full
+    text -- a PMCID, or a local/auto-fetched PDF -- that doesn't already
     have one (idempotent via enqueue_task's default idempotency key). This
     is deliberately a separate, explicitly-triggered step -- not
     auto-chained from DISCOVER_IDENTIFIERS -- so enabling text extraction
     stays opt-in: with llm.enabled: false (the default), nothing about
     running the seed pipeline suddenly starts creating tasks that are
-    guaranteed to fail against a disabled LLM."""
+    guaranteed to fail against a disabled LLM.
+
+    Real gap found live: this used to queue PMCID studies only, so a paper
+    whose sole full text was a supplied or auto-fetched PDF (the whole
+    point of FAIR_OCEAN_LOCAL_PDF_DIR) was never queued at all, even
+    though handle_extract_text_facts reads that PDF first. Run this with
+    the same FAIR_OCEAN_LOCAL_PDF_DIR the extraction jobs will use."""
     from fair_ocean_agent.workflow.task_queue import enqueue_task
 
-    study_ids = (
+    pmcid_study_ids = set(
         session.execute(
             select(ExternalIdentifier.study_id).where(
                 ExternalIdentifier.identifier_type == IdentifierType.PMCID.value
@@ -2389,6 +2418,7 @@ def enqueue_text_extraction_backfill(session: Session) -> int:
         .scalars()
         .all()
     )
+    study_ids = sorted(pmcid_study_ids | studies_with_local_pdf(session))
     for study_id in study_ids:
         enqueue_task(session, TaskType.EXTRACT_TEXT_FACTS, study_id=study_id)
     return len(study_ids)
