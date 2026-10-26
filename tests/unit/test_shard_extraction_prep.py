@@ -89,3 +89,36 @@ def test_build_shards_raises_when_nothing_is_pending(main_db, tmp_path):
 
     with pytest.raises(SystemExit):
         build_shards(shard_count=2, shard_dir=tmp_path / "shard_dbs_2")
+
+
+def test_retry_pending_tasks_land_in_exactly_one_shard(main_db, tmp_path):
+    """Real gap found live: a retry_pending task (one released after a
+    killed shard) was left in every shard copy, so all four GPU array tasks
+    extracted the same paper at the same time."""
+    build_shards(shard_count=2, shard_dir=tmp_path / "shard_dbs_1")
+    engine = create_engine(f"sqlite:///{main_db}", connect_args={"check_same_thread": False})
+    session = sessionmaker(bind=engine, expire_on_commit=False)()
+    tasks = session.query(Task).filter_by(task_type=TaskType.EXTRACT_TEXT_FACTS.value).order_by(Task.task_id).all()
+    tasks[0].status = TaskStatus.RETRY_PENDING.value
+    tasks[1].status = TaskStatus.RUNNING.value  # stale claim left in main
+    retry_id, stale_id = tasks[0].task_id, tasks[1].task_id
+    session.commit()
+    session.close()
+    engine.dispose()
+
+    manifest = build_shards(shard_count=2, shard_dir=tmp_path / "shard_dbs_2")
+
+    assert sum(retry_id in shard.task_ids for shard in manifest.shards) == 1
+    claimable_per_shard = []
+    for shard in manifest.shards:
+        conn = sqlite3.connect(shard.db_path)
+        try:
+            rows = conn.execute(
+                "SELECT task_id FROM tasks WHERE task_type = ? AND status IN ('pending','retry_pending','claimed','running')",
+                (TaskType.EXTRACT_TEXT_FACTS.value,),
+            ).fetchall()
+        finally:
+            conn.close()
+        assert sorted(r[0] for r in rows) == sorted(shard.task_ids)
+        claimable_per_shard.append({r[0] for r in rows})
+    assert not any(stale_id in ids for ids in claimable_per_shard)

@@ -48,13 +48,31 @@ from fair_ocean_agent.workflow.handlers import enqueue_text_extraction_backfill
 DEFAULT_SHARD_DIR = REPO_ROOT / "data" / "shard_dbs"
 
 
+# Real gap found live: only PENDING tasks used to be partitioned and only
+# PENDING ones filtered out of each shard -- but the worker also claims
+# RETRY_PENDING, so every retry_pending EXTRACT_TEXT_FACTS task (e.g. one
+# released by merge_extraction_shards.py after a killed shard) survived in
+# EVERY shard copy and all array tasks processed the same paper at once.
+# Partition every claimable status; strip every not-yet-finished status
+# that isn't this shard's own (claimed/running too: a stale claim in main
+# must never be picked up in four places at once either).
+_PARTITIONED_STATUSES = (TaskStatus.PENDING.value, TaskStatus.RETRY_PENDING.value)
+_UNFINISHED_STATUSES = (
+    TaskStatus.PENDING.value,
+    TaskStatus.RETRY_PENDING.value,
+    TaskStatus.CLAIMED.value,
+    TaskStatus.RUNNING.value,
+)
+
+
 def _pending_extract_text_facts_tasks() -> list[tuple[str, str | None]]:
-    """Returns (task_id, study_id) pairs, oldest first, for a deterministic
-    partition regardless of how many times this is re-run."""
+    """Returns (task_id, study_id) pairs for every claimable task, oldest
+    first, for a deterministic partition regardless of how many times this
+    is re-run."""
     with session_scope() as session:
         rows = session.execute(
             select(Task.task_id, Task.study_id)
-            .where(Task.task_type == TaskType.EXTRACT_TEXT_FACTS.value, Task.status == TaskStatus.PENDING.value)
+            .where(Task.task_type == TaskType.EXTRACT_TEXT_FACTS.value, Task.status.in_(_PARTITIONED_STATUSES))
             .order_by(Task.created_at, Task.task_id)
         ).all()
         return [(task_id, study_id) for task_id, study_id in rows]
@@ -94,9 +112,11 @@ def _filter_shard_to_its_own_tasks(shard_path: Path, keep_task_ids: set[str]) ->
     conn = sqlite3.connect(str(shard_path))
     try:
         placeholders = ",".join("?" for _ in keep_task_ids)
+        status_placeholders = ",".join("?" for _ in _UNFINISHED_STATUSES)
         conn.execute(
-            f"DELETE FROM tasks WHERE task_type = ? AND status = ? AND task_id NOT IN ({placeholders})",
-            (TaskType.EXTRACT_TEXT_FACTS.value, TaskStatus.PENDING.value, *keep_task_ids),
+            f"DELETE FROM tasks WHERE task_type = ? AND status IN ({status_placeholders}) "
+            f"AND task_id NOT IN ({placeholders})",
+            (TaskType.EXTRACT_TEXT_FACTS.value, *_UNFINISHED_STATUSES, *keep_task_ids),
         )
         conn.commit()
     finally:
