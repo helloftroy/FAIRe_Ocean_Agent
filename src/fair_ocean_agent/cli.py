@@ -440,7 +440,8 @@ def worker_command(
         fair_ocean_agent.workflow.handlers.reset_llm_backend_cache()
     console.print(
         f"Processed {summary['processed']} task(s): "
-        f"{summary['completed']} completed, {summary['failed']} failed."
+        f"{summary['completed']} completed, {summary['failed']} failed, "
+        f"{summary.get('deferred', 0)} deferred."
     )
     if summary["stopped_reason"]:
         console.print(f"[red]Stopped early:[/red] {summary['stopped_reason']}")

@@ -48,6 +48,7 @@ cd "${SLURM_SUBMIT_DIR}"
 mkdir -p logs
 export PYTHONUNBUFFERED=1
 export FAIR_OCEAN_SKIP_SQLITE_WAL=1  # this cluster's Lustre mount cannot do WAL locking -- skip the attempt outright, see database/session.py
+export FAIR_OCEAN_EXTRACTION_CACHE_ONLY="${FAIR_OCEAN_EXTRACTION_CACHE_ONLY:-1}"  # GPU nodes have no internet: defer a paper with no PDF and no cached full text instead of hanging on a fetch
 
 if [ ! -f cluster/env_activate.sh ]; then
   echo "cluster/env_activate.sh is missing -- run ./cluster/setup_env.sh first." >&2

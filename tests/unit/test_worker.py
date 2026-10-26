@@ -34,7 +34,7 @@ def test_run_worker_recovers_from_integrity_error_without_crashing(db_session):
 
         summary = run_worker(db_session, worker_id="w1", max_tasks=1)  # must not raise
 
-        assert summary == {"processed": 1, "completed": 0, "failed": 1, "stopped_reason": None}
+        assert summary == {"processed": 1, "completed": 0, "failed": 1, "deferred": 0, "stopped_reason": None}
         refreshed = db_session.get(Task, task.task_id)
         assert refreshed.status == TaskStatus.RETRY_PENDING.value
         assert refreshed.last_error  # populated, not lost to the crash

@@ -198,6 +198,33 @@ def claim_next_task(
     return task
 
 
+class TaskDeferred(Exception):
+    """Raised by a handler that cannot do its work in THIS environment
+    yet but has nothing wrong with it (e.g. its input is not available
+    offline). The worker puts the task back to pending without using up
+    an attempt, instead of failing it -- see defer_task."""
+
+    def __init__(self, reason: str, retry_after_seconds: int = 24 * 3600):
+        super().__init__(reason)
+        self.retry_after_seconds = retry_after_seconds
+
+
+def defer_task(session: Session, task: Task, reason: str, retry_after_seconds: int) -> None:
+    """Back to pending, attempt not counted, not claimable again by this
+    run (available_after pushed out, so `worker --until-empty` moves on
+    instead of re-claiming it in a loop). merge_extraction_shards.py does
+    not copy available_after back to the shared database, so a deferred
+    shard task is simply pending there again for the next round."""
+    task.status = TaskStatus.PENDING.value
+    task.attempt_count = max(task.attempt_count - 1, 0)
+    task.claimed_by = None
+    task.claimed_at = None
+    task.started_at = None
+    task.last_error = f"deferred: {reason}"[:4000]
+    task.available_after = utcnow() + timedelta(seconds=retry_after_seconds)
+    session.flush()
+
+
 def mark_running(session: Session, task: Task) -> None:
     task.status = TaskStatus.RUNNING.value
     task.started_at = utcnow()

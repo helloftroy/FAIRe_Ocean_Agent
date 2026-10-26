@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from fair_ocean_agent.database.enums import TaskType
 from fair_ocean_agent.database.models import Task
 from fair_ocean_agent.logging_setup import get_logger, log_context
-from fair_ocean_agent.workflow.task_queue import claim_next_task, complete_task, fail_task, mark_running
+from fair_ocean_agent.workflow.task_queue import TaskDeferred, claim_next_task, complete_task, defer_task, fail_task, mark_running
 
 logger = get_logger(__name__)
 
@@ -74,6 +74,7 @@ def run_worker(
     processed = 0
     completed = 0
     failed = 0
+    deferred = 0
     consecutive_rate_limit_failures = 0
     stopped_reason: str | None = None
 
@@ -105,6 +106,11 @@ def run_worker(
                 completed += 1
                 consecutive_rate_limit_failures = 0
                 logger.info("task completed")
+            except TaskDeferred as exc:
+                session.rollback()
+                defer_task(session, task, reason=str(exc), retry_after_seconds=exc.retry_after_seconds)
+                deferred += 1
+                logger.info("task deferred: %s", exc)
             except Exception as exc:  # noqa: BLE001 - task-level isolation is intentional
                 # A failure partway through a flush (e.g. an IntegrityError)
                 # leaves the session's transaction in a "pending rollback"
@@ -139,4 +145,10 @@ def run_worker(
         if not until_empty and max_tasks is None:
             break
 
-    return {"processed": processed, "completed": completed, "failed": failed, "stopped_reason": stopped_reason}
+    return {
+        "processed": processed,
+        "completed": completed,
+        "failed": failed,
+        "deferred": deferred,
+        "stopped_reason": stopped_reason,
+    }

@@ -113,6 +113,14 @@ class EuropePmcAdapter(SourceAdapter):
             raise SourceRecordNotFoundError(f"No Europe PMC record for DOI {identifier}")
         return page.records[0]
 
+    def _fulltext_url(self, pmcid: str) -> str:
+        return f"{self.config.base_url}/{pmcid}/fullTextXML"
+
+    def has_cached_fulltext(self, pmcid: str) -> bool:
+        """Whether fetch_fulltext_xml(pmcid) would be served from the disk
+        cache. Only a successful fetch is ever cached -- a 404 is not."""
+        return self.http.is_cached(self._fulltext_url(pmcid))
+
     def fetch_fulltext_xml(self, pmcid: str) -> str:
         """Raw JATS full-text XML for an open-access article
         (section 10/13: open-access retrieval only, never a paywalled or
@@ -120,8 +128,7 @@ class EuropePmcAdapter(SourceAdapter):
         PMCID doesn't exist or has no full text in Europe PMC (a genuine
         404, not a heuristic -- Europe PMC returns 404/empty body for
         exactly this case)."""
-        url = f"{self.config.base_url}/{pmcid}/fullTextXML"
-        text, _ = self.http.get_text(url)
+        text, _ = self.http.get_text(self._fulltext_url(pmcid))
         return text
 
     def fetch_supplementary_bundle(self, pmcid: str) -> bytes:

@@ -231,6 +231,12 @@ class RateLimitedClient:
         response.raise_for_status()
         return response.content
 
+    def is_cached(self, url: str, params: dict | None = None, suffix: str = "xml") -> bool:
+        """Whether get_text/get_json/get_binary would answer this request
+        from the on-disk cache, without touching the network. suffix is
+        "xml" for get_text, "json" for get_json, "bin" for get_binary."""
+        return self._cache_enabled and self._cache_path(url, params, suffix).exists()
+
     def get_json(self, url: str, params: dict | None = None) -> tuple[dict, bool]:
         """Returns (payload, from_cache)."""
         cache_path = self._cache_path(url, params, "json") if self._cache_enabled else None

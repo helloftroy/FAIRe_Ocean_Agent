@@ -136,6 +136,7 @@ from fair_ocean_agent.sources.qiita import QiitaAdapter
 from fair_ocean_agent.sources.sequence_file_heuristics import SequenceDataStatus
 from fair_ocean_agent.sources.unpaywall import UnpaywallAdapter, oa_pdf_urls
 from fair_ocean_agent.sources.zenodo import ZenodoAdapter
+from fair_ocean_agent.workflow.task_queue import TaskDeferred
 from fair_ocean_agent.workflow.worker import TASK_HANDLERS
 
 logger = get_logger(__name__)
@@ -152,6 +153,9 @@ LOCAL_PDF_PATH_ENV = "FAIR_OCEAN_LOCAL_PDF_PATH"
 # each study's own file there; LOCAL_PDF_PATH_ENV, when also set, still
 # wins as the single-paper override it always was.
 LOCAL_PDF_DIR_ENV = "FAIR_OCEAN_LOCAL_PDF_DIR"
+# Set on offline (GPU) nodes: EXTRACT_TEXT_FACTS never fetches full text
+# over the network there -- see handle_extract_text_facts.
+EXTRACTION_CACHE_ONLY_ENV = "FAIR_OCEAN_EXTRACTION_CACHE_ONLY"
 
 # Publication-oriented (DOI-keyed, populate `sources`' bibliographic
 # columns) vs repository-oriented (BioProject/ENA-accession-keyed,
@@ -1986,6 +1990,22 @@ def handle_extract_text_facts(session: Session, task: Task) -> None:
                 f"Set {LOCAL_PDF_PATH_ENV} or {LOCAL_PDF_DIR_ENV} to process a locally-supplied PDF instead."
             )
         pmcid = pmcid_identifier.identifier_value
+        # Real gap found live: a GPU array task froze for two days on one
+        # study -- no local PDF and full text not in the disk cache, so this
+        # handler went to Europe PMC from a node with no internet, and the
+        # blocked connection never errored out. With
+        # FAIR_OCEAN_EXTRACTION_CACHE_ONLY set (every GPU sbatch script sets
+        # it), such a study is deferred instead: put back to pending without
+        # using an attempt, for a later run once discovery (which fetches
+        # and caches full text on the internet-capable node) has cached it
+        # or a PDF has been supplied.
+        if os.environ.get(EXTRACTION_CACHE_ONLY_ENV, "").lower() in {"1", "true", "yes", "on"}:
+            europe_pmc = _build_enabled_adapters().get("europe_pmc")
+            if isinstance(europe_pmc, EuropePmcAdapter) and not europe_pmc.has_cached_fulltext(pmcid):
+                raise TaskDeferred(
+                    f"no local PDF and Europe PMC full text for {pmcid} is not cached "
+                    f"({EXTRACTION_CACHE_ONLY_ENV} is set, so no network fetch is attempted)"
+                )
 
     backend = _build_llm_backend_cached()
     extraction_version = f"{PROMPT_VERSION}:{backend.label}"
