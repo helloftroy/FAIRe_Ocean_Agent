@@ -26,7 +26,7 @@ import httpx
 
 from fair_ocean_agent import diag_timing
 from fair_ocean_agent.clock import utcnow
-from fair_ocean_agent.llm.base import LLMBackend, LLMBackendError, LLMResponse
+from fair_ocean_agent.llm.base import LLMBackend, LLMBackendError, LLMResponse, LLMUnreachableError
 
 
 class OpenAICompatibleHTTPBackend(LLMBackend):
@@ -99,6 +99,10 @@ class OpenAICompatibleHTTPBackend(LLMBackend):
                 raise LLMBackendError(
                     f"{self.label}: request to {self._client.base_url}/chat/completions failed: "
                     f"{exc} -- body: {exc.response.text[:500]}"
+                ) from exc
+            except httpx.ConnectError as exc:
+                raise LLMUnreachableError(
+                    f"{self.label}: request to {self._client.base_url}/chat/completions failed: {exc}"
                 ) from exc
             except httpx.HTTPError as exc:
                 raise LLMBackendError(

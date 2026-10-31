@@ -9,6 +9,7 @@ import httpx
 
 from fair_ocean_agent.database.enums import TaskStatus, TaskType
 from fair_ocean_agent.database.models import Task
+from fair_ocean_agent.llm.base import LLMBackendError, LLMUnreachableError
 from fair_ocean_agent.workflow.task_queue import enqueue_task
 from fair_ocean_agent.workflow.worker import TASK_HANDLERS, run_worker
 
@@ -146,6 +147,63 @@ def test_run_worker_max_consecutive_rate_limit_failures_none_disables_breaker(db
         )
 
         assert summary["processed"] == 7
+        assert summary["stopped_reason"] is None
+    finally:
+        del TASK_HANDLERS[TaskType.FETCH_SOURCE]
+
+
+def test_run_worker_stops_when_llm_server_is_unreachable(db_session):
+    """Found live: a vLLM server died partway through a GPU shard and the
+    worker failed 532 papers 3 times each with "connection refused". The
+    first refused connection must stop the worker, put that task back
+    with no attempt counted, and leave the rest of the queue untouched."""
+    calls = []
+
+    def llm_down(session, task):
+        calls.append(task.task_id)
+        try:
+            raise LLMUnreachableError("test-model: request to http://localhost:8000/v1/chat/completions failed")
+        except LLMUnreachableError as exc:
+            # handlers sometimes re-raise wrapped in their own error
+            raise LLMBackendError("text extraction failed") from exc
+
+    TASK_HANDLERS[TaskType.FETCH_SOURCE] = llm_down
+    try:
+        for i in range(4):
+            enqueue_task(db_session, TaskType.FETCH_SOURCE, study_id=None, idempotency_key=f"llm-down-{i}")
+        db_session.commit()
+
+        summary = run_worker(db_session, worker_id="w1", until_empty=True)
+
+        assert len(calls) == 1
+        assert summary["processed"] == 1
+        assert summary["failed"] == 0
+        assert summary["deferred"] == 1
+        assert "LLM server is not reachable" in summary["stopped_reason"]
+        tasks = db_session.query(Task).all()
+        assert all(t.status == TaskStatus.PENDING.value for t in tasks)
+        assert all(t.attempt_count == 0 for t in tasks)
+    finally:
+        del TASK_HANDLERS[TaskType.FETCH_SOURCE]
+
+
+def test_run_worker_keeps_going_after_other_llm_errors(db_session):
+    """A timeout or invalid JSON is about one paper, not the server -- the
+    worker must fail that task normally and move on."""
+
+    def bad_json(session, task):
+        raise LLMBackendError("test-model: text extraction returned invalid JSON after retries")
+
+    TASK_HANDLERS[TaskType.FETCH_SOURCE] = bad_json
+    try:
+        for i in range(3):
+            enqueue_task(db_session, TaskType.FETCH_SOURCE, study_id=None, max_attempts=1, idempotency_key=f"bad-json-{i}")
+        db_session.commit()
+
+        summary = run_worker(db_session, worker_id="w1", until_empty=True)
+
+        assert summary["processed"] == 3
+        assert summary["failed"] == 3
         assert summary["stopped_reason"] is None
     finally:
         del TASK_HANDLERS[TaskType.FETCH_SOURCE]

@@ -28,6 +28,13 @@ class LLMBackendError(Exception):
     being called."""
 
 
+class LLMUnreachableError(LLMBackendError):
+    """The LLM server refused the connection -- it is not running (e.g. a
+    vLLM process that died mid-job). Unlike a timeout or a bad response,
+    this fails every later call the same way, so workflow/worker.py stops
+    the whole worker on it instead of failing paper after paper."""
+
+
 class LLMResponse(BaseModel):
     text: str
     raw: dict

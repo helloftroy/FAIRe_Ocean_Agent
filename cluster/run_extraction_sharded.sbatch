@@ -185,7 +185,19 @@ fi
 # before this array was submitted. This shard's own database already
 # contains exactly (and only) its own slice, pre-filtered.
 echo "=== claiming this shard's EXTRACT_TEXT_FACTS tasks until its own queue is empty (array task ${ARRAY_LABEL}) ==="
-python -m fair_ocean_agent.cli worker --task-type EXTRACT_TEXT_FACTS --until-empty
+worker_status=0
+python -m fair_ocean_agent.cli worker --task-type EXTRACT_TEXT_FACTS --until-empty || worker_status=$?
+if [ "${worker_status}" -ne 0 ]; then
+  # The worker stops early (exit 2) if the LLM server stops answering --
+  # the paper it was on and everything after it stay pending in this
+  # shard, so resubmitting this array task picks them up. Show why.
+  echo "Worker stopped early (exit ${worker_status})." >&2
+  if [ -n "${VLLM_LOG:-}" ] && [ -f "${VLLM_LOG}" ]; then
+    echo "Last vllm log lines:" >&2
+    tail -n 40 "${VLLM_LOG}" >&2
+  fi
+  exit "${worker_status}"
+fi
 
 echo "Job finished: $(date)"
 echo "Array task ${ARRAY_LABEL} done. Once every array task finishes, run:"

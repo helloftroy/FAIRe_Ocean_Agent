@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from fair_ocean_agent.database.enums import TaskType
 from fair_ocean_agent.database.models import Task
+from fair_ocean_agent.llm.base import LLMUnreachableError
 from fair_ocean_agent.logging_setup import get_logger, log_context
 from fair_ocean_agent.workflow.task_queue import TaskDeferred, claim_next_task, complete_task, defer_task, fail_task, mark_running
 
@@ -41,6 +42,23 @@ DEFAULT_MAX_CONSECUTIVE_RATE_LIMIT_FAILURES = 5
 
 def is_rate_limit_error(exc: BaseException) -> bool:
     return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429
+
+
+def is_llm_unreachable_error(exc: BaseException) -> bool:
+    """True if exc, or anything it was raised from, is an
+    LLMUnreachableError -- handlers sometimes re-raise LLM errors wrapped
+    in their own. Found live: a vLLM server died partway through a GPU
+    shard and the worker kept claiming papers, failing each one 3 times
+    in seconds with "connection refused" -- 532 papers sent to manual
+    review that had nothing wrong with them."""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        if isinstance(current, LLMUnreachableError):
+            return True
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    return False
 
 
 def run_worker(
@@ -112,6 +130,20 @@ def run_worker(
                 deferred += 1
                 logger.info("task deferred: %s", exc)
             except Exception as exc:  # noqa: BLE001 - task-level isolation is intentional
+                if is_llm_unreachable_error(exc):
+                    # Not this paper's fault: put it back unattempted and
+                    # stop, leaving the rest of the queue pending for a
+                    # run with a working server.
+                    session.rollback()
+                    defer_task(session, task, reason=str(exc), retry_after_seconds=0)
+                    deferred += 1
+                    session.commit()
+                    stopped_reason = (
+                        f"the LLM server is not reachable ({exc}) -- stopping instead of failing every remaining "
+                        "task. Check the LLM server log, then rerun; nothing was counted as a failed attempt."
+                    )
+                    logger.warning(stopped_reason)
+                    break
                 # A failure partway through a flush (e.g. an IntegrityError)
                 # leaves the session's transaction in a "pending rollback"
                 # state -- any further operation on it, including fail_task's

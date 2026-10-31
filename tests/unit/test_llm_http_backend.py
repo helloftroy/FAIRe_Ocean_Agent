@@ -5,7 +5,7 @@ reaches outside the configured base_url."""
 import httpx
 import pytest
 
-from fair_ocean_agent.llm.base import LLMBackendError
+from fair_ocean_agent.llm.base import LLMBackendError, LLMUnreachableError
 from fair_ocean_agent.llm.http_backend import OpenAICompatibleHTTPBackend
 
 
@@ -74,6 +74,25 @@ def test_generate_raises_llm_backend_error_on_http_failure():
     backend = _backend(handler)
     with pytest.raises(LLMBackendError):
         backend.generate("prompt")
+
+
+def test_generate_raises_unreachable_error_when_connection_is_refused():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("[Errno 111] Connection refused", request=request)
+
+    backend = _backend(handler)
+    with pytest.raises(LLMUnreachableError):
+        backend.generate("prompt")
+
+
+def test_generate_http_500_is_not_an_unreachable_error():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500)
+
+    backend = _backend(handler)
+    with pytest.raises(LLMBackendError) as excinfo:
+        backend.generate("prompt")
+    assert not isinstance(excinfo.value, LLMUnreachableError)
 
 
 def test_generate_error_includes_response_body_for_4xx():
