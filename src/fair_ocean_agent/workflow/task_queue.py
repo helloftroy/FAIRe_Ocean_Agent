@@ -263,6 +263,13 @@ def fail_task(
     session.flush()
 
 
+def send_to_manual_review(session: Session, task: Task, error: str) -> None:
+    """Skip the remaining retries -- for a failure that would only repeat."""
+    task.last_error = error[:4000]
+    task.status = TaskStatus.MANUAL_REVIEW_REQUIRED.value
+    session.flush()
+
+
 def cancel_task(session: Session, task: Task) -> None:
     task.status = TaskStatus.CANCELLED.value
     session.flush()

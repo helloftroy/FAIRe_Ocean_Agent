@@ -185,8 +185,41 @@ fi
 # before this array was submitted. This shard's own database already
 # contains exactly (and only) its own slice, pre-filtered.
 echo "=== claiming this shard's EXTRACT_TEXT_FACTS tasks until its own queue is empty (array task ${ARRAY_LABEL}) ==="
-worker_status=0
-python -m fair_ocean_agent.cli worker --task-type EXTRACT_TEXT_FACTS --until-empty || worker_status=$?
+# One paper may take at most TASK_TIME_LIMIT_SECONDS (found live: single
+# papers stalled a shard for 9h and 24h+ with no output). Over the limit,
+# the worker sends that paper to manual review and moves on. If it cannot
+# be interrupted, the worker prints every thread's stack to the .err log
+# and exits 1 five minutes later; this loop then sends the paper it was on
+# to manual review and starts the worker again (at most MAX_WORKER_RESTARTS
+# times).
+TASK_TIME_LIMIT_SECONDS="${TASK_TIME_LIMIT_SECONDS:-3600}"
+MAX_WORKER_RESTARTS="${MAX_WORKER_RESTARTS:-3}"
+restarts=0
+while true; do
+  worker_status=0
+  python -m fair_ocean_agent.cli worker --task-type EXTRACT_TEXT_FACTS --until-empty \
+    --task-time-limit-seconds "${TASK_TIME_LIMIT_SECONDS}" || worker_status=$?
+  if [ "${worker_status}" -ne 1 ] || [ "${restarts}" -ge "${MAX_WORKER_RESTARTS}" ]; then
+    break
+  fi
+  restarts=$((restarts + 1))
+  echo "Worker exited 1 -- sending the task it was on to manual review and restarting (${restarts}/${MAX_WORKER_RESTARTS})." >&2
+  python3 - <<'PYEOF'
+from sqlalchemy import select
+
+from fair_ocean_agent.database.enums import TaskStatus
+from fair_ocean_agent.database.models import Task
+from fair_ocean_agent.database.session import session_scope
+from fair_ocean_agent.workflow.task_queue import send_to_manual_review
+
+# This shard database has exactly one worker, so anything still in flight
+# is the task that worker was stuck on.
+with session_scope() as session:
+    for task in session.scalars(select(Task).where(Task.status.in_([TaskStatus.CLAIMED.value, TaskStatus.RUNNING.value]))):
+        print(f"  {task.task_id} (study {task.study_id})")
+        send_to_manual_review(session, task, error="worker exited while on this task (hard time limit or crash) -- see the .err log")
+PYEOF
+done
 if [ "${worker_status}" -ne 0 ]; then
   # The worker stops early (exit 2) if the LLM server stops answering --
   # the paper it was on and everything after it stay pending in this

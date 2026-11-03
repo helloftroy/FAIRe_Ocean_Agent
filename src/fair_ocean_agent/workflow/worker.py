@@ -8,7 +8,11 @@ of Milestone 2+ wiring in real handlers.
 """
 from __future__ import annotations
 
-from typing import Callable
+import faulthandler
+import signal
+import threading
+from contextlib import contextmanager
+from typing import Callable, Iterator
 
 import httpx
 from sqlalchemy.orm import Session
@@ -17,7 +21,15 @@ from fair_ocean_agent.database.enums import TaskType
 from fair_ocean_agent.database.models import Task
 from fair_ocean_agent.llm.base import LLMUnreachableError
 from fair_ocean_agent.logging_setup import get_logger, log_context
-from fair_ocean_agent.workflow.task_queue import TaskDeferred, claim_next_task, complete_task, defer_task, fail_task, mark_running
+from fair_ocean_agent.workflow.task_queue import (
+    TaskDeferred,
+    claim_next_task,
+    complete_task,
+    defer_task,
+    fail_task,
+    mark_running,
+    send_to_manual_review,
+)
 
 logger = get_logger(__name__)
 
@@ -44,6 +56,57 @@ def is_rate_limit_error(exc: BaseException) -> bool:
     return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429
 
 
+# Grace period after the task time limit before the hard backstop below
+# kills the whole process.
+HARD_TIME_LIMIT_GRACE_SECONDS = 300
+
+
+class TaskTimeLimitExceeded(BaseException):
+    """Raised inside a handler when its task runs past the worker's time
+    limit. A BaseException, not an Exception, so a handler's own broad
+    `except Exception` (several log a per-section failure and carry on)
+    cannot swallow it and keep the stuck task going."""
+
+
+@contextmanager
+def _task_time_limit(seconds: int | None) -> Iterator[None]:
+    """Found live: GPU extraction shards sat for 9h and 24h+ on a single
+    paper with no log output and no error, holding the GPU the whole time.
+    Two layers, so a stuck task is bounded wherever it is stuck:
+
+    - SIGALRM at `seconds` raises TaskTimeLimitExceeded in the handler.
+      That interrupts pure-Python loops (pypdf) and blocking I/O.
+    - faulthandler, HARD_TIME_LIMIT_GRACE_SECONDS later, dumps every
+      thread's stack to stderr and exits the process. That runs on its own
+      C thread, so it fires even when the main thread is stuck inside C
+      code that never returns to Python (e.g. a runaway regex). The task
+      is left 'running'; release-stale-claims or the merge recovers it,
+      and the dumped stack shows where it was stuck.
+
+    Only works on the main thread of a platform with SIGALRM; elsewhere it
+    is a no-op (with a warning), never an error."""
+    if not seconds:
+        yield
+        return
+    if not hasattr(signal, "SIGALRM") or threading.current_thread() is not threading.main_thread():
+        logger.warning("task time limit not enforced: needs SIGALRM on the main thread")
+        yield
+        return
+
+    def on_alarm(signum, frame):
+        raise TaskTimeLimitExceeded(f"task exceeded the {seconds}s time limit")
+
+    previous = signal.signal(signal.SIGALRM, on_alarm)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    faulthandler.dump_traceback_later(seconds + HARD_TIME_LIMIT_GRACE_SECONDS, exit=True)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+        faulthandler.cancel_dump_traceback_later()
+
+
 def is_llm_unreachable_error(exc: BaseException) -> bool:
     """True if exc, or anything it was raised from, is an
     LLMUnreachableError -- handlers sometimes re-raise LLM errors wrapped
@@ -68,6 +131,7 @@ def run_worker(
     until_empty: bool = False,
     task_types: list[TaskType] | None = None,
     max_consecutive_rate_limit_failures: int | None = DEFAULT_MAX_CONSECUTIVE_RATE_LIMIT_FAILURES,
+    task_time_limit_seconds: int | None = None,
 ) -> dict[str, int | str | None]:
     """Process tasks until `max_tasks` is reached, the queue is empty (if
     until_empty), or neither limit is set (processes exactly one task).
@@ -88,7 +152,13 @@ def run_worker(
     by a 429, so this only fires on a genuinely sustained block, never on
     a few real successes with occasional retried-and-recovered 429s mixed
     in. None disables this (e.g. for tests that want the old unconditional
-    behavior)."""
+    behavior).
+
+    `task_time_limit_seconds` caps how long one task may run (see
+    _task_time_limit). A task over the limit goes straight to manual
+    review rather than being retried: a paper that hangs once almost
+    always hangs again, and each retry would cost the full limit. None or
+    0 means no limit."""
     processed = 0
     completed = 0
     failed = 0
@@ -119,11 +189,18 @@ def run_worker(
                         f"No handler registered for task type {task.task_type} "
                         "(source adapters / extraction land in later milestones)"
                     )
-                handler(session, task)
+                with _task_time_limit(task_time_limit_seconds):
+                    handler(session, task)
                 complete_task(session, task)
                 completed += 1
                 consecutive_rate_limit_failures = 0
                 logger.info("task completed")
+            except TaskTimeLimitExceeded as exc:
+                session.rollback()
+                send_to_manual_review(session, task, error=str(exc))
+                failed += 1
+                consecutive_rate_limit_failures = 0
+                logger.warning("task stopped: %s -- sent to manual review", exc)
             except TaskDeferred as exc:
                 session.rollback()
                 defer_task(session, task, reason=str(exc), retry_after_seconds=exc.retry_after_seconds)

@@ -207,3 +207,43 @@ def test_run_worker_keeps_going_after_other_llm_errors(db_session):
         assert summary["stopped_reason"] is None
     finally:
         del TASK_HANDLERS[TaskType.FETCH_SOURCE]
+
+
+def test_run_worker_task_time_limit_sends_a_stuck_task_to_manual_review(db_session):
+    """Found live: one paper stalled a GPU shard for 24h+. A task past the
+    limit must stop, skip its remaining retries, and let the worker carry
+    on with the next one -- even when the handler has its own broad
+    `except Exception` around the stuck work."""
+    import time
+
+    handled = []
+
+    def first_hangs(session, task):
+        handled.append(task.idempotency_key)
+        if task.idempotency_key == "time-limit-0":
+            try:
+                while True:
+                    time.sleep(0.01)
+            except Exception:  # noqa: BLE001 - must not swallow the time limit
+                pass
+
+    TASK_HANDLERS[TaskType.FETCH_SOURCE] = first_hangs
+    try:
+        for i in range(2):
+            enqueue_task(db_session, TaskType.FETCH_SOURCE, study_id=None, idempotency_key=f"time-limit-{i}")
+        db_session.commit()
+
+        start = time.monotonic()
+        summary = run_worker(db_session, worker_id="w1", until_empty=True, task_time_limit_seconds=1)
+
+        assert time.monotonic() - start < 10
+        assert handled == ["time-limit-0", "time-limit-1"]
+        assert summary["completed"] == 1
+        assert summary["failed"] == 1
+        stuck = db_session.query(Task).filter_by(idempotency_key="time-limit-0").one()
+        assert stuck.status == TaskStatus.MANUAL_REVIEW_REQUIRED.value
+        assert "time limit" in stuck.last_error
+        done = db_session.query(Task).filter_by(idempotency_key="time-limit-1").one()
+        assert done.status == TaskStatus.COMPLETED.value
+    finally:
+        del TASK_HANDLERS[TaskType.FETCH_SOURCE]

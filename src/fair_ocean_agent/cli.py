@@ -401,6 +401,12 @@ def worker_command(
         "rate-limiting/blocking this machine across a deep queue. Resets on any success or "
         "non-429 failure. Set to 0 to disable (never stop early).",
     ),
+    task_time_limit_seconds: int = typer.Option(
+        0,
+        help="Longest one task may run. A task over it is stopped and sent to manual review; "
+        "if it cannot be interrupted, the worker prints every thread's stack and exits "
+        "5 minutes later. 0 means no limit.",
+    ),
 ) -> None:
     if task_type and no_llm:
         console.print("[red]--task-type and --no-llm are mutually exclusive -- pick one.[/red]")
@@ -434,6 +440,7 @@ def worker_command(
                 until_empty=until_empty,
                 task_types=task_types,
                 max_consecutive_rate_limit_failures=max_consecutive_429s if max_consecutive_429s > 0 else None,
+                task_time_limit_seconds=task_time_limit_seconds or None,
             )
     finally:
         fair_ocean_agent.workflow.handlers.reset_adapter_cache()
