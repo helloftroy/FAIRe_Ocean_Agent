@@ -69,24 +69,19 @@ TARGET_SCHEMA_VERSION = "1.0.2"
 
 
 def _clear_existing_faire_mappings(session: Session, study_id: str) -> None:
-    existing_ids = list(
-        session.scalars(
-            select(StandardizedValue.standardized_value_id).where(
-                StandardizedValue.study_id == study_id,
-                StandardizedValue.target_schema == TARGET_SCHEMA,
-            )
-        )
+    # A subquery, never a Python list of ids: found live, a study with
+    # ~323,000 FAIRe values made a 323k-parameter IN (...) list, far past
+    # SQLite's limit on bound parameters, and the merge's re-mapping step
+    # crashed on it.
+    criteria = (
+        StandardizedValue.study_id == study_id,
+        StandardizedValue.target_schema == TARGET_SCHEMA,
     )
-    if not existing_ids:
-        return
+    existing_ids = select(StandardizedValue.standardized_value_id).where(*criteria)
     session.execute(
-        delete(StandardizedValueEvidence).where(
-            StandardizedValueEvidence.standardized_value_id.in_(existing_ids)
-        )
+        delete(StandardizedValueEvidence).where(StandardizedValueEvidence.standardized_value_id.in_(existing_ids))
     )
-    session.execute(
-        delete(StandardizedValue).where(StandardizedValue.standardized_value_id.in_(existing_ids))
-    )
+    session.execute(delete(StandardizedValue).where(*criteria))
     session.flush()
 
 
@@ -768,9 +763,8 @@ def _authoritative_sample_entities(session: Session, study_id: str) -> list[Enti
     study). Duplicated here rather than imported from exports/faire.py to
     avoid a circular import (exports/faire.py already imports FROM this
     module)."""
-    entity_ids = set(session.scalars(select(EntityStudy.entity_id).where(EntityStudy.study_id == study_id)))
-    if not entity_ids:
-        return []
+    # A subquery, not a Python list of ids -- see _clear_existing_faire_mappings.
+    entity_ids = select(EntityStudy.entity_id).where(EntityStudy.study_id == study_id)
     entities = session.scalars(
         select(Entity).where(Entity.entity_id.in_(entity_ids), Entity.entity_level == EntityLevel.SAMPLE.value)
     ).all()
@@ -779,6 +773,18 @@ def _authoritative_sample_entities(session: Session, study_id: str) -> list[Enti
         for entity in entities
         if entity.root_status == EntityRootStatus.DETERMINED.value and entity.root_study_id == study_id
     ]
+
+
+def _authoritative_sample_ids(study_id: str):
+    """_authoritative_sample_entities' ids as a SQL subquery, for IN (...)
+    filters: a study can have more samples than SQLite allows bound
+    parameters in one statement (see _clear_existing_faire_mappings)."""
+    return select(Entity.entity_id).where(
+        Entity.entity_id.in_(select(EntityStudy.entity_id).where(EntityStudy.study_id == study_id)),
+        Entity.entity_level == EntityLevel.SAMPLE.value,
+        Entity.root_status == EntityRootStatus.DETERMINED.value,
+        Entity.root_study_id == study_id,
+    )
 
 
 def _detect_sample_type_routed_facts(
@@ -833,12 +839,11 @@ def _apply_biological_rep_relations_from_sample_categories(
     if not sample_entities:
         return 0
     sample_by_entity_id = {entity.entity_id: entity for entity in sample_entities}
-    sample_ids = set(sample_by_entity_id)
     category_facts = session.scalars(
         select(RawFact)
         .where(
             RawFact.study_id == study_id,
-            RawFact.entity_id.in_(sample_ids),
+            RawFact.entity_id.in_(_authoritative_sample_ids(study_id)),
             RawFact.fact_type_candidate == "samp_category",
             RawFact.review_status != ReviewStatus.REJECTED.value,
             RawFact.raw_value.is_not(None),
@@ -916,12 +921,11 @@ def _apply_biological_rep_from_relations(
     sample_entities = _authoritative_sample_entities(session, study_id)
     if not sample_entities:
         return 0
-    sample_ids = {entity.entity_id for entity in sample_entities}
     relation_facts = session.scalars(
         select(RawFact)
         .where(
             RawFact.study_id == study_id,
-            RawFact.entity_id.in_(sample_ids),
+            RawFact.entity_id.in_(_authoritative_sample_ids(study_id)),
             RawFact.fact_type_candidate == "biological_rep_relation",
             RawFact.review_status != ReviewStatus.REJECTED.value,
         )
@@ -938,7 +942,7 @@ def _apply_biological_rep_from_relations(
         select(StandardizedValue)
         .where(
             StandardizedValue.study_id == study_id,
-            StandardizedValue.entity_id.in_(sample_ids),
+            StandardizedValue.entity_id.in_(_authoritative_sample_ids(study_id)),
             StandardizedValue.target_schema == TARGET_SCHEMA,
             StandardizedValue.target_field == "biological_rep_relation",
             StandardizedValue.missingness_status == MissingnessStatus.PRESENT.value,
