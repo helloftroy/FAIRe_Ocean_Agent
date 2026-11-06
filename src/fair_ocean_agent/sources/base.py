@@ -237,6 +237,13 @@ class RateLimitedClient:
         "xml" for get_text, "json" for get_json, "bin" for get_binary."""
         return self._cache_enabled and self._cache_path(url, params, suffix).exists()
 
+    def store_text(self, url: str, text: str, params: dict | None = None) -> None:
+        """Put `text` in the cache as get_text(url, params)'s answer -- for
+        a response obtained some other way (see scripts/prefetch_fulltext.py's
+        NCBI PMC fallback). No-op when caching is off."""
+        if self._cache_enabled:
+            self._cache_path(url, params, "xml").write_text(text)
+
     def get_json(self, url: str, params: dict | None = None) -> tuple[dict, bool]:
         """Returns (payload, from_cache)."""
         cache_path = self._cache_path(url, params, "json") if self._cache_enabled else None
