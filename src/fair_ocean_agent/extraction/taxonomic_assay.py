@@ -40,10 +40,17 @@ def _distinct_organism_values(session: Session, study_id: str) -> list[str]:
     `Entity.study_id`, so a sample this study only *shares* (never homes)
     still contributes its own organism value."""
     entity_ids = select(EntityStudy.entity_id).where(EntityStudy.study_id == study_id)
+    # `fact_type_candidate || ''` on purpose: found live, without table
+    # statistics SQLite chose the fact_type_candidate index here -- every
+    # "organism" fact in a 75-million-row raw_facts table -- and took ~31s
+    # per study instead of ~0s through the study's own entities. There is
+    # no study_id filter to steer it (samples can be shared); wrapping the
+    # column in an expression is SQLite's documented way to rule an index
+    # out, leaving the entity_id one.
     rows = session.execute(
         select(RawFact.raw_value).where(
             RawFact.entity_id.in_(entity_ids),
-            RawFact.fact_type_candidate == "organism",
+            (RawFact.fact_type_candidate + "") == "organism",
             RawFact.review_status != ReviewStatus.REJECTED.value,
         )
     ).all()

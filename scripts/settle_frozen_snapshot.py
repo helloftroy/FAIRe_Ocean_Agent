@@ -14,6 +14,12 @@ MAP_FAIRE for its studies. Then run:
 
     python -m fair_ocean_agent.cli worker --task-type MAP_FAIRE --until-empty
 
+Large components are slow: root determination runs per shared entity,
+all in one transaction (found live: one component of 685 studies had
+592,000 entities waiting for a root and ran for hours). Use
+--max-component-studies to settle every smaller component first and
+list the large ones; rerun without it to settle those too.
+
 Never run this against the live database: it declares components
 settled while discovery may still be adding to them. It refuses to run
 without --frozen-copy.
@@ -43,6 +49,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--frozen-copy", action="store_true", help="Confirm the database is a frozen copy, not live")
     parser.add_argument("--limit", type=int, default=None, help="Settle at most this many components (for a test)")
+    parser.add_argument(
+        "--max-component-studies",
+        type=int,
+        default=None,
+        help="Skip (and list) components with more studies than this, to settle the small ones first",
+    )
     args = parser.parse_args()
     if not args.frozen_copy:
         sys.exit("Refusing to run without --frozen-copy (see this script's docstring).")
@@ -64,6 +76,8 @@ def main() -> None:
     print(f"{len(unmapped)} candidate studies have facts but no FAIRe values.")
 
     covered: set[str] = set()
+    unmapped_set = set(unmapped)
+    skipped: list[tuple[str, int, int]] = []
     components = 0
     start = time.monotonic()
     for study_id in unmapped:
@@ -74,16 +88,25 @@ def main() -> None:
         component_start = time.monotonic()
         with session_scope() as session:
             component = compute_study_component(session, study_id)
+            if args.max_component_studies is not None and len(component) > args.max_component_studies:
+                covered |= component
+                skipped.append((study_id, len(component), len(component & unmapped_set)))
+                print(f"  skipped: component of {study_id} has {len(component)} studies", flush=True)
+                continue
             _mark_settled_and_determine_roots(session, component)
         covered |= component
         components += 1
         print(
             f"  component {components}: {len(component)} stud(y/ies) settled "
-            f"({time.monotonic() - component_start:.1f}s; {len(covered & set(unmapped))}/{len(unmapped)} "
+            f"({time.monotonic() - component_start:.1f}s; {len(covered & unmapped_set)}/{len(unmapped)} "
             f"unmapped studies covered, {(time.monotonic() - start) / 60:.1f}m total)",
             flush=True,
         )
     print(f"Done: settled {components} component(s). Now run the MAP_FAIRE worker.")
+    if skipped:
+        print(f"Skipped {len(skipped)} large component(s) -- rerun without --max-component-studies to settle them:")
+        for anchor, size, n_unmapped in skipped:
+            print(f"  {anchor}: {size} studies, {n_unmapped} of them unmapped")
 
 
 if __name__ == "__main__":
