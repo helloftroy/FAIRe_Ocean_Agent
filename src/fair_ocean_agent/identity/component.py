@@ -39,16 +39,13 @@ def compute_study_component(session: Session, anchor_study_id: str) -> set[str]:
             continue
         visited.add(study_id)
 
-        entity_ids = session.scalars(
-            select(EntityStudy.entity_id).where(EntityStudy.study_id == study_id)
-        ).all()
-        sibling_study_ids: set[str] = set()
-        if entity_ids:
-            sibling_study_ids = set(
-                session.scalars(
-                    select(EntityStudy.study_id).where(EntityStudy.entity_id.in_(entity_ids))
-                ).all()
-            )
+        # A subquery, not a Python list of ids: a study can link more
+        # entities than SQLite allows bound parameters in one statement
+        # (see mapping/faire.py's _clear_existing_faire_mappings).
+        entity_ids = select(EntityStudy.entity_id).where(EntityStudy.study_id == study_id)
+        sibling_study_ids = set(
+            session.scalars(select(EntityStudy.study_id).where(EntityStudy.entity_id.in_(entity_ids))).all()
+        )
 
         lineage_ids: set[str] = set()
         study = session.get(Study, study_id)
