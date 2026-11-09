@@ -70,8 +70,23 @@ def get_engine() -> Engine:
     return _engine
 
 
+# Opt-in page cache size per connection, in MB. SQLite's default is about
+# 2 MB, which is tiny next to a multi-GB database: found live, mapping on
+# a 51 GB snapshot spent most of its time waiting on disk reads. Unset
+# keeps SQLite's default.
+_SQLITE_CACHE_MB_ENV_VAR = "FAIR_OCEAN_SQLITE_CACHE_MB"
+
+
+def _apply_sqlite_cache_size(cursor) -> None:  # noqa: ANN001
+    cache_mb = os.environ.get(_SQLITE_CACHE_MB_ENV_VAR)
+    if cache_mb:
+        # A negative cache_size is in KiB rather than pages.
+        cursor.execute(f"PRAGMA cache_size=-{int(cache_mb) * 1024}")
+
+
 def _apply_sqlite_pragmas(cursor) -> None:  # noqa: ANN001
     global _wal_mode_unavailable_warned
+    _apply_sqlite_cache_size(cursor)
     if os.environ.get(_SKIP_WAL_ENV_VAR):
         if not _wal_mode_unavailable_warned:
             logger.warning(
