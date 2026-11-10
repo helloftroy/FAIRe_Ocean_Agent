@@ -181,7 +181,7 @@ it can be rejected (27 distinct values).
 
 ### R07: unmapped values become `other: <original>` (decision D0)
 
-Values are listed in `review_other.csv`. Current totals: **9,650 distinct
+Values are listed in `review_other.csv`. Current totals: **9,813 distinct
 values**, mostly in columns the next stages will map (see "Work remaining").
 
 ### R08: platform from instrument keywords
@@ -405,6 +405,39 @@ Largest fills, which also show coverage (useful for the paper):
 - **experimentRunMetadata:** `assay_name` 359,971, `pcr_plate_id` 130,654
   (targeted studies).
 
+### R18: storage durations → ISO 8601
+
+Applies to `samp_store_dur` and `eventDurationValue`, which use the fixed
+format `PnYnMnWnDTnHnMnS`.
+
+- **Converted (35,201 cells, 34 distinct values):**
+  - one number and one unit, optionally preceded by "for";
+  - number words one to twelve;
+  - units h / hour, min, s, day, week, month, year.
+- **Examples:** `24 h` / `for 24 h` → `PT24H`, `30 min` → `PT30M`,
+  `one hour` → `PT1H`, `4 weeks` → `P4W`.
+- **Ranges:** `4–10 days` → `P4D/10D`, following the style of FAIRe's own
+  example `P1W/4W`. This is done for date units only. Time-unit ranges such
+  as `2-4 h` go to D0, because FAIRe gives no example for them.
+- **Not converted, so `other:` (152,618 cells):**
+  - vague durations (`overnight`, `briefly`);
+  - open-ended durations (`until DNA extraction`, `until further
+    processing`);
+  - qualified durations (`up to 2 months`, `no more than 4 h`,
+    `less than a week`);
+  - sentences.
+
+Before R18, these cells were kept unchanged even when they didn't match the
+format.
+
+### eventDate: checked, no change needed
+
+All 310,654 filled values are `yyyy-mm-dd`, `yyyy-mm` or `yyyy`. The
+checklist definition lists all three as valid ISO 8601. (The definition's
+"Except: 2008-01; 2008" sentence is garbled in the upstream checklist; read
+in full, it says these forms are compliant.) There are no times, so no time
+zone is needed.
+
 ### Our own artefact found in review
 
 `(+1 similar variants omitted)` and similar values in `target_gene` (about 30
@@ -487,7 +520,7 @@ Planned in this order. Counts are cells currently written as `other:` (or not
 yet checked).
 
 1. ~~Extraction method vocabularies~~: done (R13).
-2. ~~Number and unit pairs~~: done (R14). D6 is still open.
+2. ~~Number and unit pairs~~: done (R14, with D6).
 3. ~~target_gene~~: done (R15).
 4. ~~D4 samp_category~~: done (R16).
 5. ~~Mandatory fields~~: done (R17).
@@ -500,11 +533,7 @@ yet checked).
 7. **`geo_loc_name`** against the INSDC country / sea list, in the format
    `Country: region, locality`. For example, `Chile Bay, Greenwich Island…`
    needs `Antarctica:` added. This can only be done where it's unambiguous.
-8. **Dates and durations:**
-   - `eventDate` as ISO 8601. Our values pass the format check, but this
-     needs a closer look.
-   - `samp_store_dur` as ISO 8601 durations: `24 h` → `PT24H`,
-     `overnight` → D0.
+8. ~~Dates and durations~~: done (R18; eventDate checked).
 9. **Integer fields with sentences:** `pool_dna_num` (114k cells),
    `pcr_rep`, `biological_rep`. Sentences stay D0.
 10. **Final validation:**

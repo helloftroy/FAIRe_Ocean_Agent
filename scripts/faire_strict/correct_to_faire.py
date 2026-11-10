@@ -501,6 +501,40 @@ def _fill_mandatory(table: str, row: dict[str, str], terms: dict[str, Term], stu
                 _fill(table, row, col, _NOT_PROVIDED, "R17_mandatory_missing", log)
 
 
+# --- R18 durations -> ISO 8601 (fixed format PnYnMnWnDTnHnMnS) ----------------
+# "24 h" -> PT24H, "4 weeks" -> P4W, "4-10 days" -> P4D/10D (range style of
+# FAIRe's own example "P1W/4W"; date units only). Anything vaguer
+# ("overnight", "until extraction", "up to 2 months") -> D0.
+_ISO_DURATION = re.compile(r"^P(?!$)(\d+(\.\d+)?Y)?(\d+(\.\d+)?M)?(\d+(\.\d+)?W)?(\d+(\.\d+)?D)?(T(?=\d)(\d+(\.\d+)?H)?(\d+(\.\d+)?M)?(\d+(\.\d+)?S)?)?(/.+)?$")
+_DURATION_UNITS = {
+    "h": ("T", "H"), "hr": ("T", "H"), "hrs": ("T", "H"), "hour": ("T", "H"), "hours": ("T", "H"),
+    "min": ("T", "M"), "mins": ("T", "M"), "minute": ("T", "M"), "minutes": ("T", "M"),
+    "s": ("T", "S"), "sec": ("T", "S"), "secs": ("T", "S"), "second": ("T", "S"), "seconds": ("T", "S"),
+    "d": ("", "D"), "day": ("", "D"), "days": ("", "D"),
+    "wk": ("", "W"), "wks": ("", "W"), "week": ("", "W"), "weeks": ("", "W"),
+    "month": ("", "M"), "months": ("", "M"), "mo": ("", "M"),
+    "y": ("", "Y"), "yr": ("", "Y"), "yrs": ("", "Y"), "year": ("", "Y"), "years": ("", "Y"),
+}
+_NUMBER_WORDS = {w: str(i) for i, w in enumerate(
+    "zero one two three four five six seven eight nine ten eleven twelve".split())}
+_DURATION_RE = re.compile(r"^(?:for )?(\d+(?:\.\d+)?|[a-z]+)(?:\s*-\s*(\d+(?:\.\d+)?))?\s*([a-z]+)$")
+
+
+def _iso_duration(item: str) -> str | None:
+    text = _normalise_number_text(item).lower().rstrip(".")
+    match = _DURATION_RE.match(text)
+    if not match:
+        return None
+    low, high, unit = match.groups()
+    low = _NUMBER_WORDS.get(low, low)
+    if not re.fullmatch(r"\d+(\.\d+)?", low) or unit not in _DURATION_UNITS:
+        return None
+    t, letter = _DURATION_UNITS[unit]
+    if high:
+        return None if t else f"P{low}{letter}/{high}{letter}"
+    return f"P{t}{low}{letter}"
+
+
 def _template_order() -> dict[str, list[str]]:
     wb = openpyxl.load_workbook(FULL_TEMPLATE, read_only=True, data_only=True)
     order: dict[str, list[str]] = {}
@@ -584,7 +618,14 @@ def _correct_item(term: Term, item: str) -> tuple[str, str]:
         if low in _BOOLEAN_WORDS:
             return _BOOLEAN_WORDS[low], "R10_boolean_words"
         return f"other: {item}", "R07_unmapped_other"
-    return item, "keep"  # free text, fixed format, DOI: later stages
+    if t == "fixed format" and term.fixed_format == "PnYnMnWnDTnHnMnS":
+        if _ISO_DURATION.match(item):
+            return item, "keep"
+        iso = _iso_duration(item)
+        if iso:
+            return iso, "R18_iso_duration"
+        return f"other: {item}", "R07_unmapped_other"
+    return item, "keep"  # free text, other fixed formats, DOI: later stages
 
 
 def _split_items(value: str) -> list[str]:
