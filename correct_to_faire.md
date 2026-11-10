@@ -679,9 +679,9 @@ distinct values, for example `220`, `280`, `2808`, `80`. These are probably
 | D4 | `samp_category` once the labels are removed (R11) | **Decided 2026-11-10**: negative / positive control from clear label keywords, `other: Ctrl` for other control labels, `sample` for all the rest. Rule R16. |
 | D5 | Add non-FAIRe columns back as new terms? | **No** (2026-11-10). The NOAA copy is FAIRe terms only; the extras files keep the values. |
 | D6 | Unit conversion: µL is not in FAIRe's volume list (`mL`, `L`, …) | **Decided 2026-11-10**: keep µL, no conversion, but still split the number and unit (`500 µL` → `500` + `µL`). About 10,800 cells. |
-| D7 | `informationWithheld` is "Nothing indicated as withheld" in 9,298 studies. That is our pipeline's default text, not withheld information. Keep it, or blank it (moving the text to extras)? | **open**; kept for now |
-| D8 | ENVO renamed ENVO:00002149 from "sea water" to **"ocean water"** (release 2026-10-23); FAIRe's example still says `sea water [ENVO:00002149]` | **open**; currently written with ENVO's current label, `ocean water [ENVO:00002149]` (R19). The alternative is to keep `sea water` as the label for this one ID. |
-| D9 | Instruments OBI does not list (Ion Torrent, NextSeq 2000, DNBSEQ, AVITI …) | **open**; currently the plain name is kept (FAIRe: OBI "where possible"), flagged F03. The alternative is `other: <name>`. |
+| D7 | `informationWithheld` is "Nothing indicated as withheld" in 9,298 studies. That is our pipeline's default text, not withheld information. Keep it, or blank it (moving the text to extras)? | **Keep** (2026-11-10) |
+| D8 | ENVO renamed ENVO:00002149 from "sea water" to **"ocean water"** (release 2026-10-23); FAIRe's example still says `sea water [ENVO:00002149]` | **Keep ENVO's current label**, `ocean water [ENVO:00002149]` (2026-11-10) |
+| D9 | Instruments OBI does not list (Ion Torrent, NextSeq 2000, DNBSEQ, AVITI …) | **Keep the plain name** (2026-11-10); flagged F03 for information only |
 | — | Inference rules R05b, R13b, R15b, R15c | **Accepted** 2026-11-10 |
 
 ### D4 background: what FAIRe says (decided above)
@@ -725,6 +725,29 @@ for 1M samples.
 On 2026-11-10 I said `platform` and `instrument` were 0% filled in the run
 table. They aren't in that table at all: FAIRe puts them in projectMetadata,
 where they are 63% and 47% filled.
+
+## Status (2026-11-10)
+
+- All decisions D1–D9 are made.
+- **`other:` values are left as they are.** The user decided not to review
+  the 36,324 distinct values by hand. They stay in the NOAA copy as
+  `other: <original>`, so nothing is lost.
+- **Original export deleted** (`data/snapshots/faire_2026-11/`), at the user's
+  request after validation. Before deleting:
+  - its SHA-256 checksums were saved;
+  - its two small side files (`api_paper_corrections.csv`,
+    `field_reference.csv`) were copied.
+
+  Both are in `data/snapshots/faire_strict_work/original_export_sidefiles/`.
+  To re-run the correction, regenerate the export from
+  `data/snapshots/fair_ocean_2026-11.db` with `export-faire` (about
+  26 minutes) and run `correct_to_faire.py` again.
+- **Fill summary:**
+  - per-term counts for every FAIRe column:
+    `data/snapshots/faire_strict_work/fill_summary/fill_summary.csv`, made
+    by `scripts/faire_strict/fill_summary.py`;
+  - manuscript figure: `fill_ecology.pdf/.svg/.png` in the same folder,
+    made by `scripts/faire_strict/plot_fill.py`.
 
 ## Work remaining (next sessions)
 
