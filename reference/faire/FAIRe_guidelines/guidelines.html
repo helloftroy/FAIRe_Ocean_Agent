@@ -1,0 +1,1338 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://fair-edna.github.io/guidelines.html">
+      
+      
+        <link rel="prev" href="index.html">
+      
+      
+        <link rel="next" href="next.html">
+      
+      
+      <link rel="icon" href="assets/images/ednafair_icon.svg">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.15">
+    
+    
+      
+        <title>Guidelines - FAIR eDNA</title>
+      
+    
+    
+      <link rel="stylesheet" href="assets/stylesheets/main.342714a4.min.css">
+      
+        
+        <link rel="stylesheet" href="assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+        <script src="https://unpkg.com/iframe-worker/shim"></script>
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL(".",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "ResearchProject",
+    "name": "FAIR eDNA",
+    "alternateName": ["FAIRe", "FAIR-eDNA", "FAIRe eDNA"],
+    "description": "Comprehensive FAIR metadata checklist for environmental DNA (eDNA) studies, integrating Darwin Core and MIxS standards for biodiversity monitoring.",
+    "url": "https://fair-edna.github.io/",
+    "keywords": ["FAIRe", "eDNA", "environmental DNA", "FAIR data", "biodiversity", "metabarcoding", "Darwin Core", "MIxS", "qPCR", "species detection"],
+    "sameAs": [
+      "https://github.com/FAIR-eDNA"
+    ]
+  }
+  </script>
+
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="green">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#fair-edna-faire-guidelines" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="index.html" title="FAIR eDNA" class="md-header__button md-logo" aria-label="FAIR eDNA" data-md-component="logo">
+      
+  <img src="assets/images/ednafair_icon.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            FAIR eDNA
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Guidelines
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme)" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="green"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m14.3 16-.7-2h-3.2l-.7 2H7.8L11 7h2l3.2 9zM20 8.69V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12zm-9.15 3.96h2.3L12 9z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="green"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_2" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="teal" data-md-color-accent="green"  aria-label="Switch to system preference"  type="radio" name="__palette" id="__palette_2">
+    
+      <label class="md-header__button md-icon" title="Switch to system preference" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+      <div class="md-header__option">
+  <div class="md-select">
+    
+    <button class="md-header__button md-icon" aria-label="Select language">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.5 17.5 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2zm-2.62 7 1.62-4.33L19.12 17z"/></svg>
+    </button>
+    <div class="md-select__inner">
+      <ul class="md-select__list">
+        
+          <li class="md-select__item">
+            <a href="guidelines.html" hreflang="en" class="md-select__link">
+              English
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="ja/guidelines.html" hreflang="ja" class="md-select__link">
+              日本語
+            </a>
+          </li>
+        
+      </ul>
+    </div>
+  </div>
+</div>
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="index.html" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    <li class="md-tabs__item md-tabs__item--active">
+      <a href="guidelines.html" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Guidelines
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="next.html" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Our next steps
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="download.html" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Download
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="update.html" class="md-tabs__link">
+        
+  
+  
+    
+  
+  News & Updates
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="workinggroup.html" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Working group
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="contact.html" class="md-tabs__link">
+        
+  
+  
+    
+  
+  How to contribute
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="citation.html" class="md-tabs__link">
+        
+  
+  
+    
+  
+  How to cite
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+  
+
+<nav class="md-nav md-nav--primary md-nav--lifted md-nav--integrated" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="index.html" title="FAIR eDNA" class="md-nav__button md-logo" aria-label="FAIR eDNA" data-md-component="logo">
+      
+  <img src="assets/images/ednafair_icon.svg" alt="logo">
+
+    </a>
+    FAIR eDNA
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="index.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Home
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    Guidelines
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="guidelines.html" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    Guidelines
+    
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#data-formats-and-components" class="md-nav__link">
+    <span class="md-ellipsis">
+      Data formats and components
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#consistent-identifiers-and-file-naming" class="md-nav__link">
+    <span class="md-ellipsis">
+      Consistent identifiers and file naming
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#faire-metadata-checklist" class="md-nav__link">
+    <span class="md-ellipsis">
+      FAIRe metadata checklist
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="FAIRe metadata checklist">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#vocabulary-basis" class="md-nav__link">
+    <span class="md-ellipsis">
+      Vocabulary basis
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specified-use-of-terms-and-controlled-vocabularies" class="md-nav__link">
+    <span class="md-ellipsis">
+      Specified use of terms and controlled vocabularies
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#missing-values" class="md-nav__link">
+    <span class="md-ellipsis">
+      Missing values
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#data-submissionpublication" class="md-nav__link">
+    <span class="md-ellipsis">
+      Data submission/publication
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#available-scripts-and-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      Available scripts and tools
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#example-datasets" class="md-nav__link">
+    <span class="md-ellipsis">
+      Example datasets
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#frequently-asked-questions" class="md-nav__link">
+    <span class="md-ellipsis">
+      Frequently Asked Questions
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#useful-resources" class="md-nav__link">
+    <span class="md-ellipsis">
+      Useful resources
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="next.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Our next steps
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="download.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Download
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="update.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    News & Updates
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="workinggroup.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Working group
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="contact.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    How to contribute
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="citation.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    How to cite
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="fair-edna-faire-guidelines">FAIR eDNA (FAIRe) guidelines</h1>
+<p>In this section, we outline the various data components and formats, present a comprehensive FAIR eDNA (FAIRe) metadata checklist  (click <a href="https://github.com/FAIR-eDNA/FAIRe_checklist/blob/main/FAIRe_checklist_v1.0.2.xlsx">here</a> to download) along with scripts and tools to guide users through the data formatting process. </p>
+<div align="center">
+    <img src="/assets/images/Figure2_FAIRe_practice_flowchart.jpg" alt="Figure 2. FAIRe practice flowchart" width="95%">
+     <figcaption style="margin-top: 0em; text-align: left; width: 95%;">Figure 2. FAIRe practice flowchart</a></figcaption>
+</div>
+
+<h2 id="data-formats-and-components">Data formats and components</h2>
+<p>The figure and list below outline the associated eDNA data components as well as their contents and purposes. In our proposed data structure, all data components, except DNA sequence data (i.e., raw data in FASTQ and, optionally, representative sequences in FASTA), are organised in a tabular format. They can be saved as individual worksheets in spreadsheet workbooks, as character-separated values text files (tab or comma), or as a combination of these (see various example datasets provided). This allows data to be conceptually divided into separate modules that can be linked using unique identifiers, such as <code>project_id</code>, <code>sample_name</code>, and <code>assay_name</code>, as well as to accommodate users’ needs and data wrangling preferences. </p>
+<div align="center">
+    <img src="/assets/images/datatypes_main.jpg" alt="Data types" width="95%">
+    <figcaption style="margin-top: 0em; text-align: left; width: 95%;">Figure 3. Data components and their recommended structures that promote FAIR eDNA</a></figcaption>
+</div>
+
+<ol>
+<li>
+<p><strong>Project metadata</strong> (projectMetadata)</p>
+<ul>
+<li><strong>Contents</strong>: Information that applies to an entire project and dataset. This includes a project name, reference associated to the datasets from which the datasets were derived (e.g., bibliographic references to studies, DOI of published, associated data), and metadata describing workflows including PCR, sequencing, and bioinformatic steps.</li>
+<li><strong>Purpose</strong>: To describe project information and methodologies that apply to all samples, thereby avoiding the need to propagate identical entries to all samples in sample metadata. Information, such as bioinformatic quality filtering parameters and thresholds, enable data reusers to assess whether the data quality meets the specific requirements for certain types of reuse. Standardisation of such information is particularly important as minimum requirements for amplification analysis, bioinformatic workflows and quality assurance levels vary between studies and applications, including those reusing shared data. </li>
+<li><strong>Note</strong>: Multiple primer sets are often applied within one project to target more than one taxon. In this case, practitioners would follow the format in Figure 5 to record assay-specific workflows and outputs.</li>
+</ul>
+</li>
+<li>
+<p><strong>Sample metadata</strong> (sampleMetadata)</p>
+<ul>
+<li><strong>Contents</strong>: Information for each sample (where this cannot be stated at the project level in project metadata), including sampling date, location, methodologies, and environmental variables (i.e., temperature, water depth).</li>
+<li><strong>Purpose</strong>: To record sample-specific information through the workflows from sampling to bioinformatics. </li>
+</ul>
+</li>
+<li>
+<p><strong>Experiment/run metadata</strong> (experimentRunMetadata)</p>
+<ul>
+<li><strong>Contents</strong>: Sample-specific information for PCR, library preparation and sequencing workflows.</li>
+<li><strong>Purpose</strong>: To record workflows, from PCR onward, that are specific to each sample and assay.</li>
+<li><strong>Note</strong>: Each entry (row) has a unique library ID (<code>lib_id</code>) and multiplexing identifiers (MIDs) (<code>mid_forward</code>, <code>mid_reverse</code>).</li>
+</ul>
+</li>
+<li>
+<p><strong>PCR standard data</strong> (stdData)</p>
+<ul>
+<li><strong>Contents</strong>: Detailed information of PCR standards, including starting input quantity, Ct/Cq values, and standard curve parameters (e.g., efficiency, R2).</li>
+<li><strong>Purpose</strong>: To improve reproducibility and allow data reusers to regenerate the estimated copy numbers using their own approach. The entries in <code>assay_name</code> and <code>pcr_plate_id</code> in the PCR standard data and amplification data allow linking of the standards and eDNA samples.</li>
+</ul>
+</li>
+<li>
+<p><strong>eLow Quant data</strong> (eLowQuantData)</p>
+<ul>
+<li><strong>Contents</strong>: Outputs from the eLow Quant binomial approach for PCR standards if applicable (see Lesperance et al., 2021).</li>
+<li><strong>Purpose</strong>: To improve reproducibility and allow data reusers to regenerate the estimated copy numbers using their own approach.</li>
+</ul>
+</li>
+<li>
+<p><strong>Targeted assay amplification data</strong> (ampData)</p>
+<ul>
+<li><strong>Contents</strong>: Raw amplification data of each PCR technical replicate performed on eDNA samples, as well as estimated copy numbers based on standard curves (if applicable) and detection status of targeted taxon in each biological replicate (field sample).</li>
+<li><strong>Purpose</strong>: The Ct/Cq values of each technical replicate, combined with the standard information above, enable the re-conversion of the raw amplification data to concentration or detection status in future studies. Detect/non-detect records of a target taxon at a biological replicate level allow prompt reuses of taxon occurrence records in future studies, combined with sample metadata. They also standardise eDNA data in the context of biodiversity data produced using other methods, and consequently make the collective data and underlying research discoverable and reusable for wider audiences. </li>
+<li><strong>Note</strong>: "NA" (not zero) should be used under the term <code>quantificationCycle</code> (i.e., Ct/Cq values) to indicate no amplification occurred, because zero could be interpreted as an extremely high DNA concentration, which may or may not be target DNA, that would be unquantifiable due to being outside the standard curve range.</li>
+</ul>
+</li>
+<li>
+<p><strong>Raw DNA sequences</strong></p>
+<ul>
+<li><strong>Contents</strong>: DNA sequences in FASTQ format, demultiplexed for each sample. The sequences of primers, adapters and MIDs must be removed.</li>
+<li><strong>Purpose</strong>: To allow data reusers to repeat quality filtering, denoising and taxonomic assignment using their own algorithms and thresholds to fit their purposes. To enable re-analyses using different or improved pipelines/algorithms. To enhance the reproducibility of studies. </li>
+</ul>
+</li>
+<li>
+<p><strong>Non-curated ASV/OTU table</strong> (otuRaw) (Optional)</p>
+<ul>
+<li><strong>Contents</strong>: The initial ASV/OTU table produced in a bioinformatic pipeline, containing absolute sequence read counts of all ASV/OTUs (including contaminant/non-targeted taxa and unassigned ASVs/OTUs) across all samples (including controls). Each ASV/OTU will be provided with a unique <code>seq_id</code> at this stage. </li>
+<li><strong>Purpose</strong>: To communicate objective information of read counts of all OTUs/ASVs in all samples, and allow data reusers to modify or re-run the data curation steps if required. The inclusion of control samples, suspected contaminants and non-targeted taxa allows the investigations of common contamination sequences, taxa, and sources across multiple studies, and potentially identify how to minimize them.</li>
+<li><strong>Note</strong>: The column names in ASV/OTU tables should be either <code>samp_name</code> or <code>lib_id</code>, making sure they maintain clear links between the experiment/run metadata and ASV/OTU table.</li>
+<li><strong>Note</strong>: Although it is called a “raw” ASV/OTU table, some level of compression, quality filtering and curation may already have been applied, such as filtering based on minimum length, read counts, error rates, and OTU clustering. The extent of data curation performed on the non-curated ASV/OTU table can vary between studies depending on the bioinformatics pipeline used, and this should be described under the term <code>otu_raw_description</code> in the project metadata. </li>
+</ul>
+</li>
+<li>
+<p><strong>Curated ASV/OTU table</strong> (otuFinal)</p>
+<ul>
+<li><strong>Contents</strong>: An ASV/OTU table resulting from various data curation processes, including denoising (i.e., custom or LULU curation), removing control samples, and eliminating suspected contamination and non-target taxa. This table should ideally be identical to, or correspond closely to, the one used for the final (e.g. ecological) analyses published in associated scientific papers. ASVs/OTUs without taxonomic assignments should remain in the otuFinal table if they were relevant to the analyses.</li>
+<li><strong>Purpose</strong>: To facilitate reproducibility of original (ecological) analyses, and general reuse of a curated/cleaned version of the data. To improve interoperability with other types of biodiversity data, and thereby facilitate incorporation in general biodiversity databases, and make the data and underlying research discoverable and reusable for wider audiences. </li>
+<li><strong>Note</strong>: The column names in ASV/OTU tables should be either <code>samp_name</code> or <code>lib_id</code>, making sure they maintain clear links between the experiment/run metadata and ASV/OTU table.</li>
+<li><strong>Note</strong>: In some studies, researchers may choose to collapse multiple ASVs/OTUs assigned to the same taxon, summing their read counts. We, however, strongly encourage data providers to submit ASV/OTU tables in their original, non-collapsed form. Preserving each ASV/OTU with its individual read counts and sequence ensures better interoperability and prevents the loss of potentially valuable ASVs/OTUs due to uncertain or erroneous taxonomic annotations resulting from incomplete or imperfect reference databases at the time of analysis. </li>
+<li><strong>Note</strong>: Descriptions on how data were curated to produce the curated ASV/OTU table should be recorded under the term <code>otu_final_description</code> in the project metadata.</li>
+</ul>
+</li>
+<li>
+<p><strong>Non-curated Sequence/Taxa table</strong> (taxaRaw) (Optional)</p>
+<ul>
+<li><strong>Contents</strong>: In addition to the contents in the curated Sequence - Taxa table (below), this table includes ASVs/OTUs that were excluded from the curated ASV/OTU table (e.g., non-target taxa, contaminants, positive control sequences, ASVs with no taxa hits). It may also contain multiple rows for a single ASV/OTU assigned to multiple taxa, with information of each assigned taxon.  </li>
+<li><strong>Purpose</strong>: To enhance data transparency by providing access to ASVs, OTUs, and taxa excluded from the curated ASV/OTU table. To allow data reusers the opportunity to re-assess and re-run specific data curation steps.</li>
+<li><strong>Note</strong>: When assigning a lowest common ancestor (LCA) to a single ASV/OTU, multiple rows should be generated for the ASV/OTU to capture information about each of the assigned taxa. Users may apply a similarity threshold (e.g., 97%) and include all reference sequences within this range, or a representative subsample of them, in the output.</li>
+<li><strong>Note</strong>: See the example in Figure 3 (ASV1 in the non-curated Sequence/Taxa table).</li>
+</ul>
+</li>
+<li>
+<p><strong>Curated Sequence/Taxa table</strong> (taxaFinal)</p>
+<ul>
+<li><strong>Contents</strong>: DNA sequence of each <code>seq_id</code> listed in the curated ASV/OTU table. If a taxon was assigned, also include assigned taxonomy and assignment quality assurance parameters (e.g., % identity, % query coverage). If multiple taxa are assigned to a single ASV/OTU, the LCA should be used as the assigned taxon. </li>
+<li><strong>Purpose</strong>: To allow data reusers to assess the specificity and accuracy of the inferred taxonomy, and to perform taxonomic re-annotation using different or updated sequence reference databases.</li>
+<li><strong>Note</strong>: ASVs/OTUs without taxonomic assignments should be included in the taxaFinal table, but without taxonomic information (e.g., <code>scientificName</code>), if they were relevant to the study scope.</li>
+</ul>
+</li>
+</ol>
+<div align="center">
+    <img src="/assets/images/Figure4_datatypes_noncurated_files.jpg" alt="Optional intermediate files" width="95%">
+    <figcaption style="margin-top: 0em; text-align: left; width: 95%;">Figure 4. Optional intermediate file formats for metabarcoding outputs</a></figcaption>
+</div>
+
+<div align="center">
+    <img src="/assets/images/datatypes_multiassay.jpg" alt="Multiple assay" width="95%">
+    <figcaption style="margin-top: 0em; text-align: left; width: 95%;">Figure 5. Metadata formats for a project applying multiple assays</a></figcaption>
+</div>
+
+<h2 id="consistent-identifiers-and-file-naming">Consistent identifiers and file naming</h2>
+<p>To ensure machine readability and long-lasting reference to a digital resource, it is crucial to apply consistent, persistent sample and sequence identifiers (<code>samp_name</code>, <code>lib_id</code> and <code>seq_run_id</code>) across datasets (Damerow et al., 2021; McMurry et al., 2017). Similarly, each file must have a clear, unambiguous name, consisting of <code>project_id</code>, <code>assay_name</code> and <code>seq_run_id</code> (see Table 2 and example datasets) to maintain clear links between files. For example, a curated ASV/OTU table should be named as otuFinal_<code>project_id</code>_<code>assay_name</code>_<code>seq_run_id</code> (e.g., otuFinal_gbr2022_MiFish_lib20230922.csv). If multiple data components are stored within a single spreadsheet workbook, the file name should be the <code>project_id</code> (e.g., gbr2022.xlsx). In this case, each worksheet name should follow the format in Table 2 without the <code>project_id</code> as it already appears in the main file name (e.g., otuFinal_MiFish_lib20230922). </p>
+<p>Table 1. Standardised names for each data type. In the examples, <code>project_id</code> = gbr2022, <code>samp_name</code> = S1, <code>assay_name</code> = eSERUS and MiFish for targeted and metabarcoding assay approaches respectively, <code>seq_run_id</code> = run20230922</p>
+<table>
+  <thead style="background-color: grey;">
+    <tr>
+      <th>Data type</th>
+      <th>Name format</th>
+      <th>Example</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Project metadata</td>
+      <td>projectMetadata_<code>project_id</code></td>
+      <td>projectMetadata_gbr2022.csv</td>
+    </tr>
+    <tr>
+      <td>Sample metadata</td>
+      <td>sampleMetadata_<code>project_id</code></td>
+      <td>sampleMetadata_gbr2022.csv</td>
+    </tr>
+    <tr>
+      <td>PCR standard data</td>
+      <td>stdData_<code>project_id</code></td>
+      <td>stdData_gbr2022.csv</td>
+    </tr>
+    <tr>
+      <td>eLow Quant data</td>
+      <td>eLowQuantData_<code>project_id</code></td>
+      <td>eLowQuantData_gbr2022.csv</td>
+    </tr>
+    <tr>
+      <td>Amplification data</td>
+      <td>ampData_<code>project_id</code>_<code>assay_name</code></td>
+      <td>ampData_gbr2022_eSERUS.csv</td>
+    </tr>
+    <tr>
+      <td>Experiment/run metadata</td>
+      <td>experimentRunMetadata_<code>project_id</code></td>
+      <td>experimentRunMetadata_gbr2022.csv</td>
+    </tr>
+    <tr>
+      <td>Non-curated ASV/OTU table</td>
+      <td>otuRaw_<code>project_id</code>_<code>assay_name</code>_<code>seq_run_id</code></td>
+      <td>otuRaw_gbr2022_MiFish_run20230922.csv</td>
+    </tr>
+    <tr>
+      <td>Curated ASV/OTU table</td>
+      <td>otuFinal_<code>project_id</code>_<code>assay_name</code>_<code>seq_run_id</code></td>
+      <td>otuFinal_gbr2022_MiFish_run20230922.csv</td>
+    </tr>
+    <tr>
+      <td>Non-curated Sequence/Taxa table</td>
+      <td>taxaRaw_<code>project_id</code>_<code>assay_name</code>_<code>seq_run_id</code></td>
+      <td>taxaRaw_gbr2022_MiFish_run20230922.csv</td>
+    </tr>
+    <tr>
+      <td>Curated Sequence/Taxa table</td>
+      <td>taxaFinal_<code>project_id</code>_<code>assay_name</code>_<code>seq_run_id</code></td>
+      <td>taxaFinal_gbr2022_MiFish_run20230922.csv</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 id="faire-metadata-checklist">FAIRe metadata checklist</h2>
+<p>We developed a FAIR eDNA (FAIRe) metadata checklist, providing a comprehensive vocabulary for describing different data components and methodologies. Visit the <a href="https://fair-edna.github.io/download.html">Download tab</a> to access the latest version of the checklist, the full template, and the previous versions with change logs. Thorough documentation is crucial for improving the transparency and reproducibility of studies, as well as for enabling the evaluation of data suitability for specific reuse cases. The FAIRe checklist consists of 337 data terms (38 mandatory, 51 highly recommended, 128 recommended and 120 optional terms), organised into workflow sections (e.g., sample collection, PCR, bioinformatics). Most of the mandatory, highly recommended and recommended information is generated naturally during the course of any project. As a result, data meeting the minimum reporting requirements can be readily made available and submitted to public repositories. </p>
+<h3 id="vocabulary-basis">Vocabulary basis</h3>
+<p>The FAIRe metadata checklist consists of terms sourced from existing data standards such as MIxS, DwC, and the DNA-derived data extension to DwC. MIxS offers several checklists and extensions relevant for eDNA data, including Minimum Information about a Marker Sequence (MIMARKS), Minimum Information about Metagenome or Environmental Sequence (MIMS), and extensions for various environments (e.g., water, sediment, soil, air, host associated, and symbiont associated). These standards were reviewed and incorporated into the FAIRe metadata checklist where applicable to ensure comprehensive coverage of eDNA data needs. We have also incorporated terms from MIQE guidelines (Bustin et al., 2009), the single species eDNA assay development and validation checklist (Thalinger et al., 2021) and Minimum Information for eDNA and eRNA Metabarcoding (MIEM) guidelines (Klymus et al., 2024).  The source and URI for each term from existing standards are documented in the FAIRe metadata checklist under the columns ‘source’ and ‘URI’.  Where necessary, modifications have been made to term names, descriptions, and examples for easier interpretation by the eDNA community. A total of 158 new terms were proposed to accommodate some diverse attributes of eDNA procedures and datasets, and to improve the possibility of evaluating fitness for reuse. Among these are terms related to targeted assay detection workflows (e.g., <code>lod_method</code>, <code>std_seq</code>), bioinformatic tools, filtering parameters and cutoffs (e.g., <code>demux_tool</code>, <code>demux_max_mismatch</code>), taxonomic assignment metrics (e.g., <code>percent_match</code>), and taxon screening methods (i.e., <code>screen_contam_method</code>, <code>screen_nontarget_method</code>). The FAIRe checklist also includes a range of environmental variables relevant to eDNA samples, sourced from the MIxS sample extensions including Water, Soil, Sediment, Air, HostAssociated, MicrobialMatBiofilm and SymbiontAssociated. These variables are typically recorded during sampling events, and sharing them enables more advanced modelling approaches among other applications.
+If suitable term names are not available in the FAIRe checklist , users should search for them in existing standards, such as <a href="https://genomicsstandardsconsortium.github.io/mixs/">MIxS</a> and <a href="https://dwc.tdwg.org/terms/">DwC</a>, and use these standardised terms where possible. If relevant terms cannot be found in these resources, users may add new terms using clear, concise, and descriptive names within related tables.</p>
+<h3 id="specified-use-of-terms-and-controlled-vocabularies">Specified use of terms and controlled vocabularies</h3>
+<p>Several approaches were implemented to increase standardisation of terms. Firstly, for some free-text terms from existing standards, we propose using controlled vocabularies. For example, the value for the <code>target_gene</code> term should be selected from a list of 28 gene regions  used for barcoding. This standardisation prevents variations of COI such as CO1, COXI, COX1, Cytochrome oxidase I gene, Cytochrome c oxidase I, and spelling mistakes/variants of these from being entered. If a suitable value cannot be found among the specified values of the vocabulary, it is possible to enter “other:” followed by a free-text description. Secondly, units of numeric variables are strictly specified based on the International System of Units wherever possible, and only numeric entries without units are allowed. When units are necessary for unambiguous communication, separate terms for measurement value and measurement unit are provided, with the unit restricted to a controlled vocabulary (e.g., <code>samp_size</code> for the numeric value and <code>samp_size_unit</code> with options of mL, L, mg, g, kg, cm2, m2, cm3, m3, and other). Thirdly, formats for some data terms are restricted, generally following other standards (i.e., DwC, MIxS) and data infrastructures (i.e., GBIF, OBIS, INSDC). For example, <code>decimalLatitude</code> and <code>decimalLongitude</code> are required terms, and must be in decimal degrees using WGS84 datum. If records in an original datasheet follow other formats (e.g., degree minute second, UTM, datums other than WGS84), they should be stored under the terms <code>verbatimLatitude</code> and <code>verbatimLongitude</code> while <code>decimalLatitude</code> and <code>decimalLongitude</code> are also required to be entered. Similarly, sampling date and time are summarized under the term <code>eventDate</code>, 
+which utilises the <a href="https://www.iso.org/iso-8601-date-and-time-format.html">ISO 8601 format</a>, followed by the difference from UTC time (e.g., "2008-01-23T19:23-06:00" in the time zone six hours earlier than UTC). Original records of date and time before conversion into the ISO 8601 format should be stored under the terms <code>verbatimDate</code> and <code>verbatimTime</code>. </p>
+<h3 id="missing-values">Missing values</h3>
+<p>Information may be missing for various reasons, and historically, science has used a variety of conventions to denote missing data. Furthermore, geographical coordinates can be generalised or withheld to protect endangered species or culturally important sites for Indigenous People and Local Communities (Chapman, 2020; Chapman and Wieczorek, 2020; Frank et al., 2015, https://fnigc.ca/). The reasons for withholding or generalising data should be described under the terms <code>informationWithheld</code> and <code>dataGeneralization</code> respectively in project metadata. When a value is missing from a mandatory term, it is required to provide the reason following the format of the <a href="https://www.insdc.org/submitting-standards/missing-value-reporting/">INSDC missing value controlled vocabulary</a>. It is also recommended to apply this approach for non-mandatory terms. 
+Below, we provide the complete list of missing value terms, including their full hierarchical structure for clarity. Only the bold texts should be used to describe the missing values (i.e., do not include the parenthetical explanations or add your own reasons). </p>
+<ul>
+<li><strong>not applicable: control sample</strong></li>
+<li><strong>not applicable: sample group</strong></li>
+<li><strong>not applicable</strong> (other reasons not applicable)</li>
+<li><strong>missing: not collected: synthetic construct</strong></li>
+<li><strong>missing: not collected: lab stock</strong></li>
+<li><strong>missing: not collected: third party data</strong></li>
+<li><strong>missing: not collected</strong> (other reasons not collected)</li>
+<li><strong>missing: not provided: <a href="https://www.insdc.org/news/insdc-spatiotemporal-metadata-minimum-standards-update-03-03-2023/">data agreement established pre-2023</a></strong></li>
+<li><strong>missing: not provided</strong> (other reasons not provided)</li>
+<li><strong>missing: restricted access: endangered species</strong></li>
+<li><strong>missing: restricted access: human-identifiable</strong></li>
+<li><strong>missing: restricted access</strong> (other reasons restricted access)</li>
+</ul>
+<h2 id="data-submissionpublication">Data submission/publication</h2>
+<p>Publishing eDNA datasets to databases such as <a href="https://www.gbif.org/">GBIF</a>, <a href="https://obis.org/">OBIS</a> and <a href="https://www.insdc.org/">INSDC</a>, is an essential step in ensuring FAIR data practices. These platforms ensure data findability and accessibility for scientific research and decision-making that rely on open data, either through application programming interfaces (APIs) or sophisticated web-browser interfaces. They offer data validation procedures during submission, and provide additional standardisation to ensure interoperability. Persistent sample and sequence identifiers are provided upon the submission of data to these databases, which are essential for machine-readability and long-lasting reference to the data. For example, in GBIF, dataset authors and publishers receive credit through unique dataset Digital Object Identifiers (DOIs) that enable citation tracking and automatic usage reporting. 
+Since not all eDNA data components can be sufficiently accommodated in any single of these databases, they should be submitted in parts to the most suitable databases (Figure 2). 
+These are the current recommended practices for sharing FAIR eDNA data through the larger databases/infrastructures: </p>
+<ol>
+<li>Submit raw DNA sequence data and metadata to nucleotide databases such as <a href="https://www.insdc.org/">INSDC</a> (<a href="https://www.ebi.ac.uk/ena/browser/home">ENA</a>, <a href="https://www.ncbi.nlm.nih.gov/">NCBI</a> or <a href="https://www.ddbj.nig.ac.jp/index-e.html">DDBJ</a>). For instance, NCBI allows submission of project metadata via BioProject, sample metadata via BioSample, and raw sequences via the Sequence Read Archive (SRA) (Barrett et al., 2012). This links metadata with sequence data, enabling users to retrieve complete datasets by querying BioProject or BioSample records.   </li>
+<li>Publish the derived biodiversity data – i.e., inferred taxon occurrences with sequences and metadata – to biodiversity databases such as <a href="https://www.gbif.org/">GBIF</a>, or GBIF and <a href="https://obis.org/">OBIS</a> (if marine data). Both GBIF and OBIS rely on data being formatted according to the DwC Standard with the DNA-derived data extension as described in the co-authored guide (Abarenkov et al., 2023). The dataset is converted into so-called Darwin Core Archive (DwC-A) that can be indexed by GBIF and OBIS.  </li>
+<li>Archive the remaining data components (i.e., standard data for targeted assay studies and raw ASV/OTU table for metabarcoding studies), formatted according to the FAIRe guidelines, in open data repositories such as <a href="https://datadryad.org/stash">Dryad</a>, <a href="https://zenodo.org/">Zenodo</a> and <a href="https://figshare.com/">Figshare</a> or as supplementary materials in journals. This approach ensures comprehensive storage of raw data which are not addressed in the above steps. It is, however, essential to recognise that datasets in these repositories are not indexed to the extent required for effective searchability and interoperability within larger eDNA, biodiversity, or nucleotide data platforms.</li>
+<li>Publishing protocols and sharing bioinformatics and analytical codes is also highly recommended (Jenkins et al., 2023; Teytelman et al., 2016) through open-source platforms such as <a href="https://www.protocols.io/">protocols.io</a> and <a href="https://workflowhub.eu/">WorkflowHub</a>. </li>
+<li>All above data, protocols and codes should be assigned DOIs, which should be documented in data accessibility statements within journal articles, as well as in the metadata terms such as <code>seq_archive</code>, <code>code_repo</code> and <code>associated_resource</code>.</li>
+</ol>
+<p>The guidelines provided here result in data formatted slightly different from those accepted by nucleotide and biodiversity databases. Hence, minor reformatting is required. One example is the necessary data format when multiple assays were applied in a single project. GBIF recently launched the <a href="https://www.gbif.org/metabarcoding">Metabarcoding Data Toolkit (MDT)</a>, a user-friendly web application that reshapes tabular metabarcoding data—similar to the format proposed here—and publishes it to GBIF and OBIS complying with the <a href="https://doi.org/10.35035/doc-vf1a-nr22">guidelines in Abarenkov et al. (2023)</a>.  The GBIF MDT currently requires a separate input dataset for each assay (hence information from project and sample metadata are repeated), whereas the FAIRe checklist allow the metadata from multiple assays to be combined (Figure 5). An R script (FAIRe2MDT) has been developed to convert FAIRe data templates for GBIF and OBIS publication via MDT, bridging the differences in data formats between FAIRe and GBIF standards (see below section ‘Available scripts and tools’). Using these tools in combination streamlines the publication of eDNA data to GBIF and OBIS. Overall, there is currently a strong effort by biodiversity data platforms to improve the suitability of depositing eDNA-based data.</p>
+<h2 id="available-scripts-and-tools">Available scripts and tools</h2>
+<p>The below scripts and tools were developed to aid data formatting according to the guidelines, and are made available at the <a href="https://github.com/orgs/FAIR-eDNA/repositories">FAIRe github repositories</a>. </p>
+<ul>
+<li><strong>FAIRe-ator</strong> (FAIR eDNA template generator): This R function creates data templates based on user-specified parameters, such as assay type (i.e., targeted or metabarcoding assay), sample type (e.g., water, sediment), and the number of assays applied. Additionally, the function allows users to input project ID and assay name(s), which ensures correct file name formatting and pre-fills the <code>project_id</code> and <code>assay_name</code> terms in the template. Download the README and R code <a href="https://github.com/FAIR-eDNA/FAIRe-ator/blob/main">here</a>.</li>
+<li><strong>FAIRe-fier</strong> (FAIR eDNA metadata verifier): This tool is accessible via <a href="https://shiny.csiro.au/FAIRe-fier/">web interface</a>. Source code is on <a href="https://github.com/csiro/FAIRe-fier">GitHub</a>, and additional metadata and citation details can be found at <a href="http://hdl.handle.net/102.100.100/706519?index=1">http://hdl.handle.net/102.100.100/706519?index=1</a>. It allows users to validate their metadata without requiring any scripting knowledge. After filling their project and sample metadata, users can upload it to the tool for validation. The tool checks various components, including whether mandatory terms are completed or, if not, whether a valid reason has been provided under the <code>information_withheld</code> term in the project metadata. It also verifies that controlled vocabulary entries and fixed-format terms, such as <code>eventDate</code> (which must follow ISO 8601 format), are correctly formatted. If any issues are found, users receive output with warning and error messages, indicating where corrections are needed. Formatted output will be produced when there is no warning message.</li>
+<li><strong>FAIRe2MDT</strong>: The R script to convert FAIR eDNA data templates for GBIF submission via <a href="https://mdt.gbif.org/">MDT</a>. Download the R code <a href="https://github.com/FAIR-eDNA/FAIRe2MDT/blob/main/FAIRe2MDT.R">here</a>.</li>
+</ul>
+<p><strong>Tools Developed by the Community</strong>
+We’re excited to showcase a growing set of scripts and tools developed by FAIRe implementors! It’s fantastic to see more groups adopting the FAIRe guidelines and building automation tools to streamline their workflows. We are currently developing these tools in both R and Python as part of a new package – stay tuned via <a href="https://fair-edna.github.io/update.html#faire-coding">FAIRe Coding</a> on the News &amp; Updates page!</p>
+<p>*If your community has developed FAIRe-related tools, please <a href="https://fair-edna.github.io/contact.html">contact us</a> – we’d love to connect and explore collaboration opportunities! </p>
+<ul>
+<li><a href="https://github.com/aomlomics/fairesheets"><strong>FAIReSheets</strong></a> (FAIR eDNA template generator for Google Sheets): This python script creates the FAIRe eDNA Data Template in Google Sheets. It replicates the template creation from the <a href="https://github.com/FAIR-eDNA/FAIRe-ator/blob/main">FAIRe-ator</a>, except FAIReSheets outputs the template to Google Sheets rather than a Microsoft Excel spreadsheet. Developed by Bayden Willms (<a href="https://orcid.org/0009-0003-2751-7317">ORCID</a>/ <a href="https://github.com/baydenwillms">GitHub</a>) at <a href="https://github.com/aomlomics">NOAA AOML 'Omics</a></li>
+<li><a href="https://github.com/aomlomics/FAIRe2NCBI"><strong>FAIRe2NCBI</strong></a> : Convert FAIRe metadata sheets (NOAA FAIReSheets format) to NCBI BioSample and SRA submission templates with automated configuration management. Developed by <a href="https://github.com/aomlomics">NOAA AOML 'Omics</a></li>
+<li><a href="https://github.com/aomlomics/edna2obis"><strong>edna2obis</strong></a> : Convert FAIRe metadata sheets to OBIS submission format. Developed by <a href="https://github.com/aomlomics">NOAA AOML 'Omics</a></li>
+<li><a href="https://github.com/Minderoo-OceanOmics-Centre-UWA/FAIRe2ENA"><strong>FAIRe2ENA</strong></a> : Convert FAIRe-formatted metadata to ENA (European Nucleotide Archive) XML format for submission. Developed by Philipp Bayer (<a href="https://orcid.org/0000-0001-8530-3067">ORCID</a>/ <a href="https://github.com/philippbayer">GitHub</a>) at <a href="https://github.com/Minderoo-OceanOmics-Centre-UWA">Minderoo Foundation OceanOmics</a></li>
+<li><a href="https://github.com/MinderooFoundation/OceanOmics-amplicon-nf"><strong>Amplicon Nextflow</strong></a> : A bioinformatics pipeline for quality controls, denoising, ASVs and ZOTUs, taxonomic assignment, with an option to use FAIRe metadata as an input and output. Developed by Adam Bennett (<a href="https://orcid.org/0009-0000-7038-2890">ORCID</a>/ <a href="https://github.com/a4000">GitHub</a>), Philipp Bayer (<a href="https://orcid.org/0000-0001-8530-3067">ORCID</a>/ <a href="https://github.com/philippbayer">GitHub</a>), Sebastian Rauschert (<a href="https://orcid.org/0000-0001-8359-6898">ORCID</a>/ <a href="https://github.com/sebrauschert">GitHub</a>) at <a href="https://github.com/Minderoo-OceanOmics-Centre-UWA">Minderoo Foundation OceanOmics</a> </li>
+</ul>
+<h2 id="example-datasets">Example datasets</h2>
+<p>Various example datasets are available to provide eDNA practitioners with suggestions for how to format and publish their data.</p>
+<p>Below is a list of example datasets using <strong>targeted assays</strong>, formatted according to the FAIRe checklist v1.0. These datasets are available <a href="https://github.com/FAIR-eDNA/FAIR-eDNA.github.io/tree/main/docs/examples/targeted_assay">here</a>.</p>
+<table>
+  <thead>
+    <tr>
+      <th style="background-color: grey;"><b>recordedBy</b></th>
+      <th>Mark Louie Lopez</th>
+      <th>Neha Acharya-Patel</th>
+      <th>Cecilia Villacorta-Rath</th>
+      <th>Lynsey Harper</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td style="background-color: grey;"><b>project_id</b></td>
+      <td>AEP_Fish_sedDNA</td>
+      <td>Rockfish_targeted_qPCR</td>
+      <td>EirwiniBurdekin</td>
+      <td>NECR534_GCN_single-species</td>
+    </tr>
+    <tr>
+      <td style="background-color: grey;"><b>bibliographicCitation</b></td>
+      <td><a href="https://doi.org/10.1016/j.ecolind.2023.111014">DOI</a></td>
+      <td><a href="https://doi.org/10.1016/j.ecolind.2024.111830">DOI</a></td>
+      <td><a href="https://doi.org/10.1186/s12862-022-02009-6">DOI</a></td>
+      <td><a href="https://publications.naturalengland.org.uk/publication/5177901000163328">Link</a></td>
+    </tr>
+    <tr>
+      <td style="background-color: grey;"><b>assay_type</b></td>
+      <td>targeted</td>
+      <td>targeted</td>
+      <td>targeted</td>
+      <td>targeted</td>
+    </tr>
+    <tr>
+      <td style="background-color: grey;"><b>assay_name</b></td>
+      <td>eFish1 | eESLU1 | eCOAR7</td>
+      <td>eSEMA3 | eSEPA9 | eSERU5</td>
+      <td>EirwiniND4</td>
+      <td>TCCB</td>
+    </tr>
+    <tr>
+      <td style="background-color: grey;"><b>env_medium</b></td>
+      <td>lake sediment [ENVO:00000546]</td>
+      <td>sea water [ENVO:00002149]</td>
+      <td>river water [ENVO:01000599]</td>
+      <td>liquid water [ENVO:00002006]</td>
+    </tr>
+    <tr>
+      <td style="background-color: grey;"><b>Output file 1</b></td>
+      <td>AEP_Fish_sedDNA.xlsx</td>
+      <td>Rockfish_targeted_qPCR.xlsx</td>
+      <td>EirwiniBurdekin.xlsx</td>
+      <td>NECR534_GCN_single-species.XLSX</td>
+    </tr>
+    <tr>
+      <td style="background-color: grey;"><b>Excel worksheet 1</b></td>
+      <td>projectMetadata</td>
+      <td>projectMetadata</td>
+      <td>projectMetadata</td>
+      <td>projectMetadata</td>
+    </tr>
+    <tr>
+      <td style="background-color: grey;"><b>Excel worksheet 2</b></td>
+      <td>sampleMetadata</td>
+      <td>sampleMetadata</td>
+      <td>sampleMetadata</td>
+      <td>sampleMetadata</td>
+    </tr>
+    <tr>
+      <td style="background-color: grey;"><b>Excel worksheet 3</b></td>
+      <td>stdData</td>
+      <td>stdData</td>
+      <td>ampData</td>
+      <td>stdData</td>
+    </tr>
+    <tr>
+      <td style="background-color: grey;"><b>Excel worksheet 4</b></td>
+      <td>eLowQuantData</td>
+      <td>eLowQuantData</td>
+      <td></td>
+      <td>ampData</td>
+    </tr>
+    <tr>
+      <td style="background-color: grey;"><b>Excel worksheet 5</b></td>
+      <td>ampData_eFish1</td>
+      <td>ampData_eSERU5</td>
+      <td></td>
+      <td></td>
+    </tr>
+    <tr>
+      <td style="background-color: grey;"><b>Excel worksheet 6</b></td>
+      <td>ampData_eESLU1</td>
+      <td>ampData_eSEPA9</td>
+      <td></td>
+      <td></td>
+    </tr>
+    <tr>
+      <td style="background-color: grey;"><b>Excel worksheet 7</b></td>
+      <td>ampData_eCOAR7</td>
+      <td>ampData_eSEMA3</td>
+      <td></td>
+      <td></td>
+    </tr>
+  </tbody>
+</table>
+
+<p>A list of example datasets using <strong>metabarcoding assays</strong>, formatted according to the FAIRe checklist v1.0. These datasets are available <a href="https://github.com/FAIR-eDNA/FAIR-eDNA.github.io/tree/main/docs/examples/metabarcoding">here</a>.</p>
+<table>
+  <thead>
+    <tr>
+      <th style="background-color: grey;"><b>recordedBy</b></th>
+      <th>Bruce Deagle</th>
+      <th>Luke Thompson</th>
+      <th>Nick Dunn</th>
+      <th>Katrina West</th>
+      <th>Rachel Haderlé</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td style="background-color: grey;"><b>project_id</b></td>
+      <td>CPR_2015</td>
+      <td>noaa-aoml-gomecc4</td>
+      <td>NECR534_GCN_metabarcoding</td>
+      <td>IOT-eDNA</td>
+      <td>verte_quadeloupe</td>
+    </tr>
+    <tr>
+      <td style="background-color: grey;"><b>bibliographicCitation</b></td>
+      <td><a href="https://onlinelibrary.wiley.com/doi/full/10.1111/1755-0998.12740">DOI</a></td>
+      <td><a href="https://doi.org/10.1101/2024.07.30.605667">DOI</a></td>
+      <td><a href="https://publications.naturalengland.org.uk/publication/5177901000163328">Link</a></td>
+      <td>West et al., in prep</td>
+      <td><a href="https://doi.org/10.48579/PRO/EHR5AC">DOI</a></td>
+    </tr>
+    <tr>
+      <td style="background-color: grey;"><b>assay_type</b></td>
+      <td>metabarcoding</td>
+      <td>metabarcoding</td>
+      <td>metabarcoding</td>
+      <td>metabarcoding</td>
+      <td>metabarcoding</td>
+    </tr>
+    <tr>
+      <td style="background-color: grey;"><b>assay_name</b></td>
+      <td>LerayCOI</td>
+      <td>ssu16sv4v5-emp | ssu18sv9-emp</td>
+      <td>12S-V5</td>
+      <td>16SFish | COILeray</td>
+      <td>vert01 | tele01 | mamm01 | cetac</td>
+    </tr>
+    <tr>
+      <td style="background-color: grey;"><b>env_medium</b></td>
+      <td>planktonic material [ENVO:01000063]</td>
+      <td>sea water [ENVO:00002149] | marine sediment [ENVO:03000033]</td>
+      <td>liquid water [ENVO:00002006]</td>
+      <td>sea water [ENVO:00002149]</td>
+      <td>water surface [ENVO:01001191]</td>
+    </tr>
+    <tr>
+      <td style="background-color: grey;"><b>Output file 1</b></td>
+      <td>CPR_2015.xlsx</td>
+      <td>noaa-aoml-gomecc4.xlsx</td>
+      <td>NECR534_GCN_metabarcoding.xlsx</td>
+      <td>IOT-eDNA.xlsx</td>
+      <td>verte_quadeloupe.xlsx</td>
+    </tr>
+    <tr>
+      <td style="background-color: grey;"><b>Output file 2</b></td>
+      <td></td>
+      <td>outRaw_* (for each assay and sequencing run)</td>
+      <td></td>
+      <td>otuFinal_* (for each assay and sequencing run)</td>
+      <td></td>
+    </tr>
+    <tr>
+      <td style="background-color: grey;"><b>Output file 3</b></td>
+      <td></td>
+      <td>outFinal_* (for each assay and sequencing run)</td>
+      <td></td>
+      <td>taxaFinal_* (for each assay and sequencing run)</td>
+      <td></td>
+    </tr>
+    <tr>
+      <td style="background-color: grey;"><b>Output file 4</b></td>
+      <td></td>
+      <td>taxaRaw_* (for each assay and sequencing run)</td>
+      <td></td>
+      <td></td>
+      <td></td>
+    </tr>
+    <tr>
+      <td style="background-color: grey;"><b>Output file 5</b></td>
+      <td></td>
+      <td>taxaFinal_* (for each assay and sequencing run)</td>
+      <td></td>
+      <td></td>
+      <td></td>
+    </tr>
+    <tr>
+      <td style="background-color: grey;"><b>Excel worksheet 1</b></td>
+      <td>projectMetadata</td>
+      <td>projectMetadata</td>
+      <td>projectMetadata</td>
+      <td>projectMetadata</td>
+      <td>projectMetadata</td>
+    </tr>
+    <tr>
+      <td style="background-color: grey;"><b>Excel worksheet 2</b></td>
+      <td>sampleMetadata</td>
+      <td>sampleMetadata</td>
+      <td>sampleMetadata</td>
+      <td>sampleMetadata</td>
+      <td>sampleMetadata</td>
+    </tr>
+    <tr>
+      <td style="background-color: grey;"><b>Excel worksheet 3</b></td>
+      <td>experimentRunMetadata</td>
+      <td>experimentRunMetadata</td>
+      <td>experimentRunMetadata</td>
+      <td>experimentRunMetadata</td>
+      <td>otuFinal_* (for each assay and sequencing run)</td>
+    </tr>
+    <tr>
+      <td style="background-color: grey;"><b>Excel worksheet 4</b></td>
+      <td>otuFinal</td>
+      <td></td>
+      <td>otuFinal</td>
+      <td></td>
+      <td>taxaFinal_* (for each assay and sequencing run)</td>
+    </tr>
+    <tr>
+      <td style="background-color: grey;"><b>Excel worksheet 5</b></td>
+      <td>taxaFinal</td>
+      <td></td>
+      <td>taxaFinal</td>
+      <td></td>
+      <td></td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 id="frequently-asked-questions">Frequently Asked Questions</h2>
+<p>Q. <strong>What should I do with ASVs that have no BLAST hits?</strong>
+A. ASVs without taxonomic hits are still valuable (e.g., for future re-annotation as reference databases improve). They should be included in the <strong>otuRaw</strong> and <strong>taxaRaw</strong> tables without taxonomic fields such as <code>scientificName</code>. If these ASVs fall within the scope of your study and are relevant to ecological analyses, they should also be retained in <strong>otuFinal</strong> and <strong>taxaFinal</strong>.</p>
+<p>Q. <strong>Can FAIRe-fier verify all data components?</strong>
+A. No. Currently, FAIRe-fier validates <strong>projectMetadata</strong> and <strong>sampleMetadata</strong> for both metabarcoding and targeted assay studies, but does not yet validate other components (e.g., <strong>experimentRunMetadata</strong>, <strong>ampData</strong>). Support for these additional components is planned for a future version of FAIRe-fier.</p>
+<h2 id="useful-resources">Useful resources</h2>
+<p>The current FAIRe frameworks were developed using the following resources as foundational starting points.</p>
+<ul>
+<li><a href="https://dwc.tdwg.org/terms/">Darwin Core Quick Reference Guide</a></li>
+<li><a href="https://genomicsstandardsconsortium.github.io/mixs/">Minimum Information about any (x) Sequence (MIxS) standard</a></li>
+<li><a href="https://rs.gbif.org/extension/gbif/1.0/dna_derived_data_2024-07-11.xml">Darwin Core extension of DNA derived data</a> </li>
+<li><a href="https://doi.org/10.35035/doc-vf1a-nr22">Abarenkov et al., (2023) Publishing DNA-derived data through biodiversity data platforms, v1.3. Copenhagen: GBIF Secretariat.</a></li>
+<li><a href="https://manual.obis.org/">The OBIS manual</a></li>
+<li><a href="https://mdt.gbif.org/">GBIF Metabarcoding Data Toolkit</a></li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      <script id="__config" type="application/json">{"base": ".", "features": ["navigation.tabs", "navigation.tabs.sticky", "toc.integrate", "navigation.top"], "search": "assets/javascripts/workers/search.d50fe291.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="assets/javascripts/bundle.56ea9cef.min.js"></script>
+      
+    
+  </body>
+</html>

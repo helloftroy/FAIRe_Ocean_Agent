@@ -1,0 +1,32 @@
+run_noaa_formatting: true
+# This config file is for FAIReSheets' NOAA-specific formatting.
+# It is used to set parameters for the formatting run.
+# NOAA's FAIRe metadata templates are the input format for the Ocean DNA Explorer and other AOML Omics tools
+
+# Required: Project ID (must match the project_id used in your config.yaml file and metadata)
+project_id: "example_project_id"
+
+#-----------------------------------------------------------------
+
+# If you DO NOT have any analysis runs ready:
+# Use the following to generate a generic analysisMetadata sheet:
+
+analysis_run_name:
+  "analysisMetadata_<analysis_run_name>":
+    assay_name: "Bacteria-16S-V4V5-Parada"
+  "analysisMetadata_<analysis_run_name2>":
+    assay_name: "Eukarya-18S-V9-Lane-Medlin"
+#-----------------------------------------------------------------
+
+# If you DO have analysis runs ready:
+# To use specific analysis run names, uncomment and modify:
+#
+#   gomecc4_16s_p1-2_v2024.10_241122:
+#     assay_name: "ssu16sv4v5-emp"
+#   # Add more analysis runs as needed
+#   gomecc4_16s_p3-6_v2024.10_241122:
+#     assay_name: "ssu16sv4v5-emp"
+#   gomecc4_18s_p1-6_v2024.10_241122:
+#     assay_name: "ssu18sv9-emp"
+
+#-----------------------------------------------------------------
