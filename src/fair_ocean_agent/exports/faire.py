@@ -799,8 +799,15 @@ def _write_csv(path: Path, columns: list[str], rows: list[dict[str, str]]) -> in
         writer = csv.DictWriter(f, fieldnames=columns)
         writer.writeheader()
         for row in rows:
-            writer.writerow({col: row.get(col, "") for col in columns})
+            # NUL characters (found live, from PDF text extraction) make
+            # csv raise "need to escape, but no escapechar set"; they are
+            # never meaningful text, so drop them.
+            writer.writerow({col: _strip_nul(row.get(col, "")) for col in columns})
     return len(rows)
+
+
+def _strip_nul(value):
+    return value.replace("\x00", "") if isinstance(value, str) else value
 
 
 def _write_field_reference(output_dir: Path, columns_by_class: dict[str, list[str]]) -> int:
