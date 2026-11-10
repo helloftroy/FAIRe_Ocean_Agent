@@ -254,7 +254,12 @@ _UNIT_PAIRS = {
     ),
 }
 # FAIRe terms we add as columns even though the original export lacks them.
-_ADDED_COLUMNS = {"sampleMetadata": ("concentration_unit",)}
+_ADDED_COLUMNS = {
+    "projectMetadata": (
+        "pcr_assay_lod", "pcr_assay_lod_unit", "pcr_assay_loq", "pcr_assay_loq_unit", "thresholdQuantificationCycle",
+    ),
+    "sampleMetadata": ("concentration_unit", "neg_cont_type", "pos_cont_type", "detected_notDetected"),
+}
 _UNIT_SYNONYMS = {
     "mL": ("ml", "milliliter", "milliliters", "millilitre", "millilitres"),
     "L": ("l", "liter", "liters", "litre", "litres"),
@@ -265,6 +270,7 @@ _UNIT_SYNONYMS = {
     "m2": ("m2", "m²"),
     "cm3": ("cm3", "cm³", "cc"),
     "m3": ("m3", "m³"),
+    "µL": ("μL", "µl", "μl", "ul", "uL", "microliter", "microliters", "microlitre", "microlitres"),
     "mm": ("mm",),
     "cm": ("cm",),
     "m": ("m",),
@@ -275,6 +281,9 @@ _UNIT_SYNONYMS = {
     "ng/µl": ("ng/µl", "ng/μl", "ng/ul", "ng µl-1", "ng μl-1", "ng µl−1", "ng μl−1", "ng/µl-1"),
     "copies/µl": ("copies/µl", "copies/μl", "copies/ul", "copies µl-1", "copies μl-1"),
 }
+# Decision D6 (2026-11-10): keep µL as a unit (not in FAIRe's volume list;
+# no conversion to mL), still split from the number.
+_D6_EXTRA_UNITS = frozenset({"µL"})
 _UNIT_LOOKUP = {syn: canonical for canonical, syns in _UNIT_SYNONYMS.items() for syn in (canonical, *syns)}
 # Matched case-insensitively except where case changes the meaning
 # (m vs M, ml vs ML).
@@ -290,7 +299,7 @@ def _canonical_unit(text: str, allowed: tuple[str, ...]) -> str | None:
         canonical = _UNIT_LOOKUP.get(key.lower())
     if canonical is None and key in ("mL", "Ml"):  # ml spelled with capital L
         canonical = "mL"
-    return canonical if canonical in allowed else None
+    return canonical if canonical in allowed or canonical in _D6_EXTRA_UNITS else None
 
 
 _NUM_UNIT = re.compile(rf"^(?:approximately |approx\.? |~ ?|ca\.? )?({_NUM_FWD})(?:\s*-\s*({_NUM_FWD}))?\s*-?\s*(.+)$")
@@ -374,6 +383,122 @@ def _target_gene_item(item: str, row: dict[str, str]) -> tuple[str, str] | None:
         if _ANIMAL_WORDS.search(scope) and not prokaryote:
             return "16S rRNA (LSU mitochondria)", "R15c_16S_mitochondrial_from_target_taxa"
     return None
+
+
+# --- R16 samp_category from the sample label (decision D4, 2026-11-10) --------
+# Clear negative / positive control keywords -> that category; other
+# "control"/"ctrl" labels (usually an experimental control treatment) ->
+# "other: Ctrl" (user: keep Ctrl as Ctrl); everything else -> "sample".
+_NEGATIVE_LABEL = re.compile(
+    r"blank(?![ _-]?spring)|(?<![a-z])ntc(?![a-z])|no[nt]?[ _-]?template|negative[ _-]?control|"
+    r"neg[ _-]?(ctrl|control|cont)\b|extraction[ _-]?(blank|control)|field[ _-]?(blank|control)|kit[ _-]?(blank|control)",
+    re.IGNORECASE,
+)
+_POSITIVE_LABEL = re.compile(
+    r"mock[ _-]?(microbial |fungal |bacterial )?comm|mockmix|mock[ _-]?mixture|mock (virome|bacteriome)|"
+    r"positive[ _-]?control|pos[ _-]?(ctrl|control)\b|zymo[ _-]?(mock|standard|comm)|^positive$",
+    re.IGNORECASE,
+)
+_CONTROL_LABEL = re.compile(r"ctrl|control", re.IGNORECASE)
+
+
+def _category_from_label(label: str, log: Log) -> str:
+    if label and _NEGATIVE_LABEL.search(label):
+        value, rule = "negative control", "R16a_negative_control_from_label"
+    elif label and _POSITIVE_LABEL.search(label):
+        value, rule = "positive control", "R16b_positive_control_from_label"
+    elif label and _CONTROL_LABEL.search(label):
+        value, rule = "other: Ctrl", "R16c_ctrl_label"
+    else:
+        value, rule = "sample", "R16d_default_sample"
+    log.change("sampleMetadata", "samp_category", rule, "(label)" if label else "(empty)", value)
+    return value
+
+
+# --- R17 mandatory fields (FAIRe requirement_level M and its condition) ------
+# Empty mandatory cell whose condition applies -> "missing: not provided".
+# Controls: env_* and coordinates -> "not applicable: control sample".
+# Condition not applicable, or unknown for targeted-only terms -> left empty
+# (the term is then not mandatory). Values already present are untouched.
+_NOT_PROVIDED = "missing: not provided"
+_CONTROL_NA = "not applicable: control sample"
+_CONTROL_CATEGORIES = ("negative control", "positive control", "PCR standard")
+_NEG_TYPE_FROM_LABEL = (
+    (re.compile(r"field[ _-]?(blank|control|neg)", re.I), "field negative"),
+    (re.compile(r"site[ _-]?(blank|control|neg)", re.I), "site negative"),
+    (re.compile(r"extr(action|act)?[ _-]?(blank|control|neg)|kit[ _-]?(blank|control)", re.I), "extraction negative"),
+    (re.compile(r"(?<![a-z])ntc(?![a-z])|no[nt]?[ _-]?template|pcr[ _-]?(blank|neg)", re.I), "PCR negative"),
+)
+_MOCK_COMMUNITY = re.compile(r"mock[ _-]?(microbial |fungal |bacterial )?comm|mockmix|mock[ _-]?mixture", re.I)
+
+
+def _assay_flags(project_row: dict[str, str]) -> dict[str, bool]:
+    assay = project_row.get("assay_type", "")
+    return {
+        "targeted": "targeted" in _split_items(assay),
+        "metabarcoding": "metabarcoding" in _split_items(assay),
+        "qpcr": "qPCR" in _split_items(project_row.get("amp_vis_method", "")),
+    }
+
+
+def _fill(table: str, row: dict[str, str], column: str, value: str, rule: str, log: Log) -> None:
+    if column in row and not row[column]:
+        row[column] = value
+        log.change(table, column, rule, "(empty)", value)
+
+
+def _fill_mandatory(table: str, row: dict[str, str], terms: dict[str, Term], studies: dict[str, dict[str, bool]],
+                    label: str, log: Log) -> None:
+    if table == "projectMetadata":
+        flags = _assay_flags(row)
+        if not row.get("pcr_0_1") and (flags["targeted"] or flags["metabarcoding"]):
+            _fill(table, row, "pcr_0_1", "1", "R17b_pcr_from_assay_type", log)
+        pcr = row.get("pcr_0_1") == "1"
+        for col in ("recordedBy", "project_contact", "project_id", "assay_type", "checkls_ver", "pcr_0_1", "assay_name"):
+            _fill(table, row, col, _NOT_PROVIDED, "R17_mandatory_missing", log)
+        if pcr:
+            for col in ("targetTaxonomicAssay", "pcr_primer_forward", "pcr_primer_reverse"):
+                _fill(table, row, col, _NOT_PROVIDED, "R17_mandatory_missing", log)
+        if flags["targeted"] and row.get("pcr_0_1") != "0":
+            for col in ("amp_vis_method", "detection_criteria", "pcr_assay_lod", "pcr_assay_lod_unit",
+                        "pcr_assay_loq", "pcr_assay_loq_unit"):
+                _fill(table, row, col, _NOT_PROVIDED, "R17_mandatory_missing", log)
+            if flags["qpcr"]:
+                _fill(table, row, "thresholdQuantificationCycle", _NOT_PROVIDED, "R17_mandatory_missing", log)
+        return
+    linked = [studies.get(sid, {}) for sid in row.get("internal_study_id", "").split("|")]
+    targeted = any(f.get("targeted") for f in linked)
+    metabarcoding = any(f.get("metabarcoding") for f in linked)
+    if table == "sampleMetadata":
+        category = row.get("samp_category", "")
+        is_control = category in _CONTROL_CATEGORIES
+        for col in ("samp_name", "samp_category", "geo_loc_name", "eventDate", "assay_name"):
+            _fill(table, row, col, _NOT_PROVIDED, "R17_mandatory_missing", log)
+        for col in ("decimalLatitude", "decimalLongitude", "env_broad_scale", "env_local_scale", "env_medium"):
+            if is_control:
+                _fill(table, row, col, _CONTROL_NA, "R17_control_not_applicable", log)
+            else:
+                _fill(table, row, col, _NOT_PROVIDED, "R17_mandatory_missing", log)
+        if category == "negative control":
+            neg_type = next((t for pattern, t in _NEG_TYPE_FROM_LABEL if pattern.search(label)), None)
+            if neg_type:
+                _fill(table, row, "neg_cont_type", neg_type, "R17c_neg_cont_type_from_label", log)
+            _fill(table, row, "neg_cont_type", _NOT_PROVIDED, "R17_mandatory_missing", log)
+        if category == "positive control":
+            if _MOCK_COMMUNITY.search(label):
+                _fill(table, row, "pos_cont_type", "mock community", "R17c_pos_cont_type_from_label", log)
+            _fill(table, row, "pos_cont_type", _NOT_PROVIDED, "R17_mandatory_missing", log)
+        if targeted:
+            _fill(table, row, "detected_notDetected", _NOT_PROVIDED, "R17_mandatory_missing", log)
+        return
+    if table == "experimentRunMetadata":
+        for col in ("samp_name", "assay_name"):
+            _fill(table, row, col, _NOT_PROVIDED, "R17_mandatory_missing", log)
+        if targeted:
+            _fill(table, row, "pcr_plate_id", _NOT_PROVIDED, "R17_mandatory_missing", log)
+        if metabarcoding:
+            for col in ("lib_id", "seq_run_id"):
+                _fill(table, row, col, _NOT_PROVIDED, "R17_mandatory_missing", log)
 
 
 def _template_order() -> dict[str, list[str]]:
@@ -470,6 +595,8 @@ def correct_cell(
     table: str, term: Term, value: str, log: Log, extras: dict[str, str], row: dict[str, str] | None = None
 ) -> str:
     if not value:
+        if table == "sampleMetadata" and term.name == "samp_category":
+            return _category_from_label("", log)
         return value
     if table == "projectMetadata" and term.name in _EVIDENCE_BOOLEAN_COLUMNS:
         flag, _, evidence = value.partition("|")
@@ -520,9 +647,10 @@ def correct_cell(
             (kept if rule != "R07_unmapped_other" else labels).append(new_item if rule != "R07_unmapped_other" else item)
         if labels:
             extras["samp_category__sample_label"] = LIST_SEPARATOR.join(labels)
-            new_value = LIST_SEPARATOR.join(dict.fromkeys(kept))
-            log.change(table, term.name, "R11_sample_label_to_extras", "(sample label)", new_value or "(blank, see D4)")
-            return new_value
+            log.change(table, term.name, "R11_sample_label_to_extras", "(sample label)", "(see R16)")
+        if kept:
+            return LIST_SEPARATOR.join(dict.fromkeys(kept))
+        return _category_from_label(LIST_SEPARATOR.join(labels), log)
     items = _split_items(value)
     new_items: list[str] = []
     for item in items:
@@ -547,7 +675,10 @@ def correct_cell(
     return new_value
 
 
-def process_table(table: str, src: Path, out: Path, terms: dict[str, Term], order: list[str], log: Log) -> int:
+def process_table(
+    table: str, src: Path, out: Path, terms: dict[str, Term], order: list[str], log: Log,
+    studies: dict[str, dict[str, bool]],
+) -> int:
     with (src / f"{table}.csv").open(newline="") as handle:
         reader = csv.DictReader(handle)
         header = reader.fieldnames or []
@@ -573,6 +704,9 @@ def process_table(table: str, src: Path, out: Path, terms: dict[str, Term], orde
                 new_row = {c: row.get(c, "") for c in out_cols if c in KEEP_EXTRA_COLUMNS}
                 for col in faire_cols:
                     new_row[col] = correct_cell(table, terms[col], row.get(col, ""), log, extras, row)
+                _fill_mandatory(table, new_row, terms, studies, extras.get("samp_category__sample_label", ""), log)
+                if table == "projectMetadata":
+                    studies[new_row.get("internal_study_id", "")] = _assay_flags(new_row)
                 writer.writerow(new_row)
                 if extras:
                     for col in extras:
@@ -601,8 +735,9 @@ def main() -> None:
     terms = load_checklist()
     order = _template_order()
     log = Log()
+    studies: dict[str, dict[str, bool]] = {}  # internal_study_id -> assay flags, from projectMetadata
     for table in TABLES:
-        process_table(table, src, out, terms, order[table], log)
+        process_table(table, src, out, terms, order[table], log, studies)
         with (out / f"changes_{table}.csv").open("w", newline="") as handle:
             writer = csv.writer(handle)
             writer.writerow(["column", "rule", "original", "new", "cells"])

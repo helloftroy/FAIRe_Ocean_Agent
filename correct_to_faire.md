@@ -339,6 +339,72 @@ Whenever `target_gene` changes, the original cell is copied to
 Genes not in FAIRe's barcoding list (mcrA, nirS, nirK, pmoA, dsrB, …) are
 correctly written as `other: <gene>`.
 
+### R16: samp_category (decision D4)
+
+Applied to every sample row whose `samp_category` is empty after R11. The
+label is the BioSample label that R11 moved to extras.
+
+- **R16a → `negative control`:** 1,451 rows. The label contains blank (but
+  not "Blank Spring", a place name), NTC, no-template / non-template,
+  negative control, neg ctrl, extraction / field / kit blank.
+- **R16b → `positive control`:** 157 rows. The label contains mock
+  community, mockmix, mock mixture, positive control, pos ctrl, Zymo mock.
+  A bare "Mock" is **not** a positive control: in labels like "Mock - 3dpi"
+  or "mock exp" it means a mock-inoculated treatment.
+- **R16c → `other: Ctrl`:** 2,185 rows. Other labels with control / ctrl,
+  such as `Apo_Ctrl_1_1` or `Control_SSW_1`, usually an experimental control
+  group. The value is written in FAIRe's `other: …` format.
+- **R16d → `sample`:** 1,005,529 rows. All the rest, including rows with no
+  label.
+
+### R17: mandatory fields
+
+FAIRe requirement level M, applying each term's condition from the
+checklist. Only empty cells are filled.
+
+- **Condition applies, or there is no condition** → `missing: not provided`.
+- **Control samples** (negative / positive control, PCR standard) →
+  `not applicable: control sample` in `decimalLatitude`, `decimalLongitude`
+  and the `env_*` fields. The checklist exempts controls from these terms;
+  this is the exact INSDC term for that case.
+- **Condition does not apply** → left empty, since the term isn't mandatory
+  then. For example, `amp_vis_method` is mandatory only if `assay_type`
+  includes `targeted`.
+- **Condition unknown** (no `assay_type`) → targeted-only terms are left
+  empty.
+- **Sample and run rows** take the assay type from their study's
+  projectMetadata row, via `internal_study_id`. A sample linked to several
+  studies counts as targeted if any of them is.
+
+Columns added, because these are FAIRe terms the original export lacked:
+- **projectMetadata:** `pcr_assay_lod`, `pcr_assay_lod_unit`,
+  `pcr_assay_loq`, `pcr_assay_loq_unit`, `thresholdQuantificationCycle`
+  (targeted assays only).
+- **sampleMetadata:** `neg_cont_type`, `pos_cont_type`,
+  `detected_notDetected`.
+
+Rules that infer a value rather than reading it:
+- **R17b (inference):** `pcr_0_1` = `1` when `assay_type` is targeted or
+  metabarcoding, which are PCR-based by definition. 157 studies.
+- **R17c (inference from the label):**
+  - `neg_cont_type`: field blank → `field negative` (15), extraction / kit
+    blank → `extraction negative` (108), NTC / PCR blank / no-template →
+    `PCR negative` (377). The other negative controls → `missing: not
+    provided` (952).
+  - `pos_cont_type` (free text): mock community → `mock community` (140).
+
+Largest fills, which also show coverage (useful for the paper):
+- **sampleMetadata, `missing: not provided`:**
+  - `env_local_scale` 847k, `env_broad_scale` 838k, `env_medium` 699k
+  - `decimalLatitude` / `decimalLongitude` 752k
+  - `eventDate` 699k
+  - `assay_name` 663k
+  - `geo_loc_name` 601k
+- **projectMetadata:** `project_contact` 7,524 studies, `assay_name` 5,392,
+  `assay_type` 5,359, `recordedBy` 5,253, `pcr_0_1` 5,128.
+- **experimentRunMetadata:** `assay_name` 359,971, `pcr_plate_id` 130,654
+  (targeted studies).
+
 ### Our own artefact found in review
 
 `(+1 similar variants omitted)` and similar values in `target_gene` (about 30
@@ -367,11 +433,13 @@ distinct values, for example `220`, `280`, `2808`, `80`. These are probably
 | D1 | `checkls_ver`: FAIRe types it numeric (example `1.2`), but the real version is `1.0.2` | **Keep `1.0.2`** (2026-11-10) |
 | D2 | `lib_layout` = `no files` (5,032 studies with no SRA files) | **Write `none`** (2026-11-10). Note: `none` is not in FAIRe's list (`paired end`, `single end`); it was chosen deliberately. Rule R12. |
 | D3 | `0 \| no control/blank mention found` | **`missing: not provided`** (2026-11-10). Rule R04. |
-| D4 | `samp_category` once the labels are removed (R11) | **open**, see below |
+| D4 | `samp_category` once the labels are removed (R11) | **Decided 2026-11-10**: negative / positive control from clear label keywords, `other: Ctrl` for other control labels, `sample` for all the rest. Rule R16. |
 | D5 | Add non-FAIRe columns back as new terms? | **No** (2026-11-10). The NOAA copy is FAIRe terms only; the extras files keep the values. |
-| D6 | Unit conversion: µL is not in FAIRe's volume list (`mL`, `L`, …). Convert `500 µL` → `0.5` `mL`? | **open**. The current build doesn't convert; these values go to D0. |
+| D6 | Unit conversion: µL is not in FAIRe's volume list (`mL`, `L`, …) | **Decided 2026-11-10**: keep µL, no conversion, but still split the number and unit (`500 µL` → `500` + `µL`). About 10,800 cells. |
+| D7 | `informationWithheld` is "Nothing indicated as withheld" in 9,298 studies. That is our pipeline's default text, not withheld information. Keep it, or blank it (moving the text to extras)? | **open**; kept for now |
+| — | Inference rules R05b, R13b, R15b, R15c | **Accepted** 2026-11-10 |
 
-### D4: what FAIRe says, and the options
+### D4 background: what FAIRe says (decided above)
 
 From the checklist:
 - `samp_category` is **mandatory for every sample**, with no condition.
@@ -421,29 +489,22 @@ yet checked).
 1. ~~Extraction method vocabularies~~: done (R13).
 2. ~~Number and unit pairs~~: done (R14). D6 is still open.
 3. ~~target_gene~~: done (R15).
-4. **D4 samp_category**, once you have decided.
-5. **Ontology-coded fields** (needs ENVO and OBI downloads, saved with
+4. ~~D4 samp_category~~: done (R16).
+5. ~~Mandatory fields~~: done (R17).
+6. **Ontology-coded fields** (needs ENVO and OBI downloads, saved with
    versions):
    - `env_broad_scale`, `env_local_scale`, `env_medium` →
      `label [ENVO:xxxxxxxx]`. They are 17–31% filled, and most are labels
      without IDs or IDs without labels.
    - `instrument` → `Name [OBI_xxxxxxx]`.
-6. **`geo_loc_name`** against the INSDC country / sea list, in the format
+7. **`geo_loc_name`** against the INSDC country / sea list, in the format
    `Country: region, locality`. For example, `Chile Bay, Greenwich Island…`
    needs `Antarctica:` added. This can only be done where it's unambiguous.
-7. **Dates and durations:**
+8. **Dates and durations:**
    - `eventDate` as ISO 8601. Our values pass the format check, but this
      needs a closer look.
    - `samp_store_dur` as ISO 8601 durations: `24 h` → `PT24H`,
      `overnight` → D0.
-8. **Mandatory and conditionally mandatory fields:**
-   - Add the absent M terms as columns: `neg_cont_type`, `pos_cont_type`,
-     `detected_notDetected`, and for targeted assays `pcr_assay_lod/loq`
-     (+ units) and `thresholdQuantificationCycle`.
-   - Fill empty M fields with the right missing-value term, respecting each
-     term's condition (for example, `amp_vis_method` is mandatory only if
-     `assay_type = targeted` and `pcr_0_1 = 1`; otherwise
-     `not applicable`).
 9. **Integer fields with sentences:** `pool_dna_num` (114k cells),
    `pcr_rep`, `biological_rep`. Sentences stay D0.
 10. **Final validation:**
