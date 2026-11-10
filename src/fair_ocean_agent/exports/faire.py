@@ -655,7 +655,11 @@ def _study_wide_values(session: Session, study_id: str) -> dict[str, str]:
         select(StandardizedValue.target_field, StandardizedValue.standardized_value).where(
             StandardizedValue.study_id == study_id,
             StandardizedValue.target_schema == TARGET_SCHEMA,
-            StandardizedValue.entity_id.is_(None),
+            # `+ ""` keeps SQLite off the entity_id index: with it, SQLite
+            # scanned every study-wide row in the table (~3s per call,
+            # once per exported sample -- found live: weeks for 1M samples)
+            # instead of using the (target_schema, study_id) index.
+            (StandardizedValue.entity_id + "").is_(None),
         )
     ).all()
     return {
