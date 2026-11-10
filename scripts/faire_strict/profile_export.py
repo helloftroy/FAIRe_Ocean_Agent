@@ -16,6 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from checklist import MISSING_VALUE_TERMS, TABLES, is_number, load_checklist  # noqa: E402
+from geo import CURRENT, HISTORICAL  # noqa: E402
 
 csv.field_size_limit(10**9)
 MAX_DISTINCT = 20000
@@ -27,9 +28,12 @@ FIXED_FORMAT_PATTERNS = {
         r"(/\d{4}(-\d{2}(-\d{2}(T\d{2}(:\d{2}(:\d{2}(\.\d+)?)?)?(Z|[+-]\d{2}(:?\d{2})?)?)?)?)?)?$"
     ),
     "termLabel [termID]": re.compile(r"^.+ \[[A-Za-z]+[_:]\d+\]$"),
-    "PnYnMnWnDTnHnMnS": re.compile(r"^P(?!$)(\d+(\.\d+)?Y)?(\d+(\.\d+)?M)?(\d+(\.\d+)?W)?(\d+(\.\d+)?D)?(T(?=\d)(\d+(\.\d+)?H)?(\d+(\.\d+)?M)?(\d+(\.\d+)?S)?)?$"),
+    "PnYnMnWnDTnHnMnS": re.compile(r"^P(?!$)(\d+(\.\d+)?Y)?(\d+(\.\d+)?M)?(\d+(\.\d+)?W)?(\d+(\.\d+)?D)?(T(?=\d)(\d+(\.\d+)?H)?(\d+(\.\d+)?M)?(\d+(\.\d+)?S)?)?(/\S+)?$"),
     "<country or sea names>:<region>,<locality>": re.compile(r"^[^:]+(:.*)?$"),
 }
+
+
+GEO_NAMES = frozenset((*CURRENT, *HISTORICAL))
 
 
 def check_item(term, item: str) -> str:
@@ -38,6 +42,11 @@ def check_item(term, item: str) -> str:
         return "missing_term"
     if item.lower() in MISSING_VALUE_TERMS:
         return "case"
+    if re.match(r"^other: \S", item):
+        return "other"  # decision D0: allowed for review in every field
+    if term.name == "geo_loc_name":
+        head = item.partition(":")[0].strip()
+        return "ok" if head in GEO_NAMES else "bad"
     t = term.term_type
     if t == "controlled vocabulary" or t == "numeric or controlled vocabulary":
         if item in term.vocabulary:
@@ -61,7 +70,7 @@ def check_item(term, item: str) -> str:
             return "ok"
         return "ok" if pattern.match(item) else "bad"
     if t == "DOI":
-        return "ok" if re.match(r"^(https?://(dx\.)?doi\.org/)?10\.\d{4,9}/\S+$", item) else "bad"
+        return "ok" if re.match(r"^(DOI: |https?://(dx\.)?doi\.org/)?10\.\d{4,9}/\S+$", item) else "bad"
     return "ok"
 
 

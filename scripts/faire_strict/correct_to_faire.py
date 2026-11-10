@@ -44,6 +44,8 @@ from checklist import (  # noqa: E402
     is_number,
     load_checklist,
 )
+from geo import resolve_geo  # noqa: E402
+from ontology import ENVO_BRANCH, load_envo, load_obi_sequencers, resolve_envo_tokens, resolve_instrument  # noqa: E402
 
 csv.field_size_limit(10**9)
 
@@ -64,6 +66,15 @@ _MISSING_ALIASES = {
     "not collected": "missing: not collected",
     "restricted access": "missing: restricted access",
     "missing: not reported": "missing: not provided",
+    # INSDC's own spellings of the same categories (FAIRe nests them):
+    "missing: control sample": "not applicable: control sample",
+    "missing: sample group": "not applicable: sample group",
+    "missing: synthetic construct": "missing: not collected: synthetic construct",
+    "missing: lab stock": "missing: not collected: lab stock",
+    "missing: third party data": "missing: not collected: third party data",
+    "missing: data agreement established pre-2023": "missing: not provided: data agreement established pre-2023",
+    "missing: endangered species": "missing: restricted access: endangered species",
+    "missing: human-identifiable": "missing: restricted access: human-identifiable",
 }
 
 # --- R05 units that equal a term's standard unit ------------------------
@@ -549,6 +560,41 @@ def _template_order() -> dict[str, list[str]]:
     return order
 
 
+# R22: a whole cell that is one number word, in an integer field.
+_INTEGER_WORDS = _NUMBER_WORDS
+# R22b: replicate counts written as multiplicity words (only *_rep fields:
+# "triplicate" in pcr_cycles is a misplaced value, not a cycle count).
+_REPLICATE_WORDS = {
+    "duplicate": "2", "duplicates": "2", "triplicate": "3", "triplicates": "3",
+    "quadruplicate": "4", "quadruplicates": "4", "quintuplicate": "5", "quintuplicates": "5",
+}
+
+
+# R24: host_life_stage -> UBERON life cycle stage, FAIRe's example format
+# "juvenile stage [UBERON_0034919]". IDs and labels checked against UBERON
+# release 2026-11-05 via OLS (reference/ontologies/uberon_ols/).
+_LIFE_STAGE = {
+    "adult": "post-juvenile adult stage [UBERON_0000113]",
+    "adult stage": "post-juvenile adult stage [UBERON_0000113]",
+    "juvenile": "juvenile stage [UBERON_0034919]",
+    "juveniles": "juvenile stage [UBERON_0034919]",
+    "juvenile stage": "juvenile stage [UBERON_0034919]",
+    "larva": "larval stage [UBERON_0000069]",
+    "larvae": "larval stage [UBERON_0000069]",
+    "larval": "larval stage [UBERON_0000069]",
+    "larval stage": "larval stage [UBERON_0000069]",
+}
+_TERM_LABEL_ID = re.compile(r"^.+ \[[A-Za-z]+[_:]\d+\]$")
+
+# R23: bibliographicCitation is typed DOI (example "DOI: 10.1111/mec.15382").
+_DOI = re.compile(r"10\.\d{4,9}/[^\s|\"<>]+")
+
+
+def _citation_doi(value: str) -> str | None:
+    dois = {d.rstrip(".,;)]") for d in _DOI.findall(value)}
+    return f"DOI: {dois.pop()}" if len(dois) == 1 else None
+
+
 def _correct_item(term: Term, item: str) -> tuple[str, str]:
     """(new item, rule id) for one list item of a FAIRe column."""
     # R03 missing values
@@ -606,6 +652,12 @@ def _correct_item(term: Term, item: str) -> tuple[str, str]:
         number = _number_with_standard_unit(term, item)
         if number is not None and is_number(number, integer=(t == "integer")):
             return number, "R05_strip_standard_unit"
+        if t == "integer":
+            word = low.removeprefix("in ").strip()
+            if word in _INTEGER_WORDS:
+                return _INTEGER_WORDS[word], "R22_integer_number_word"
+            if term.name.endswith("_rep") and word in _REPLICATE_WORDS:
+                return _REPLICATE_WORDS[word], "R22b_replicate_word"
         if term.name == "size_frac":
             typo = _SIZE_FRAC_MICROMOLAR.match(_normalise_number_text(item))
             if typo:
@@ -625,7 +677,88 @@ def _correct_item(term: Term, item: str) -> tuple[str, str]:
         if iso:
             return iso, "R18_iso_duration"
         return f"other: {item}", "R07_unmapped_other"
-    return item, "keep"  # free text, other fixed formats, DOI: later stages
+    if t == "fixed format" and term.fixed_format == "termLabel [termID]":
+        if _TERM_LABEL_ID.match(item):
+            return item, "keep"
+        if term.name == "host_life_stage" and low in _LIFE_STAGE:
+            return _LIFE_STAGE[low], "R24_host_life_stage_uberon"
+        return f"other: {item}", "R07_unmapped_other"
+    return item, "keep"  # free text, other fixed formats
+
+
+_ENVO = None
+_OBI = None
+
+
+def _obi():
+    global _OBI
+    if _OBI is None:
+        _OBI = load_obi_sequencers()
+    return _OBI
+
+
+def _correct_instrument_item(term: Term, item: str) -> tuple[str, str]:
+    """R20: OBI sequencer name and id where OBI lists the instrument."""
+    if _is_missing_item(item) or item.lower().startswith("other:"):
+        return _correct_item(term, item)
+    if item.lower() == "unspecified":  # SRA instrument_model 'unspecified'
+        return "missing: not provided", "R20d_instrument_unspecified"
+    resolved = resolve_instrument(_obi(), item)
+    if resolved:
+        return resolved
+    if item.startswith("(+") and item.endswith("omitted)"):
+        return f"other: {item}", "R07_unmapped_other"  # our elision marker
+    return item, "R20c_instrument_not_in_obi"
+
+
+def _envo():
+    global _ENVO
+    if _ENVO is None:
+        _ENVO = load_envo()
+    return _ENVO
+
+
+def _is_missing_item(item: str) -> bool:
+    low = item.lower().strip()
+    return item in MISSING_VALUE_TERMS or low in MISSING_VALUE_TERMS or low in _MISSING_ALIASES
+
+
+def _correct_envo_cell(table: str, term: Term, value: str, log: Log, extras: dict[str, str]) -> str:
+    """R19: env_* -> "label [ENVO:id]" (ontology.py). Missing-value items
+    go through the usual R03 rules; runs of other items go to the ENVO
+    resolver, which pairs a label with the ID item that follows it."""
+    envo = _envo()
+    tokens = _split_items(value)
+    results: list[tuple[str, str, str]] = []
+    run: list[str] = []
+    for token in [*tokens, None]:
+        if token is None or _is_missing_item(token) or token.lower().startswith("other:"):
+            if run:
+                results.extend(resolve_envo_tokens(envo, run, term.name))
+                run = []
+            if token is not None:
+                new_item, rule = _correct_item(term, token)
+                results.append((token, new_item, rule))
+        else:
+            run.append(token)
+    new_items: list[str] = []
+    root = ENVO_BRANCH[term.name]
+    for original, new_item, rule in results:
+        if rule != "keep":
+            log.change(table, term.name, rule, original, new_item)
+        if new_item.startswith("other: ") and not original.lower().startswith("other"):
+            log.other[(table, term.name, original)] += 1
+        elif new_item.endswith("]") and "[ENVO:" in new_item:
+            curie = new_item.rsplit("[", 1)[1][:-1]
+            if not envo.in_branch(curie, root):
+                message = f"F02 ENVO term outside FAIRe's recommended class ({envo.terms[root].label} [{root}])"
+                log.flags[(table, term.name, message, new_item)] += 1
+        if new_item not in new_items:
+            new_items.append(new_item)
+    new_value = LIST_SEPARATOR.join(new_items)
+    if new_value != value:
+        extras[f"{term.name}__original"] = value
+    return new_value
 
 
 def _split_items(value: str) -> list[str]:
@@ -676,6 +809,19 @@ def correct_cell(
         if new_value != LIST_SEPARATOR.join(_split_items(value)):
             extras["target_gene__original"] = value
         return new_value
+    if table == "projectMetadata" and term.name == "bibliographicCitation":
+        if re.match(r"^(DOI: )?10\.\d{4,9}/\S+$", value):
+            return value
+        doi = _citation_doi(value)
+        new = doi if doi else f"other: {value}"
+        rule = "R23_citation_to_doi" if doi else "R07_unmapped_other"
+        extras["bibliographicCitation__full_text"] = value
+        log.change(table, term.name, rule, value, new)
+        if not doi:
+            log.other[(table, term.name, value)] += 1
+        return new
+    if table == "sampleMetadata" and term.name in ENVO_BRANCH:
+        return _correct_envo_cell(table, term, value, log, extras)
     if table == "sampleMetadata" and term.name == "samp_category":
         # R11: our pipeline used samp_category as a sample-label log
         # (BioSample source_material_id / sample_name / title; see
@@ -695,7 +841,17 @@ def correct_cell(
     items = _split_items(value)
     new_items: list[str] = []
     for item in items:
-        new_item, rule = _correct_item(term, item)
+        if term.name == "geo_loc_name" and not _is_missing_item(item) and not item.lower().startswith("other:"):
+            resolved = resolve_geo(item)
+            new_item, rule = resolved if resolved else (f"other: {item}", "R07_unmapped_other")
+            if rule == "R21h_geo_historical_name":
+                log.flags[(table, term.name, "F04 INSDC historical name kept (no single current name)", item)] += 1
+        elif table == "projectMetadata" and term.name == "instrument":
+            new_item, rule = _correct_instrument_item(term, item)
+            if rule == "R20c_instrument_not_in_obi":
+                log.flags[(table, term.name, "F03 instrument not in OBI's DNA sequencer list: name kept", item)] += 1
+        else:
+            new_item, rule = _correct_item(term, item)
         if rule != "keep":
             log.change(table, term.name, rule, item, new_item)
         if rule == "R07_unmapped_other":

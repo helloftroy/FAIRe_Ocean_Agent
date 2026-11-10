@@ -1,0 +1,20 @@
+column,label,envo_id,note
+env_medium,feces,ENVO:00002003,fecal material; ENVO has no plain 'feces' class (UBERON:0001988 is the anatomy term)
+env_medium,faeces,ENVO:00002003,British spelling of feces
+env_medium,stool,ENVO:00002003,stool = feces
+env_medium,stool sample,ENVO:00002003,'sample' suffix only
+env_medium,fecal,ENVO:00002003,adjective used as the material
+env_medium,fecal sample,ENVO:00002003,'sample' suffix only
+env_medium,human feces,ENVO:00002003,host is recorded elsewhere (host fields); material is fecal material
+env_medium,human fecal sample,ENVO:00002003,as above
+env_medium,sea water,ENVO:01001964,ENVO 2026 label is 'seawater'; 'sea water' is the older spelling
+env_medium,marine water,ENVO:01001964,same material as seawater
+env_medium,seawater sample,ENVO:01001964,'sample' suffix only
+env_medium,marine water sample,ENVO:01001964,'sample' suffix only
+env_medium,coastal water,ENVO:00002150,coastal sea water
+env_medium,wastewater,ENVO:00002001,ENVO label 'waste water'
+env_medium,deep-sea sediment,ENVO:00002113,ENVO label 'deep marine sediment'
+env_medium,deep sea sediment,ENVO:00002113,as above
+env_medium,sediments,ENVO:00002007,plural of sediment
+env_broad_scale,marine,ENVO:00000447,broad scale 'marine' = marine biome
+env_broad_scale,coral reef biome,ENVO:01000049,ENVO label 'marine coral reef biome' (no non-marine coral reef biome exists)

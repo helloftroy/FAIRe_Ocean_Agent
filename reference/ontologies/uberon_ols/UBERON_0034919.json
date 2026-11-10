@@ -1,0 +1,126 @@
+{
+  "iri" : "http://purl.obolibrary.org/obo/UBERON_0034919",
+  "lang" : "en",
+  "description" : [ "The stage of being no more dependent of the nest and/or from caregivers for subsistence while having not reach sexual maturity." ],
+  "synonyms" : [ ],
+  "annotation" : {
+    "Contributor" : [ "https://orcid.org/0000-0002-6601-2165", "https://orcid.org/0000-0003-3308-6245" ],
+    "database_cross_reference" : [ "ChirDv:0000034", "GgalDv:0000005", "GgorDv:0000005", "HsapDv:0000271", "MdomDv:0000005", "MmulDv:0000014", "MmusDv:0000178", "OariDv:0000005", "PpanDv:0000005", "PtroDv:0000005", "RnorDv:0000058", "SscrDv:0000005" ],
+    "id" : [ "UBERON:0034919" ]
+  },
+  "label" : "juvenile stage",
+  "ontology_name" : "uberon",
+  "ontology_prefix" : "UBERON",
+  "ontology_iri" : "http://purl.obolibrary.org/obo/uberon.owl",
+  "is_obsolete" : false,
+  "term_replaced_by" : null,
+  "is_defining_ontology" : true,
+  "has_children" : false,
+  "is_root" : false,
+  "short_form" : "UBERON_0034919",
+  "obo_id" : "UBERON:0034919",
+  "in_subset" : null,
+  "obo_definition_citation" : [ {
+    "definition" : "The stage of being no more dependent of the nest and/or from caregivers for subsistence while having not reach sexual maturity.",
+    "oboXrefs" : [ {
+      "database" : "Bgee",
+      "id" : "AN",
+      "description" : null,
+      "url" : null
+    }, {
+      "database" : null,
+      "id" : "https://github.com/obophenotype/uberon/issues/645",
+      "description" : null,
+      "url" : "https://github.com/obophenotype/uberon/issues/645"
+    } ]
+  } ],
+  "obo_xref" : [ {
+    "database" : "ChirDv",
+    "id" : "0000034",
+    "description" : null,
+    "url" : null
+  }, {
+    "database" : "GgalDv",
+    "id" : "0000005",
+    "description" : null,
+    "url" : null
+  }, {
+    "database" : "GgorDv",
+    "id" : "0000005",
+    "description" : null,
+    "url" : null
+  }, {
+    "database" : "HsapDv",
+    "id" : "0000271",
+    "description" : null,
+    "url" : "http://purl.obolibrary.org/obo/HsapDv_0000271"
+  }, {
+    "database" : "MdomDv",
+    "id" : "0000005",
+    "description" : null,
+    "url" : null
+  }, {
+    "database" : "MmulDv",
+    "id" : "0000014",
+    "description" : null,
+    "url" : null
+  }, {
+    "database" : "MmusDv",
+    "id" : "0000178",
+    "description" : null,
+    "url" : "http://purl.obolibrary.org/obo/MmusDv_0000178"
+  }, {
+    "database" : "OariDv",
+    "id" : "0000005",
+    "description" : null,
+    "url" : null
+  }, {
+    "database" : "PpanDv",
+    "id" : "0000005",
+    "description" : null,
+    "url" : null
+  }, {
+    "database" : "PtroDv",
+    "id" : "0000005",
+    "description" : null,
+    "url" : null
+  }, {
+    "database" : "RnorDv",
+    "id" : "0000058",
+    "description" : null,
+    "url" : null
+  }, {
+    "database" : "SscrDv",
+    "id" : "0000005",
+    "description" : null,
+    "url" : null
+  } ],
+  "obo_synonym" : null,
+  "is_preferred_root" : false,
+  "_links" : {
+    "self" : {
+      "href" : "http://www.ebi.ac.uk/ols4/api/ontologies/uberon/terms/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FUBERON_0034919?lang=en"
+    },
+    "parents" : {
+      "href" : "http://www.ebi.ac.uk/ols4/api/ontologies/uberon/terms/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FUBERON_0034919/parents"
+    },
+    "ancestors" : {
+      "href" : "http://www.ebi.ac.uk/ols4/api/ontologies/uberon/terms/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FUBERON_0034919/ancestors"
+    },
+    "hierarchicalParents" : {
+      "href" : "http://www.ebi.ac.uk/ols4/api/ontologies/uberon/terms/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FUBERON_0034919/hierarchicalParents"
+    },
+    "hierarchicalAncestors" : {
+      "href" : "http://www.ebi.ac.uk/ols4/api/ontologies/uberon/terms/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FUBERON_0034919/hierarchicalAncestors"
+    },
+    "jstree" : {
+      "href" : "http://www.ebi.ac.uk/ols4/api/ontologies/uberon/terms/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FUBERON_0034919/jstree"
+    },
+    "graph" : {
+      "href" : "http://www.ebi.ac.uk/ols4/api/ontologies/uberon/terms/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FUBERON_0034919/graph"
+    },
+    "part_of" : {
+      "href" : "http://www.ebi.ac.uk/ols4/api/ontologies/uberon/terms/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FUBERON_0034919/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FBFO_0000050"
+    }
+  }
+}

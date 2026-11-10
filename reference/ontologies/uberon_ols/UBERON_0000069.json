@@ -1,0 +1,451 @@
+{
+  "iri" : "http://purl.obolibrary.org/obo/UBERON_0000069",
+  "lang" : "en",
+  "description" : [ "A distinct juvenile stage many animals undergo before metamorphosis into adults. Animals with indirect development such as insects, amphibians, or cnidarians typically have a larval phase of their life cycle." ],
+  "synonyms" : [ "larva stage", "larva", "ammocoete stage", "ammocoete", "bipinnaria stage", "bipinnaria", "caterpillar stage", "caterpillar", "glochidium stage", "glochidium", "grub stage", "grub", "leptocephalus stage", "leptocephalus", "maggot stage", "maggot", "metacestode", "naiad, nymph stage", "naiad, nymph", "nauplius stage", "nauplius", "nymph stage", "nymph", "planula stage", "planula", "tornaria", "trochophore stage", "trochophore", "veliger stage", "veliger", "wriggler stage", "wriggler", "zoea stage", "zoea" ],
+  "annotation" : {
+    "curator note" : [ "Uberon includes clade-specific subclasses, e.g. nematod larva" ],
+    "database_cross_reference" : [ "BTO:0000915", "BTO:0000954", "EFO:0001303", "MIAA:0000400", "OGES:000008", "Wikipedia:Larva", "ZFS:0000048", "DpseDv:0000003", "DsimDv:0000003", "SsalDv:0000039" ],
+    "id" : [ "UBERON:0000069" ],
+    "never in taxon" : [ "http://purl.obolibrary.org/obo/NCBITaxon_32524" ],
+    "taxon_notes" : [ "It is a misunderstanding that the larval form always reflects the group's evolutionary history. It could be the case, but often the larval stage has evolved secondarily, as in insects. In these cases the larval form might differ more from the group's common origin than the adult form" ]
+  },
+  "label" : "larval stage",
+  "ontology_name" : "uberon",
+  "ontology_prefix" : "UBERON",
+  "ontology_iri" : "http://purl.obolibrary.org/obo/uberon.owl",
+  "is_obsolete" : false,
+  "term_replaced_by" : null,
+  "is_defining_ontology" : true,
+  "has_children" : true,
+  "is_root" : false,
+  "short_form" : "UBERON_0000069",
+  "obo_id" : "UBERON:0000069",
+  "in_subset" : [ "efo_slim" ],
+  "obo_definition_citation" : [ {
+    "definition" : "A distinct juvenile stage many animals undergo before metamorphosis into adults. Animals with indirect development such as insects, amphibians, or cnidarians typically have a larval phase of their life cycle.",
+    "oboXrefs" : [ {
+      "database" : "Wikipedia",
+      "id" : "Larva",
+      "description" : null,
+      "url" : "http://en.wikipedia.org/wiki/Larva"
+    } ]
+  } ],
+  "obo_xref" : [ {
+    "database" : "BTO",
+    "id" : "0000915",
+    "description" : null,
+    "url" : "http://purl.obolibrary.org/obo/BTO_0000915"
+  }, {
+    "database" : "BTO",
+    "id" : "0000954",
+    "description" : null,
+    "url" : "http://purl.obolibrary.org/obo/BTO_0000954"
+  }, {
+    "database" : "EFO",
+    "id" : "0001303",
+    "description" : null,
+    "url" : "http://www.ebi.ac.uk/efo/EFO_0001303"
+  }, {
+    "database" : "MIAA",
+    "id" : "0000400",
+    "description" : null,
+    "url" : null
+  }, {
+    "database" : "OGES",
+    "id" : "000008",
+    "description" : null,
+    "url" : null
+  }, {
+    "database" : "Wikipedia",
+    "id" : "Larva",
+    "description" : null,
+    "url" : "http://en.wikipedia.org/wiki/Larva"
+  }, {
+    "database" : "ZFS",
+    "id" : "0000048",
+    "description" : null,
+    "url" : "http://purl.obolibrary.org/obo/ZFS_0000048"
+  }, {
+    "database" : "DpseDv",
+    "id" : "0000003",
+    "description" : null,
+    "url" : null
+  }, {
+    "database" : "DsimDv",
+    "id" : "0000003",
+    "description" : null,
+    "url" : null
+  }, {
+    "database" : "SsalDv",
+    "id" : "0000039",
+    "description" : null,
+    "url" : null
+  } ],
+  "obo_synonym" : [ {
+    "name" : "ammocoete stage",
+    "scope" : "hasNarrowSynonym",
+    "type" : "taxonomic disambiguation",
+    "xrefs" : [ {
+      "database" : "Wikipedia",
+      "id" : "Larva",
+      "description" : null,
+      "url" : "http://en.wikipedia.org/wiki/Larva"
+    } ]
+  }, {
+    "name" : "ammocoete",
+    "scope" : "hasNarrowSynonym",
+    "type" : "taxonomic disambiguation",
+    "xrefs" : [ {
+      "database" : "Wikipedia",
+      "id" : "Larva",
+      "description" : null,
+      "url" : "http://en.wikipedia.org/wiki/Larva"
+    } ]
+  }, {
+    "name" : "bipinnaria stage",
+    "scope" : "hasNarrowSynonym",
+    "type" : "taxonomic disambiguation",
+    "xrefs" : [ {
+      "database" : "Wikipedia",
+      "id" : "Larva",
+      "description" : null,
+      "url" : "http://en.wikipedia.org/wiki/Larva"
+    } ]
+  }, {
+    "name" : "bipinnaria",
+    "scope" : "hasNarrowSynonym",
+    "type" : "taxonomic disambiguation",
+    "xrefs" : [ {
+      "database" : "Wikipedia",
+      "id" : "Larva",
+      "description" : null,
+      "url" : "http://en.wikipedia.org/wiki/Larva"
+    } ]
+  }, {
+    "name" : "caterpillar stage",
+    "scope" : "hasNarrowSynonym",
+    "type" : "taxonomic disambiguation",
+    "xrefs" : [ {
+      "database" : "Wikipedia",
+      "id" : "Larva",
+      "description" : null,
+      "url" : "http://en.wikipedia.org/wiki/Larva"
+    } ]
+  }, {
+    "name" : "caterpillar",
+    "scope" : "hasNarrowSynonym",
+    "type" : "taxonomic disambiguation",
+    "xrefs" : [ {
+      "database" : "Wikipedia",
+      "id" : "Larva",
+      "description" : null,
+      "url" : "http://en.wikipedia.org/wiki/Larva"
+    } ]
+  }, {
+    "name" : "glochidium stage",
+    "scope" : "hasNarrowSynonym",
+    "type" : "taxonomic disambiguation",
+    "xrefs" : [ {
+      "database" : "Wikipedia",
+      "id" : "Larva",
+      "description" : null,
+      "url" : "http://en.wikipedia.org/wiki/Larva"
+    } ]
+  }, {
+    "name" : "glochidium",
+    "scope" : "hasNarrowSynonym",
+    "type" : "taxonomic disambiguation",
+    "xrefs" : [ {
+      "database" : "Wikipedia",
+      "id" : "Larva",
+      "description" : null,
+      "url" : "http://en.wikipedia.org/wiki/Larva"
+    } ]
+  }, {
+    "name" : "grub stage",
+    "scope" : "hasNarrowSynonym",
+    "type" : "taxonomic disambiguation",
+    "xrefs" : [ {
+      "database" : "Wikipedia",
+      "id" : "Larva",
+      "description" : null,
+      "url" : "http://en.wikipedia.org/wiki/Larva"
+    } ]
+  }, {
+    "name" : "grub",
+    "scope" : "hasNarrowSynonym",
+    "type" : "taxonomic disambiguation",
+    "xrefs" : [ {
+      "database" : "Wikipedia",
+      "id" : "Larva",
+      "description" : null,
+      "url" : "http://en.wikipedia.org/wiki/Larva"
+    } ]
+  }, {
+    "name" : "leptocephalus stage",
+    "scope" : "hasNarrowSynonym",
+    "type" : "taxonomic disambiguation",
+    "xrefs" : [ {
+      "database" : "Wikipedia",
+      "id" : "Larva",
+      "description" : null,
+      "url" : "http://en.wikipedia.org/wiki/Larva"
+    } ]
+  }, {
+    "name" : "leptocephalus",
+    "scope" : "hasNarrowSynonym",
+    "type" : "taxonomic disambiguation",
+    "xrefs" : [ {
+      "database" : "Wikipedia",
+      "id" : "Larva",
+      "description" : null,
+      "url" : "http://en.wikipedia.org/wiki/Larva"
+    } ]
+  }, {
+    "name" : "maggot stage",
+    "scope" : "hasNarrowSynonym",
+    "type" : "taxonomic disambiguation",
+    "xrefs" : [ {
+      "database" : "Wikipedia",
+      "id" : "Larva",
+      "description" : null,
+      "url" : "http://en.wikipedia.org/wiki/Larva"
+    } ]
+  }, {
+    "name" : "maggot",
+    "scope" : "hasNarrowSynonym",
+    "type" : "taxonomic disambiguation",
+    "xrefs" : [ {
+      "database" : "Wikipedia",
+      "id" : "Larva",
+      "description" : null,
+      "url" : "http://en.wikipedia.org/wiki/Larva"
+    } ]
+  }, {
+    "name" : "metacestode",
+    "scope" : "hasNarrowSynonym",
+    "type" : "taxonomic disambiguation",
+    "xrefs" : [ {
+      "database" : "BTO",
+      "id" : "0000859",
+      "description" : null,
+      "url" : "http://purl.obolibrary.org/obo/BTO_0000859"
+    } ]
+  }, {
+    "name" : "naiad, nymph stage",
+    "scope" : "hasNarrowSynonym",
+    "type" : "taxonomic disambiguation",
+    "xrefs" : [ {
+      "database" : "Wikipedia",
+      "id" : "Larva",
+      "description" : null,
+      "url" : "http://en.wikipedia.org/wiki/Larva"
+    } ]
+  }, {
+    "name" : "naiad, nymph",
+    "scope" : "hasNarrowSynonym",
+    "type" : "taxonomic disambiguation",
+    "xrefs" : [ {
+      "database" : "Wikipedia",
+      "id" : "Larva",
+      "description" : null,
+      "url" : "http://en.wikipedia.org/wiki/Larva"
+    } ]
+  }, {
+    "name" : "nauplius stage",
+    "scope" : "hasNarrowSynonym",
+    "type" : "taxonomic disambiguation",
+    "xrefs" : [ {
+      "database" : "Wikipedia",
+      "id" : "Larva",
+      "description" : null,
+      "url" : "http://en.wikipedia.org/wiki/Larva"
+    } ]
+  }, {
+    "name" : "nauplius",
+    "scope" : "hasNarrowSynonym",
+    "type" : "taxonomic disambiguation",
+    "xrefs" : [ {
+      "database" : "Wikipedia",
+      "id" : "Larva",
+      "description" : null,
+      "url" : "http://en.wikipedia.org/wiki/Larva"
+    } ]
+  }, {
+    "name" : "nymph stage",
+    "scope" : "hasNarrowSynonym",
+    "type" : "taxonomic disambiguation",
+    "xrefs" : [ {
+      "database" : "Wikipedia",
+      "id" : "Larva",
+      "description" : null,
+      "url" : "http://en.wikipedia.org/wiki/Larva"
+    } ]
+  }, {
+    "name" : "nymph",
+    "scope" : "hasNarrowSynonym",
+    "type" : "taxonomic disambiguation",
+    "xrefs" : [ {
+      "database" : "Wikipedia",
+      "id" : "Larva",
+      "description" : null,
+      "url" : "http://en.wikipedia.org/wiki/Larva"
+    } ]
+  }, {
+    "name" : "planula stage",
+    "scope" : "hasNarrowSynonym",
+    "type" : "taxonomic disambiguation",
+    "xrefs" : [ {
+      "database" : "Wikipedia",
+      "id" : "Larva",
+      "description" : null,
+      "url" : "http://en.wikipedia.org/wiki/Larva"
+    } ]
+  }, {
+    "name" : "planula",
+    "scope" : "hasNarrowSynonym",
+    "type" : "taxonomic disambiguation",
+    "xrefs" : [ {
+      "database" : "Wikipedia",
+      "id" : "Larva",
+      "description" : null,
+      "url" : "http://en.wikipedia.org/wiki/Larva"
+    } ]
+  }, {
+    "name" : "tornaria",
+    "scope" : "hasNarrowSynonym",
+    "type" : "taxonomic disambiguation",
+    "xrefs" : [ {
+      "database" : "NCBITaxon",
+      "id" : "10219",
+      "description" : null,
+      "url" : "http://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?id=10219"
+    } ]
+  }, {
+    "name" : "trochophore stage",
+    "scope" : "hasNarrowSynonym",
+    "type" : "taxonomic disambiguation",
+    "xrefs" : [ {
+      "database" : "Wikipedia",
+      "id" : "Larva",
+      "description" : null,
+      "url" : "http://en.wikipedia.org/wiki/Larva"
+    } ]
+  }, {
+    "name" : "trochophore",
+    "scope" : "hasNarrowSynonym",
+    "type" : "taxonomic disambiguation",
+    "xrefs" : [ {
+      "database" : "Wikipedia",
+      "id" : "Larva",
+      "description" : null,
+      "url" : "http://en.wikipedia.org/wiki/Larva"
+    } ]
+  }, {
+    "name" : "veliger stage",
+    "scope" : "hasNarrowSynonym",
+    "type" : "taxonomic disambiguation",
+    "xrefs" : [ {
+      "database" : "Wikipedia",
+      "id" : "Larva",
+      "description" : null,
+      "url" : "http://en.wikipedia.org/wiki/Larva"
+    } ]
+  }, {
+    "name" : "veliger",
+    "scope" : "hasNarrowSynonym",
+    "type" : "taxonomic disambiguation",
+    "xrefs" : [ {
+      "database" : "Wikipedia",
+      "id" : "Larva",
+      "description" : null,
+      "url" : "http://en.wikipedia.org/wiki/Larva"
+    } ]
+  }, {
+    "name" : "wriggler stage",
+    "scope" : "hasNarrowSynonym",
+    "type" : "taxonomic disambiguation",
+    "xrefs" : [ {
+      "database" : "Wikipedia",
+      "id" : "Larva",
+      "description" : null,
+      "url" : "http://en.wikipedia.org/wiki/Larva"
+    } ]
+  }, {
+    "name" : "wriggler",
+    "scope" : "hasNarrowSynonym",
+    "type" : "taxonomic disambiguation",
+    "xrefs" : [ {
+      "database" : "Wikipedia",
+      "id" : "Larva",
+      "description" : null,
+      "url" : "http://en.wikipedia.org/wiki/Larva"
+    } ]
+  }, {
+    "name" : "zoea stage",
+    "scope" : "hasNarrowSynonym",
+    "type" : "taxonomic disambiguation",
+    "xrefs" : [ {
+      "database" : "Wikipedia",
+      "id" : "Larva",
+      "description" : null,
+      "url" : "http://en.wikipedia.org/wiki/Larva"
+    } ]
+  }, {
+    "name" : "zoea",
+    "scope" : "hasNarrowSynonym",
+    "type" : "taxonomic disambiguation",
+    "xrefs" : [ {
+      "database" : "Wikipedia",
+      "id" : "Larva",
+      "description" : null,
+      "url" : "http://en.wikipedia.org/wiki/Larva"
+    } ]
+  } ],
+  "is_preferred_root" : false,
+  "_links" : {
+    "self" : {
+      "href" : "http://www.ebi.ac.uk/ols4/api/ontologies/uberon/terms/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FUBERON_0000069?lang=en"
+    },
+    "parents" : {
+      "href" : "http://www.ebi.ac.uk/ols4/api/ontologies/uberon/terms/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FUBERON_0000069/parents"
+    },
+    "ancestors" : {
+      "href" : "http://www.ebi.ac.uk/ols4/api/ontologies/uberon/terms/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FUBERON_0000069/ancestors"
+    },
+    "hierarchicalParents" : {
+      "href" : "http://www.ebi.ac.uk/ols4/api/ontologies/uberon/terms/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FUBERON_0000069/hierarchicalParents"
+    },
+    "hierarchicalAncestors" : {
+      "href" : "http://www.ebi.ac.uk/ols4/api/ontologies/uberon/terms/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FUBERON_0000069/hierarchicalAncestors"
+    },
+    "jstree" : {
+      "href" : "http://www.ebi.ac.uk/ols4/api/ontologies/uberon/terms/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FUBERON_0000069/jstree"
+    },
+    "children" : {
+      "href" : "http://www.ebi.ac.uk/ols4/api/ontologies/uberon/terms/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FUBERON_0000069/children"
+    },
+    "descendants" : {
+      "href" : "http://www.ebi.ac.uk/ols4/api/ontologies/uberon/terms/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FUBERON_0000069/descendants"
+    },
+    "hierarchicalChildren" : {
+      "href" : "http://www.ebi.ac.uk/ols4/api/ontologies/uberon/terms/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FUBERON_0000069/hierarchicalChildren"
+    },
+    "hierarchicalDescendants" : {
+      "href" : "http://www.ebi.ac.uk/ols4/api/ontologies/uberon/terms/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FUBERON_0000069/hierarchicalDescendants"
+    },
+    "graph" : {
+      "href" : "http://www.ebi.ac.uk/ols4/api/ontologies/uberon/terms/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FUBERON_0000069/graph"
+    },
+    "part_of" : {
+      "href" : "http://www.ebi.ac.uk/ols4/api/ontologies/uberon/terms/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FUBERON_0000069/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FBFO_0000050"
+    },
+    "simultaneous_with" : {
+      "href" : "http://www.ebi.ac.uk/ols4/api/ontologies/uberon/terms/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FUBERON_0000069/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FRO_0002082"
+    },
+    "immediately_preceded_by" : {
+      "href" : "http://www.ebi.ac.uk/ols4/api/ontologies/uberon/terms/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FUBERON_0000069/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FRO_0002087"
+    }
+  }
+}

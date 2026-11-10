@@ -58,6 +58,12 @@ in `VERSIONS.md` and checksums in `SHA256SUMS.txt`:
   v1.0.2).
 - Citation: Takahashi et al. (2025) Environmental DNA 7(3): e70100,
   https://doi.org/10.1002/edn3.70100
+- **ENVO** release 2026-10-23 and **OBI** release 2026-07-27, in
+  `reference/ontologies/` (gzip copies, version IRIs, checksums). Used by
+  R19 and R20.
+- **INSDC `/geo_loc_name` vocabulary**, revised 2024-07-08, in
+  `reference/insdc/` (the page as downloaded plus the extracted lists).
+  Used by R21.
 
 ## Decisions already made (2026-11-10)
 
@@ -430,6 +436,210 @@ format `PnYnMnWnDTnHnMnS`.
 Before R18, these cells were kept unchanged even when they didn't match the
 format.
 
+### R19: env_broad_scale, env_local_scale, env_medium → `label [ENVO:id]`
+
+FAIRe's format is `termLabel [termID]`, for example `estuarine biome
+[ENVO:01000020]`. The reference is ENVO release 2026-10-23, saved in
+`reference/ontologies/`. Code: `scripts/faire_strict/ontology.py`.
+
+Our export wrote the label and the ID as two separate list items
+(`marine biome | ENVO:00000447`). R19 therefore reads the raw cell, before
+the R02 dedupe, and treats a label followed by an ID as one pair. Repeated
+adjacent items are collapsed first: `marine biome | marine biome |
+ENVO:00000447` is one pair. Missing-value items go through R03 as usual.
+Whenever the cell changes, the full original cell is copied to
+`extras_sampleMetadata.csv` as `<column>__original`.
+
+The label written is always ENVO's current label for the ID. When an
+unresolved label/ID pair becomes `other:`, it is written as one list item,
+`other: <label> [<ID as written>]`. Writing it as `other: label | ENVO:id`
+would split it into two list items.
+
+| rule | what | cells (broad / local / medium) |
+|---|---|---|
+| R19a | label + ID, label is the ID's label or one of its synonyms (any type) | 25,975 / 23,498 / 21,762 |
+| R19a2 | label + ID, label is a near typo (similarity ≥ 0.9) or one name's words contain the other's, e.g. `marine coral reeef biome`, `marine \| ENVO:00000447`. The ID decides. | 2,818 / 1,480 / 607 |
+| R19b | ID only → ENVO label added | 6,783 / 9,056 / 7,372 |
+| R19c | label only, exactly one ENVO label (case and spacing ignored) | 50,477 / 34,808 / 80,905 |
+| R19d | label only, exactly one ENVO exact synonym, e.g. `freshwater` → `fresh water [ENVO:00002011]` | 1,513 / 2,007 / 2,337 |
+| R19e | obsolete ID with an ENVO replacement → the replacement, e.g. `ENVO:00002151` → `ocean water [ENVO:00002149]` | 60 / 403 / 361 |
+| R19m | reviewed manual map, `maps/envo_manual.csv` (19 rows, listed below) | 6,543 / – / 30,461 |
+| R19f | obsolete ID, no ENVO replacement (e.g. `ENVO:00009003`, obsolete human-associated habitat) → `other:` | 2,185 / 692 / 104 |
+| R19g | a non-ENVO ID (OHMI, UBERON, PO, PCO …) → `other:` | 889 / 2,314 / 1,530 |
+| R19h | ENVO ID that does not exist (wrong digit count, or spreadsheet drag-fill such as `ENVO:06105017`, `…018`, …) → `other:` | 255 / 306 / 485 |
+| R19i | label and ID disagree, e.g. `hydrothermal vent sediment \| ENVO:00005779` (= vegetable garden soil) → `other:` | 943 / 1,211 / 507 |
+| R19j | spreadsheet formula text (`=IF(F62="Tissue",…`) → `other:` | 206 / 2 / 347 |
+| R07 | no exact match → `other:` | rest |
+
+Points to check:
+
+- **ENVO renamed a term (see D8).** In this release ENVO:00002149 is
+  labelled **"ocean water"**. FAIRe's v1.0.2 example (and many of our
+  cells, about 5,400) still say `sea water`. The ID is kept and ENVO's
+  current label is written: `ocean water [ENVO:00002149]`. The label-only
+  word `seawater` matches the new class `seawater [ENVO:01001964]` exactly
+  (R19c), and the manual map sends `sea water` / `marine water` there too.
+- **Synonyms blocked.** Five exact synonyms are never used, because in our
+  data they mean something else: tissue (= tissue paper), gas (gasoline),
+  mountains (seamount), human biome (anthropogenic terrestrial biome),
+  subway (subway train).
+- **Matching is never fuzzy without an ID.** Near matches (R19a2) are used
+  only when the cell also gives the ID.
+- **Manual map (R19m), `scripts/faire_strict/maps/envo_manual.csv`:**
+  - env_medium:
+    - feces, faeces, stool, stool sample, fecal, fecal sample, human
+      feces, human fecal sample → `fecal material [ENVO:00002003]`;
+    - sea water, marine water, seawater sample, marine water sample →
+      `seawater [ENVO:01001964]`;
+    - coastal water → `coastal sea water [ENVO:00002150]`;
+    - wastewater → `waste water [ENVO:00002001]`;
+    - deep-sea sediment, deep sea sediment → `deep marine sediment
+      [ENVO:00002113]`;
+    - sediments → `sediment [ENVO:00002007]`.
+  - env_broad_scale:
+    - marine → `marine biome [ENVO:00000447]`;
+    - coral reef biome → `marine coral reef biome [ENVO:01000049]`.
+- **What stays `other:`.** Many of the remaining values are host-associated
+  (gut, sputum, blood, vagina, human). ENVO has no class for these (they are
+  UBERON anatomy terms), so they stay `other:` for review rather than being
+  forced into a loose ENVO class.
+- **F02 flag (value not changed).** FAIRe asks for the env_* terms to come
+  from one ENVO branch each: biome for broad scale, layer for local scale,
+  environmental material for medium. ENVO terms outside that branch are kept
+  and listed in `review_flags.csv`. Cells flagged: broad 35,927, local
+  65,058, medium 19,375. Most local-scale values are features rather than
+  layers (`ocean`, `hospital`, `coral reef`), and FAIRe's own example
+  `marine pelagic zone` is not a layer either. So F02 is information, not an
+  error.
+
+### R20: instrument → `Name [OBI_xxxxxxx]`
+
+FAIRe example: `Illumina HiSeq 1500 [OBI_0003386]`. The reference is OBI
+release 2026-07-27: the 39 named subclasses of DNA sequencer
+(OBI_0400103). Code: `ontology.py`.
+
+- **R20a (5,657 items):** exact OBI label (case ignored), also with
+  `Illumina` added in front (`NextSeq 500` → `Illumina NextSeq 500
+  [OBI_0002021]`).
+- **R20b (699 items): reviewed map, `maps/obi_manual.csv`:**
+  - MinION, PromethION → Oxford Nanopore …
+  - Sequel, Sequel II, Sequel IIe, Revio → PacBio …
+  - 454 GS FLX and 454 GS FLX Titanium → 454 Genome Sequencer FLX
+    (Titanium is a reagent upgrade of the same instrument).
+  - 454 GS 20 → 454 Genome Sequence 20 (OBI's spelling).
+  - AB SOLiD System, AB SOLiD 4 System, AB SOLiD 3 Plus System,
+    Helicos HeliScope.
+- **Not mapped because ambiguous:**
+  - GridION (OBI has only the Mk1 model);
+  - Illumina HiSeq X (Five or Ten);
+  - PacBio RS (OBI has only RS II);
+  - 454 GS FLX+;
+  - AB SOLiD System 3.0.
+- **R20c (see D9):** instruments OBI does not list keep their name unchanged
+  and are flagged F03 (516 items). These include:
+  - Ion Torrent PGM, Proton and S5;
+  - NextSeq 2000;
+  - DNBSEQ-G400 and DNBSEQ-T7;
+  - BGISEQ and MGISEQ;
+  - iSeq 100;
+  - Element AVITI;
+  - AB capillary sequencers;
+  - 454 GS Junior;
+  - the unmapped names above.
+
+  FAIRe says the term should come from OBI "where possible", so a plain name
+  is valid when OBI has no term.
+- **R20d (28 items):** `unspecified`, which is SRA's instrument_model
+  placeholder, becomes `missing: not provided`.
+
+### R21: geo_loc_name against the INSDC vocabulary
+
+The FAIRe checklist links `insdc.org/country.html`, which now returns 404:
+in 2024 INSDC renamed the `/country` qualifier to `/geo_loc_name`. The
+reference is the INSDC `/geo_loc_name` vocabulary (revised 2024-07-08,
+280 current names and 17 historical ones), saved in `reference/insdc/`.
+Code: `scripts/faire_strict/geo.py`. Only the country or sea part is
+checked or moved; the rest of the text is kept exactly as written.
+
+- **keep (292,577 items):** the part before `:` (or the whole value) is
+  already an INSDC name.
+- **R21a (310):** case only (`NETHERLANDS` → `Netherlands`).
+- **R21b (16):** unambiguous aliases, e.g. `United states of america` →
+  `USA`, `Republic of Korea` → `South Korea`. The full list is `ALIASES`
+  in `geo.py`.
+- **R21d (52,543):** no `:`, and exactly one comma-separated part is an
+  INSDC name, and it is the last part. That name is moved to the front:
+  `Chile Bay, Greenwich Island, South Shetland Islands, Antarctica` →
+  `Antarctica: Chile Bay, Greenwich Island, South Shetland Islands`
+  (48,986 of these cells); `Halifax, Canada` → `Canada: Halifax`.
+- **R21c:** the same when the name is the first part. No cells in this
+  export.
+- **R21f (2,896):** `GAZ:` prefix, from the GAZ gazetteer, dropped:
+  `GAZ:United States of America` → `USA`.
+- **R21g (1,750):** historical names with one current successor:
+  - Czech Republic → Czechia (most cells);
+  - Swaziland → Eswatini;
+  - Burma → Myanmar;
+  - also the Macedonia, East Timor, Zaire and Siam entries.
+- **R21h / F04 (358):** historical names without a single successor
+  (`Korea`, `Netherlands Antilles`) are kept and flagged.
+- **Everything else → `other:` (54,523 cells, 487 distinct).** These are
+  values with no country or sea name, or with several:
+  - site names (`CAWS`, `Framlingham Forest reserve`, `Helgoland Roads`);
+  - cruise descriptions;
+  - US states without `USA`;
+  - seas INSDC does not list (`Red Sea`, `Chesapeake Bay`).
+
+  Adding the country would need per-site knowledge, so these are left for
+  the manual review.
+
+### R22: integer fields written as words
+
+- **R22 (60 cells):** a whole cell that is one number word in an integer
+  field: `three` → `3`.
+- **R22b (126 cells):** in `*_rep` fields only, `duplicate(s)` → 2,
+  `triplicate(s)` → 3, `quadruplicate(s)` → 4. In `pcr_cycles`,
+  `triplicate` is a misplaced value, so there it stays `other:`.
+- **Not converted, so `other:`:**
+  - vague values (`multiple`, `several`, `two or three`, `5 to 10`);
+  - pasted sentences in `pool_dna_num` (all of its filled cells; the field
+    is the number of extracts pooled, and our extraction filled it with
+    methods text).
+
+### R23: bibliographicCitation → the DOI
+
+FAIRe types `bibliographicCitation` as a DOI (example `DOI:
+10.1111/mec.15382`). Our export wrote the full reference text.
+
+- **R23 (3,844 studies):** the text contains exactly one DOI, which is
+  written as `DOI: 10.xxxx/...`. The full reference text is kept in
+  `extras_projectMetadata.csv` as `bibliographicCitation__full_text`.
+- **`other:` (8 studies):** JSON-LD records with several DOIs or none (from
+  PANGAEA). The full text is in the extras file as well.
+
+### R24: host_life_stage → UBERON life cycle stage
+
+FAIRe's format is `termLabel [termID]`, with the example `juvenile stage
+[UBERON_0034919]`. The ID form is written with an underscore, as in FAIRe's
+example. The IDs were checked against UBERON release 2026-11-05 (OLS
+responses saved in `reference/ontologies/uberon_ols/`).
+
+- **R24 (3,099 cells), any case:**
+  - adult → `post-juvenile adult stage [UBERON_0000113]` (UBERON's label;
+    "adult stage" is its synonym);
+  - juvenile(s) → `juvenile stage [UBERON_0034919]`;
+  - larva, larvae, larval → `larval stage [UBERON_0000069]`.
+- **`other:` (1,427 cells):** everything else, for example `native polyp`,
+  `Mature`, `grower pig`, `seedling`, `medusa`, `V8`. Before this change
+  these cells were kept unchanged even though they don't match the format.
+
+### R03 addition: INSDC spellings of the missing-value categories
+
+INSDC writes, for example, `missing: third party data`, where FAIRe writes
+`missing: not collected: third party data`. All eight INSDC forms are
+mapped to the matching FAIRe term. They are the same categories, nested
+differently.
+
 ### eventDate: checked, no change needed
 
 All 310,654 filled values are `yyyy-mm-dd`, `yyyy-mm` or `yyyy`. The
@@ -470,6 +680,8 @@ distinct values, for example `220`, `280`, `2808`, `80`. These are probably
 | D5 | Add non-FAIRe columns back as new terms? | **No** (2026-11-10). The NOAA copy is FAIRe terms only; the extras files keep the values. |
 | D6 | Unit conversion: µL is not in FAIRe's volume list (`mL`, `L`, …) | **Decided 2026-11-10**: keep µL, no conversion, but still split the number and unit (`500 µL` → `500` + `µL`). About 10,800 cells. |
 | D7 | `informationWithheld` is "Nothing indicated as withheld" in 9,298 studies. That is our pipeline's default text, not withheld information. Keep it, or blank it (moving the text to extras)? | **open**; kept for now |
+| D8 | ENVO renamed ENVO:00002149 from "sea water" to **"ocean water"** (release 2026-10-23); FAIRe's example still says `sea water [ENVO:00002149]` | **open**; currently written with ENVO's current label, `ocean water [ENVO:00002149]` (R19). The alternative is to keep `sea water` as the label for this one ID. |
+| D9 | Instruments OBI does not list (Ion Torrent, NextSeq 2000, DNBSEQ, AVITI …) | **open**; currently the plain name is kept (FAIRe: OBI "where possible"), flagged F03. The alternative is `other: <name>`. |
 | — | Inference rules R05b, R13b, R15b, R15c | **Accepted** 2026-11-10 |
 
 ### D4 background: what FAIRe says (decided above)
@@ -524,20 +736,23 @@ yet checked).
 3. ~~target_gene~~: done (R15).
 4. ~~D4 samp_category~~: done (R16).
 5. ~~Mandatory fields~~: done (R17).
-6. **Ontology-coded fields** (needs ENVO and OBI downloads, saved with
-   versions):
-   - `env_broad_scale`, `env_local_scale`, `env_medium` →
-     `label [ENVO:xxxxxxxx]`. They are 17–31% filled, and most are labels
-     without IDs or IDs without labels.
-   - `instrument` → `Name [OBI_xxxxxxx]`.
-7. **`geo_loc_name`** against the INSDC country / sea list, in the format
-   `Country: region, locality`. For example, `Chile Bay, Greenwich Island…`
-   needs `Antarctica:` added. This can only be done where it's unambiguous.
+6. ~~Ontology-coded fields~~: done (R19 ENVO, R20 OBI; D8, D9 open).
+7. ~~`geo_loc_name`~~: done (R21).
 8. ~~Dates and durations~~: done (R18; eventDate checked).
-9. **Integer fields with sentences:** `pool_dna_num` (114k cells),
-   `pcr_rep`, `biological_rep`. Sentences stay D0.
-10. **Final validation:**
-   - Re-run the profiler on the strict copy, aiming for zero
-     non-conforming values outside `other:` and the missing-value terms.
+9. ~~Integer fields with words~~: done (R22). Sentences stay `other:`
+   (D0); `pool_dna_num` is entirely pasted methods text.
+10. **Final validation:** profiler re-run on the strict copy (2026-11-10).
+   Outside `other:` and the missing-value terms, the only non-conforming
+   values left are the deliberate decisions:
+   - `checkls_ver` = `1.0.2` (D1, 9,298 studies);
+   - `lib_layout` = `none` (D2, 5,032 studies);
+   - `µL` in three unit columns (D6, 21,944 cells).
+
+   The env_* fields, geo_loc_name, the durations, integers, Booleans,
+   controlled vocabularies and bibliographicCitation all conform. In total,
+   1,769,877 cells (36,324 distinct values) are `other:` for the manual
+   review in `review_other.csv`.
+
+   Still to do:
    - Optionally run FAIRe-fier (the official validator) on a sample of
      studies.

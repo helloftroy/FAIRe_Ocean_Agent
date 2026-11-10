@@ -1,0 +1,56 @@
+{
+  "languages" : [ "en" ],
+  "lang" : "en",
+  "ontologyId" : "uberon",
+  "loaded" : "2026-11-10T00:09:44.242235538",
+  "updated" : "2026-11-10T00:09:44.242235538",
+  "status" : "LOADED",
+  "message" : "",
+  "version" : null,
+  "fileHash" : null,
+  "loadAttempts" : 0,
+  "numberOfTerms" : 26739,
+  "numberOfProperties" : 556,
+  "numberOfIndividuals" : 67,
+  "config" : {
+    "id" : "uberon",
+    "versionIri" : "http://purl.obolibrary.org/obo/uberon/releases/2026-11-05/uberon.owl",
+    "namespace" : "uberon",
+    "preferredPrefix" : "UBERON",
+    "title" : "Uber-anatomy ontology",
+    "description" : "Uberon is an integrated cross-species anatomy ontology representing a variety of entities classified according to traditional anatomical criteria such as structure, function and developmental lineage. The ontology includes comprehensive relationships to taxon-specific anatomical ontologies, allowing integration of functional, phenotype and expression data.",
+    "homepage" : "http://uberon.org",
+    "version" : null,
+    "mailingList" : "https://lists.sourceforge.net/lists/listinfo/obo-anatomy",
+    "tracker" : "https://github.com/obophenotype/uberon/issues",
+    "logo" : null,
+    "creators" : [ ],
+    "annotations" : null,
+    "fileLocation" : "http://purl.obolibrary.org/obo/uberon.owl",
+    "oboSlims" : false,
+    "labelProperty" : "http://www.w3.org/2000/01/rdf-schema#label",
+    "definitionProperties" : [ ],
+    "synonymProperties" : [ ],
+    "hierarchicalProperties" : [ ],
+    "baseUris" : [ ],
+    "hiddenProperties" : [ ],
+    "preferredRootTerms" : [ ],
+    "isSkos" : false,
+    "allowDownload" : false
+  },
+  "baseUris" : [ ],
+  "_links" : {
+    "self" : {
+      "href" : "http://www.ebi.ac.uk/ols4/api/ontologies/uberon?lang=en"
+    },
+    "terms" : {
+      "href" : "http://www.ebi.ac.uk/ols4/api/ontologies/uberon/terms"
+    },
+    "properties" : {
+      "href" : "http://www.ebi.ac.uk/ols4/api/ontologies/uberon/properties"
+    },
+    "individuals" : {
+      "href" : "http://www.ebi.ac.uk/ols4/api/ontologies/uberon/individuals"
+    }
+  }
+}

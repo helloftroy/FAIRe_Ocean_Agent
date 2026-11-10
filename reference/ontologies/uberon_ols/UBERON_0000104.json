@@ -1,0 +1,217 @@
+{
+  "iri" : "http://purl.obolibrary.org/obo/UBERON_0000104",
+  "lang" : "en",
+  "description" : [ "An entire span of an organism's life. In metazoans, commences with the zygote stage and ends with the death of the organism." ],
+  "synonyms" : [ "entire life cycle", "entire lifespan", "life", "lifespan" ],
+  "annotation" : {
+    "database_cross_reference" : [ "FBdv:00000000", "OGES:000011", "ncithesaurus:Life", "AcarDv:0000001", "BtauDv:0000001", "CfamDv:0000001", "ChirDv:0000001", "CporDv:0000001", "DpseDv:0000001", "DsimDv:0000001", "EcabDv:0000001", "FcatDv:0000001", "GgalDv:0000001", "GgorDv:0000001", "HsapDv:0000001", "MESH:D008136", "MESH:D019369", "MdomDv:0000001", "MmulDv:0000001", "MmusDv:0000001", "OanaDv:0000001", "OariDv:0000001", "OcunDv:0000001", "PpanDv:0000001", "PtroDv:0000001", "RnorDv:0000001", "SsalDv:0000001", "SscrDv:0000001" ],
+    "id" : [ "UBERON:0000104" ],
+    "present in taxon" : [ "http://purl.obolibrary.org/obo/NCBITaxon_33090", "http://purl.obolibrary.org/obo/NCBITaxon_33208", "http://purl.obolibrary.org/obo/NCBITaxon_4751" ],
+    "seeAlso" : [ "https://github.com/obophenotype/uberon/issues/532" ]
+  },
+  "label" : "life cycle",
+  "ontology_name" : "uberon",
+  "ontology_prefix" : "UBERON",
+  "ontology_iri" : "http://purl.obolibrary.org/obo/uberon.owl",
+  "is_obsolete" : false,
+  "term_replaced_by" : null,
+  "is_defining_ontology" : true,
+  "has_children" : true,
+  "is_root" : false,
+  "short_form" : "UBERON_0000104",
+  "obo_id" : "UBERON:0000104",
+  "in_subset" : [ "common_anatomy", "upper_level" ],
+  "obo_definition_citation" : [ {
+    "definition" : "An entire span of an organism's life. In metazoans, commences with the zygote stage and ends with the death of the organism.",
+    "oboXrefs" : [ {
+      "database" : null,
+      "id" : "https://orcid.org/0000-0002-6601-2165",
+      "description" : null,
+      "url" : "https://orcid.org/0000-0002-6601-2165"
+    } ]
+  } ],
+  "obo_xref" : [ {
+    "database" : "FBdv",
+    "id" : "00000000",
+    "description" : null,
+    "url" : "http://flybase.org/cgi-bin/fbcvq.html?query=FBdv:00000000"
+  }, {
+    "database" : "OGES",
+    "id" : "000011",
+    "description" : null,
+    "url" : null
+  }, {
+    "database" : "ncithesaurus",
+    "id" : "Life",
+    "description" : null,
+    "url" : null
+  }, {
+    "database" : "AcarDv",
+    "id" : "0000001",
+    "description" : null,
+    "url" : null
+  }, {
+    "database" : "BtauDv",
+    "id" : "0000001",
+    "description" : null,
+    "url" : null
+  }, {
+    "database" : "CfamDv",
+    "id" : "0000001",
+    "description" : null,
+    "url" : null
+  }, {
+    "database" : "ChirDv",
+    "id" : "0000001",
+    "description" : null,
+    "url" : null
+  }, {
+    "database" : "CporDv",
+    "id" : "0000001",
+    "description" : null,
+    "url" : null
+  }, {
+    "database" : "DpseDv",
+    "id" : "0000001",
+    "description" : null,
+    "url" : null
+  }, {
+    "database" : "DsimDv",
+    "id" : "0000001",
+    "description" : null,
+    "url" : null
+  }, {
+    "database" : "EcabDv",
+    "id" : "0000001",
+    "description" : null,
+    "url" : null
+  }, {
+    "database" : "FcatDv",
+    "id" : "0000001",
+    "description" : null,
+    "url" : null
+  }, {
+    "database" : "GgalDv",
+    "id" : "0000001",
+    "description" : null,
+    "url" : null
+  }, {
+    "database" : "GgorDv",
+    "id" : "0000001",
+    "description" : null,
+    "url" : null
+  }, {
+    "database" : "HsapDv",
+    "id" : "0000001",
+    "description" : null,
+    "url" : "http://purl.obolibrary.org/obo/HsapDv_0000001"
+  }, {
+    "database" : "MESH",
+    "id" : "D008136",
+    "description" : null,
+    "url" : "http://id.nlm.nih.gov/mesh/D008136"
+  }, {
+    "database" : "MESH",
+    "id" : "D019369",
+    "description" : null,
+    "url" : "http://id.nlm.nih.gov/mesh/D019369"
+  }, {
+    "database" : "MdomDv",
+    "id" : "0000001",
+    "description" : null,
+    "url" : null
+  }, {
+    "database" : "MmulDv",
+    "id" : "0000001",
+    "description" : null,
+    "url" : null
+  }, {
+    "database" : "MmusDv",
+    "id" : "0000001",
+    "description" : null,
+    "url" : "http://purl.obolibrary.org/obo/MmusDv_0000001"
+  }, {
+    "database" : "OanaDv",
+    "id" : "0000001",
+    "description" : null,
+    "url" : null
+  }, {
+    "database" : "OariDv",
+    "id" : "0000001",
+    "description" : null,
+    "url" : null
+  }, {
+    "database" : "OcunDv",
+    "id" : "0000001",
+    "description" : null,
+    "url" : null
+  }, {
+    "database" : "PpanDv",
+    "id" : "0000001",
+    "description" : null,
+    "url" : null
+  }, {
+    "database" : "PtroDv",
+    "id" : "0000001",
+    "description" : null,
+    "url" : null
+  }, {
+    "database" : "RnorDv",
+    "id" : "0000001",
+    "description" : null,
+    "url" : null
+  }, {
+    "database" : "SsalDv",
+    "id" : "0000001",
+    "description" : null,
+    "url" : null
+  }, {
+    "database" : "SscrDv",
+    "id" : "0000001",
+    "description" : null,
+    "url" : null
+  } ],
+  "obo_synonym" : null,
+  "is_preferred_root" : false,
+  "_links" : {
+    "self" : {
+      "href" : "http://www.ebi.ac.uk/ols4/api/ontologies/uberon/terms/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FUBERON_0000104?lang=en"
+    },
+    "parents" : {
+      "href" : "http://www.ebi.ac.uk/ols4/api/ontologies/uberon/terms/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FUBERON_0000104/parents"
+    },
+    "ancestors" : {
+      "href" : "http://www.ebi.ac.uk/ols4/api/ontologies/uberon/terms/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FUBERON_0000104/ancestors"
+    },
+    "hierarchicalParents" : {
+      "href" : "http://www.ebi.ac.uk/ols4/api/ontologies/uberon/terms/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FUBERON_0000104/hierarchicalParents"
+    },
+    "hierarchicalAncestors" : {
+      "href" : "http://www.ebi.ac.uk/ols4/api/ontologies/uberon/terms/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FUBERON_0000104/hierarchicalAncestors"
+    },
+    "jstree" : {
+      "href" : "http://www.ebi.ac.uk/ols4/api/ontologies/uberon/terms/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FUBERON_0000104/jstree"
+    },
+    "children" : {
+      "href" : "http://www.ebi.ac.uk/ols4/api/ontologies/uberon/terms/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FUBERON_0000104/children"
+    },
+    "descendants" : {
+      "href" : "http://www.ebi.ac.uk/ols4/api/ontologies/uberon/terms/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FUBERON_0000104/descendants"
+    },
+    "hierarchicalChildren" : {
+      "href" : "http://www.ebi.ac.uk/ols4/api/ontologies/uberon/terms/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FUBERON_0000104/hierarchicalChildren"
+    },
+    "hierarchicalDescendants" : {
+      "href" : "http://www.ebi.ac.uk/ols4/api/ontologies/uberon/terms/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FUBERON_0000104/hierarchicalDescendants"
+    },
+    "graph" : {
+      "href" : "http://www.ebi.ac.uk/ols4/api/ontologies/uberon/terms/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FUBERON_0000104/graph"
+    },
+    "has_part" : {
+      "href" : "http://www.ebi.ac.uk/ols4/api/ontologies/uberon/terms/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FUBERON_0000104/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FBFO_0000051"
+    },
+    "ends_with" : {
+      "href" : "http://www.ebi.ac.uk/ols4/api/ontologies/uberon/terms/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FUBERON_0000104/http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FRO_0002230"
+    }
+  }
+}

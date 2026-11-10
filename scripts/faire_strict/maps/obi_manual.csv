@@ -1,0 +1,14 @@
+instrument,obi_id,note
+MinION,OBI_0002750,vendor short name for Oxford Nanopore MinION
+PromethION,OBI_0002752,vendor short name for Oxford Nanopore PromethION
+Sequel,OBI_0002632,PacBio Sequel
+Sequel II,OBI_0002633,PacBio Sequel II
+Sequel IIe,OBI_0003921,PacBio Sequel IIe
+Revio,OBI_0003922,PacBio Revio
+454 GS FLX,OBI_0000702,454 Genome Sequencer FLX
+454 GS FLX Titanium,OBI_0000702,Titanium is the GS FLX reagent upgrade; the instrument is the GS FLX
+454 GS 20,OBI_0000689,OBI label is '454 Genome Sequence 20'
+AB SOLiD System,OBI_0000696,AB SOLiD System
+AB SOLiD 4 System,OBI_0002024,SOLiD 4 System
+AB SOLiD 3 Plus System,OBI_0002007,SOLiD 3 Plus System
+Helicos HeliScope,OBI_0000717,HeliScope Single Molecule Sequencer
