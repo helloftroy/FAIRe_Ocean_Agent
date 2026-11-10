@@ -922,15 +922,34 @@ def _write_api_paper_corrections(session: Session, output_dir: Path) -> int:
     )
 
 
-def export_faire(session: Session, output_dir: str | Path, *, study_ids: list[str] | None = None) -> dict[str, int]:
+EXPORT_TABLES = ("projectMetadata", "sampleMetadata", "experimentRunMetadata", "field_reference", "api_paper_corrections")
+
+
+def export_faire(
+    session: Session,
+    output_dir: str | Path,
+    *,
+    study_ids: list[str] | None = None,
+    tables: tuple[str, ...] | list[str] | None = None,
+) -> dict[str, int]:
+    """Writes one CSV per table in `tables` (default: all of
+    EXPORT_TABLES). Tables not selected are neither built nor written, so
+    one table can be redone without the others (sampleMetadata alone
+    takes most of an export of a full snapshot)."""
+    selected = frozenset(EXPORT_TABLES if tables is None else tables)
+    unknown = selected - set(EXPORT_TABLES)
+    if unknown:
+        raise ValueError(f"unknown FAIRe export table(s) {sorted(unknown)}; choose from {list(EXPORT_TABLES)}")
     session.info[_STUDY_WIDE_CACHE_KEY] = {}
     try:
-        return _export_faire(session, output_dir, study_ids=study_ids)
+        return _export_faire(session, output_dir, study_ids=study_ids, tables=selected)
     finally:
         session.info.pop(_STUDY_WIDE_CACHE_KEY, None)
 
 
-def _export_faire(session: Session, output_dir: str | Path, *, study_ids: list[str] | None) -> dict[str, int]:
+def _export_faire(
+    session: Session, output_dir: str | Path, *, study_ids: list[str] | None, tables: frozenset[str]
+) -> dict[str, int]:
     output_dir = Path(output_dir)
     counts: dict[str, int] = {}
     for class_name in OMITTED_EMPTY_CLASSES:
@@ -948,7 +967,7 @@ def _export_faire(session: Session, output_dir: str | Path, *, study_ids: list[s
 
     project_columns = _exportable_project_columns()
     project_rows = []
-    for study in studies:
+    for study in studies if "projectMetadata" in tables else []:
         # Analysis-only paper: links to shared samples/runs (EntityStudy)
         # but is home to none of them -- did no original data collection of
         # its own, just reanalysis. Still exists in the network (Study row,
@@ -1049,11 +1068,12 @@ def _export_faire(session: Session, output_dir: str | Path, *, study_ids: list[s
         ],
         PROJECT_METADATA_COLUMN_ORDER,
     )
-    counts["projectMetadata"] = _write_csv(output_dir / "projectMetadata.csv", project_export_columns, project_rows)
+    if "projectMetadata" in tables:
+        counts["projectMetadata"] = _write_csv(output_dir / "projectMetadata.csv", project_export_columns, project_rows)
 
     sample_columns = _exportable_sample_columns()
     sample_rows = []
-    for study in studies:
+    for study in studies if "sampleMetadata" in tables else []:
         # entities are keyed by home study_id (Entity.study_id, unchanged),
         # so a shared entity is still visited exactly once here, under its
         # home study -- no double-counting despite an entity now possibly
@@ -1114,11 +1134,12 @@ def _export_faire(session: Session, output_dir: str | Path, *, study_ids: list[s
         ],
         SAMPLE_METADATA_COLUMN_ORDER,
     )
-    counts["sampleMetadata"] = _write_csv(output_dir / "sampleMetadata.csv", sample_export_columns, sample_rows)
+    if "sampleMetadata" in tables:
+        counts["sampleMetadata"] = _write_csv(output_dir / "sampleMetadata.csv", sample_export_columns, sample_rows)
 
     experiment_columns = _exportable_experiment_columns()
     experiment_rows = []
-    for study in studies:
+    for study in studies if "experimentRunMetadata" in tables else []:
         experiment_entities = session.scalars(
             select(Entity).where(
                 Entity.study_id == study.study_id,
@@ -1170,18 +1191,21 @@ def _export_faire(session: Session, output_dir: str | Path, *, study_ids: list[s
                 row.setdefault("lib_id", entity.external_identifier)
             row[INTERNAL_STUDY_ID_FIELD] = "|".join(linked_study_ids)
             experiment_rows.append(row)
-    counts["experimentRunMetadata"] = _write_csv(
-        output_dir / "experimentRunMetadata.csv",
-        [INTERNAL_STUDY_ID_FIELD, *experiment_columns],
-        experiment_rows,
-    )
+    if "experimentRunMetadata" in tables:
+        counts["experimentRunMetadata"] = _write_csv(
+            output_dir / "experimentRunMetadata.csv",
+            [INTERNAL_STUDY_ID_FIELD, *experiment_columns],
+            experiment_rows,
+        )
 
     columns_by_class = {
         "projectMetadata": [field for field in project_export_columns if field in project_columns],
         "sampleMetadata": [field for field in sample_export_columns if field in sample_columns],
         "experimentRunMetadata": experiment_columns,
     }
-    counts["field_reference"] = _write_field_reference(output_dir, columns_by_class)
-    counts["api_paper_corrections"] = _write_api_paper_corrections(session, output_dir)
+    if "field_reference" in tables:
+        counts["field_reference"] = _write_field_reference(output_dir, columns_by_class)
+    if "api_paper_corrections" in tables:
+        counts["api_paper_corrections"] = _write_api_paper_corrections(session, output_dir)
 
     return counts

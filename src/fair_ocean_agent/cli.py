@@ -551,13 +551,19 @@ def export_raw_facts_command(
 @app.command("export-faire")
 def export_faire_command(
     output: Path = typer.Option(..., help="Output directory; one CSV per FAIRe class is written here"),
+    table: list[str] = typer.Option(
+        None,
+        "--table",
+        help="Only build and write this table (repeatable): projectMetadata, sampleMetadata, "
+        "experimentRunMetadata, field_reference, api_paper_corrections. Default: all.",
+    ),
 ) -> None:
     """Exports FAIRe StandardizedValues (run `enqueue-mapping-backfill` +
     `worker` first to generate them) as one CSV per FAIRe class, matching
     the FULLtemplate.xlsx sheet layout. See exports/faire.py's docstring
     for which classes have real data vs. header-only placeholders."""
     with session_scope() as session:
-        counts = export_faire(session, output)
+        counts = export_faire(session, output, tables=table or None)
     for class_name, count in counts.items():
         console.print(f"Wrote {count} row(s) to {output / (class_name + '.csv')}")
 
