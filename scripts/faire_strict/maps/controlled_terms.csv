@@ -1,0 +1,28 @@
+column,pattern,faire_value,rule,note
+nucl_acid_ext_lysis,(bead|beads) ?(beating|beaten|milling|mill|homogeni[sz]ation)( lysis)?,physical,R13_lysis,FAIRe definition: physical = bead mills / homogenizers / sonicators / freeze-thaw
+nucl_acid_ext_lysis,bead based physical lysis|mechanical lysis|mechanical disruption|physical lysis,physical,R13_lysis,stated as physical/mechanical
+nucl_acid_ext_lysis,(ultra)?sonication( lysis)?|sonicat(ed|ion) lysis,physical,R13_lysis,FAIRe definition lists sonicators as physical
+nucl_acid_ext_lysis,(freeze ?thaw|freeze and thaw|freezing and thawing)( cycles?)?( lysis)?,physical,R13_lysis,FAIRe definition lists freeze-thaw cycles as physical
+nucl_acid_ext_lysis,cryogenic grinding|grinding( in liquid nitrogen)?|liquid nitrogen grinding|high speed homogeni[sz]ation|homogeni[sz]ation|vortexing|tissuelyser|fastprep,physical,R13_lysis,grinding / homogenising / vortexing: physical
+nucl_acid_ext_lysis,(lysozyme|mutanolysin|lysostaphin|achromopeptidase|proteinase k|lyticase|zymolyase)( lysis| digestion| treatment)?|enzymatic (lysis|digestion),enzymatic,R13_lysis,enzymes
+nucl_acid_ext_lysis,(sds|ctab|triton x ?100|guanidin(e|ium)( thiocyanate)?|alkaline|detergent|chemical)( based)?( lysis)?,chemical,R13_lysis,detergents / chaotropes / alkali
+nucl_acid_ext_lysis,(heat|thermal)( lysis| treatment)?|boiling( lysis)?,thermal,R13_lysis,FAIRe definition: thermal = high temperatures
+nucl_acid_ext_lysis,osmotic( shock)?( lysis)?,osmotic,R13_lysis,stated as osmotic
+nucl_acid_ext_sep,(silica )?spin ?columns?|silica (spin )?columns?|silica membranes?|column based( purification| extraction)?|columns?,column-based,R13_separation,spin / silica columns
+nucl_acid_ext_sep,phenol ?chloroform( isoamyl alcohol)?( extraction)?|phenol chloroform isoamyl( alcohol)?( extraction)?|phenol/chloroform(/isoamyl alcohol)?( extraction)?,phenol chloroform,R13_separation,stated phenol-chloroform
+nucl_acid_ext_sep,(ethanol|isopropanol|alcohol|peg|polyethylene glycol)( precipitation)?|precipitation,precipitation,R13_separation,alcohol / PEG precipitation
+nucl_acid_ext_sep,magnetic ?beads?( purification| based( purification)?| separation)?|(spri|ampure( xp)?) beads?( purification)?|magnetic bead based( purification)?,magnetic beads,R13_separation,magnetic / SPRI / AMPure beads
+nucl_acid_ext_sep,(using )?((\d+(\.\d+)?% )?agarose )?gel( electrophoresis)?|size select gel electrophoresis,gel electrophoresis,R13_separation,stated gel electrophoresis
+nucl_acid_ext_sep,centrifugation|ultracentrifugation|density gradient centrifugation,centrifugation,R13_separation,stated centrifugation
+samp_store_sol,(\d+(\.\d+)? ?% )?(absolute |molecular grade |ice cold |cold )?ethanol|ethanol \(\d+% or \d+%\),ethanol,R13_storage_solution,ethanol (concentration not part of the FAIRe term; original in change log)
+samp_store_sol,(rlt|ra1|atl|al|cd1|pw1|lysis|cell lysis) (lysis )?buffer|lysis buffer( \(.*\))?,lysis buffer,R13_storage_solution,stated lysis buffer
+samp_store_sol,longmire('?s)?( buffer| solution)?,longmire,R13_storage_solution,stated Longmire
+samp_store_sol,sodium acetate( buffer| solution)?,sodium acetate,R13_storage_solution,stated sodium acetate
+samp_store_sol,none|no (preservative|solution|buffer),none,R13_storage_solution,stated none
+filter_material,(\d+(\.\d+)? ?(μm|µm|um) )?(grade )?(gf/?[a-z] )?(whatman )?glass (micro)?fib(er|re)( filters?)?|gf/?[a-z]( whatman)? glass (micro)?fib(er|re)( filters?)?|(combusted )?(\d+ mm diameter )?glass fib(er|re)( filters?)?,glass fiber,R13_filter_material,stated glass fiber
+filter_material,(\d+(\.\d+)? ?(μm|µm|um) )?(pes|polyethersulfone|polyethersulphone|polyether sulfone)( \(pes\))?( membranes?)?( filters?)?|size polyethersulfone \(pes\) membrane,polyethersulfone,R13_filter_material,stated PES
+filter_material,(mixed )?cellulose (acetate|nitrate|ester)s?( membranes?)?( filters?)?|mixed cellulose esters?( \w+)?( membranes?)?( filters?)?|nitrocellulose mixed esters?( membranes?)?( filters?)?|mce( membranes?)?( filters?)?,cellulose ester,R13_filter_material,cellulose acetate/nitrate/mixed ester are cellulose esters
+filter_material,(acid hardened )?cellulose( filter paper| filters?| membranes?)?,cellulose,R13_filter_material,stated cellulose (not ester)
+filter_material,(\d+(\.\d+)? ?(μm|µm|um) )?(\d+ ?(μm|µm|um) mesh )?nylon( membranes?)?( filters?)?,nylon,R13_filter_material,stated nylon
+filter_material,(\d+(\.\d+)? ?(μm|µm|um) )?(black |white )?polycarbonate( track etched)?( membranes?)?( filters?)?|(\d+(\.\d+)? ?(μm|µm|um) )?polycarbonate (cyclopore|nuclepore|isopore)( membranes?)?( filters?)?,track etched polycarbonate,R13b_polycarbonate_is_track_etched,inference: membrane polycarbonate filters are track-etched; reject this rule id if not accepted
+filter_material,(\d+(\.\d+)? ?(μm|µm|um) )?(isopore|nuclepore|cyclopore)( \(\w+ \d+\))?( membranes?)?( filters?)?( \(millipore\))?,track etched polycarbonate,R13b_polycarbonate_is_track_etched,inference from brand: Isopore / Nuclepore / Cyclopore are track-etched polycarbonate

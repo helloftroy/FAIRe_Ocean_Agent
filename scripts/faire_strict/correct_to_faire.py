@@ -191,6 +191,41 @@ _PLAUSIBILITY_FLAGS = (
 _BOOLEAN_WORDS = {"yes": "1", "true": "1", "no": "0", "false": "0"}
 
 
+# R13: reviewed phrase -> FAIRe term rules, one per line with a reason,
+# in maps/controlled_terms.csv. Matched against the whole item after
+# normalising (lowercase, hyphens/dashes to spaces, spaces collapsed,
+# trailing period removed), and only for short items: a sentence is never
+# reduced to a term.
+_MAP_FILE = Path(__file__).resolve().parent / "maps/controlled_terms.csv"
+_MAX_MAPPED_WORDS = 8
+
+
+def _load_term_maps() -> dict[str, list[tuple[re.Pattern, str, str]]]:
+    maps: dict[str, list[tuple[re.Pattern, str, str]]] = collections.defaultdict(list)
+    with _MAP_FILE.open(newline="") as handle:
+        for row in csv.DictReader(handle):
+            maps[row["column"]].append((re.compile(row["pattern"]), row["faire_value"], row["rule"]))
+    return maps
+
+
+_TERM_MAPS = _load_term_maps()
+
+
+def _normalise_phrase(item: str) -> str:
+    text = item.lower().replace("\u2010", " ").replace("\u2011", " ").replace("\u2013", " ").replace("-", " ")
+    return re.sub(r"\s+", " ", text).strip().rstrip(".")
+
+
+def _map_phrase(column: str, item: str) -> tuple[str, str] | None:
+    if column not in _TERM_MAPS or len(item.split()) > _MAX_MAPPED_WORDS:
+        return None
+    phrase = _normalise_phrase(item)
+    for pattern, value, rule in _TERM_MAPS[column]:
+        if pattern.fullmatch(phrase):
+            return value, rule
+    return None
+
+
 class Log:
     def __init__(self) -> None:
         self.changes: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
@@ -200,6 +235,145 @@ class Log:
     def change(self, table: str, column: str, rule: str, old: str, new: str) -> None:
         if old != new:
             self.changes[table][(column, rule, old, new)] += 1
+
+
+# --- R14 number + unit pairs ----------------------------------------------
+# FAIRe keeps the number and its unit in separate columns. "15 ml" in the
+# value column becomes 15 and unit "mL" -- only when every number in the
+# cell has the same unit and the unit column is empty or already agrees.
+# No unit conversion (e.g. µL is not in FAIRe's volume list: decision D6).
+_UNIT_PAIRS = {
+    "sampleMetadata": (
+        ("samp_vol_we_dna_ext", "samp_vol_we_dna_ext_unit"),
+        ("samp_size", "samp_size_unit"),
+        ("pump_flow_rate", "pump_flow_rate_unit"),
+        ("concentration", "concentration_unit"),
+        ("host_tot_mass", "host_tot_mass_unit"),
+        ("host_height", "host_height_unit"),
+        ("host_length", "host_length_unit"),
+    ),
+}
+# FAIRe terms we add as columns even though the original export lacks them.
+_ADDED_COLUMNS = {"sampleMetadata": ("concentration_unit",)}
+_UNIT_SYNONYMS = {
+    "mL": ("ml", "milliliter", "milliliters", "millilitre", "millilitres"),
+    "L": ("l", "liter", "liters", "litre", "litres"),
+    "mg": ("mg", "milligram", "milligrams"),
+    "g": ("g", "gram", "grams", "gr"),
+    "kg": ("kg", "kilogram", "kilograms"),
+    "cm2": ("cm2", "cm²"),
+    "m2": ("m2", "m²"),
+    "cm3": ("cm3", "cm³", "cc"),
+    "m3": ("m3", "m³"),
+    "mm": ("mm",),
+    "cm": ("cm",),
+    "m": ("m",),
+    "L/min": ("l/min", "l min-1", "l min−1", "l min^-1", "liters per minute", "litres per minute", "lpm"),
+    "L/h": ("l/h", "l/hr", "l h-1", "l h−1", "liters per hour", "litres per hour"),
+    "L/s": ("l/s", "l s-1", "l s−1"),
+    "m3/s": ("m3/s",), "m3/min": ("m3/min",), "m3/h": ("m3/h",),
+    "ng/µl": ("ng/µl", "ng/μl", "ng/ul", "ng µl-1", "ng μl-1", "ng µl−1", "ng μl−1", "ng/µl-1"),
+    "copies/µl": ("copies/µl", "copies/μl", "copies/ul", "copies µl-1", "copies μl-1"),
+}
+_UNIT_LOOKUP = {syn: canonical for canonical, syns in _UNIT_SYNONYMS.items() for syn in (canonical, *syns)}
+# Matched case-insensitively except where case changes the meaning
+# (m vs M, ml vs ML).
+_CASE_SENSITIVE_UNIT_KEYS = frozenset({"g", "kg", "m", "ml", "mm", "cm", "mg", "m2", "m3", "cm2", "cm3"})
+
+
+def _canonical_unit(text: str, allowed: tuple[str, ...]) -> str | None:
+    """FAIRe spelling of a unit, if it is one of this unit term's allowed
+    values. Case is kept for the metric prefixes that need it (mL vs ML)."""
+    key = re.sub(r"\s+", " ", text.strip()).rstrip(".")
+    canonical = _UNIT_LOOKUP.get(key)
+    if canonical is None and key.lower() not in _CASE_SENSITIVE_UNIT_KEYS:
+        canonical = _UNIT_LOOKUP.get(key.lower())
+    if canonical is None and key in ("mL", "Ml"):  # ml spelled with capital L
+        canonical = "mL"
+    return canonical if canonical in allowed else None
+
+
+_NUM_UNIT = re.compile(rf"^(?:approximately |approx\.? |~ ?|ca\.? )?({_NUM_FWD})(?:\s*-\s*({_NUM_FWD}))?\s*-?\s*(.+)$")
+
+
+def _split_unit_pairs(table: str, row: dict[str, str], terms: dict[str, Term], log: Log) -> None:
+    for value_col, unit_col in _UNIT_PAIRS.get(table, ()):
+        value = row.get(value_col) or ""
+        if not value or value_col not in terms or unit_col not in terms:
+            continue
+        allowed = terms[unit_col].vocabulary
+        items = _split_items(value)
+        numbers, units = [], set()
+        for item in items:
+            text = _normalise_number_text(item)
+            if is_number(text):
+                numbers.append(text)
+                continue
+            match = _NUM_UNIT.match(text)
+            unit = _canonical_unit(match.group(3), allowed) if match else None
+            if unit is None:
+                numbers = None
+                break
+            low, high = match.group(1), match.group(2)
+            numbers.append(f"{low}-{high}" if high else low)
+            units.add(unit)
+        if not numbers or not units or len(units) != 1:
+            continue
+        unit = units.pop()
+        existing = row.get(unit_col) or ""
+        existing_units = {_canonical_unit(u, allowed) or u for u in _split_items(existing)}
+        if existing and existing_units != {unit}:
+            continue  # unit column disagrees: leave both for review
+        new_value = LIST_SEPARATOR.join(dict.fromkeys(numbers))
+        log.change(table, value_col, "R14_number_unit_split", value, new_value)
+        if not existing:
+            log.change(table, unit_col, "R14_number_unit_split", "(empty)", unit)
+        row[value_col] = new_value
+        row[unit_col] = unit
+
+
+# --- R15 target_gene ---------------------------------------------------------
+# Unambiguous gene names -> FAIRe target_gene terms (whole item, normalised
+# like R13). 16S alone is ambiguous in FAIRe (SSU prokaryote vs LSU
+# mitochondria) and is decided from the row's target taxa (R15b/R15c), else
+# left to D0. ITS1/ITS2 subregions also go to target_subfragment (R15d).
+_TARGET_GENE_PATTERNS = (
+    (r"(18 ?s|ssu eukaryot\w*)( rrna| rdna| ribosomal rna)?( gene)?( ssu)?( rrna)?( gene)?", "18S rRNA (SSU eukaryote)"),
+    (r"28 ?s( rrna| rdna| ribosomal rna)?( gene)?", "28S rRNA (LSU eukaryote)"),
+    (r"(mt ?)?12 ?s( rrna| rdna| ribosomal rna)?( gene)?", "12S rRNA (SSU mitochondria)"),
+    (r"23 ?s( rrna| rdna| ribosomal rna)?( gene)?", "23S rRNA (LSU prokaryote)"),
+    (r"(mt ?16 ?s|mitochondrial 16 ?s)( rrna| rdna| ribosomal rna)?( gene)?", "16S rRNA (LSU mitochondria)"),
+    (r"16 ?s( rrna| rdna)? ssu|ssu 16 ?s( rrna| rdna)?", "16S rRNA (SSU prokaryote)"),
+    (r"co ?1|cox ?1|coi|cytochrome (c )?oxidase( subunit)? (i|1)|mitochondrial cytochrome c oxidase subunit i( \(coi\))?", "COI"),
+    (r"cyt ?b|cytochrome b", "CytB"),
+    (r"its ?[12]?( region| rdna| rrna)?|internal transcribed spacer( [12])?( region)?", "ITS"),
+    (r"(bacterial|archaeal|comammox) ?amoa", "amoA"),
+)
+_TARGET_GENE_RE = [(re.compile(p), v) for p, v in _TARGET_GENE_PATTERNS]
+_PLAIN_16S = re.compile(r"16 ?s( rrna| rdna| ribosomal rna| ribsosomal rna)?( gene| genes)?")
+_PROKARYOTE_WORDS = re.compile(r"bacteri|archae|prokaryot|microb|cyanobacter", re.IGNORECASE)
+_ANIMAL_WORDS = re.compile(
+    r"vertebrat|fish|amphib|mammal|animal|metazoa|invertebrat|mollus|crustac|insect|arthropod|bird|reptil|"
+    r"chordat|elasmobranch|shark|teleost|actinopter|cetacea|turtle",
+    re.IGNORECASE,
+)
+_ITS_SUBREGION = re.compile(r"its ?-?([12])|internal transcribed spacer ([12])", re.IGNORECASE)
+
+
+def _target_gene_item(item: str, row: dict[str, str]) -> tuple[str, str] | None:
+    phrase = _normalise_phrase(item)
+    for pattern, value in _TARGET_GENE_RE:
+        if pattern.fullmatch(phrase):
+            return value, "R15_target_gene_name"
+    if _PLAIN_16S.fullmatch(phrase):
+        assay, scope = row.get("targetTaxonomicAssay", ""), row.get("targetTaxonomicScope", "")
+        prokaryote = bool(_PROKARYOTE_WORDS.search(assay) or _PROKARYOTE_WORDS.search(scope))
+        animal_any = bool(_ANIMAL_WORDS.search(assay) or _ANIMAL_WORDS.search(scope))
+        if prokaryote and not animal_any:
+            return "16S rRNA (SSU prokaryote)", "R15b_16S_prokaryote_from_target_taxa"
+        if _ANIMAL_WORDS.search(scope) and not prokaryote:
+            return "16S rRNA (LSU mitochondria)", "R15c_16S_mitochondrial_from_target_taxa"
+    return None
 
 
 def _template_order() -> dict[str, list[str]]:
@@ -227,6 +401,12 @@ def _correct_item(term: Term, item: str) -> tuple[str, str]:
     if low in _MISSING_ALIASES:
         return _MISSING_ALIASES[low], "R03_missing_value_alias"
 
+    # User decisions 2026-11-10 (correct_to_faire.md, D1/D2).
+    if term.name == "checkls_ver" and item == "1.0.2":
+        return item, "keep"  # D1: the real checklist version, kept as text
+    if term.name == "lib_layout" and low == "no files":
+        return "none", "R12_lib_layout_no_files"  # D2
+
     t = term.term_type
     if t in ("controlled vocabulary", "numeric or controlled vocabulary"):
         if item in term.vocabulary:
@@ -241,9 +421,16 @@ def _correct_item(term: Term, item: str) -> tuple[str, str]:
             mapped = _map_platform(item)
             if mapped:
                 return mapped, "R08_platform_keyword"
+        if term.name.endswith("_unit"):
+            unit = _canonical_unit(item, term.vocabulary)
+            if unit:
+                return unit, "R14b_unit_spelling"
         mapped = _VOCAB_MAPS.get(term.name, {}).get(low)
         if mapped:
             return mapped, f"R09_vocab_map_{term.name}"
+        phrase = _map_phrase(term.name, item)
+        if phrase:
+            return phrase
         if t.startswith("numeric"):
             if is_number(item):
                 return item, "keep"
@@ -279,7 +466,9 @@ def _split_items(value: str) -> list[str]:
     return [p.strip() for p in value.split("|") if p.strip()]
 
 
-def correct_cell(table: str, term: Term, value: str, log: Log, extras: dict[str, str]) -> str:
+def correct_cell(
+    table: str, term: Term, value: str, log: Log, extras: dict[str, str], row: dict[str, str] | None = None
+) -> str:
     if not value:
         return value
     if table == "projectMetadata" and term.name in _EVIDENCE_BOOLEAN_COLUMNS:
@@ -293,6 +482,32 @@ def correct_cell(table: str, term: Term, value: str, log: Log, extras: dict[str,
                 new, rule = _NO_MENTION_VALUE, "R04_no_mention_is_missing"
             log.change(table, term.name, rule, value, new)
             return new
+    if table == "projectMetadata" and term.name == "target_gene" and row is not None:
+        new_items = []
+        for item in _split_items(value):
+            mapped = _target_gene_item(item, row)
+            if mapped:
+                new_item, rule = mapped
+                log.change(table, term.name, rule, item, new_item)
+                subregion = _ITS_SUBREGION.search(item)
+                if subregion and rule == "R15_target_gene_name":
+                    sub = f"ITS{subregion.group(1) or subregion.group(2)}"
+                    existing = _split_items(row.get("target_subfragment", ""))
+                    if sub not in existing:
+                        row["target_subfragment"] = LIST_SEPARATOR.join([*existing, sub])
+                        log.change(table, "target_subfragment", "R15d_its_subregion", "(from target_gene)", sub)
+            else:
+                new_item, rule = _correct_item(term, item)
+                if rule != "keep":
+                    log.change(table, term.name, rule, item, new_item)
+                if rule == "R07_unmapped_other":
+                    log.other[(table, term.name, item)] += 1
+            if new_item not in new_items:
+                new_items.append(new_item)
+        new_value = LIST_SEPARATOR.join(new_items)
+        if new_value != LIST_SEPARATOR.join(_split_items(value)):
+            extras["target_gene__original"] = value
+        return new_value
     if table == "sampleMetadata" and term.name == "samp_category":
         # R11: our pipeline used samp_category as a sample-label log
         # (BioSample source_material_id / sample_name / title; see
@@ -336,7 +551,8 @@ def process_table(table: str, src: Path, out: Path, terms: dict[str, Term], orde
     with (src / f"{table}.csv").open(newline="") as handle:
         reader = csv.DictReader(handle)
         header = reader.fieldnames or []
-        faire_cols = [c for c in order if c in header and c in terms]
+        added = _ADDED_COLUMNS.get(table, ())
+        faire_cols = [c for c in order if (c in header or c in added) and c in terms]
         misplaced = [c for c in header if c in terms and c not in order]
         dropped = [c for c in header if c not in terms and c not in KEEP_EXTRA_COLUMNS]
         out_cols = [*[c for c in KEEP_EXTRA_COLUMNS if c in header], *faire_cols]
@@ -353,9 +569,10 @@ def process_table(table: str, src: Path, out: Path, terms: dict[str, Term], orde
                 for col in dropped + misplaced:
                     if row.get(col):
                         extras[col] = row[col]
+                _split_unit_pairs(table, row, terms, log)
                 new_row = {c: row.get(c, "") for c in out_cols if c in KEEP_EXTRA_COLUMNS}
                 for col in faire_cols:
-                    new_row[col] = correct_cell(table, terms[col], row.get(col, ""), log, extras)
+                    new_row[col] = correct_cell(table, terms[col], row.get(col, ""), log, extras, row)
                 writer.writerow(new_row)
                 if extras:
                     for col in extras:
@@ -395,9 +612,12 @@ def main() -> None:
                 writer.writerow([column, rule, old, new, count])
     with (out / "review_other.csv").open("w", newline="") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["table", "column", "original", "cells"])
+        writer.writerow(["table", "column", "kind", "original", "cells"])
         for (table, column, item), count in sorted(log.other.items(), key=lambda kv: (kv[0][0], kv[0][1], -kv[1])):
-            writer.writerow([table, column, item, count])
+            # phrase: a short value not in the FAIRe list (often a correct
+            # "other:"); sentence: pasted method text, likely wrong field.
+            kind = "phrase" if len(item.split()) <= _MAX_MAPPED_WORDS else "sentence"
+            writer.writerow([table, column, kind, item, count])
     print(f"review_other.csv: {len(log.other)} distinct values written as 'other: ...'")
     with (out / "review_flags.csv").open("w", newline="") as handle:
         writer = csv.writer(handle)

@@ -1,6 +1,6 @@
 # Correcting the FAIRe export to strict FAIRe (NOAA fill-in)
 
-Status: **in progress, session 1 of several (2026-11-10).**
+Status: **in progress. Session 1 and session 2 (2026-11-10) done.**
 
 Please check this document before the original CSVs are deleted. Each rule has an
 id (R01, R02, …), which also appears in the `rule` column of the change logs, so
@@ -181,7 +181,7 @@ it can be rejected (27 distinct values).
 
 ### R07: unmapped values become `other: <original>` (decision D0)
 
-Values are listed in `review_other.csv`. Current totals: **11,051 distinct
+Values are listed in `review_other.csv`. Current totals: **9,650 distinct
 values**, mostly in columns the next stages will map (see "Work remaining").
 
 ### R08: platform from instrument keywords
@@ -236,21 +236,176 @@ mandatory? It can only be `sample`, `negative control`, `positive control` or
 - (b) `missing: not provided`;
 - (c) also copy the label into `materialSampleID` where that is empty.
 
+### R12: lib_layout `no files` → `none` (decision D2)
+
+5,032 studies.
+
+### R13: reviewed phrase maps for extraction method, storage solution and filter material
+
+The rules are in `scripts/faire_strict/maps/controlled_terms.csv`: one line
+per pattern, with the FAIRe term and the reason. Each pattern must match a
+whole short item, at most 8 words, after normalising: lowercase, hyphens to
+spaces. A sentence is never reduced to a term.
+
+The categories follow FAIRe's own term definitions. For example, the
+`nucl_acid_ext_lysis` definition says physical methods include "freeze-thaw
+cycles or the uses of bead mills, homogenizers and sonicators", and thermal
+methods "apply high temperatures".
+
+| column | mapped items | still `other:` |
+|---|---|---|
+| nucl_acid_ext_lysis | 253,724 (bead-beating → physical, lysozyme → enzymatic, SDS / CTAB / Triton → chemical, heat → thermal, …) | 360,751 (1,885 distinct; mostly method sentences) |
+| nucl_acid_ext_sep | 144,428 (spin column → column-based, phenol-chloroform → phenol chloroform, ethanol / isopropanol / PEG → precipitation, SPRI / AMPure → magnetic beads, …) | 221,459 |
+| samp_store_sol | 11,749 (x% ethanol → ethanol, RA1 / lysis buffer → lysis buffer) | 207,836 (for example `sterilized SW`, RNAlater, PBS: genuinely not in FAIRe's list, so `other:` is correct) |
+| filter_material | 12,255 (GF/F → glass fiber, PES → polyethersulfone, mixed cellulose ester → cellulose ester, nylon) | 23,985 |
+
+Deliberately not mapped:
+- `kit-proprietary lysis`.
+- PVDF, PTFE, Durapore. FAIRe's `thermoplastic membrane` is too vague to put
+  these under it.
+- Sterivex. Sterivex-GP is PES, but Sterivex-GV is PVDF.
+- `organic phase extraction`.
+- `chloroform extraction` without phenol.
+
+**R13b (inference, can be rejected):** polycarbonate membrane filters, and
+the brands Isopore, Nuclepore and Cyclopore, → `track etched polycarbonate`.
+FAIRe only lists track-etched polycarbonate, and membrane polycarbonate
+filters are made by track etching.
+
+Ethanol percentages (70%, 95%, …) are not part of the FAIRe term. The
+original values are in the change log.
+
+### R14: number and unit split into the value and `_unit` columns
+
+Pairs:
+- `samp_vol_we_dna_ext` / `_unit`
+- `samp_size` / `_unit`
+- `pump_flow_rate` / `_unit`
+- `concentration` / `concentration_unit`, a FAIRe term **added as a column**
+  because our export lacked it
+- `host_tot_mass` / `_unit`
+- `host_height` / `_unit`
+- `host_length` / `_unit`
+
+`15 ml` becomes `15` and unit `mL`, but only when:
+- every number in the cell has the same unit;
+- that unit is in the unit term's FAIRe list;
+- the unit column is empty or already agrees.
+
+If the unit column disagrees, both values are left for review. There is no
+unit conversion (see D6). Unit spellings are matched case-sensitively wherever
+case changes the meaning (m vs M, mL vs ML, g vs G).
+
+Counts: `samp_vol_we_dna_ext` 58,169, `concentration` 22,754, `samp_size`
+17,947, `pump_flow_rate` 1,271, host measurements 906.
+
+**R14b:** unit-column spellings are normalised to FAIRe's (`liters` → `L`,
+`ng/uL` → `ng/µl`).
+
+### R15: target_gene
+
+**R15:** unambiguous gene names are mapped to the FAIRe term. 2,356 cells.
+Examples:
+- `18S`, `18S rDNA` → `18S rRNA (SSU eukaryote)`
+- `12S` → `12S rRNA (SSU mitochondria)`
+- `28S` → `28S rRNA (LSU eukaryote)`
+- `23S` → `23S rRNA (LSU prokaryote)`
+- `CO1`, `cox1`, `cytochrome c oxidase I` → `COI`
+- `cytochrome b` → `CytB`
+- `ITS1`, `ITS2` → `ITS`
+- `bacterial amoA` → `amoA`
+- `mt16S` → `16S rRNA (LSU mitochondria)`
+- `16S rRNA SSU` → `16S rRNA (SSU prokaryote)`
+
+**Plain `16S` is ambiguous in FAIRe.** It can be `16S rRNA (SSU prokaryote)`
+or `16S rRNA (LSU mitochondria)`, so it is decided from the same row's target
+taxa:
+- **R15b (inference, can be rejected):** `16S rRNA (SSU prokaryote)` when
+  `targetTaxonomicAssay` or `targetTaxonomicScope` mention bacteria, archaea,
+  prokaryotes or microbes, and no animal groups. 1,530 cells.
+- **R15c (inference, can be rejected):** `16S rRNA (LSU mitochondria)` when
+  `targetTaxonomicScope` itself names animal groups (fish, sharks, mammals,
+  …) and no prokaryotes. 109 cells. `targetTaxonomicAssay` alone doesn't
+  count here: it says "vertebrates" in many clearly bacterial studies,
+  apparently as a default.
+- Everything else stays `other:`. 1,298 cells, with no or mixed context.
+
+**R15d:** `ITS1` / `ITS2` also go into `target_subfragment` (430 cells), so
+the subregion isn't lost.
+
+Whenever `target_gene` changes, the original cell is copied to
+`extras_projectMetadata.csv` (`target_gene__original`).
+
+Genes not in FAIRe's barcoding list (mcrA, nirS, nirK, pmoA, dsrB, …) are
+correctly written as `other: <gene>`.
+
+### Our own artefact found in review
+
+`(+1 similar variants omitted)` and similar values in `target_gene` (about 30
+cells) are an elision marker written by our extraction, not data. They are in
+`review_other.csv`.
+
+### review_other.csv: `kind` column
+
+Each entry is either:
+- `phrase`: 8 words or fewer. Usually a value genuinely not in FAIRe's list,
+  which is correct as `other:`.
+- `sentence`: pasted method text, probably the wrong field.
+
+The sentences are where review is most needed.
+
 ### F01: plausibility flags (values not changed)
 
 Storage temperatures of 50 °C or more are flagged in `review_flags.csv`: 9
 distinct values, for example `220`, `280`, `2808`, `80`. These are probably
 −20 / −80 °C with the minus sign, or a superscript, lost in PDF text.
 
-## Decisions needed from you
+## Decisions
 
-| id | question | current build |
+| id | question | decision |
 |---|---|---|
-| D1 | `checkls_ver`: FAIRe types it numeric (example `1.2`), but the real version is `1.0.2`. Keep `1.0.2`? | `other: 1.0.2` (D0); proposed: keep `1.0.2` |
-| D2 | `lib_layout` = `no files` (5,032 studies with no SRA files). Use `missing: not provided`? | `other: no files` |
-| D3 | `0 \| no control/blank mention found` → `missing: not provided` or `0`? | `missing: not provided` |
-| D4 | `samp_category` once the labels are removed (R11) | blank |
-| D5 | Non-FAIRe columns (R01): drop as now, or add back any as new terms (`funding_source`, env variables)? | dropped to extras |
+| D1 | `checkls_ver`: FAIRe types it numeric (example `1.2`), but the real version is `1.0.2` | **Keep `1.0.2`** (2026-11-10) |
+| D2 | `lib_layout` = `no files` (5,032 studies with no SRA files) | **Write `none`** (2026-11-10). Note: `none` is not in FAIRe's list (`paired end`, `single end`); it was chosen deliberately. Rule R12. |
+| D3 | `0 \| no control/blank mention found` | **`missing: not provided`** (2026-11-10). Rule R04. |
+| D4 | `samp_category` once the labels are removed (R11) | **open**, see below |
+| D5 | Add non-FAIRe columns back as new terms? | **No** (2026-11-10). The NOAA copy is FAIRe terms only; the extras files keep the values. |
+| D6 | Unit conversion: µL is not in FAIRe's volume list (`mL`, `L`, …). Convert `500 µL` → `0.5` `mL`? | **open**. The current build doesn't convert; these values go to D0. |
+
+### D4: what FAIRe says, and the options
+
+From the checklist:
+- `samp_category` is **mandatory for every sample**, with no condition.
+- Allowed values: `sample`, `negative control`, `positive control`,
+  `PCR standard`, `other: …`.
+- Description: "'Sample' includes biological and technical replicates. If
+  negative or positive control was selected, provide further information
+  under the terms neg_cont_type and pos_cont_type."
+
+From the guidelines: a missing mandatory value takes an INSDC missing-value
+term.
+
+What our data has:
+- **Before R11:** 349,336 sample rows had a label in `samp_category`. The
+  other 660,053 sample rows had nothing. 67 rows had a real category.
+- **Labels that look like controls**, by keyword:
+  - 1,350 look like negative controls (`BLANK`, `NTC`, `Control_Blank`).
+  - 229 look like positive controls (`Mock community`, `pos_control`).
+  - 1,281 only say `Ctrl`. These are often an experimental control
+    treatment (for example `Apo_Ctrl_1_1`), which FAIRe would call a
+    `sample`, not a negative control.
+
+Recommendation, which needs your OK:
+- **`sample`** for every BioSample row, because public BioSamples are almost
+  all real samples;
+- **`negative control`** / **`positive control`** only where the label
+  contains an unambiguous keyword (BLANK, NTC, no-template, negative control
+  / mock community, positive control), under a separate rule id you can
+  reject;
+- `Ctrl` alone stays `sample`, and is listed for review.
+
+The alternative is `missing: not provided` for every row without a known
+category. That is FAIRe-correct, but it makes a mandatory field nearly empty
+for 1M samples.
 
 ## Correction to something I said earlier
 
@@ -263,41 +418,25 @@ where they are 63% and 47% filled.
 Planned in this order. Counts are cells currently written as `other:` (or not
 yet checked).
 
-1. **Extraction method controlled vocabularies.**
-   - `nucl_acid_ext_lysis` (614k cells, 1,930 distinct): for example
-     bead-beating → `physical`, lysozyme / proteinase K → `enzymatic`,
-     SDS / CTAB / Triton → `chemical`, freeze-thaw → `physical`.
-   - `nucl_acid_ext_sep` (366k cells, 1,198 distinct): spin column →
-     `column-based`, phenol-chloroform → `phenol chloroform`, …
-   - `samp_store_sol` (220k), `filter_material` (36k).
-   - Each needs a reviewed term-by-term map (a CSV in
-     `scripts/faire_strict/maps/`). Sentences stay D0.
-2. **Number + unit pairs:** `samp_vol_we_dna_ext` / `_unit`,
-   `samp_size` / `samp_size_unit`, `pump_flow_rate` / `_unit`,
-   `concentration` (+ `concentration_unit`, a FAIRe term we don't export
-   yet). Rule: `15 ml` → value 15 and unit `mL`, only when the unit column is
-   empty or already agrees.
-3. **`target_gene`** (6,400 cells). Mostly safe: `12S` → `12S rRNA (SSU
-   mitochondria)`, `18S` → `18S rRNA (SSU eukaryote)`, `COI`/`CO1` → `COI`.
-   **16S is ambiguous**: FAIRe has both `16S rRNA (SSU prokaryote)` and
-   `16S rRNA (LSU mitochondria)`. It needs a row-level rule using the
-   target taxa (prokaryotes vs. vertebrates), else D0. Subregions (`ITS2`,
-   `V4`) go to `target_subfragment` when it is empty.
-4. **Ontology-coded fields** (needs ENVO and OBI downloads, saved with
+1. ~~Extraction method vocabularies~~: done (R13).
+2. ~~Number and unit pairs~~: done (R14). D6 is still open.
+3. ~~target_gene~~: done (R15).
+4. **D4 samp_category**, once you have decided.
+5. **Ontology-coded fields** (needs ENVO and OBI downloads, saved with
    versions):
    - `env_broad_scale`, `env_local_scale`, `env_medium` →
      `label [ENVO:xxxxxxxx]`. They are 17–31% filled, and most are labels
      without IDs or IDs without labels.
    - `instrument` → `Name [OBI_xxxxxxx]`.
-5. **`geo_loc_name`** against the INSDC country / sea list, in the format
+6. **`geo_loc_name`** against the INSDC country / sea list, in the format
    `Country: region, locality`. For example, `Chile Bay, Greenwich Island…`
    needs `Antarctica:` added. This can only be done where it's unambiguous.
-6. **Dates and durations:**
+7. **Dates and durations:**
    - `eventDate` as ISO 8601. Our values pass the format check, but this
      needs a closer look.
    - `samp_store_dur` as ISO 8601 durations: `24 h` → `PT24H`,
      `overnight` → D0.
-7. **Mandatory and conditionally mandatory fields:**
+8. **Mandatory and conditionally mandatory fields:**
    - Add the absent M terms as columns: `neg_cont_type`, `pos_cont_type`,
      `detected_notDetected`, and for targeted assays `pcr_assay_lod/loq`
      (+ units) and `thresholdQuantificationCycle`.
@@ -305,9 +444,9 @@ yet checked).
      term's condition (for example, `amp_vis_method` is mandatory only if
      `assay_type = targeted` and `pcr_0_1 = 1`; otherwise
      `not applicable`).
-8. **Integer fields with sentences:** `pool_dna_num` (114k cells),
+9. **Integer fields with sentences:** `pool_dna_num` (114k cells),
    `pcr_rep`, `biological_rep`. Sentences stay D0.
-9. **Final validation:**
+10. **Final validation:**
    - Re-run the profiler on the strict copy, aiming for zero
      non-conforming values outside `other:` and the missing-value terms.
    - Optionally run FAIRe-fier (the official validator) on a sample of
