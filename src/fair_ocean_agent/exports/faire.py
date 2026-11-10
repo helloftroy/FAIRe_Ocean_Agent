@@ -648,10 +648,27 @@ def _exportable_experiment_columns() -> list[str]:
     ]
 
 
+# session.info key for export_faire's per-export cache of
+# _study_wide_values. The same study's values are needed once per sample
+# and per run, and for a study with many entities the lookup is slow
+# (found live: ~165ms, so days for 900k runs). Only set while an export
+# runs, so nothing else ever reads a stale cached value.
+_STUDY_WIDE_CACHE_KEY = "faire_export_study_wide_cache"
+
+
 def _study_wide_values(session: Session, study_id: str) -> dict[str, str]:
     """entity_id IS NULL standardized_values for a study: projectMetadata
     fields proper, plus sample-scoped LLM facts broadcast as a default
     (see mapping/faire.py's docstring)."""
+    cache = session.info.get(_STUDY_WIDE_CACHE_KEY)
+    if cache is None:
+        return _query_study_wide_values(session, study_id)
+    if study_id not in cache:
+        cache[study_id] = _query_study_wide_values(session, study_id)
+    return dict(cache[study_id])
+
+
+def _query_study_wide_values(session: Session, study_id: str) -> dict[str, str]:
     rows = session.execute(
         select(StandardizedValue.target_field, StandardizedValue.standardized_value).where(
             StandardizedValue.study_id == study_id,
@@ -906,6 +923,14 @@ def _write_api_paper_corrections(session: Session, output_dir: Path) -> int:
 
 
 def export_faire(session: Session, output_dir: str | Path, *, study_ids: list[str] | None = None) -> dict[str, int]:
+    session.info[_STUDY_WIDE_CACHE_KEY] = {}
+    try:
+        return _export_faire(session, output_dir, study_ids=study_ids)
+    finally:
+        session.info.pop(_STUDY_WIDE_CACHE_KEY, None)
+
+
+def _export_faire(session: Session, output_dir: str | Path, *, study_ids: list[str] | None) -> dict[str, int]:
     output_dir = Path(output_dir)
     counts: dict[str, int] = {}
     for class_name in OMITTED_EMPTY_CLASSES:
