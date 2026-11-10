@@ -9,7 +9,8 @@ pipeline currently produces amplification/standard-curve/taxonomic-
 assignment records, so writing them would only create empty files.
 `experimentRunMetadata` is populated from sample/assay-specific
 experiment_run (library) entities. Sequencing runs remain separate linked
-entities, so many library rows may correctly share one `seq_run_id`.
+entities, so many library rows may correctly share one `seq_run_id`, and
+a library sequenced in several runs lists them all, pipe-joined.
 
 Alongside the per-class data files, `export_faire` also writes
 `field_reference.csv` -- one row per FAIRe field, every column that
@@ -734,13 +735,29 @@ def _linked_entity(
     return entities[0] if entities else None
 
 
+def _sequencing_runs(session: Session, experiment_entity_id: str) -> list[Entity]:
+    """Every sequencing run an experiment_run (library) entity was
+    sequenced in, in a stable order."""
+    return list(
+        session.scalars(
+            select(Entity)
+            .join(EntityRelationship, EntityRelationship.to_entity_id == Entity.entity_id)
+            .where(
+                EntityRelationship.from_entity_id == experiment_entity_id,
+                EntityRelationship.relationship_type == EntityRelationshipType.SEQUENCED_IN_RUN.value,
+            )
+            .order_by(Entity.external_identifier, Entity.entity_id)
+        )
+    )
+
+
 def _alias_entities(session: Session, canonical_entity_id: str) -> list[Entity]:
     """Reverse of _linked_entity's direction: every alias entity that
     identity/sample_alias_reconciliation.py has folded INTO this canonical
     entity. Deliberately doesn't reuse _linked_entity's "raise if >1"
     guard -- more than one supplement-derived alias legitimately folding
     into one real accession is the expected case here, unlike
-    DERIVED_FROM_SAMPLE/USES_ASSAY/SEQUENCED_IN_RUN's 1:1 semantics."""
+    DERIVED_FROM_SAMPLE/USES_ASSAY's 1:1 semantics."""
     return list(
         session.scalars(
             select(Entity)
@@ -1098,11 +1115,10 @@ def export_faire(session: Session, output_dir: str | Path, *, study_ids: list[st
                 entity.entity_id,
                 EntityRelationshipType.USES_ASSAY,
             )
-            sequencing_run = _linked_entity(
-                session,
-                entity.entity_id,
-                EntityRelationshipType.SEQUENCED_IN_RUN,
-            )
+            # Not _linked_entity: one SRA experiment (SRX) is often
+            # sequenced in several runs (SRR) -- found live: 12,166 of
+            # them -- so every run is listed, pipe-joined.
+            sequencing_runs = _sequencing_runs(session, entity.entity_id)
             if sample is not None:
                 # Defends against a run's DERIVED_FROM_SAMPLE link pointing
                 # at a supplement-derived alias entity (identity/
@@ -1120,8 +1136,11 @@ def export_faire(session: Session, output_dir: str | Path, *, study_ids: list[st
                 linked_assay_name = _linked_study_values(session, linked_study_ids, "assay_name")
                 if linked_assay_name:
                     row["assay_name"] = linked_assay_name
-            if sequencing_run is not None:
-                row.setdefault("seq_run_id", sequencing_run.external_identifier or sequencing_run.entity_id)
+            if sequencing_runs:
+                row.setdefault(
+                    "seq_run_id",
+                    "|".join(run.external_identifier or run.entity_id for run in sequencing_runs),
+                )
             if entity.external_identifier and not entity.external_identifier.startswith("internal:"):
                 row.setdefault("lib_id", entity.external_identifier)
             row[INTERNAL_STUDY_ID_FIELD] = "|".join(linked_study_ids)

@@ -743,7 +743,7 @@ def test_export_emits_one_library_row_each_when_libraries_share_a_sequencing_run
     assert {row["seq_run_id"] for row in rows} == {"RUN-2026-07-31-A"}
 
 
-def test_export_refuses_ambiguous_library_to_run_relationship(db_session, tmp_path):
+def test_export_lists_every_run_of_a_library_sequenced_in_several(db_session, tmp_path):
     study = Study(title="Ambiguous library")
     db_session.add(study)
     db_session.flush()
@@ -777,8 +777,11 @@ def test_export_refuses_ambiguous_library_to_run_relationship(db_session, tmp_pa
     map_study_to_faire(db_session, study.study_id)
     db_session.commit()
 
-    with pytest.raises(ValueError, match="multiple sequenced_in_run links"):
-        export_faire(db_session, tmp_path)
+    export_faire(db_session, tmp_path)
+
+    with (tmp_path / "experimentRunMetadata.csv").open() as f:
+        rows = list(csv.DictReader(f))
+    assert [row["seq_run_id"] for row in rows] == ["RUN-A|RUN-B"]
 
 
 def test_export_faire_sample_column_order_uses_preferred_human_readable_layout(db_session, tmp_path):
