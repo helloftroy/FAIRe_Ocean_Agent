@@ -128,3 +128,35 @@ lat/lon 86 %, date 95 %, geo_loc_name 93 %, env_medium 93 %,
 env_broad_scale 54 %, depth 48 %. Over all 1.01M samples: 33 / 44 / 45 /
 40 / 21 / 12 %. The data is there; contamination and unmapped studies are
 what pull the percentages down.
+
+## Curation dry run (2026-11-11, Nov 9 snapshot, classifier fix a136fa7)
+
+User decisions (2026-11-11): reversible flag for studies (export skips
+them) AND hard deletion of obviously unwanted samples; check the review
+BioProjects without marine samples by hand (curation/bioproject_review_2026-11-11.csv:
+98 drop, 89 keep); all 134 mapping candidates approved (112 added, see
+f4904f3; 5 wrong-meaning and the export-suppressed targets left out).
+
+First dry run deleted marine samples: "coral metagenome" matched the
+"oral metagenome" pattern, "Acropora" matched "crop", and marine hosts
+behind generic organism names (seagrass, sardine gut, jellyfish) were
+called non-marine. Fixed in marine_audit.classify_sample (word boundaries;
+any marine/freshwater evidence keeps a sample unless the organism is
+human / SARS-CoV-2 / mouse / rat); tests/unit/test_marine_classifier.py.
+
+Corrected plan (scripts/apply_curation.py, dry run):
+- delete 517,815 of 1,009,474 samples (+ 887,226 child runs):
+  own evidence non-marine 367,325 (medical 244,038; terrestrial 89,099;
+  engineered 19,073; other host 15,115), foreign BioProjects 104,560,
+  non-marine BioProjects 42,296, manual review 3,634
+- unlink 157,742 (sample/run, study) links kept by another study
+- drop 4,661 (study, BioProject) links
+- flag 1,702 studies not_relevant; 5,662 relevant
+Spot checks (random samples of each rule, flagged study titles): correct.
+Plan CSVs: data/snapshots/faire_strict_work/curation_dryrun2/plan/.
+
+Cluster order: stop discovery; pull; run_audits.sbatch; run_curation.sbatch
+(dry run, compare with the numbers above); run_curation.sbatch with
+CURATION_APPLY=1 (backs up the db first); run_remap.sbatch; export-faire;
+correct_to_faire.py; fill summary + figure. Still to build: fill samples
+and runs past the NCBI (300) and ENA (500) caps for kept BioProjects.
