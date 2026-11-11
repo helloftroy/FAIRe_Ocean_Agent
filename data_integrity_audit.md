@@ -73,3 +73,53 @@ cluster/run_fetch_missing_biosamples.sbatch (running since 2026-11-10).
 
 - Mapping-rule audit (scripts/faire_strict/mapping_inventory.py) running.
 - Cleanup design for Finding 1/2 (needs user approval before touching data).
+
+## Code fixes (2026-11-10, commit b6c8497)
+
+- sources/ncbi.py `fetch_record_by_accessions`: esearch `[accn]` -> UID ->
+  efetch, keep only requested accessions (regression test added).
+- sources/datacite.py `find_related`: related DOIs only for same-work
+  relations (IsSupplementTo, IsDocumentedBy, IsDescribedBy, IsPublishedIn,
+  and inverses). Cited / citing / part DOIs no longer merge studies.
+- Not done: `_resolve_sequence_source_identifiers` still resolves accessions
+  harvested from fetched samples. User (2026-11-10): many studies were found
+  sample-first, so legitimacy must NOT be judged from paper text.
+
+## Finding 6: per-BioProject audit of the 989 studies with 2+ BioProjects
+
+scripts/bioproject_audit.py -> marine_audit/bioproject_audit.csv.
+User decision: target studies with >1 BioProject first, assess from there.
+
+| verdict | BioProjects | samples |
+|---|---|---|
+| first_arrived | 989 | 87,389 |
+| foreign_bug_chain | 2,214 | 267,212 |
+| non_marine (>= 90 % classified non-marine) | 2,544 | 165,244 |
+| jgi_gold (JGI: one BioProject per sequencing project) | 5,356 | 12,975 |
+| paper_cited (accession in the paper text) | 1,591 | 60,552 |
+| resolved_clean (resolution, study has no collisions) | 592 | 10,028 |
+| review | 514 | 22,018 |
+
+Spot check of foreign_bug_chain: cleft-lip GWAS, tick salivary glands, HMP
+reference genome, grasshopper mouse, twins gut -- all foreign.
+After dropping foreign_bug_chain + non_marine: 375 studies keep 1
+BioProject, 331 keep 2, 283 keep 3+ (mostly JGI GOLD / reanalysis).
+
+## Finding 7: mapping rules (gap 2)
+
+scripts/faire_strict/mapping_inventory.py (10,412 raw name/level pairs) and
+mapping_candidates.py (MIxS 7.0.1 pinned in reference/mixs/).
+Sample level: 10,046 raw names, 64 mapped (38 % of sample facts).
+134 candidate rules (excluding samp_name) add ~108k sample-term cells:
+ENA spellings of lat/lon/date/depth/country, and FAIRe/MIxS-named
+attributes with no sample-level rule at all (samp_vol_we_dna_ext,
+samp_store_temp/dur/loc, nucl_acid_ext, size_frac_low, ph_meth, temp, alt,
+local environmental context, ...). Other levels: almost all bibliographic
+or bookkeeping; experiment_run library_layout (1,011) is unmapped.
+
+Upper bound with all rules, raw value present (149,234 samples classified
+marine/freshwater by organism/host/isolation source):
+lat/lon 86 %, date 95 %, geo_loc_name 93 %, env_medium 93 %,
+env_broad_scale 54 %, depth 48 %. Over all 1.01M samples: 33 / 44 / 45 /
+40 / 21 / 12 %. The data is there; contamination and unmapped studies are
+what pull the percentages down.
