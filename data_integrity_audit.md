@@ -69,10 +69,15 @@ by Finding 1/2 (SARS-CoV-2, MalariaGEN, CDC HAI-Seq, PHE E. coli, HMP).
 332k sample entities exist without attributes:
 cluster/run_fetch_missing_biosamples.sbatch (running since 2026-11-10).
 
-## Open
+## Open (updated 2026-11-10, end of day)
 
-- Mapping-rule audit (scripts/faire_strict/mapping_inventory.py) running.
-- Cleanup design for Finding 1/2 (needs user approval before touching data).
+- Mapping-rule audit: done (Finding 7). Candidate rules to approve and add.
+- Cleanup of Finding 1/2: verdicts done for multi-BioProject studies
+  (Finding 6); the 514 "review" BioProjects and the per-sample marine rule
+  for single-BioProject studies still to apply. Needs approval before
+  anything touches the cluster database.
+- Settle-gate fix so every study gets MAP_FAIRE (Finding 4).
+- Order of operations for the cluster (draft in the chat, 2026-11-10).
 
 ## Code fixes (2026-11-10, commit b6c8497)
 
