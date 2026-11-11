@@ -9,7 +9,7 @@ import re
 import sqlite3
 from collections.abc import Iterable
 
-from marine_audit import ORDER, categorize
+from marine_audit import ORDER, categorize, classify_sample
 
 EVIDENCE_FIELDS = ("organism", "host", "isolation_source", "env_broad_scale")
 NON_MARINE = ("medical", "terrestrial", "engineered", "other_host")
@@ -22,7 +22,9 @@ def _in(values: Iterable[str]) -> str:
 
 def sample_categories(conn: sqlite3.Connection) -> dict[str, str | None]:
     """sample entity -> category from its own evidence (organism, else host,
-    else isolation_source, else env_broad_scale; any source), or None."""
+    else isolation_source, else env_broad_scale; any source), or None.
+    marine_audit.classify_sample: a non-marine call is overruled by any
+    marine/freshwater evidence unless the organism is unambiguous."""
     evidence: dict[str, dict[str, str]] = collections.defaultdict(dict)
     q = (
         "select entity_id, fact_type_candidate, raw_value from raw_facts "
@@ -31,15 +33,7 @@ def sample_categories(conn: sqlite3.Connection) -> dict[str, str | None]:
     )
     for eid, field, value in conn.execute(q):
         evidence[eid].setdefault(field, value or "")
-    out: dict[str, str | None] = {}
-    for eid, f in evidence.items():
-        cat = None
-        for field in EVIDENCE_FIELDS:
-            cat = categorize(f.get(field))
-            if cat:
-                break
-        out[eid] = cat
-    return out
+    return {eid: classify_sample(f, EVIDENCE_FIELDS) for eid, f in evidence.items()}
 
 
 def bioproject_identifiers(conn: sqlite3.Connection) -> dict[str, list[tuple[str, str, str]]]:

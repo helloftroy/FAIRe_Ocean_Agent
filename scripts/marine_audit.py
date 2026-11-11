@@ -40,23 +40,23 @@ PATTERNS = {
     "medical": r"homo sapiens|\bhuman|patient|clinical|hospital|sars-cov|coronavirus|influenza|hiv\b|"
     r"plasmodium|tuberculosis|streptococcus|staphylococcus|klebsiella|acinetobacter|clostridioides|"
     r"campylobacter|listeria|salmonella|escherichia coli|pseudomonas aeruginosa|enterococcus|neisseria|"
-    r"helicobacter|mus musculus|\bmouse\b|\bmice\b|murine|rattus|\brats?\b|danio rerio|zebrafish|vaginal|oral metagenome|"
+    r"helicobacter|mus musculus|\bmouse\b|\bmice\b|murine|rattus|\brats?\b|danio rerio|zebrafish|vaginal|\boral metagenome|"
     r"skin metagenome|lung metagenome|\bfeces|fecal|faecal|stool|saliva|sputum|urine|blood|"
-    r"cancer|tumou?r|infant|child|covid|disease|infection|obes|diabet",
+    r"cancer|tumou?r|infant|\bchild|covid|disease|infection|obes|diabet",
     "marine": r"marine|sea ?water|ocean|coral|sponge|porifera|estuar|salt ?marsh|mangrove|hydrothermal|"
     r"seagrass|kelp|intertidal|coastal|plankton|symbiodin|whale|dolphin|cetacean|brackish|\breef|"
     r"deep[- ]sea|cold seep|beach|tidal|seaweed|macroalga|oyster|mussel|shrimp|\bcrab|tunicate|ascidian|"
     r"cnidaria|jellyfish|anemone|bivalve|cephalopod|squid|octopus|polychaete|seabird|penguin|\btuna|"
     r"\bsea\b|\bseas\b|\bbay\b|gulf|fjord|lagoon|atlantic|pacific|arctic|antarctic|southern ocean|"
     r"mediterranean|baltic|benthic|pelagic|abyss|hadal|trench|sea ice|diatom|dinoflagellate|"
-    r"copepod|krill|salmon(?!ella)|\bcod\b|herring|sardine|anchov|seal\b|sea lion|turtle|shark|ray\b",
+    r"copepod|krill|salmon(?!ella)|\bcod\b|herring|sardine|anchov|\bseals?\b|sea lion|turtle|shark|\brays?\b|jellyfish|aurelia|seagrass|zostera|sardinella|grouper|seabass",
     "freshwater": r"freshwater|fresh water|\blake|\brivers?\b|stream|\bpond|groundwater|aquifer|"
     r"drinking water|tap water|wetland|hot spring|glacier|snow|reservoir|daphnia",
     "terrestrial": r"\bsoil|rhizosphere|\broots?\b|plant|phyllosphere|arabidopsis|oryza|zea mays|"
     r"triticum|hordeum|glycine max|solanum|compost|terrestrial|insect|mosquito|drosophila|bovine|"
     r"bos taurus|sus scrofa|\bpigs?\b|porcine|chicken|gallus|canis|cattle|\bcow|sheep|ovis|goat|"
     r"honey ?bee|apis mellifera|termite|\bleaf|leaves|forest|desert|permafrost|caenorhabditis|"
-    r"saccharomyces|grassland|agricultur|crop|maize|wheat|rice\b|cave",
+    r"saccharomyces|grassland|agricultur|\bcrops?\b|maize|wheat|rice\b|cave",
     "engineered": r"wastewater|sewage|activated sludge|bioreactor|anaerobic digest|digester|\bfood|"
     r"indoor|air metagenome|built environment|dairy|cheese|fermented|brewery|wine|kimchi|landfill|"
     r"mine drainage|oil reservoir|hydrocarbon reservoir",
@@ -83,6 +83,43 @@ def categorize(text: str | None) -> str | None:
         if RX[cat].search(t):
             return cat
     return None
+
+
+# Organisms that settle the question on their own, whatever else a record
+# says (a human sample whose isolation_source mentions "sea" is still human).
+UNAMBIGUOUS_NON_MARINE = re.compile(
+    r"^(homo sapiens|human (gut |skin |oral |vaginal |lung |nasal )?metagenome|"
+    r"severe acute respiratory syndrome coronavirus 2|mus musculus|mouse gut metagenome|rattus norvegicus)$",
+    re.I,
+)
+KEPT = ("marine", "freshwater")
+
+
+def classify_sample(fields: dict[str, str], order=("organism", "host", "isolation_source", "env_broad_scale")) -> str | None:
+    """One category per sample. The first field that categorizes decides;
+    but a non-marine decision is overruled by any field that reads marine or
+    freshwater (a "plant metagenome" whose host is Zostera marina, a "gut
+    metagenome" from Sardinella), unless the organism is unambiguous
+    (UNAMBIGUOUS_NON_MARINE). Deletion relies on this, so it errs towards
+    keeping (user decision 2026-11-11: delete only what is obviously unwanted)."""
+    cat = None
+    for field in order:
+        cat = categorize(fields.get(field))
+        if cat:
+            break
+    if cat in KEPT or cat is None:
+        return cat
+    if UNAMBIGUOUS_NON_MARINE.match((fields.get("organism") or "").strip()):
+        return cat
+    for field in order:
+        text = fields.get(field) or ""
+        if AMBIGUOUS.match(text.strip()):
+            continue
+        if RX["marine"].search(text):
+            return "marine"
+        if RX["freshwater"].search(text):
+            return "freshwater"
+    return cat
 
 
 def text_category(text: str) -> tuple[str | None, dict[str, int]]:
@@ -116,11 +153,7 @@ def main() -> None:
     per_study: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
     organisms: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
     for eid, f in ev.items():
-        cat = None
-        for field in fields:
-            cat = categorize(f.get(field))
-            if cat:
-                break
+        cat = classify_sample(f, fields)
         sid = ent_study[eid]
         per_study[sid][cat or "unclassified"] += 1
         if f.get("organism"):
