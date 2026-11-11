@@ -45,6 +45,7 @@ from checklist import (  # noqa: E402
     load_checklist,
 )
 from geo import resolve_geo  # noqa: E402
+from env_vars import ALL_COLUMNS as ENV_VAR_COLUMNS, env_values  # noqa: E402
 from ontology import ENVO_BRANCH, load_envo, load_obi_sequencers, resolve_envo_tokens, resolve_instrument  # noqa: E402
 
 csv.field_size_limit(10**9)
@@ -269,7 +270,8 @@ _ADDED_COLUMNS = {
     "projectMetadata": (
         "pcr_assay_lod", "pcr_assay_lod_unit", "pcr_assay_loq", "pcr_assay_loq_unit", "thresholdQuantificationCycle",
     ),
-    "sampleMetadata": ("concentration_unit", "neg_cont_type", "pos_cont_type", "detected_notDetected"),
+    # R25: environmental variables parsed out of the env-var extras columns.
+    "sampleMetadata": ("concentration_unit", "neg_cont_type", "pos_cont_type", "detected_notDetected", *ENV_VAR_COLUMNS),
 }
 _UNIT_SYNONYMS = {
     "mL": ("ml", "milliliter", "milliliters", "millilitre", "millilitres"),
@@ -350,6 +352,23 @@ def _split_unit_pairs(table: str, row: dict[str, str], terms: dict[str, Term], l
             log.change(table, unit_col, "R14_number_unit_split", "(empty)", unit)
         row[value_col] = new_value
         row[unit_col] = unit
+
+
+# --- R25 environmental variables ---------------------------------------------
+# scripts/faire_strict/env_vars.py. Fills an empty FAIRe column only; the
+# source text stays in x_env_var_block / x_pulled_env_var in extras. Logged
+# compactly (source column -> "(number)") so the change log stays small.
+def _apply_env_vars(row: dict[str, str], log: Log) -> None:
+    found = env_values(row.get("x_env_var_block", ""), row.get("x_pulled_env_var", ""))
+    for term, (number, unit, rule, _source) in found.items():
+        if row.get(term):
+            continue
+        source = "(x_env_var_block)" if rule.startswith("R25a") else "(x_pulled_env_var)"
+        row[term] = number
+        log.change("sampleMetadata", term, rule, source, "(number)")
+        if unit is not None and not row.get(f"{term}_unit"):
+            row[f"{term}_unit"] = unit
+            log.change("sampleMetadata", f"{term}_unit", rule, source, unit)
 
 
 # --- R15 target_gene ---------------------------------------------------------
@@ -897,6 +916,8 @@ def process_table(
                 for col in dropped + misplaced:
                     if row.get(col):
                         extras[col] = row[col]
+                if table == "sampleMetadata":
+                    _apply_env_vars(row, log)
                 _split_unit_pairs(table, row, terms, log)
                 new_row = {c: row.get(c, "") for c in out_cols if c in KEEP_EXTRA_COLUMNS}
                 for col in faire_cols:

@@ -663,6 +663,43 @@ Each entry is either:
 
 The sentences are where review is most needed.
 
+### R25: environmental variables out of the env-var extras columns (2026-11-11)
+
+User request: the env-var extras columns collect every environmental variable
+measured where the sample was taken; map them into FAIRe's own columns so the
+work is not lost. The FAIRe columns stay suppressed in the export (an earlier
+user request); this rule fills them in the strict copy only. Code:
+`scripts/faire_strict/env_vars.py`; tests `tests/unit/test_faire_strict_env_vars.py`.
+
+- **Sources:** `x_env_var_block` items `<name>: <value>` (per-sample BioSample
+  attributes, **R25a**) and `x_pulled_env_var` items `<name> = <value>`
+  (the same attributes plus values pulled from the paper, **R25b**, only for
+  a variable R25a did not fill). Methods sentences in the block are ignored.
+  The source text stays in the extras columns.
+- **Columns (20):** temp, salinity, ph, chlorophyll, suspend_part_matter
+  (fixed unit) and diss_oxygen, diss_inorg_carb, diss_inorg_nitro,
+  diss_org_carb, diss_org_nitro, nitrate, nitrite, org_matter,
+  part_org_carb, part_org_nitro, tot_carb, tot_diss_nitro, tot_nitro,
+  tot_org_carb, tot_part_carb (number + `_unit`).
+- **Used only when the value is one plain number**, after removing `± x`
+  and turning a decimal comma into a point. Ranges, inequalities (`>30 PSU`),
+  words (`in situ`, `room temperature`), two numbers (`+2 -4°C`) and missing
+  tokens are not used.
+- **Fixed-unit terms:** no unit, or a unit that means FAIRe's unit:
+  °C / ◦C / C (temp, −5 to 120); psu, ppt, ‰, g/kg (salinity, 0 to 400; ppt
+  and g/kg equal psu numerically); pH has no unit (0 to 14); chlorophyll
+  mg/m3 or µg/L (equal); suspended particulate matter mg/L. Anything else,
+  e.g. °F, is not used.
+- **Terms with a `_unit` column:** number ≥ 0; unit mapped to FAIRe's list
+  (uM → µM, umol/L → µmol/L, mg/l → mg/L, ppm → parts per million, `_mol` →
+  `µmol`, a µ lost in encoding); other units → `other: <unit>` (allowed for
+  these terms, e.g. `other: %`); no unit → `missing: not provided`.
+- **Logged** as source column → `(number)` per term, plus the unit values.
+- **Size, Nov 9 export (before curation):** 38,276 samples get at least one
+  variable: temp 23,239; pH 17,088; salinity 9,827; tot_nitro 2,546;
+  diss_oxygen 2,532; nitrate 2,006; chlorophyll 1,394; nitrite 1,290; others
+  fewer. 50,016 values from the block (R25a), 13,434 from pulled (R25b).
+
 ### F01: plausibility flags (values not changed)
 
 Storage temperatures of 50 °C or more are flagged in `review_flags.csv`: 9
