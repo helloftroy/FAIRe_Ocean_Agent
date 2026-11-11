@@ -805,3 +805,28 @@ fulltext 5,166; paper linked but full text never retrieved (paywalled)
 1,131; no linked paper 3,803. In the export: 1,121 / 9,503 studies and
 66,412 / 1,009,389 samples are in paywalled studies. The fill figure now
 shows "not reported, paper paywalled" as its own segment.
+
+## Marine audit and study-merge problem (2026-11-10, Nov 9 snapshot)
+
+`scripts/marine_audit.py` -> data/snapshots/faire_strict_work/marine_audit/.
+marine_relevance_status was 'unknown' for all 10,100 studies (never screened).
+Per sample (organism, else host, else isolation_source/env_broad_scale):
+medical 257,649; marine 122,768; terrestrial 96,295; freshwater 26,466;
+engineered 19,485; other host 16,150; no usable evidence 470,661
+(of 1,009,474 sample entities).
+
+Study merging: identity resolution chains unrelated studies together.
+Studies with >10 BioProjects hold 47 % of samples; STUDY-caa33f2ce2d5
+("cold seeps, South China Sea") has 1,445 BioProjects and 73,187 DOIs;
+the Antarctic sponge study has 157 BioProjects incl. Mus musculus and soil.
+So exclusion must be per sample / per BioProject, not per study, and
+study-level (paper) facts are broadcast onto foreign samples.
+
+The 2.4M BioSamples past the 300 cap are mostly in clinical mega-projects
+pulled in by these merges (SARS-CoV-2, MalariaGEN, CDC HAI-Seq, PHE E. coli,
+HMP, GenomeTrakr, GPS pneumococcus): do not fetch them.
+
+Discovery: CHECK_COMPONENT_SETTLED tasks pending since September were never
+claimed (worker restricted to other task types), so 4,029 studies with
+samples never got MAP_FAIRE (gap 2 root cause). Stalled components never
+get MAP_FAIRE either.
