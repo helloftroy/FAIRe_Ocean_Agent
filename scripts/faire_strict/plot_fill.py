@@ -6,7 +6,9 @@ Reads fill_summary.csv (scripts/faire_strict/fill_summary.py) and writes
 fill_ecology.{pdf,svg,png} next to it. Two panels: sample-level terms
 (% of samples) and study / library-level terms (% of studies or libraries).
 Each bar: FAIRe-conforming value | present but non-standard ("other:") |
-not reported. No title baked in (caption goes in the manuscript).
+not reported, paper paywalled (study's article full text never retrieved;
+needs the ACCESS_CSV columns of fill_summary.py) | not reported. No title
+baked in (caption goes in the manuscript).
 
 Usage: python scripts/faire_strict/plot_fill.py FILL_SUMMARY_CSV
 """
@@ -35,6 +37,7 @@ INK_3 = "#8a8983"
 SURFACE = "#ffffff"
 C_VALUE = "#2a78d6"   # categorical slot 1
 C_OTHER = "#eb6834"   # categorical slot 2 (validated pair)
+C_PAYWALL = "#a9a8a1"  # neutral, darker: not reported, paper paywalled
 C_NONE = "#e7e6e1"    # neutral track: not reported
 
 # (group, [(table, term, label)]). Order = reading order.
@@ -104,6 +107,7 @@ def load(path: Path) -> dict[tuple[str, str], dict[str, float]]:
             out[(r["table"], r["term"])] = {
                 "value": int(r["value"]) / n * 100,
                 "other": int(r["other"]) / n * 100,
+                "paywall": int(r.get("missing_no_fulltext") or 0) / n * 100,
                 "rows": n,
             }
         return out
@@ -121,7 +125,7 @@ def draw_panel(ax, groups, data, unit_note: str, n_libs_note: str = "") -> None:
         y += 0.75
         for table, term, label in items:
             d = data[(table, term)]
-            v, o = d["value"], d["other"]
+            v, o, pw = d["value"], d["other"], d["paywall"]
             ax.barh(y, 100, height=bar_h, color=C_NONE, linewidth=0, zorder=1)
             if v > 0:
                 ax.barh(y, v, height=bar_h, color=C_VALUE, linewidth=0, zorder=2)
@@ -130,6 +134,11 @@ def draw_panel(ax, groups, data, unit_note: str, n_libs_note: str = "") -> None:
                 # 2px-style surface gap between the two fills
                 if v > 0:
                     ax.plot([v, v], [y - bar_h / 2, y + bar_h / 2], color=SURFACE, lw=0.9, zorder=3,
+                            solid_capstyle="butt")
+            if pw > 0:
+                ax.barh(y, pw, left=v + o, height=bar_h, color=C_PAYWALL, linewidth=0, zorder=2)
+                if v + o > 0:
+                    ax.plot([v + o, v + o], [y - bar_h / 2, y + bar_h / 2], color=SURFACE, lw=0.9, zorder=3,
                             solid_capstyle="butt")
             present = v + o
             text = f"{present:.0f}%" if present >= 1 else ("<1%" if present > 0 else "0%")
@@ -180,10 +189,11 @@ def main() -> None:
     handles = [
         Patch(color=C_VALUE, label="FAIRe-conforming value"),
         Patch(color=C_OTHER, label="Reported, non-standard (other:)"),
+        Patch(color=C_PAYWALL, label="Not reported, paper paywalled"),
         Patch(color=C_NONE, label="Not reported"),
     ]
-    fig.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.55, 0.985), ncol=3, frameon=False,
-               fontsize=7, handlelength=1.2, handleheight=0.9, columnspacing=1.8, labelcolor=INK)
+    fig.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.55, 0.985), ncol=4, frameon=False,
+               fontsize=7, handlelength=1.2, handleheight=0.9, columnspacing=1.4, labelcolor=INK)
     out = path.parent / "fill_ecology"
     for ext in ("pdf", "svg"):
         fig.savefig(f"{out}.{ext}", facecolor=SURFACE)

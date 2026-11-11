@@ -9,7 +9,13 @@ Each cell is classed as:
 A list cell counts as "value" if any item is a value, else "other" if any
 item is other, else not_applicable / missing.
 
-Usage: python scripts/faire_strict/fill_summary.py STRICT_DIR OUT_CSV
+With ACCESS_CSV (scripts/faire_strict/study_access.py), each row also gets
+the paper access of its study (best over linked studies: fulltext >
+no_fulltext > no_publication), and missing cells are split by it:
+missing_no_fulltext / missing_no_publication, plus rows_no_fulltext /
+rows_no_publication.
+
+Usage: python scripts/faire_strict/fill_summary.py STRICT_DIR OUT_CSV [ACCESS_CSV]
 """
 from __future__ import annotations
 
@@ -46,8 +52,22 @@ def classify(value: str) -> str:
     return "missing"
 
 
+_ACCESS_RANK = {"fulltext": 0, "no_fulltext": 1, "no_publication": 2}
+
+
+def load_access(path: Path) -> dict[str, str]:
+    with path.open(newline="") as handle:
+        return {r["study_id"]: r["access"] for r in csv.DictReader(handle)}
+
+
+def row_access(access: dict[str, str], study_ids: str) -> str:
+    kinds = [access.get(s.strip(), "no_publication") for s in study_ids.split("|") if s.strip()]
+    return min(kinds, key=_ACCESS_RANK.__getitem__) if kinds else "no_publication"
+
+
 def main() -> None:
     src, out = Path(sys.argv[1]), Path(sys.argv[2])
+    access = load_access(Path(sys.argv[3])) if len(sys.argv) > 3 else None
     terms = load_checklist()
     rows = []
     for table in TABLES:
@@ -56,10 +76,17 @@ def main() -> None:
             header = next(reader)
             counts = [collections.Counter() for _ in header]
             n = 0
+            by_access = collections.Counter()
+            sid = header.index("internal_study_id")
             for row in reader:
                 n += 1
+                acc = row_access(access, row[sid]) if access is not None else "fulltext"
+                by_access[acc] += 1
                 for i, v in enumerate(row):
-                    counts[i][classify(v)] += 1
+                    kind = classify(v)
+                    counts[i][kind] += 1
+                    if kind == "missing" and acc != "fulltext":
+                        counts[i]["missing_" + acc] += 1
         for col, c in zip(header, counts):
             if col not in terms:
                 continue
@@ -70,6 +97,12 @@ def main() -> None:
                 "not_applicable": c["not_applicable"], "missing": c["missing"],
                 "pct_value": round(100 * c["value"] / n, 2),
                 "pct_present": round(100 * (c["value"] + c["other"]) / n, 2),
+                **({
+                    "missing_no_fulltext": c["missing_no_fulltext"],
+                    "missing_no_publication": c["missing_no_publication"],
+                    "rows_no_fulltext": by_access["no_fulltext"],
+                    "rows_no_publication": by_access["no_publication"],
+                } if access is not None else {}),
             })
         print(table, n, flush=True)
     with out.open("w", newline="") as handle:

@@ -779,3 +779,29 @@ yet checked).
    Still to do:
    - Optionally run FAIRe-fier (the official validator) on a sample of
      studies.
+
+## Coverage gaps found 2026-11-10 (not fixed yet; need the user's go-ahead)
+
+Why lat/lon, date, depth and geo_loc_name look so low (25-40 % of samples):
+
+1. **BioSample fetch cap.** `sources/ncbi.py` `MAX_SAMPLES_PER_PROJECT = 300`:
+   in large BioProjects only the first 300 BioSamples get their attributes
+   fetched. 1,009,474 sample entities, only 643,987 have any raw fact; the
+   other ~365k (36 %) are accession-only rows with no metadata at all.
+2. **Raw values never mapped.** Parseable values already in raw_facts but
+   empty in the export (sample rows): lat/lon 92,177 (25.5 -> 34.6 %),
+   eventDate 132,449 (30.8 -> 43.9 %), geo_loc_name 116,908 (40.1 -> 51.7 %),
+   depth 21,127 (20.5 -> 22.6 %). Mostly samples with no
+   standardized_values at all (MAP_FAIRE never ran for their facts; MAP_FAIRE
+   completed for 5,686 of 10,100 studies), plus BioSample attribute
+   spellings with no mapping rule ("collection date", "geographic location
+   (latitude)", "geographic location (country and/or sea)", "country",
+   "geo loc name", "geographic location (depth)", "Latitude", "lat lon", ...).
+   Fix: add the rules, run enqueue-mapping-backfill + worker (deterministic,
+   no LLM), re-export, re-run the strict correction.
+
+Paper access (scripts/faire_strict/study_access.py, all 10,100 studies):
+fulltext 5,166; paper linked but full text never retrieved (paywalled)
+1,131; no linked paper 3,803. In the export: 1,121 / 9,503 studies and
+66,412 / 1,009,389 samples are in paywalled studies. The fill figure now
+shows "not reported, paper paywalled" as its own segment.
