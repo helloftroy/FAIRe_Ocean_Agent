@@ -201,7 +201,9 @@ def test_datacite_extracts_dataset_metadata_and_related_identifiers(retrieval_co
                 "publisher": "PANGAEA",
                 "publicationYear": 2024,
                 "relatedIdentifiers": [
-                    {"relatedIdentifier": "10.1000/paper", "relatedIdentifierType": "DOI", "relationType": "References"}
+                    {"relatedIdentifier": "10.1000/paper", "relatedIdentifierType": "DOI", "relationType": "IsSupplementTo"},
+                    {"relatedIdentifier": "10.1000/cited", "relatedIdentifierType": "DOI", "relationType": "References"},
+                    {"relatedIdentifier": "10.1000/citing", "relatedIdentifierType": "DOI", "relationType": "IsCitedBy"},
                 ],
             },
         }
@@ -214,6 +216,8 @@ def test_datacite_extracts_dataset_metadata_and_related_identifiers(retrieval_co
     assert any(f.fact_type_candidate == "titles" for f in facts)
     assert any(r.identifier_type == IdentifierType.DATASET_DOI for r in related)
     assert any(r.identifier_type == IdentifierType.DOI and r.value == "10.1000/paper" for r in related)
+    # Other works' DOIs would merge unrelated studies (resolve_or_create_study).
+    assert not any(r.value in {"10.1000/cited", "10.1000/citing"} for r in related)
     adapter.close()
 
 

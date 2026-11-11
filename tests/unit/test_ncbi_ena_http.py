@@ -246,13 +246,17 @@ def test_biosample_fetch_record_by_accessions_fetches_directly_no_elink(retrieva
     accession -- efetch accepts a real accession string exactly like a
     numeric UID. This is the fallback path handlers.py's
     _fetch_ncbi_record_with_biosample_fallback uses when fetch_record's
-    own elink-based discovery comes up empty. No esearch/elink calls at
-    all -- efetch is the only request made."""
+    own elink-based discovery comes up empty. No elink: accessions are
+    looked up with esearch [accn], then efetched by UID (never by
+    accession string -- see the SAMEA collision test below)."""
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
         params = dict(request.url.params)
+        if path.endswith("esearch.fcgi") and params.get("db") == "biosample":
+            assert params.get("term") == "SAMN1[accn] OR SAMN2[accn]"
+            return httpx.Response(200, json={"esearchresult": {"idlist": ["1", "2"]}})
         if path.endswith("efetch.fcgi") and params.get("db") == "biosample":
-            assert params.get("id") == "SAMN1,SAMN2"
+            assert params.get("id") == "1,2"
             return httpx.Response(200, text=BIOSAMPLE_XML)
         raise AssertionError(f"unexpected request: {request.url}")
 
@@ -272,6 +276,8 @@ def test_biosample_fetch_record_by_accessions_fetches_directly_no_elink(retrieva
 
 def test_biosample_fetch_record_by_accessions_not_found_when_none_resolve(retrieval_config):
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("esearch.fcgi"):
+            return httpx.Response(200, json={"esearchresult": {"idlist": []}})
         return httpx.Response(200, text='<?xml version="1.0" ?><BioSampleSet></BioSampleSet>')
 
     adapter = NcbiBioSampleAdapter(
@@ -281,6 +287,29 @@ def test_biosample_fetch_record_by_accessions_not_found_when_none_resolve(retrie
     )
     with pytest.raises(SourceRecordNotFoundError):
         adapter.fetch_record_by_accessions("PRJNA1425045", ["SAMN999999"])
+    adapter.close()
+
+
+def test_biosample_fetch_record_by_accessions_drops_records_not_requested(retrieval_config):
+    """Live bug (2026-11-10): efetch given "SAMEA2620084" reads the digits
+    as a UID and returns the unrelated SAMN02620084. Even if a lookup ever
+    returns a record for another accession, it must never be kept."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        params = dict(request.url.params)
+        if path.endswith("esearch.fcgi") and params.get("db") == "biosample":
+            return httpx.Response(200, json={"esearchresult": {"idlist": ["2620084"]}})
+        if path.endswith("efetch.fcgi") and params.get("db") == "biosample":
+            return httpx.Response(200, text=BIOSAMPLE_XML)  # SAMN1 / SAMN2, not what was asked
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    adapter = NcbiBioSampleAdapter(
+        SourceConfig(name="ncbi_biosample", enabled=True, base_url="https://eutils.ncbi.nlm.nih.gov/entrez/eutils", rate_limit_per_second=1000),
+        retrieval_config,
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(SourceRecordNotFoundError):
+        adapter.fetch_record_by_accessions("PRJEB18736", ["SAMEA2620084"])
     adapter.close()
 
 

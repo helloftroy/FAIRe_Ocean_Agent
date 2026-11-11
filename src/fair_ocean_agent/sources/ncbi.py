@@ -696,7 +696,21 @@ class NcbiBioSampleAdapter(SourceAdapter):
             )
         accessions = accessions[:MAX_SAMPLES_PER_PROJECT]
 
-        samples, combined_xml_for_hash = self._fetch_and_parse_biosamples(accessions)
+        # Never hand efetch an accession string: checked live 2026-11-10,
+        # efetch drops a SAMEA/SAMD prefix and reads the digits as a UID
+        # (SAMEA2620084 -> the unrelated SAMN02620084). That put ~50k foreign
+        # samples into 499 studies. Look UIDs up by accession instead, and
+        # keep only records whose own accession was asked for.
+        uids = self._esearch_biosample_uids(accessions)
+        samples, combined_xml_for_hash = self._fetch_and_parse_biosamples(uids) if uids else ([], [])
+        wanted = set(accessions)
+        dropped = [s.get("accession") for s in samples if s.get("accession") not in wanted]
+        if dropped:
+            logger.warning(
+                "BioProject %s: dropped %d returned BioSample(s) not among the requested accessions: %s",
+                bioproject_accession, len(dropped), dropped[:5],
+            )
+        samples = [s for s in samples if s.get("accession") in wanted]
         if not samples:
             raise SourceRecordNotFoundError(
                 f"None of {len(accessions)} known BioSample accession(s) resolved for BioProject {bioproject_accession}"
@@ -718,6 +732,24 @@ class NcbiBioSampleAdapter(SourceAdapter):
             retrieved_at=utcnow(),
             content_hash=_hash_text("".join(combined_xml_for_hash)),
         )
+
+    def _esearch_biosample_uids(self, accessions: list[str]) -> list[str]:
+        """BioSample accessions -> NCBI UIDs via esearch "<acc>[accn]",
+        EFETCH_BATCH_SIZE terms per request."""
+        uids: list[str] = []
+        for i in range(0, len(accessions), EFETCH_BATCH_SIZE):
+            batch = accessions[i : i + EFETCH_BATCH_SIZE]
+            payload, _ = self.http.get_json(
+                f"{self.config.base_url}/esearch.fcgi",
+                params={
+                    "db": "biosample",
+                    "term": " OR ".join(f"{a}[accn]" for a in batch),
+                    "retmode": "json",
+                    "retmax": len(batch) * 2,
+                },
+            )
+            uids.extend(payload.get("esearchresult", {}).get("idlist", []))
+        return list(dict.fromkeys(uids))
 
     def _fetch_and_parse_biosamples(self, ids: list[str]) -> tuple[list[dict], list[str]]:
         """Shared by fetch_record (numeric UIDs from elink) and

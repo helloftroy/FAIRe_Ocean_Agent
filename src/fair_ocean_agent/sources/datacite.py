@@ -36,6 +36,21 @@ def _doi_from_record(record: SourceRecord) -> str | None:
     return _attrs(record).get("doi") or (record.raw.get("data") or {}).get("id")
 
 
+# DataCite relationType values (lower-cased) that mean "this dataset belongs
+# to that paper". Only these may emit a related DOI (see find_related).
+_SAME_WORK_RELATION_TYPES = frozenset(
+    {
+        "issupplementto",
+        "issupplementedby",
+        "isdocumentedby",
+        "documents",
+        "isdescribedby",
+        "describes",
+        "ispublishedin",
+    }
+)
+
+
 def _relationship_type(value: str | None) -> RelationshipType:
     relation = (value or "").lower()
     if relation in {"isreferencedby", "iscitedby"}:
@@ -156,6 +171,18 @@ class DataCiteAdapter(SourceAdapter):
                 continue
             related_type = (item.get("relatedIdentifierType") or "").lower()
             identifier_type = IdentifierType.DOI if related_type == "doi" else guess_identifier_type(value)
+            if (
+                identifier_type == IdentifierType.DOI
+                and (item.get("relationType") or "").lower() not in _SAME_WORK_RELATION_TYPES
+            ):
+                # A paper DOI is study-identity evidence: resolve_or_create_study
+                # merges two studies on any DOI match, at STRUCTURED_SOURCE with
+                # no consistency check. Only relations that tie this dataset to
+                # its own paper may produce one. A dataset's References / Cites /
+                # IsCitedBy / HasPart / IsPartOf / IsVersionOf ... DOIs are other
+                # works: emitting them chained 448 papers into one study
+                # (STUDY-caa33f2ce2d5, found 2026-11-10).
+                continue
             if identifier_type is None:
                 identifier_type = IdentifierType.URL if related_type == "url" else IdentifierType.OTHER
             related.append(
