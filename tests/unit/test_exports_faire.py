@@ -810,6 +810,7 @@ def test_export_faire_sample_column_order_uses_preferred_human_readable_layout(d
         CUSTOM_PULLED_ENV_VAR_FIELD,
         CUSTOM_SOURCE_UNMAPPED_FIELD,
         SAMPLE_METADATA_SUPPRESSED_FIELDS,
+        UPSTREAM_SAMPLE_FIELDS_NOT_IN_MIRROR,
     )
 
     export_faire(db_session, tmp_path)
@@ -820,7 +821,7 @@ def test_export_faire_sample_column_order_uses_preferred_human_readable_layout(d
     # the human-readable order used for audit spreadsheets.
     expected_columns = [
         field for field in class_columns("sampleMetadata") if field not in SAMPLE_METADATA_SUPPRESSED_FIELDS
-    ]
+    ] + list(UPSTREAM_SAMPLE_FIELDS_NOT_IN_MIRROR)  # gap-2 rule targets (2026-11-11)
     exportable_columns = [
         INTERNAL_STUDY_ID_FIELD,
         INTERNAL_ALIAS_SAMPLE_IDS_FIELD,
@@ -834,19 +835,11 @@ def test_export_faire_sample_column_order_uses_preferred_human_readable_layout(d
     assert header == preferred_present + [field for field in exportable_columns if field not in preferred_set]
     assert not {
         "verbatimCoordinateSystem",
-        "verbatimEventDate",
-        "verbatimEventTime",
         "verbatimLatitude",
         "verbatimLongitude",
         "verbatimSRS",
-        "habitat_natural_artificial_0_1",
-        "ph_meth",
         "stationed_sample_dur",
-        "tidal_stage",
-        "turbidity",
-        "water_current",
         "wind_direction",
-        "wind_speed",
         "tot_carb_unit",
         "tot_diss_nitro_unit",
         "tot_inorg_nitro_unit",

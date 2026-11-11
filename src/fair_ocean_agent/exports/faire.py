@@ -612,8 +612,25 @@ SAMPLE_METADATA_SUPPRESSED_FIELDS = frozenset(
 )
 
 
+# Real FAIRe v1.0.2 sampleMetadata terms (reference/faire/FAIRe_checklist/
+# classes.yaml and the FULLtemplate) that the schemas/faire mirror lacks, but
+# that the gap-2 mapping rules (mapping/rules.py, 2026-11-11) fill. Without
+# these columns their standardized values never reached the export.
+UPSTREAM_SAMPLE_FIELDS_NOT_IN_MIRROR = (
+    "habitat_natural_artificial_0_1",
+    "ph_meth",
+    "tidal_stage",
+    "turbidity",
+    "verbatimEventDate",
+    "verbatimEventTime",
+    "water_current",
+    "wind_speed",
+)
+
+
 def _exportable_sample_columns() -> list[str]:
-    return [field for field in class_columns("sampleMetadata") if field not in SAMPLE_METADATA_SUPPRESSED_FIELDS]
+    columns = [field for field in class_columns("sampleMetadata") if field not in SAMPLE_METADATA_SUPPRESSED_FIELDS]
+    return columns + [field for field in UPSTREAM_SAMPLE_FIELDS_NOT_IN_MIRROR if field not in columns]
 
 
 # Same export-time suppression idiom as PROJECT_METADATA_SUPPRESSED_FIELDS/

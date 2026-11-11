@@ -23,13 +23,14 @@ from __future__ import annotations
 
 import collections
 import csv
-import json
 import re
 import sqlite3
 import sys
 from pathlib import Path
 
 import yaml
+
+from fair_ocean_agent.standards.faire_registry import build_faire_registry
 
 REPO = Path(__file__).resolve().parents[2]
 MIN_ENTITIES = 100
@@ -75,7 +76,8 @@ def main() -> None:
     for name in mapped:
         by_norm[norm(name)].add(name)
 
-    terms = json.load(open(REPO / "standards/compiled/faire_registry.json"))
+    # built from the vendored schema (standards/compiled/ is gitignored, absent on the cluster)
+    terms = build_faire_registry()
     faire = {t["upstream_field_name"] for t in terms if "sampleMetadata" in (t.get("data_type") or [])}
     mixs_to_faire = {}
     for t in terms:
