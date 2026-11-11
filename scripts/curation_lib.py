@@ -36,21 +36,51 @@ def sample_categories(conn: sqlite3.Connection) -> dict[str, str | None]:
     return {eid: classify_sample(f, EVIDENCE_FIELDS) for eid, f in evidence.items()}
 
 
-def bioproject_identifiers(conn: sqlite3.Connection) -> dict[str, list[tuple[str, str, str]]]:
-    """study -> [(bioproject, identifier source, created_at)] (primary only)."""
-    out: dict[str, list[tuple[str, str, str]]] = collections.defaultdict(list)
-    for s, v, src, created in conn.execute(
-        "select study_id, identifier_value, coalesce(source,''), created_at from external_identifiers "
-        "where identifier_type='bioproject_accession' and (relationship_type is null or relationship_type='')"
+PROJECT_IDENTIFIER_TYPES = ("bioproject_accession", "sra_study_accession", "ena_study_accession")
+
+
+def project_aliases(conn: sqlite3.Connection) -> dict[str, str]:
+    """SRA/ENA study accession (SRP/ERP/DRP) -> its BioProject (PRJ...), from
+    the secondary_study_accession facts of ENA sources keyed by the PRJ. One
+    project is then judged once, under one name."""
+    out: dict[str, str] = {}
+    for prj, secondary in conn.execute(
+        "select src.external_identifier, f.raw_value from raw_facts f "
+        "indexed by ix_raw_facts_fact_type_candidate join sources src on src.source_id=f.source_id "
+        "where f.fact_type_candidate='secondary_study_accession' and src.source_name='ena' "
+        "and src.external_identifier like 'PRJ%'"
     ):
-        out[s].append((v, src, str(created)))
+        for v in (secondary or "").replace(";", ",").split(","):
+            v = v.strip()
+            if v and not v.startswith("PRJ"):
+                out.setdefault(v, prj)
     return out
 
 
-def placements(conn: sqlite3.Connection, studies: Iterable[str]) -> dict[tuple[str, str], str]:
-    """(study, sample entity) -> BioProject, from NCBI BioSample facts (the
+def bioproject_identifiers(conn: sqlite3.Connection, aliases: dict[str, str] | None = None
+                           ) -> dict[str, list[tuple[str, str, str]]]:
+    """study -> [(project, identifier source, created_at)]. Every BioProject /
+    SRA study / ENA study identifier, primary or shares_accession_with (a
+    project first attached to another study is recorded as shared, but its
+    samples were still fetched into this one), SRP/ERP/DRP translated to the
+    BioProject through `aliases`."""
+    aliases = aliases if aliases is not None else project_aliases(conn)
+    out: dict[str, list[tuple[str, str, str]]] = collections.defaultdict(list)
+    for s, v, src, created in conn.execute(
+        "select study_id, identifier_value, coalesce(source,''), created_at from external_identifiers "
+        f"where identifier_type in ({_in(PROJECT_IDENTIFIER_TYPES)})"
+    ):
+        out[s].append((aliases.get(v, v), src, str(created)))
+    return out
+
+
+def placements(conn: sqlite3.Connection, studies: Iterable[str], aliases: dict[str, str] | None = None
+               ) -> dict[tuple[str, str], str]:
+    """(study, sample entity) -> project, from NCBI BioSample facts (the
     fetch's BioProject) or ENA run facts (samp_name accession, the ENA
-    source's project). NCBI wins when both exist."""
+    source's project, SRP/ERP/DRP translated through `aliases`). NCBI wins
+    when both exist."""
+    aliases = aliases if aliases is not None else project_aliases(conn)
     sq = _in(studies)
     out: dict[tuple[str, str], str] = {}
     for s, e, bp in conn.execute(
@@ -78,7 +108,7 @@ def placements(conn: sqlite3.Connection, studies: Iterable[str]) -> dict[tuple[s
     ):
         e = acc_to_entity.get(acc or "")
         if e:
-            out.setdefault((s, e), bp)
+            out.setdefault((s, e), aliases.get(bp, bp))
     return out
 
 
@@ -106,4 +136,5 @@ def digit_collisions(conn: sqlite3.Connection, studies: Iterable[str]) -> set[st
 __all__ = [
     "ORDER", "NON_MARINE", "KEPT_KINDS", "EVIDENCE_FIELDS", "categorize",
     "sample_categories", "bioproject_identifiers", "placements", "digit_collisions",
+    "project_aliases", "PROJECT_IDENTIFIER_TYPES",
 ]

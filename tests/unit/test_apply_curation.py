@@ -137,3 +137,40 @@ def test_tombstone_rerun_deletes_reappeared_sample(db):
     db.commit()
     plan = apply_curation.make_plan(db, [], [])
     assert plan.delete["E3b"][0] == "tombstone"
+
+
+def test_shared_identifiers_and_srp_aliases_are_one_project(tmp_path):
+    import curation_lib
+
+    path = tmp_path / "a.db"
+    engine = create_engine(f"sqlite:///{path}")
+    Base.metadata.create_all(engine)
+    s = sessionmaker(bind=engine)()
+    s.add(Study(study_id="S", title="Sponge microbiomes"))
+    s.add_all([
+        Source(source_id="ENA-PRJ", study_id="S", source_type="repository_api", source_name="ena",
+               external_identifier="PRJNA1", access_status="unknown", is_mirror=False,
+               inspection_status="inspected", inspection_level="metadata_only"),
+        Source(source_id="ENA-SRP", study_id="S", source_type="repository_api", source_name="ena",
+               external_identifier="SRP1", access_status="unknown", is_mirror=False,
+               inspection_status="inspected", inspection_level="metadata_only"),
+    ])
+    s.add(RawFact(study_id="S", source_id="ENA-PRJ", fact_type_candidate="secondary_study_accession", raw_value="SRP1",
+                  entity_level="project", support_type="structured_source", review_status="accepted"))
+    s.add(Entity(entity_id="E", study_id="S", entity_level="sample", external_identifier="SAMN9"))
+    s.add(RawFact(study_id="S", source_id="ENA-SRP", fact_type_candidate="samp_name", raw_value="SAMN9",
+                  entity_level="experiment_run", support_type="structured_source", review_status="accepted"))
+    s.add_all([
+        ExternalIdentifier(study_id="S", identifier_type="bioproject_accession", identifier_value="PRJNA1"),
+        ExternalIdentifier(study_id="S", identifier_type="sra_study_accession", identifier_value="SRP1"),
+        ExternalIdentifier(study_id="S", identifier_type="bioproject_accession", identifier_value="PRJNA612578",
+                           relationship_type="shares_accession_with", source="external_identifier_sequence_accession_resolution"),
+    ])
+    s.commit()
+    s.close()
+    conn = sqlite3.connect(path)
+    aliases = curation_lib.project_aliases(conn)
+    assert aliases == {"SRP1": "PRJNA1"}
+    projects = {p for p, _, _ in curation_lib.bioproject_identifiers(conn, aliases)["S"]}
+    assert projects == {"PRJNA1", "PRJNA612578"}            # SRP1 folded in; shared one seen
+    assert curation_lib.placements(conn, ["S"], aliases) == {("S", "E"): "PRJNA1"}

@@ -28,6 +28,7 @@ from curation_lib import (  # noqa: E402
     bioproject_identifiers,
     digit_collisions,
     placements,
+    project_aliases,
     sample_categories,
 )
 
@@ -52,11 +53,12 @@ VERDICTS = """
 
 
 def audit(conn: sqlite3.Connection) -> list[dict]:
-    bp_rows = bioproject_identifiers(conn)
+    aliases = project_aliases(conn)
+    bp_rows = bioproject_identifiers(conn, aliases)
     studies = {s for s, rows in bp_rows.items() if len({v for v, _, _ in rows}) >= 2}
     print(f"{len(studies):,} studies with 2+ BioProjects", flush=True)
     cats = sample_categories(conn)
-    placed = placements(conn, studies)
+    placed = placements(conn, studies, aliases)
     collisions = digit_collisions(conn, studies)
     print(f"{len(placed):,} (study, sample) placements", flush=True)
 

@@ -51,7 +51,7 @@ from pathlib import Path
 from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from curation_lib import KEPT_KINDS, NON_MARINE, placements, sample_categories  # noqa: E402
+from curation_lib import KEPT_KINDS, NON_MARINE, PROJECT_IDENTIFIER_TYPES, placements, project_aliases, sample_categories  # noqa: E402
 from marine_audit import text_category  # noqa: E402
 
 DROP_VERDICTS = ("foreign_bug_chain", "non_marine")
@@ -66,6 +66,7 @@ class Plan:
     flag: dict[str, tuple[str, str]] = field(default_factory=dict)              # study -> (status, reason)
     accession: dict[str, str] = field(default_factory=dict)
     level: dict[str, str] = field(default_factory=dict)
+    aliases: dict[str, str] = field(default_factory=dict)                       # SRP/ERP/DRP -> PRJ
 
 
 def _chunks(seq, n=900):
@@ -155,9 +156,10 @@ def make_plan(conn, audit_rows: list[dict], review_rows: list[dict]) -> Plan:
                 plan.delete.setdefault(e, ("tombstone", "deleted by an earlier curation run"))
 
     dropped_links: dict[str, dict[str, tuple[str, str]]] = collections.defaultdict(dict)
+    plan.aliases = project_aliases(conn)
     if plan.drop_bps:
         studies = {s for s, _ in plan.drop_bps}
-        for (s, e), bp in placements(conn, studies).items():
+        for (s, e), bp in placements(conn, studies, plan.aliases).items():
             if (s, bp) in plan.drop_bps:
                 rule, _ = plan.drop_bps[(s, bp)]
                 dropped_links[e][s] = (rule, f"{bp} dropped from {s}")
@@ -336,11 +338,16 @@ def apply_plan(conn, plan: Plan, run_label: str) -> None:
         print(f"  deleted {min(i + CHUNK, len(ents)):,}/{len(ents):,} entities  {time.time() - t0:.0f}s", flush=True)
 
     # dropped BioProjects: identifier rows; repository sources left without facts
+    names_of = collections.defaultdict(set)
+    for alias, prj in plan.aliases.items():
+        names_of[prj].add(alias)
+    types = ",".join(f"'{t}'" for t in PROJECT_IDENTIFIER_TYPES)
     for (s, bp), (rule, why) in sorted(plan.drop_bps.items()):
-        conn.execute(
-            "delete from external_identifiers where study_id=? and identifier_type='bioproject_accession' and identifier_value=?",
-            (s, bp),
-        )
+        for name in {bp} | names_of.get(bp, set()):
+            conn.execute(
+                f"delete from external_identifiers where study_id=? and identifier_type in ({types}) and identifier_value=?",
+                (s, name),
+            )
     _record(conn, [("bioproject", bp, None, s, "excluded", rule, why) for (s, bp), (rule, why) in plan.drop_bps.items()], run_label)
     studies = {s for s, _ in plan.drop_bps} | {s for _, s in plan.unlink} | {s for s in home.values() if s}
     empty = []
