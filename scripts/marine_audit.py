@@ -58,7 +58,7 @@ PATTERNS = {
     r"honey ?bee|apis mellifera|termite|\bleaf|leaves|forest|desert|permafrost|caenorhabditis|"
     r"saccharomyces|grassland|agricultur|\bcrops?\b|maize|wheat|rice\b|cave",
     "engineered": r"wastewater|sewage|activated sludge|bioreactor|anaerobic digest|digester|\bfood|"
-    r"indoor|air metagenome|built environment|dairy|cheese|fermented|brewery|wine|kimchi|landfill|"
+    r"indoor|air metagenome|built environment|dairy|cheese|ice[- ]?cream|fermented|brewery|wine|kimchi|landfill|"
     r"mine drainage|oil reservoir|hydrocarbon reservoir",
     "other_host": r"gut metagenome|insect metagenome|invertebrate metagenome|animal|"
     r"cyprinus|carassius|\bcarp\b|tilapia|oreochromis|oncorhynchus mykiss|rainbow trout",

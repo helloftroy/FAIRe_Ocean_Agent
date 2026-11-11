@@ -160,3 +160,29 @@ Cluster order: stop discovery; pull; run_audits.sbatch; run_curation.sbatch
 CURATION_APPLY=1 (backs up the db first); run_remap.sbatch; export-faire;
 correct_to_faire.py; fill summary + figure. Still to build: fill samples
 and runs past the NCBI (300) and ENA (500) caps for kept BioProjects.
+
+## Curation and cap fill, final dry run (2026-11-11, Nov 9 snapshot)
+
+Further fixes after the second dry run:
+- shared (shares_accession_with) BioProject identifiers are now audited, and
+  SRP/ERP/DRP are folded into their PRJ (6167602): foreign projects such as
+  SARS-CoV-2 PRJNA612578 under the Antarctic sponge study had escaped;
+- new verdict foreign_hub (b5e26c7): resolution-only project attached to >=3
+  studies with < 50 % marine/freshwater classified samples (PulseNet,
+  GenomeTrakr, Listeria, malaria trials); Tara Oceans projects stay;
+- 91 more review BioProjects checked by hand (43 drop, 48 keep):
+  curation/bioproject_review_2026-11-11.csv now has 278 rows, 140 drop.
+
+Final plan (curation_dryrun4/plan_final): delete 598k samples (own evidence
+non-marine 367,325; foreign bug chain 173,029; non-marine projects 52,769;
+manual 5,535; hubs 2,637) plus their runs; unlink 178,220 links; drop 6,848
+(study, project) links; flag 1,712 studies not_relevant.
+
+Cap fill (scripts/fill_capped_projects.py): one study per project; only
+projects with samples left after curation, in a study that reads
+marine/freshwater (title, or >= 50 % of its remaining classified samples);
+fetched samples filtered again one by one. Snapshot estimate: 264 projects,
+up to 161,240 BioSamples past the cap (lower on the live db: gap 1 added
+organism data, so curation removes more). ENA: 450 studies with > 500 runs.
+run_curation.sbatch re-runs the BioProject audit itself; the fill job refuses
+to start before curation is applied.

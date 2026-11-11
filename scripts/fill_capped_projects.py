@@ -47,7 +47,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from sqlalchemy import text  # noqa: E402
 
-from curation_lib import KEPT_KINDS, project_aliases  # noqa: E402
+from curation_lib import KEPT_KINDS, placements, project_aliases, sample_categories  # noqa: E402
 from fair_ocean_agent.clock import utcnow  # noqa: E402
 from fair_ocean_agent.database.enums import (  # noqa: E402
     AccessStatus,
@@ -64,7 +64,7 @@ from fair_ocean_agent.sources.base import SourceRecord  # noqa: E402
 from fair_ocean_agent.sources.ena import RUN_FIELDS, STUDY_FIELDS  # noqa: E402
 from fair_ocean_agent.sources.ncbi import _elink_ids, _esearch_verified_uid  # noqa: E402
 from fair_ocean_agent.workflow.handlers import _build_enabled_adapters, _materialize_candidate_entity  # noqa: E402
-from marine_audit import classify_sample  # noqa: E402
+from marine_audit import classify_sample, text_category  # noqa: E402
 
 CHUNK = 500
 
@@ -114,7 +114,36 @@ def _targets(session, note: str, source_name: str, aliases: dict[str, str], stud
         seen.add((s, ident))
         m = re.search(r"of (\d+)", note_text or "")
         out.append((s, ident, source_id, int(m.group(1)) if m else 0))
-    return out
+    # A project none of whose first samples survived curation in this study
+    # (all deleted as non-marine or foreign) is not filled: the rest would be
+    # filtered out too, after a large download.
+    # Filling adds data, so it is stricter than keeping. A target is filled
+    # only if some of its samples survived curation in this study AND the
+    # study reads marine/freshwater: by its title/description, or (neutral
+    # title) by at least half of the project's remaining classified samples.
+    conn = session.connection().connection.driver_connection
+    cats = sample_categories(conn)
+    kept, kind, classified = collections.Counter(), collections.Counter(), collections.Counter()
+    for (st, e), proj in placements(conn, {t[0] for t in out}, aliases).items():
+        kept[(st, proj)] += 1
+        c = cats.get(e)
+        if c:
+            classified[(st, proj)] += 1
+            kind[(st, proj)] += c in KEPT_KINDS
+    titles = {sid: f"{t or ''} {d or ''}" for sid, t, d in conn.execute("select study_id, title, description from studies")}
+    final, why = [], collections.Counter()
+    for t in out:
+        k = (t[0], aliases.get(t[1], t[1]))
+        tcat, _ = text_category(titles.get(t[0], ""))
+        if kept[k] == 0:
+            why["no sample of the project left in the study"] += 1
+        elif tcat in KEPT_KINDS or (tcat is None and classified[k] and kind[k] / classified[k] >= 0.5):
+            final.append(t)
+        else:
+            why[f"study not marine/freshwater (title: {tcat})"] += 1
+    for reason, n in why.items():
+        print(f"  {n:,} targets skipped: {reason}", flush=True)
+    return final
 
 
 def _present(session, level: str) -> set[str]:
