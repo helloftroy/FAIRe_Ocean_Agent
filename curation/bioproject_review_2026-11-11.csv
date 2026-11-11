@@ -186,3 +186,94 @@ STUDY-12d5ded31994,PRJNA490140,drop,GlobalFungi soil / plant fungal dataset,root
 STUDY-236d8bf91074,PRJNA437519,keep,coastal salt ponds,Revegetation of abandoned salt ponds relieves the seasonal fluctuation
 STUDY-43a7a4e43ef5,PRJEB15177,drop,pitcher plant fluid (terrestrial),Pitcher plant Darlingtonia california microbe intervention
 STUDY-e01c1f1d161f,PRJNA351843,drop,Mycobacteria reads unrelated to the coral study,Mycobacteria Raw sequence reads
+STUDY-01a6d31adb4e,SRP700914,keep,"marine or freshwater content of the study's own data, or no samples",
+STUDY-07b6f192edc5,SRP517461,keep,"marine or freshwater content of the study's own data, or no samples",
+STUDY-0cb9a5534b52,SRP660864,keep,"marine or freshwater content of the study's own data, or no samples",
+STUDY-10c9f80eb45e,PRJNA488536,keep,"marine or freshwater content of the study's own data, or no samples",Microbial eukaryotes from the Western Pacific Ocean
+STUDY-13422e1bfcb6,PRJEB33499,keep,"marine or freshwater content of the study's own data, or no samples",A comparison of sample processing and bacterial lysis methods for dairy product DNA extraction using automation friendly
+STUDY-13edeb43e197,PRJEB14970,keep,"marine or freshwater content of the study's own data, or no samples",Trade-offs between microbiome diversity and productivity in a stratified microbial mat
+STUDY-148fd4d789e0,PRJNA1342807,drop,"water deer (Hydropotes inermis), terrestrial",Hydropotes inermis Raw sequence reads
+STUDY-150290a66e93,PRJNA268940,keep,"marine or freshwater content of the study's own data, or no samples",Deep Subsurface Targeted Locus (Loci)
+STUDY-16b88a285cd0,PRJNA473633,keep,"marine or freshwater content of the study's own data, or no samples",Sediment and tubercle
+STUDY-190595023d2b,ERP020889,keep,"marine or freshwater content of the study's own data, or no samples",
+STUDY-1a54865d2803,PRJNA244376,drop,lake cyanobacterial mats attached to unrelated studies,Metatranscriptome of Cyanobacterial mats from Lake
+STUDY-1a54865d2803,PRJNA293920,drop,freshwater fish eDNA attached to unrelated studies,freshwater fish species targeted loci environmental
+STUDY-1f5d2c8c732b,PRJNA1075347,drop,"river ammonia oxidisers, unrelated to the study","AOA,,AOB,comammox A and comammox B in Beiyun river basin in winter"
+STUDY-1f5d2c8c732b,PRJNA1079394,drop,"rainbow trout brain, unrelated to the study",Dysbiotic Brain Microbiota Facilitates Rainbow Trout Tel in Detecting Systemic Inflammatory Responses
+STUDY-1f5d2c8c732b,PRJNA1081582,drop,"amoeba in water treatment, unrelated to the study",Characterization of amoeba communities in full-scale drinking water distribution systems with different disinfectants
+STUDY-1fde2cff816d,ERP009616,keep,"marine or freshwater content of the study's own data, or no samples",
+STUDY-209c6c7a9f65,PRJNA414718,keep,"marine or freshwater content of the study's own data, or no samples",EUPHYLLIA PARADIVISA Raw sequence reads
+STUDY-21c5299f710d,PRJNA244306,drop,"fasting vertebrate hosts, unrelated",Fasting Vertebrate Hosts Metagenome
+STUDY-21c5299f710d,PRJNA251543,drop,"large rivers, unrelated to the study",Large rivers Targeted Locus (Loci)
+STUDY-30ffcf6250c0,PRJNA302771,keep,"marine or freshwater content of the study's own data, or no samples",Platygyra daedalea map
+STUDY-318a7b353218,PRJNA315941,keep,"marine or freshwater content of the study's own data, or no samples",sediment of marginal seas Raw sequence reads
+STUDY-32d77cb82530,PRJNA293920,drop,freshwater fish eDNA attached to unrelated studies,freshwater fish species targeted loci environmental
+STUDY-3466a3777de9,PRJEB32516,keep,"marine or freshwater content of the study's own data, or no samples",Quantifying and understanding well-to-well contamination in microbiome research
+STUDY-3d1e13371af1,PRJEB14902,keep,"marine or freshwater content of the study's own data, or no samples",The effect of wetland age and restoration methodology on long term development and ecosystem functions of restored wetla
+STUDY-3eb0ecb9722c,PRJEB121158,drop,gravesoils (terrestrial),Microbial community succession of gravesoils at SHSU 2015
+STUDY-42927a79a8de,SRP604161,keep,"marine or freshwater content of the study's own data, or no samples",
+STUDY-43a7a4e43ef5,PRJEB12947,drop,gastric bypass patients (medical),Roux-en-Y gastric bypass surgery of morbidly obese patients shows swift and persistent changes of the individual gut mic
+STUDY-43a7a4e43ef5,PRJEB32520,drop,pitcher plant microbiomes (terrestrial),Ecology outweighs evolutionary history in shaping the bat microbiome
+STUDY-4fa00a12f182,PRJEB14797,keep,"marine or freshwater content of the study's own data, or no samples",Gibbons tongue river 16S
+STUDY-5355c2339192,SRP399961,keep,"marine or freshwater content of the study's own data, or no samples",
+STUDY-53af9e50bbc1,PRJEB86128,drop,sorghum rhizosphere (terrestrial),Key microbial taxa in the rhizosphere of sorghum and sunflower grown in crop rotations
+STUDY-569895c45a5e,SRP045208,keep,"marine or freshwater content of the study's own data, or no samples",
+STUDY-5ac5dc70580a,PRJEB31895,keep,"marine or freshwater content of the study's own data, or no samples",Kongsfjorden_July_2016
+STUDY-5e5bb6a6b2a1,PRJNA576070,keep,"marine or freshwater content of the study's own data, or no samples",Pacific Northwest National Laboratory - Columbia River Science Focus Area
+STUDY-5e907dcab694,PRJNA304344,drop,freshwater lake data attached to a soil study,Freshwater lake 16S sequencing data EM2015Schmidt
+STUDY-672e71ad461a,SRP699433,keep,"marine or freshwater content of the study's own data, or no samples",
+STUDY-687d18cec847,PRJEB51632,keep,"marine or freshwater content of the study's own data, or no samples",Nuanced effects of wastewater disinfection upgrades on the microbial community dynamics of an urban river system
+STUDY-6c377742528c,PRJEB22677,keep,"marine or freshwater content of the study's own data, or no samples",Impact of different sequencing and analysis methods for 16S rRNA gene-based bacterial community analysis in dairy produc
+STUDY-6d66f338de35,SRP213361,keep,"marine or freshwater content of the study's own data, or no samples",
+STUDY-718ca4d55c61,PRJEB108853,keep,"marine or freshwater content of the study's own data, or no samples",Microbial Communities associated to three species of crabs in Puerto Rican Red and Black Mangroves
+STUDY-87d31d6af657,PRJNA293920,drop,freshwater fish eDNA attached to unrelated studies,freshwater fish species targeted loci environmental
+STUDY-97ca7a2cd48f,SRP498670,keep,"marine or freshwater content of the study's own data, or no samples",
+STUDY-99ecd41fddbc,PRJNA672207,keep,"marine or freshwater content of the study's own data, or no samples",Freshwater Metagenome
+STUDY-9c361364e70c,SRP387272,keep,"marine or freshwater content of the study's own data, or no samples",
+STUDY-9ecb5abe71e3,PRJNA244376,drop,lake cyanobacterial mats attached to unrelated studies,Metatranscriptome of Cyanobacterial mats from Lake
+STUDY-9ecb5abe71e3,PRJNA293920,drop,freshwater fish eDNA attached to unrelated studies,freshwater fish species targeted loci environmental
+STUDY-9f709276cdc8,PRJNA351843,drop,"Mycobacteria reads, unrelated",Mycobacteria Raw sequence reads
+STUDY-9f709276cdc8,PRJNA353856,drop,"Influenza A virus reads, unrelated",Influenza A virus Raw sequence reads
+STUDY-9f709276cdc8,PRJNA354726,drop,"Lake Erie Microcystis, unrelated to the coral study",Metatranscriptome of Microcystis bloom in Lake Erie 2014
+STUDY-a3492f971116,PRJEB9658,drop,"lake depth profile, unrelated to the study",Assessment of community structures along the depth profile of an alpine snowpack in winter and at snowmelt
+STUDY-a3492f971116,PRJEB9659,drop,"lake monitoring, unrelated to the study",Long-term monitoring of structures of microbial communities along a vegetation gradient from alpine meadows to a glacier
+STUDY-a91750c67b3c,PRJNA317417,keep,"marine or freshwater content of the study's own data, or no samples",Southeast Andaman Sea Raw sequence reads
+STUDY-abb25025d5ab,PRJNA33179,drop,"Antarctic lake attached by resolution, unrelated",Microbial metagenome from a lake in Antarctica
+STUDY-b0c2e9fb3d6f,PRJNA52461,drop,"bacterial genome assembly, unrelated",Singulisphaera acidiphila DSM 18658 genome sequencing project
+STUDY-bbd03e87481a,PRJNA647658,keep,"marine or freshwater content of the study's own data, or no samples",Sequencing data of full-length 16S rRNA of bacteria in the Three Gorges Reservoir area
+STUDY-bc3c1cf5bc98,PRJEB15163,drop,biological soil crust (terrestrial),Recovery of biological soil crust-like microbial communities in previously submerged soils of Glen canyon
+STUDY-ca41a115771e,PRJNA244376,drop,lake cyanobacterial mats attached to unrelated studies,Metatranscriptome of Cyanobacterial mats from Lake
+STUDY-ca41a115771e,PRJNA293920,drop,freshwater fish eDNA attached to unrelated studies,freshwater fish species targeted loci environmental
+STUDY-caa33f2ce2d5,ERP009665,keep,"marine or freshwater content of the study's own data, or no samples",
+STUDY-caa33f2ce2d5,ERP016926,keep,"marine or freshwater content of the study's own data, or no samples",
+STUDY-caa33f2ce2d5,ERP020887,keep,"marine or freshwater content of the study's own data, or no samples",
+STUDY-caa33f2ce2d5,ERP020888,keep,"marine or freshwater content of the study's own data, or no samples",
+STUDY-caa33f2ce2d5,ERP020916,keep,"marine or freshwater content of the study's own data, or no samples",
+STUDY-caa33f2ce2d5,ERP021864,keep,"marine or freshwater content of the study's own data, or no samples",
+STUDY-caa33f2ce2d5,PRJDB5936,drop,"Tamagawa river, unrelated to the cold-seep study",Tamagawa river microbiome
+STUDY-caa33f2ce2d5,PRJDB6461,drop,"isolate genome, unrelated",IRD18C08 cluster bacterioplankton isolate Genome sequencing and assembly
+STUDY-caa33f2ce2d5,PRJEB15061,drop,soil bacterial diversity (terrestrial),Spatial scale drives patterns in soil bacterial diversity.
+STUDY-caa33f2ce2d5,PRJEB49194,keep,"marine or freshwater content of the study's own data, or no samples",Shrimp aquaculture microbiome
+STUDY-caa33f2ce2d5,PRJNA114691,drop,"Rifle groundwater, unrelated",Rifle CO Subsurface Groundwater Metagenome
+STUDY-caa33f2ce2d5,PRJNA448784,drop,"ciliate genome, unrelated",Halteria grandinella macronuclear genome sequencing and assembly
+STUDY-caa33f2ce2d5,PRJNA517427,drop,"brown trout selection, unrelated",contemporary natural selection in brown trout (Salmo trutta) at transcriptome level - QuantSeq 3' RNA-Seq forward raw se
+STUDY-caa33f2ce2d5,PRJNA522026,drop,"Ross River virus genomes, unrelated",Genome sequences of three Ross River virus isolates from Australian Defence Force
+STUDY-caa33f2ce2d5,PRJNA542960,drop,"anthropogenic impacts dataset attached by resolution, unrelated",Impacts of anthropogenic activities on ecological health in a river ecosystem
+STUDY-cafedd470b1b,PRJEB14822,keep,"marine or freshwater content of the study's own data, or no samples",Song Colorado freshwater fish
+STUDY-d2330fe0b9d4,PRJEB61671,drop,fly organs and fly-human transfer (terrestrial),The microbiome of fly organs and fly-human microbial transfer during decomposition
+STUDY-d61304cf96b5,PRJEB19469,keep,"marine or freshwater content of the study's own data, or no samples",Effect of fracking on freshwater biosystems
+STUDY-d61ce60aa3b9,PRJEB120966,keep,"marine or freshwater content of the study's own data, or no samples",iCONNECT
+STUDY-d67f39be2002,SRP560575,keep,"marine or freshwater content of the study's own data, or no samples",
+STUDY-da5b0d0ca73a,PRJNA293920,drop,freshwater fish eDNA attached to unrelated studies,freshwater fish species targeted loci environmental
+STUDY-daf65b717b57,PRJEB14911,keep,"marine or freshwater content of the study's own data, or no samples",A decade of seasonal dynamics and co-occurrences within freshwater bacterioplankton communities from eutrophic Lake Mend
+STUDY-e01c1f1d161f,PRJNA353856,drop,"Influenza A virus reads, unrelated",Influenza A virus Raw sequence reads
+STUDY-e01c1f1d161f,PRJNA354726,drop,"Lake Erie Microcystis, unrelated to the coral study",Metatranscriptome of Microcystis bloom in Lake Erie 2014
+STUDY-e2023529e684,PRJNA293920,drop,freshwater fish eDNA attached to unrelated studies,freshwater fish species targeted loci environmental
+STUDY-e5a1254fdbaa,PRJNA269745,keep,"marine or freshwater content of the study's own data, or no samples","pCO2 Vent, Vulcano, Italy Metagenome"
+STUDY-e80f5c3d2b23,PRJEB14739,keep,"marine or freshwater content of the study's own data, or no samples",Catchment sources of microbes
+STUDY-f1c2ca757da7,PRJEB18097,keep,"marine or freshwater content of the study's own data, or no samples","Prokaryote populations of extant microbialites along a depth gradient in Pavilion Lake, British Columbia, Canada"
+STUDY-f52316b7c62e,PRJEB67765,drop,Italian seeps attached to a human lung study,Deeply sourced seeps of Italy
+STUDY-f59d5a376497,ERP004961,keep,"marine or freshwater content of the study's own data, or no samples",
+STUDY-f99dbd5c546d,ERP011240,drop,tick (Ixodes) microbiota (terrestrial),
+STUDY-fa2bab6a95d0,PRJNA222539,keep,"marine or freshwater content of the study's own data, or no samples",Red Sea sediment 2011 Targeted Locus (Loci)
+STUDY-fbac5059588d,PRJNA192455,keep,"marine or freshwater content of the study's own data, or no samples",16S rDNA pyrosequencing of the Mediterranean gorgonian Paramuricea clavata
