@@ -47,3 +47,15 @@ def test_obviously_unwanted_is_non_marine(fields, category):
 
 def test_no_evidence_is_unclassified():
     assert classify_sample({"organism": "metagenome"}) is None
+
+
+def test_generic_host_associated_label_defers_to_the_host():
+    from marine_audit import classify_sample
+
+    assert classify_sample({"organism": "fish gut metagenome", "host": "Sparisoma viride"}) is None
+    assert classify_sample({"organism": "gut metagenome", "host": "Lates calcarifer"}) is None
+    assert classify_sample({"organism": "invertebrate metagenome", "host": "Exaiptasia diaphana"}) is None
+    assert classify_sample({"organism": "gut metagenome", "host": "Homo sapiens"}) == "medical"
+    assert classify_sample({"organism": "gut metagenome", "host": "Equus caballus"}) is None
+    assert classify_sample({"organism": "gut metagenome", "host": "Gallus gallus"}) == "terrestrial"
+    assert classify_sample({"organism": "Cyprinus carpio"}) == "other_host"   # named host still decides

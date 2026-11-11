@@ -204,12 +204,23 @@ def make_plan(conn, audit_rows: list[dict], review_rows: list[dict]) -> Plan:
         for s in studies:
             if (e, s) not in plan.unlink:
                 kept_kind[s] += 1
+    had = collections.Counter()
+    left = collections.Counter()
+    for e, studies in links.items():
+        for s in studies:
+            had[s] += 1
+            if e not in plan.delete and (e, s) not in plan.unlink:
+                left[s] += 1
     for s, title, desc in conn.execute("select study_id, title, description from studies where canonical_status != 'merged'"):
         tcat, _ = text_category(f"{title or ''} {desc or ''}")
         if kept_kind[s] or tcat in KEPT_KINDS:
             plan.flag[s] = ("relevant", f"{kept_kind[s]} marine/freshwater samples; title: {tcat}")
         elif tcat is not None:
             plan.flag[s] = ("not_relevant", f"no marine/freshwater samples; title: {tcat}")
+        elif had[s] and not left[s]:
+            # every sample removed and no habitat word in title or description
+            # (spot-check 2026-11-11: fruit fly, ant, ambient air, milk studies)
+            plan.flag[s] = ("not_relevant", f"all {had[s]} samples removed; title: no habitat keyword")
     return plan
 
 

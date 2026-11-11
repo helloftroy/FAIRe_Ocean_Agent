@@ -174,3 +174,23 @@ def test_shared_identifiers_and_srp_aliases_are_one_project(tmp_path):
     projects = {p for p, _, _ in curation_lib.bioproject_identifiers(conn, aliases)["S"]}
     assert projects == {"PRJNA1", "PRJNA612578"}            # SRP1 folded in; shared one seen
     assert curation_lib.placements(conn, ["S"], aliases) == {("S", "E"): "PRJNA1"}
+
+
+def _clone(db, table, key, value, **changes):
+    cols = [r[1] for r in db.execute(f"pragma table_info({table})")]
+    row = dict(zip(cols, db.execute(f"select * from {table} where {key}=? limit 1", (value,)).fetchone()))
+    row.update(changes)
+    db.execute(f"insert into {table} ({','.join(cols)}) values ({','.join('?' * len(cols))})", [row[c] for c in cols])
+
+
+def test_study_emptied_by_curation_with_no_habitat_title_is_not_relevant(db):
+    _clone(db, "studies", "study_id", A, study_id="STUDY-D", title="Ants propleura microbial community", description=None)
+    _clone(db, "entities", "entity_id", "E5", entity_id="E7", study_id="STUDY-D", external_identifier="SAMN7")
+    es = db.execute("select entity_study_id from entity_studies where entity_id='E5'").fetchone()[0]
+    _clone(db, "entity_studies", "entity_study_id", es, entity_study_id="ES-7", entity_id="E7", study_id="STUDY-D")
+    fact = db.execute("select fact_id from raw_facts where entity_id='E5'").fetchone()[0]
+    _clone(db, "raw_facts", "fact_id", fact, fact_id="F-7", entity_id="E7", study_id="STUDY-D")
+    db.commit()
+    plan = apply_curation.make_plan(db, AUDIT, [])
+    assert plan.flag["STUDY-D"][0] == "not_relevant"
+    assert plan.flag[A][0] == "relevant"      # still has its sponge sample

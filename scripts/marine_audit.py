@@ -93,6 +93,14 @@ UNAMBIGUOUS_NON_MARINE = re.compile(
     re.I,
 )
 KEPT = ("marine", "freshwater")
+# Host-associated labels that say nothing about the host itself. When one of
+# these is the only non-marine evidence, the host field decides; an unknown
+# host (Sparisoma viride, Lates calcarifer, Exaiptasia diaphana: marine animals
+# with no keyword) leaves the sample unclassified, so it is kept (2026-11-11).
+GENERIC_HOST_ASSOCIATED = re.compile(
+    r"^((fish |invertebrate |animal )?gut|invertebrate|fish|animal|organismal|whole organism) metagenomes?$",
+    re.I,
+)
 
 
 def classify_sample(fields: dict[str, str], order=("organism", "host", "isolation_source", "env_broad_scale")) -> str | None:
@@ -119,6 +127,9 @@ def classify_sample(fields: dict[str, str], order=("organism", "host", "isolatio
             return "marine"
         if RX["freshwater"].search(text):
             return "freshwater"
+    if cat == "other_host" and GENERIC_HOST_ASSOCIATED.match((fields.get("organism") or "").strip()):
+        host = categorize(fields.get("host"))
+        return host if host in ("medical", "terrestrial", "engineered") else None
     return cat
 
 
