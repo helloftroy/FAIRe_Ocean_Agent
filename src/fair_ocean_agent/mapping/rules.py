@@ -1341,12 +1341,168 @@ def _generated_v3_llm_rules() -> tuple[MappingRule, ...]:
     return tuple(generated)
 
 
-RULES: tuple[MappingRule, ...] = (
+_BASE_RULES: tuple[MappingRule, ...] = (
     _EXPLICIT_RULES
     + _generated_environmental_sample_rules()
     + _generated_physicochemical_env_var_rules()
     + _generated_v3_llm_rules()
 )
+
+# --- Gap-2 sample-level spellings (2026-11-10 mapping-rule audit) ---
+# Found by scripts/faire_strict/mapping_inventory.py + mapping_candidates.py
+# against the Nov 9 snapshot: real BioSample / ENA attribute spellings that
+# had no rule, so their values never reached the export (sample counts and
+# the full candidate list are in data_integrity_audit.md, Finding 7).
+# Approved by the user (2026-11-10), minus five with the wrong meaning
+# (concentration / Concentration are exposure treatments, not DNA
+# concentration; host_common_name x3 are common, not taxonomic, names) and
+# minus targets the export suppresses on purpose
+# (SAMPLE_METADATA_SUPPRESSED_FIELDS: alt, nucl_acid_ext, size_frac_low,
+# nitro, org_carb, ...).
+#
+# Spelling -> existing raw name whose SAMPLE-level rules are copied as-is
+# (same target, transform, enum, ENVO expansion or env-var formatting).
+_GAP2_COPY_RULES_OF: dict[str, str] = {
+    "geographic location (latitude)": "latitude",
+    "geographic location (longitude)": "longitude",
+    "sampling event, latitude, start": "latitude",
+    "sampling event, longitude, start": "longitude",
+    "Latitude": "latitude",
+    "Longitude": "longitude",
+    "decimalLatitude": "latitude",
+    "decimalLongitude": "longitude",
+    "lat lon": "lat_lon",
+    "latitude and longitude": "lat_lon",
+    "collection_timestamp": "collection_date",
+    "sampling event, date-time, start": "collection_date",
+    "collection date": "collection_date",
+    "Collection Date": "collection_date",
+    "collection-date": "collection_date",
+    "collection_datetime": "collection_date",
+    "Collection.Date": "collection_date",
+    "collectiondate": "collection_date",
+    "geographic location (country and/or sea)": "geo_loc_name",
+    "geographic location (country and/or sea,region)": "geo_loc_name",
+    "geographic location (country and/or sea, region)": "geo_loc_name",
+    "geographic location (countryand/orsea,region)": "geo_loc_name",
+    "geo loc name": "geo_loc_name",
+    "geo-loc-name": "geo_loc_name",
+    "country": "geo_loc_name",
+    "Country": "geo_loc_name",
+    "geographic location (depth)": "depth",
+    "depth_m": "Depth",
+    "Depth (m)": "Depth",
+    "Depth_m": "Depth",
+    "depth (m)": "Depth",
+    "Water depth": "tot_depth_water_col",
+    "total depth of water column": "tot_depth_water_col",
+    "Elevation_m": "elev",
+    "elevation": "elev",
+    "Elevation": "elev",
+    "local environmental context": "env_local_scale",
+    "Local Environmental Context": "env_local_scale",
+    "broad-scale environmental context": "env_broad_scale",
+    "Broad-scale Environmental Context": "env_broad_scale",
+    "broad scale environmental context": "env_broad_scale",
+    "environmental medium": "env_medium",
+    "Environmental Medium": "env_medium",
+    "env biome": "env_biome",
+    "env feature": "env_feature",
+    "isolation source": "isolation_source",
+    "isolation-source": "isolation_source",
+    "Isolation Source": "isolation_source",
+    "Isolation_source": "isolation_source",
+    "temperature": "temp",
+    "Temperature": "temp",
+    "Temperature_C": "temp",
+    "Temp": "temp",
+    "temperature_c": "temp",
+    "temp_c": "temp",
+    "Temperature (deg C)": "temp",
+    "Salinity": "salinity",
+    "Salinity_psu": "salinity",
+    "Salinity (PSU)": "salinity",
+    "salinity_psu": "salinity",
+    "pH": "ph",
+    "PH": "ph",
+    "dissolved_oxygen": "diss_oxygen",
+    "dissolvedoxygen": "diss_oxygen",
+    "total organic carbon": "tot_org_carb",
+    "Station": "station",
+    "Cruise ID": "cruise_id",
+    "cruise ID": "cruise_id",
+    "Cruise": "cruise",
+    "sample derived from": "sample_derived_from",
+    "amount or size of sample collected": "samp_size",
+    "sample collection device": "samp_collect_device",
+    "sample material processing": "samp_mat_process",
+    "collection method": "collection_method",
+    "Collection method": "collection_method",
+    "COLLECTION_METHOD": "collection_method",
+    "sample-type": "sample_type",
+    "sample type": "sample_type",
+    "Sample Type": "sample_type",
+    "Sample type": "sample_type",
+    "Sample_type": "sample_type",
+    "SampleType": "sample_type",
+    "sampletype": "sample_type",
+    "host life stage": "host_life_stage",
+    "host height": "host_height",
+    "host total mass": "host_tot_mass",
+    "HostSpecies": "host_species",
+}
+# Spelling -> FAIRe sampleMetadata field with no SAMPLE-level rule yet.
+_GAP2_DIRECT_RULES: tuple[tuple[str, str, Callable[[str], str | None]], ...] = (
+    ("samp_vol_we_dna_ext", "samp_vol_we_dna_ext", _identity),
+    ("sample volume or weight for DNA extraction", "samp_vol_we_dna_ext", _identity),
+    ("samp_store_temp", "samp_store_temp", _identity),
+    ("sample storage temperature", "samp_store_temp", _identity),
+    ("samp_store_dur", "samp_store_dur", _identity),
+    ("sample storage duration", "samp_store_dur", _identity),
+    ("samp_store_loc", "samp_store_loc", _identity),
+    ("sample storage location", "samp_store_loc", _identity),
+    ("samp_store_sol", "samp_store_sol", _identity),
+    ("ph_meth", "ph_meth", _identity),
+    ("ph method", "ph_meth", _identity),
+    ("ph_method", "ph_meth", _identity),
+    ("materialSampleID", "materialSampleID", _identity),
+    ("pool_dna_extracts", "pool_dna_num", _identity),
+    ("verbatimEventDate", "verbatimEventDate", _identity),
+    ("verbatimEventTime", "verbatimEventTime", _identity),
+    ("eventDurationValue", "eventDurationValue", _identity),
+    ("habitat_natural_artificial_0_1", "habitat_natural_artificial_0_1", _identity),
+    ("minimumDepthInMeters", "minimumDepthInMeters", to_min_meters),
+    ("maximumDepthInMeters", "maximumDepthInMeters", to_max_meters),
+    ("turbidity", "turbidity", _identity),
+    ("wind_speed", "wind_speed", _identity),
+    ("wind speed", "wind_speed", _identity),
+    ("tidal_stage", "tidal_stage", _identity),
+    ("water_current", "water_current", _identity),
+)
+
+
+def _generated_gap2_alias_rules(base: tuple[MappingRule, ...]) -> tuple[MappingRule, ...]:
+    from dataclasses import replace
+
+    out: list[MappingRule] = []
+    for alias, original in _GAP2_COPY_RULES_OF.items():
+        copies = [
+            replace(rule, source_fact_type=alias)
+            for rule in base
+            if rule.source_fact_type == original and rule.source_entity_level == EntityLevel.SAMPLE.value
+        ]
+        if not copies:
+            raise ValueError(f"gap-2 alias {alias!r}: {original!r} has no SAMPLE-level rule to copy")
+        out.extend(copies)
+    for alias, field, transform in _GAP2_DIRECT_RULES:
+        out.append(
+            MappingRule(alias, EntityLevel.SAMPLE.value, "sampleMetadata", field,
+                        MappingMethod.DETERMINISTIC_SYNONYM.value, transform=transform)
+        )
+    return tuple(out)
+
+
+RULES: tuple[MappingRule, ...] = _BASE_RULES + _generated_gap2_alias_rules(_BASE_RULES)
 
 
 def rules_for(fact_type: str, entity_level: str | None) -> list[MappingRule]:
