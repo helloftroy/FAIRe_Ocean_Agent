@@ -12,7 +12,8 @@
 # Submit from the repo root:
 #   sbatch --account=191001-364393 cluster/run_audits.sbatch
 #SBATCH --job-name=faire_audits
-#SBATCH --partition=service
+# Partition: morrill (CPU, no internet). service is the DTN, for downloads only.
+#SBATCH --partition=morrill
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=48G
 #SBATCH --time=48:00:00

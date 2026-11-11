@@ -14,7 +14,8 @@
 #      data/fair_ocean.db.bak-pre-curation-<date> first (set SKIP_BACKUP=1
 #      only if you made your own copy).
 #SBATCH --job-name=faire_curation
-#SBATCH --partition=service
+# Partition: morrill (CPU, no internet). service is the DTN, for downloads only.
+#SBATCH --partition=morrill
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=64G
 #SBATCH --time=48:00:00

@@ -8,7 +8,8 @@
 #
 #   sbatch --account=191001-364393 cluster/run_remap.sbatch
 #SBATCH --job-name=faire_remap
-#SBATCH --partition=service
+# Partition: morrill (CPU, no internet). service is the DTN, for downloads only.
+#SBATCH --partition=morrill
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=32G
 #SBATCH --time=48:00:00
