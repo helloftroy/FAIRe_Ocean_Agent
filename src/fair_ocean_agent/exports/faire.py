@@ -41,6 +41,7 @@ from fair_ocean_agent.database.enums import (
     EntityRelationshipType,
     EntityRootStatus,
     IdentifierType,
+    RelevanceStatus,
     ReviewStatus,
 )
 from fair_ocean_agent.database.models import (
@@ -963,6 +964,10 @@ def _export_faire(
     # experimentRunMetadata) iterates this same `studies` list, so
     # filtering it here is sufficient to scope the whole export.
     studies_query = select(Study).where(Study.study_id.in_(study_ids)) if study_ids is not None else select(Study)
+    # Studies scripts/apply_curation.py flagged not marine (no marine or
+    # freshwater samples left, non-marine title) stay in the database but
+    # never reach the export (user decision 2026-11-11).
+    studies_query = studies_query.where(Study.marine_relevance_status != RelevanceStatus.NOT_RELEVANT.value)
     studies = list(session.scalars(studies_query))
 
     project_columns = _exportable_project_columns()

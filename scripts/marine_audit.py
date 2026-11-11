@@ -9,7 +9,7 @@ Per sample entity, one category from (first hit wins):
   organism (BioSample taxonomy name, e.g. "marine metagenome",
   "human gut metagenome", "Homo sapiens"), else host, else
   isolation_source / env_broad_scale text.
-Categories: medical (human / lab animal / clinical pathogen), marine,
+Categories: medical (human / lab animal incl. zebrafish / clinical pathogen), marine,
 freshwater, terrestrial, engineered, other_host; "ambiguous" values
 ("metagenome", "sediment metagenome", "aquatic metagenome", ...) are not
 counted.
@@ -40,7 +40,7 @@ PATTERNS = {
     "medical": r"homo sapiens|\bhuman|patient|clinical|hospital|sars-cov|coronavirus|influenza|hiv\b|"
     r"plasmodium|tuberculosis|streptococcus|staphylococcus|klebsiella|acinetobacter|clostridioides|"
     r"campylobacter|listeria|salmonella|escherichia coli|pseudomonas aeruginosa|enterococcus|neisseria|"
-    r"helicobacter|mus musculus|\bmouse\b|\bmice\b|murine|rattus|\brats?\b|vaginal|oral metagenome|"
+    r"helicobacter|mus musculus|\bmouse\b|\bmice\b|murine|rattus|\brats?\b|danio rerio|zebrafish|vaginal|oral metagenome|"
     r"skin metagenome|lung metagenome|\bfeces|fecal|faecal|stool|saliva|sputum|urine|blood|"
     r"cancer|tumou?r|infant|child|covid|disease|infection|obes|diabet",
     "marine": r"marine|sea ?water|ocean|coral|sponge|porifera|estuar|salt ?marsh|mangrove|hydrothermal|"
@@ -51,8 +51,7 @@ PATTERNS = {
     r"mediterranean|baltic|benthic|pelagic|abyss|hadal|trench|sea ice|diatom|dinoflagellate|"
     r"copepod|krill|salmon(?!ella)|\bcod\b|herring|sardine|anchov|seal\b|sea lion|turtle|shark|ray\b",
     "freshwater": r"freshwater|fresh water|\blake|\brivers?\b|stream|\bpond|groundwater|aquifer|"
-    r"drinking water|tap water|wetland|hot spring|glacier|snow|reservoir|cyprinus|danio rerio|zebrafish|"
-    r"tilapia|carp\b|daphnia",
+    r"drinking water|tap water|wetland|hot spring|glacier|snow|reservoir|daphnia",
     "terrestrial": r"\bsoil|rhizosphere|\broots?\b|plant|phyllosphere|arabidopsis|oryza|zea mays|"
     r"triticum|hordeum|glycine max|solanum|compost|terrestrial|insect|mosquito|drosophila|bovine|"
     r"bos taurus|sus scrofa|\bpigs?\b|porcine|chicken|gallus|canis|cattle|\bcow|sheep|ovis|goat|"
@@ -61,7 +60,8 @@ PATTERNS = {
     "engineered": r"wastewater|sewage|activated sludge|bioreactor|anaerobic digest|digester|\bfood|"
     r"indoor|air metagenome|built environment|dairy|cheese|fermented|brewery|wine|kimchi|landfill|"
     r"mine drainage|oil reservoir|hydrocarbon reservoir",
-    "other_host": r"gut metagenome|insect metagenome|invertebrate metagenome|animal",
+    "other_host": r"gut metagenome|insect metagenome|invertebrate metagenome|animal|"
+    r"cyprinus|carassius|\bcarp\b|tilapia|oreochromis|oncorhynchus mykiss|rainbow trout",
 }
 RX = {k: re.compile(v, re.I) for k, v in PATTERNS.items()}
 AMBIGUOUS = re.compile(

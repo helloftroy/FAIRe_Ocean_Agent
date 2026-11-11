@@ -617,6 +617,28 @@ class ValidationResult(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
+class CurationExclusion(Base):
+    """One curation decision (scripts/apply_curation.py, 2026-11-11): a
+    sample deleted or unlinked from a study, a BioProject dropped from a
+    study, or a study flagged not marine. Kept after the rows it describes
+    are deleted -- the audit trail for the paper, and the tombstone list a
+    re-run checks so deleted material is not silently restored. No foreign
+    keys on purpose: the entity it names may no longer exist."""
+
+    __tablename__ = "curation_exclusions"
+
+    curation_id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: new_id("CURAT"))
+    level: Mapped[str] = mapped_column(String, index=True)  # sample | bioproject | study
+    accession: Mapped[str | None] = mapped_column(String, index=True)
+    entity_id: Mapped[str | None] = mapped_column(String, index=True)
+    study_id: Mapped[str | None] = mapped_column(String, index=True)
+    action: Mapped[str] = mapped_column(String)  # deleted | unlinked | excluded
+    rule: Mapped[str] = mapped_column(String)
+    reason: Mapped[str | None] = mapped_column(Text)
+    run_label: Mapped[str | None] = mapped_column(String)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
 class CandidateMatch(Base, TimestampMixin):
     __tablename__ = "candidate_matches"
 

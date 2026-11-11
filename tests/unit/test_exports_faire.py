@@ -223,6 +223,26 @@ def test_export_faire_study_ids_filter_scopes_to_just_those_studies(db_session, 
     assert [row["seq_run_id"] for row in rows] == ["SRR100"]
 
 
+def test_export_faire_skips_studies_curated_not_marine(db_session, tmp_path):
+    """scripts/apply_curation.py flags a study with no marine/freshwater
+    samples left and a non-marine title as not_relevant; it stays in the
+    database but never reaches the export (user decision 2026-11-11)."""
+    kept = _minimal_mapped_study(db_session, bioproject="PRJNA100", biosample="SAMN100", run_accession="SRR100")
+    dropped = _minimal_mapped_study(db_session, bioproject="PRJNA200", biosample="SAMN200", run_accession="SRR200")
+    dropped.marine_relevance_status = "not_relevant"
+    db_session.commit()
+
+    export_faire(db_session, tmp_path)
+
+    with (tmp_path / "projectMetadata.csv").open() as f:
+        assert [row["project_id"] for row in csv.DictReader(f)] == ["PRJNA100"]
+    with (tmp_path / "sampleMetadata.csv").open() as f:
+        assert [row["samp_name"] for row in csv.DictReader(f)] == ["SAMN100"]
+    with (tmp_path / "experimentRunMetadata.csv").open() as f:
+        assert [row["seq_run_id"] for row in csv.DictReader(f)] == ["SRR100"]
+    assert kept.study_id != dropped.study_id
+
+
 def test_export_faire_internal_study_id_traces_rows_across_two_studies(db_session, tmp_path):
     """export_faire() merges every study in the database into one shared
     set of output CSVs with no per-study filter -- internal_study_id is the

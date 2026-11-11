@@ -1,0 +1,183 @@
+study_id,bioproject,decision,reason,bioproject_title
+STUDY-00c1c818d386,PRJNA705808,keep,"marine or freshwater content, or related to the study",Full-length transcriptome and gonad transcriptome of Clarias fuscus
+STUDY-0368c2c68a4d,PRJNA328535,keep,"marine or freshwater content, or related to the study",uncultured prokaryote Targeted loci environmental
+STUDY-0429e5b93e32,PRJNA293920,keep,"marine or freshwater content, or related to the study",freshwater fish species targeted loci environmental
+STUDY-0429e5b93e32,PRJNA244376,keep,"marine or freshwater content, or related to the study",Metatranscriptome of Cyanobacterial mats from Lake
+STUDY-080d930821a2,PRJEB6614,drop,Central Park soil,Bacerial and archaeal diversity in Central Park
+STUDY-080d930821a2,PRJEB6624,drop,"Central Park soil (seed, no samples)",
+STUDY-1048288a953b,PRJNA350395,keep,"marine or freshwater content, or related to the study",Mercury-Induced Epigenetic Transgenerational Inheritance of Abnormal Neurobehavior is Correlated with Sperm Epimutations
+STUDY-12d5ded31994,PRJNA34493,drop,GlobalFungi soil / plant fungal dataset,Targeted gene survey from fungal communities inhabiting Quercus macrocarpa phyllosphere
+STUDY-12d5ded31994,PRJNA33665,drop,GlobalFungi soil / plant fungal dataset,Massively parallel 454-sequencing of Quercus spp. ectomycorrhizosphere
+STUDY-12d5ded31994,PRJNA168235,drop,GlobalFungi soil / plant fungal dataset,Fungal ITS1 amplicon library from environmental samples Targeted Locus (Loci)
+STUDY-12d5ded31994,PRJNA174991,drop,GlobalFungi soil / plant fungal dataset,Mixed root associated fungi Metagenome
+STUDY-12d5ded31994,PRJNA214124,drop,GlobalFungi soil / plant fungal dataset,Pioneer fungal community Targeted Locus (Loci)
+STUDY-12d5ded31994,PRJNA229802,drop,GlobalFungi soil / plant fungal dataset,"Diversity of bacteria, archaea, fungi and algae in coal mine drainage remediation systems treating elevated manganese"
+STUDY-12d5ded31994,PRJNA231902,drop,GlobalFungi soil / plant fungal dataset,Fungal ITS2 amlicons Targeted Locus (Loci)
+STUDY-12d5ded31994,PRJNA258435,drop,GlobalFungi soil / plant fungal dataset,Soil Metagenome
+STUDY-12d5ded31994,PRJNA262479,drop,GlobalFungi soil / plant fungal dataset,Foliar fungal endophytes in Changbai Mountain Metagenome
+STUDY-12d5ded31994,PRJNA281566,drop,GlobalFungi soil / plant fungal dataset,Oryza sativa Raw sequence reads
+STUDY-12d5ded31994,PRJNA289600,drop,GlobalFungi soil / plant fungal dataset,secondary forest soil raw sequence reads
+STUDY-12d5ded31994,PRJNA289948,drop,GlobalFungi soil / plant fungal dataset,Welwitschia microbiome Raw sequence reads
+STUDY-12d5ded31994,PRJNA290186,drop,GlobalFungi soil / plant fungal dataset,soil bacteria and fungi Targeted loci environmental
+STUDY-12d5ded31994,PRJNA295773,drop,GlobalFungi soil / plant fungal dataset,Microbial endophytes in the grass Deschampsia flexuosa - ecology and use in restoration of Arctic habitats
+STUDY-12d5ded31994,PRJNA301180,drop,GlobalFungi soil / plant fungal dataset,Fungal community compostion in litters and soils collected from larch plantations and adjacent secondary forests
+STUDY-12d5ded31994,PRJNA305543,drop,GlobalFungi soil / plant fungal dataset,Ash leaves and forest spores Targeted loci environmental
+STUDY-12d5ded31994,PRJNA308730,drop,GlobalFungi soil / plant fungal dataset,roots and rhizosphere soil Metagenome
+STUDY-12d5ded31994,PRJNA309177,drop,GlobalFungi soil / plant fungal dataset,Antarctic Soil Fungi Communities
+STUDY-12d5ded31994,PRJNA310202,drop,GlobalFungi soil / plant fungal dataset,Community structure and diversity of the root-associated microbiome of Ilex paraguariensis St. Hil (Yerba Mate)
+STUDY-12d5ded31994,PRJNA315177,drop,GlobalFungi soil / plant fungal dataset,paddy soil chronosequence Raw sequence reads
+STUDY-12d5ded31994,PRJNA316729,drop,GlobalFungi soil / plant fungal dataset,root-associated fungi from Hawaiian soils Raw sequence reads
+STUDY-12d5ded31994,PRJNA323989,drop,GlobalFungi soil / plant fungal dataset,Hippophae rhamnoides Raw sequence reads
+STUDY-12d5ded31994,PRJNA339655,drop,GlobalFungi soil / plant fungal dataset,peat metagenome Metagenome
+STUDY-12d5ded31994,PRJNA340895,drop,GlobalFungi soil / plant fungal dataset,Soil fungal communities in th Jerusalem artichoke field
+STUDY-12d5ded31994,PRJNA349443,drop,GlobalFungi soil / plant fungal dataset,fungal comunity
+STUDY-12d5ded31994,PRJNA368954,drop,GlobalFungi soil / plant fungal dataset,Effects of land-use change in temperate rainforests on the soil fungal metagenome
+STUDY-12d5ded31994,PRJNA381139,drop,GlobalFungi soil / plant fungal dataset,Root associated fungal diversity of Calanthe orchid species in Korea
+STUDY-12d5ded31994,PRJNA386114,drop,GlobalFungi soil / plant fungal dataset,Soil fungi in Pantelleria (Italy)
+STUDY-12d5ded31994,PRJNA387391,drop,GlobalFungi soil / plant fungal dataset,lichen crust ITS1 Metabarcoding Targeted loci environmental
+STUDY-12d5ded31994,PRJNA396934,drop,GlobalFungi soil / plant fungal dataset,fungal communities of no-till wheat
+STUDY-12d5ded31994,PRJNA412155,drop,GlobalFungi soil / plant fungal dataset,Black alder roots metagenome
+STUDY-12d5ded31994,PRJNA420435,drop,GlobalFungi soil / plant fungal dataset,Unexpectedly High Beta-Diversity of Root-Associated Fungal Communities in the Bolivian Andes
+STUDY-12d5ded31994,PRJNA433174,drop,GlobalFungi soil / plant fungal dataset,Fungal communities with soil depth in no-till wheat
+STUDY-12d5ded31994,PRJNA448284,drop,GlobalFungi soil / plant fungal dataset,soil metagenome Raw sequence reads
+STUDY-12d5ded31994,PRJNA453158,drop,GlobalFungi soil / plant fungal dataset,Bacterial and Fungal communities in four hemlock tree species
+STUDY-12d5ded31994,PRJEB3210,drop,GlobalFungi soil / plant fungal dataset,Nature conservation in the genomic era: soil fungal diversity assessment in protected coastal Salix repens communities i
+STUDY-12d5ded31994,PRJEB3999,drop,GlobalFungi soil / plant fungal dataset,Illumina metabarcoding of a soil fungal community
+STUDY-12d5ded31994,PRJEB4497,drop,GlobalFungi soil / plant fungal dataset,Variation in wood decay rates in naturally colonized stumps: effect of moisture content and fungal community composition
+STUDY-12d5ded31994,PRJEB5753,drop,GlobalFungi soil / plant fungal dataset,Serpentine soil conditions affect the community composition of fungal symbionts in the roots of Onosma echioides
+STUDY-12d5ded31994,PRJEB6382,drop,GlobalFungi soil / plant fungal dataset,Changes in fungal diversity and function after fire in boreal forest
+STUDY-12d5ded31994,PRJEB8978,drop,GlobalFungi soil / plant fungal dataset,Fungal ITS amplicon sequences of the BEF CSP Dead wood experiment
+STUDY-12d5ded31994,PRJEB9030,drop,GlobalFungi soil / plant fungal dataset,Similar patterns of fungal community dynamics in relation to wood decay of two contrasting tree species: an experimental
+STUDY-12d5ded31994,PRJEB9616,drop,GlobalFungi soil / plant fungal dataset,Urban stress is associated with variation in microbial species composition-but not richness-in Manhattan.
+STUDY-12d5ded31994,PRJEB10643,drop,GlobalFungi soil / plant fungal dataset,Pyrosequencing of fungal ITS and bacterial 16S rDNA regions
+STUDY-12d5ded31994,PRJEB10726,drop,GlobalFungi soil / plant fungal dataset,Vertical and seasonal dynamics of fungal communities in boreal Scots pine forest soil
+STUDY-12d5ded31994,PRJEB11799,drop,GlobalFungi soil / plant fungal dataset,Survey of soil microbial diversity in permafrost soil and the surrounding active layers at the long-term study site Muot
+STUDY-12d5ded31994,PRJEB12501,drop,GlobalFungi soil / plant fungal dataset,Comprehensive amplicon-based metagenome analyses reveal long-term impacts of timber harvesting on soil microbial communi
+STUDY-12d5ded31994,PRJEB12716,drop,GlobalFungi soil / plant fungal dataset,Elevation gradient in Ordesa Monte Perdido Microbial Observatory to study the effect of climate on soil microbial commun
+STUDY-12d5ded31994,PRJEB15650,drop,GlobalFungi soil / plant fungal dataset,Effect of N deposition in a highly N-limited habitat: deadwood
+STUDY-12d5ded31994,PRJEB16010,drop,GlobalFungi soil / plant fungal dataset,Trends in fungal diversity related to plant diversity
+STUDY-12d5ded31994,PRJEB16069,drop,GlobalFungi soil / plant fungal dataset,Fungal community of birch leaves
+STUDY-12d5ded31994,PRJEB17710,drop,GlobalFungi soil / plant fungal dataset,Soil bateria and fungi in temperate steppe of China
+STUDY-12d5ded31994,PRJEB18012,drop,GlobalFungi soil / plant fungal dataset,"Soil depth-based community assembly processes in Ngari drylands, Tibet"
+STUDY-12d5ded31994,PRJEB18707,drop,GlobalFungi soil / plant fungal dataset,Fungal diversity and niche differentiation in decaying logs and stumps
+STUDY-12d5ded31994,PRJEB20576,drop,GlobalFungi soil / plant fungal dataset,Soil-wood interactions: influence of decaying logs on composition of soil fungal communities
+STUDY-12d5ded31994,PRJEB21052,drop,GlobalFungi soil / plant fungal dataset,Tree species preferences of deadwood-inhabiting fungi in temperate forests
+STUDY-12d5ded31994,PRJEB21463,drop,GlobalFungi soil / plant fungal dataset,tillage effect soil bacterial and fungal community
+STUDY-12d5ded31994,PRJEB21587,drop,GlobalFungi soil / plant fungal dataset,The effect of reindeer grazing on soil fungal communities and enzyme activities in boreal coniferous forests in Finnish 
+STUDY-12d5ded31994,PRJEB24318,drop,GlobalFungi soil / plant fungal dataset,The study includes fungal genetic diversity assessment by ITS-1 next generation sequencing (NGS) analyses. The main the 
+STUDY-12d5ded31994,PRJEB25693,drop,GlobalFungi soil / plant fungal dataset,The microbiome of climate change induced range-expanding plants
+STUDY-12d5ded31994,PRJEB25697,drop,GlobalFungi soil / plant fungal dataset,The microbiome of climate change induced range-expanding plants
+STUDY-12d5ded31994,PRJEB28028,drop,GlobalFungi soil / plant fungal dataset,The Glastir Monitoring & Evaluation Programme - sequencing data from microbiology cores focused on fungi using the ITS1 
+STUDY-12d5ded31994,PRJEB29685,drop,GlobalFungi soil / plant fungal dataset,Ectomycorrhizal communities of Abies pinsapo conifer trees
+STUDY-12d5ded31994,PRJDB8049,drop,GlobalFungi soil / plant fungal dataset,Seasonal dynamics of soil fungal and bacterial communities in cool-temperate montane forests
+STUDY-150290a66e93,PRJNA627655,keep,"marine or freshwater content, or related to the study","Metagenome from a deep subsurface, shale-hosted aquifer of the Volcanic Eifel"
+STUDY-150290a66e93,PRJNA628506,keep,"marine or freshwater content, or related to the study",Metagenome from the Muhlbacher Schwefelquelle aquifer
+STUDY-150290a66e93,PRJNA246526,keep,"marine or freshwater content, or related to the study",Aspo Hard Rock Laboratory groundwater Targeted Locus (Loci)
+STUDY-150290a66e93,PRJNA246527,keep,"marine or freshwater content, or related to the study","Olkiluoto, Finland groundwater Targeted Locus (Loci)"
+STUDY-150290a66e93,PRJNA701321,keep,"marine or freshwater content, or related to the study",Cinder Pool hot spring metagenome
+STUDY-150290a66e93,PRJNA793866,keep,"marine or freshwater content, or related to the study",Dziani Dzaha Lake Targeted loci environmental
+STUDY-150290a66e93,PRJNA797393,keep,"marine or freshwater content, or related to the study",Austin Hot Spring Targeted loci environmental
+STUDY-150290a66e93,PRJNA797441,keep,"marine or freshwater content, or related to the study",Costa Rica subduction zone Targeted loci environmental
+STUDY-150290a66e93,PRJNA800393,keep,"marine or freshwater content, or related to the study",Italy deep sulfidic aquifer field Targeted loci environmental
+STUDY-150290a66e93,PRJNA1048502,keep,"marine or freshwater content, or related to the study",Forearc hot springs of Southern Costa Rica and Panama Targeted loci environmental
+STUDY-150290a66e93,PRJNA799781,keep,"marine or freshwater content, or related to the study",Costa Rica subduction zone Metagenome
+STUDY-150290a66e93,PRJNA275225,keep,"marine or freshwater content, or related to the study",Fennoscandian Shield groundwater Targeted Locus (Loci)
+STUDY-150290a66e93,PRJNA282084,keep,"marine or freshwater content, or related to the study",Methane shale flowback fluids metagenome
+STUDY-150290a66e93,PRJNA1052675,keep,"marine or freshwater content, or related to the study",Deep serpentinization-driven hyperalkaline springs Targeted loci environmental
+STUDY-150290a66e93,PRJNA195613,keep,"marine or freshwater content, or related to the study",Groundwater Metagenome
+STUDY-150290a66e93,PRJNA1086540,keep,"marine or freshwater content, or related to the study",East Skaftar Cauldrons Subglacial Lake Metagenome
+STUDY-150290a66e93,PRJNA1086850,keep,"marine or freshwater content, or related to the study","Deep sulfidic groundwater, Olkiluoto, Finland Metagenome"
+STUDY-150290a66e93,PRJNA1087378,keep,"marine or freshwater content, or related to the study",Peninsula Iberica deep aquifers Metagenome
+STUDY-150290a66e93,PRJNA327016,keep,"marine or freshwater content, or related to the study",aquifer metagenome Raw sequence reads
+STUDY-150290a66e93,PRJNA340288,keep,"marine or freshwater content, or related to the study",Manleluag Spring National Park Metagenome
+STUDY-150290a66e93,PRJNA84439,keep,"marine or freshwater content, or related to the study",Whole environmental genomic DNA from Census of Deep Life
+STUDY-150290a66e93,PRJNA341265,keep,"marine or freshwater content, or related to the study",groundwater metagenome Targeted Locus (Loci)
+STUDY-150290a66e93,PRJNA448431,keep,"marine or freshwater content, or related to the study",ICICLES glacier lake metagenome Metagenome
+STUDY-18dd4414e057,PRJNA203029,drop,zebrafish and mouse skin RNA-seq,RNA-seq of Danio rerio and Mus musculus skin for three different age groups
+STUDY-190595023d2b,PRJEB18922,keep,"marine or freshwater content, or related to the study",Quality-filtering vastly improves diversity estimates from Illumina amplicon sequencing - DS3
+STUDY-19dd2727d4f7,PRJNA1039858,drop,salamander skin microbiome,Microbial diversity of Appalachian salamander skin
+STUDY-19dd2727d4f7,PRJNA1022813,drop,genome assemblies of 418 species,Whole genome sequencing and assembly of 418 species from the family Boletaceae Raw sequence reads
+STUDY-19dd2727d4f7,PRJNA1040917,drop,groundwater and soil site unrelated to the sponge study,Microbial communities in groundwater and soil from an industrial site exposed to chlorinated and nitroaromatic compounds
+STUDY-2023770d84ea,PRJNA356353,keep,"marine or freshwater content, or related to the study",Microbial community function in bleaching disease of the marine macroalgae Delisea pulchra
+STUDY-21cd3da48399,PRJNA203014,keep,"marine or freshwater content, or related to the study",Lake Erie Metagenome
+STUDY-21ee74de0b1b,PRJNA447936,keep,"marine or freshwater content, or related to the study","Microbial community of methane oxidation coupled with selenate reduction, bioreplicate_2"
+STUDY-236d8bf91074,PRJNA437436,keep,"marine or freshwater content, or related to the study",Metabarcoding of fungi from lake water and sediment
+STUDY-2884a6209262,PRJNA405772,keep,"marine or freshwater content, or related to the study","Freshwater lake microbial communities from Lake Erie, under a cyanobacterial bloom - NOAA_Erie_Diel1S_2200h metaT metatr"
+STUDY-2884a6209262,PRJNA405774,keep,"marine or freshwater content, or related to the study","Freshwater lake microbial communities from Lake Erie, under a cyanobacterial bloom - NOAA_Erie_Diel5S_2200h metaT metatr"
+STUDY-2884a6209262,PRJNA405773,keep,"marine or freshwater content, or related to the study","Freshwater lake microbial communities from Lake Erie, under a cyanobacterial bloom - NOAA_Erie_Diel4S_1600h metaT metatr"
+STUDY-2884a6209262,PRJNA405775,keep,"marine or freshwater content, or related to the study","Freshwater lake microbial communities from Lake Erie, under a cyanobacterial bloom - NOAA_Erie_Diel6S_1000h metaT metatr"
+STUDY-2884a6209262,PRJNA429071,keep,"marine or freshwater content, or related to the study","Freshwater lake microbial communities from Lake Erie, under a cyanobacterial bloom - NOAA_Erie_Diel2S_0400h metaT metatr"
+STUDY-2884a6209262,PRJNA429068,keep,"marine or freshwater content, or related to the study","Freshwater lake microbial communities from Lake Erie, under a cyanobacterial bloom - NOAA_Erie_Diel7S_1600h metaT metatr"
+STUDY-2884a6209262,PRJNA429072,keep,"marine or freshwater content, or related to the study","Freshwater lake microbial communities from Lake Erie, under a cyanobacterial bloom - NOAA_Erie_Diel3S_1000h metaT metatr"
+STUDY-2ab750fa1d6a,PRJNA327979,keep,"marine or freshwater content, or related to the study",Myxosporea Targeted loci environmental
+STUDY-2b85315d8c07,PRJNA314134,drop,Picea glauca populations,Picea glauca Association Populations
+STUDY-2d6c8404a345,PRJNA315545,keep,"marine or freshwater content, or related to the study",Resistance and resilience of aquatic bacterial communities
+STUDY-30ffcf6250c0,PRJNA302770,keep,"marine or freshwater content, or related to the study",Platygyra daedalea SNP genotyping
+STUDY-33ccd0046118,PRJNA281530,keep,"marine or freshwater content, or related to the study",Polymetallic nodule field Targeted loci environmental
+STUDY-3466a3777de9,PRJNA339601,drop,Danio rerio reads,Danio rerio Raw sequence reads
+STUDY-4302ccc56ad6,PRJEB6411,keep,"marine or freshwater content, or related to the study",Port Hacking Time Series
+STUDY-4302ccc56ad6,PRJEB8420,drop,forest harvesting soil,Forest harvesting reduces the soil metagenomic potential for biomass decomposition
+STUDY-4302ccc56ad6,PRJNA357337,keep,"marine or freshwater content, or related to the study",marine sediment metagenome raw sequence reads
+STUDY-4b0428df1191,PRJNA109327,keep,"marine or freshwater content, or related to the study",Marine sediment metagenome ICM_CFU
+STUDY-4b0428df1191,PRJNA109371,keep,"marine or freshwater content, or related to the study",Marine metagenome ICM_ICR
+STUDY-4fa00a12f182,PRJEB5140,keep,"marine or freshwater content, or related to the study",CDKC_Tongue_river_samples_16S
+STUDY-51abcda76ea3,PRJNA244615,drop,saline desert soil,"Metagenomes of Saline Desert,Kutch,Gujarat, India, Project-151, Gujarat Genomics Initiative, GSBTM, DST, Gandhinagar, Gu"
+STUDY-51abcda76ea3,PRJNA60545,keep,"marine or freshwater content, or related to the study",Metagenomes isolated from NE Brazil
+STUDY-51abcda76ea3,PRJNA240951,drop,paddy soil,Paddy soil Genome sequencing
+STUDY-51abcda76ea3,PRJNA265029,keep,"marine or freshwater content, or related to the study",Fracture water Metagenome
+STUDY-55a737368fb0,PRJDB7293,keep,"marine or freshwater content, or related to the study",Metagenomic analysis of Kirishima hot springs
+STUDY-55a737368fb0,PRJEB6559,keep,"marine or freshwater content, or related to the study",Metagenomic analysis reveals unusually high incidence of proteorhodopsin genes in the ultraoligotrophic Eastern Mediterr
+STUDY-55a737368fb0,PRJEB6608,keep,"marine or freshwater content, or related to the study",Metatranscriptome sequencing of Tara Oceans DNA samples corresponding to size fractions for prokaryotes.
+STUDY-55a737368fb0,PRJEB6941,keep,"marine or freshwater content, or related to the study",Evaluation of methods to purify virus-like particles for the sequencing of intestinal viromes
+STUDY-55a737368fb0,PRJEB7983,drop,oil sands hydrocarbon (engineered),Hydrocarbon Metagenomics Project
+STUDY-5a4ad633de98,PRJEB85906,drop,"human read removal, viral read sets",Human_Read_Removal_Investigation___Viral_Read_Sets
+STUDY-5a4ad633de98,PRJEB85907,drop,"human read removal, viral read sets",Human_Read_Removal_Investigation___Viral_Read_Sets
+STUDY-6813e98cd1bd,PRJNA1330795,drop,RNA ligase / neural function (lab),"An RNA ligase shapes transcriptional profiles, neural function, and behaviour in the developing larval zebrafish"
+STUDY-74c9527e7265,PRJNA248305,drop,rainbow trout topographical mapping (lab),Topographical mapping the rainbow trout (Oncorhynchus mykiss) microbiome
+STUDY-74c9527e7265,PRJNA293931,drop,Carassius genetics,"Carassius carassius, Carassius auratus auratus, Carassius auratus gibelio and Cyprinus carpio raw sequence reads"
+STUDY-80f78e7f6fca,PRJEB34906,keep,"marine or freshwater content, or related to the study",Field sampling of Ectocarpales and associated microbes from Southern Australia
+STUDY-8964bc90bcfa,PRJNA437783,keep,"marine or freshwater content, or related to the study",shrimp gut metagenome Raw sequence reads
+STUDY-8964bc90bcfa,PRJNA555807,keep,"marine or freshwater content, or related to the study",Scylla paramamosain Raw sequence reads
+STUDY-8efcd47895d0,PRJNA476388,keep,"marine or freshwater content, or related to the study",Archaea
+STUDY-90ba9f3a9b85,PRJNA307297,keep,"marine or freshwater content, or related to the study",freshwater aquaculture pond sediment Raw sequence reads
+STUDY-917339f7246f,PRJNA659411,keep,"marine or freshwater content, or related to the study",Influence of temperature changes on Symbiodiniaceae and bacterial communities
+STUDY-924a188ba16c,PRJEB6492,drop,diet and gut study,
+STUDY-94614ae62473,PRJEB23235,keep,"marine or freshwater content, or related to the study",Origin based predominance of Dothideomycetes and Saccharomycetes in the intestinal mycobiota of zebrafish
+STUDY-a1f945956661,PRJNA345605,drop,zebrafish larval gut transcription,Transcriptional responses in 6.5 dpf larval zebrafish guts upon feeding a high-fat or low-fat meal
+STUDY-a76c8b10ed6a,PRJNA529749,keep,"marine or freshwater content, or related to the study","Sediment Microbiome of River Ganga (Nawabganj, Kanpur s1)"
+STUDY-a76c8b10ed6a,PRJNA529770,keep,"marine or freshwater content, or related to the study","Sediment Microbiome of River Ganga (Jajmau, Kanpur s2)"
+STUDY-a8578398a164,PRJEB21822,keep,"marine or freshwater content, or related to the study","Protist communities in moored long-term sediment traps (Fram Strait, Arctic) – Preservation with mercury chloride allows"
+STUDY-b2209eb1be33,PRJNA414718,keep,"marine or freshwater content, or related to the study",EUPHYLLIA PARADIVISA Raw sequence reads
+STUDY-b66730c4bdbb,PRJEB6499,keep,"marine or freshwater content, or related to the study",Parfrey_euk_testing_samples_515_1119
+STUDY-c12159b9a128,PRJEB2790,drop,soil microbes,Functional diversity of soil microbes across environmental gradients
+STUDY-c1822492cc0e,PRJNA328593,keep,"marine or freshwater content, or related to the study",marine sediment metagenome Targeted loci environmental
+STUDY-c1822492cc0e,PRJNA328595,keep,"marine or freshwater content, or related to the study",marine metagenome Targeted loci environmental
+STUDY-c1822492cc0e,PRJNA328597,keep,"marine or freshwater content, or related to the study",marine sediment metagenome Targeted loci environmental
+STUDY-c90933897485,PRJNA1007388,drop,soil and rhizosphere multi-omics,Multi-omics for Understanding Climate Change (MUCC)
+STUDY-caa33f2ce2d5,PRJDB4849,keep,"marine or freshwater content, or related to the study",Microbial community in on-site tsunami sediment caused by the Great East Japan Earthquake
+STUDY-caa33f2ce2d5,PRJEB2989,drop,Arabidopsis root microbiome,Defining the core Arabidopsis thaliana root microbiome
+STUDY-caa33f2ce2d5,PRJEB3029,keep,"marine or freshwater content, or related to the study",Specialists instead of generalists oxidize alkanes in anoxic marine hydrocarbon seep sediments
+STUDY-caa33f2ce2d5,PRJEB6233,drop,leafy greens,Analysis of microbial communities in leafy greens using Illumina MiSeq
+STUDY-caa33f2ce2d5,PRJEB6310,drop,terrestrial SIP,Stable isotope probing/metagenomics of terrestrial dimethylsulfide degrading microorganisms
+STUDY-caa33f2ce2d5,PRJEB7708,drop,Anopheles mosquito microbiota,16S pyrosequencing of the microbiota in Anopheles gambiae mosquitoes after bloodfeeding on blood treated or not with pen
+STUDY-caa33f2ce2d5,PRJNA283163,keep,"marine or freshwater content, or related to the study",Marine sediment
+STUDY-caa33f2ce2d5,PRJNA353894,keep,"marine or freshwater content, or related to the study",ASU barcoding in 5 regional seas
+STUDY-caa33f2ce2d5,PRJNA241091,keep,"marine or freshwater content, or related to the study",Hydrothermal systems Targeted Locus (Loci)
+STUDY-caa33f2ce2d5,PRJEB18736,keep,"marine or freshwater content, or related to the study",The Sponge Microbiome Project
+STUDY-caa33f2ce2d5,PRJNA109301,keep,"marine or freshwater content, or related to the study",Coral metagenome ICM_CCB
+STUDY-caa33f2ce2d5,PRJEB4478,drop,soil and captivity effects on animal microbiota,Investigating the effects of soil and captivity on the skin microbes of Eastern Redback salamanders
+STUDY-caa33f2ce2d5,PRJEB18946,keep,"marine or freshwater content, or related to the study",Quality-filtering vastly improves diversity estimates from Illumina amplicon sequencing
+STUDY-caa33f2ce2d5,PRJEB18920,keep,"marine or freshwater content, or related to the study",Quality-filtering vastly improves diversity estimates from Illumina amplicon sequencing - DS3
+STUDY-caa33f2ce2d5,PRJEB18921,keep,"marine or freshwater content, or related to the study",Quality-filtering vastly improves diversity estimates from Illumina amplicon sequencing - DS5
+STUDY-caa33f2ce2d5,PRJEB19022,keep,"marine or freshwater content, or related to the study",Quality-filtering vastly improves diversity estimates from Illumina amplicon sequencing - DS9
+STUDY-caa33f2ce2d5,PRJEB19023,keep,"marine or freshwater content, or related to the study",Quality-filtering vastly improves diversity estimates from Illumina amplicon sequencing DS10
+STUDY-caa33f2ce2d5,PRJEB14745,keep,"marine or freshwater content, or related to the study",Diversity of carbonate deposits and basement rocks in continental and marine serpentinite seeps.
+STUDY-caa33f2ce2d5,PRJNA300314,drop,zebrafish small RNA,Small RNA and mRNA expression profiling during zebrafish caudal fin regeneration
+STUDY-daec5c4eb4ad,PRJNA207095,keep,"marine or freshwater content, or related to the study","16S rRNA Gene Pyrosequencing of Alkaline Hot Springs in Heart Lake Geyser Basin, Yellowstone National Park"
+STUDY-dcc937e7655a,PRJNA488593,keep,"marine or freshwater content, or related to the study",Myohalovirus phiH Phenotype or Genotype
+STUDY-dcc937e7655a,PRJEB7614,drop,zebrafish embryo drug screen,Screening_zebrafish_embryos_treated_with_small_molecules_by_transcriptome_profiling
+STUDY-de09267ca9ed,PRJNA263673,keep,"marine or freshwater content, or related to the study",Temporal survey of lake bacterioplankton diversity
+STUDY-e964181c2d79,PRJEB14855,keep,"marine or freshwater content, or related to the study",Bacterial community characterisation and pathogen profiling in a cooling tower system using an Illumina-based approach
+STUDY-f70c223f454d,PRJNA474467,drop,acid mine drainage (engineered),Moderate-temperature extremely acidic ecosystem metagenome study
+STUDY-f70c223f454d,PRJEB1352,drop,acid mine drainage,changes of microbial community composition and function in the acidification process of a lead/zinc mine tailings
+STUDY-fa3c3fc92fcc,PRJNA433553,keep,"marine or freshwater content, or related to the study",Transcriptome of Methylophaga nitratireducenticrescens strain GP59 cultured under denitrifying conditions
