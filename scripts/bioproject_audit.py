@@ -34,13 +34,20 @@ from curation_lib import (  # noqa: E402
 
 RESOLUTION = "external_identifier_sequence_accession_resolution"
 PAPER_TEXT = {"europe_pmc_fulltext_identifier_scan", "local_pdf_identifier_scan"}
-DROP_VERDICTS = ("foreign_bug_chain", "non_marine")
+DROP_VERDICTS = ("foreign_bug_chain", "foreign_hub", "non_marine")
+HUB_MIN_STUDIES = 3
 
 VERDICTS = """
   first_arrived        the study's first BioProject (kept as its own data)
   foreign_bug_chain    added only by sequence-accession resolution in a study
                        with digit-collision samples, and none of its samples
                        is marine or freshwater -> almost surely foreign
+  foreign_hub          added only by sequence-accession resolution, attached to
+                       >= 3 studies, and fewer than half of its classified
+                       samples marine/freshwater (none classified counts):
+                       public surveillance projects the bug chain landed on
+                       (PulseNet, GenomeTrakr, malaria trials). Shared marine
+                       datasets (Tara Oceans) are not caught by it.
   non_marine           >= 90 % of classified samples non-marine (user rule:
                        drop per BioProject; freshwater counts as kept)
   paper_cited          the accession is written in the paper's own text
@@ -77,6 +84,7 @@ def audit(conn: sqlite3.Connection) -> list[dict]:
     ):
         titles.setdefault(bp, (title or "")[:120])
     study_titles = dict(conn.execute("select study_id, title from studies"))
+    n_studies = collections.Counter(bp for rows_ in bp_rows.values() for bp in {v for v, _, _ in rows_})
 
     rows = []
     for s in sorted(studies):
@@ -94,6 +102,8 @@ def audit(conn: sqlite3.Connection) -> list[dict]:
                 verdict = "first_arrived"
             elif srcs == {RESOLUTION} and study_collisions and kept_kind == 0:
                 verdict = "foreign_bug_chain"
+            elif srcs == {RESOLUTION} and n_studies[bp] >= HUB_MIN_STUDIES and (not classified or kept_kind / classified < 0.5):
+                verdict = "foreign_hub"
             elif classified and nonmar / classified >= 0.9:
                 verdict = "non_marine"
             elif srcs & PAPER_TEXT:

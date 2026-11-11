@@ -54,7 +54,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from curation_lib import KEPT_KINDS, NON_MARINE, PROJECT_IDENTIFIER_TYPES, placements, project_aliases, sample_categories  # noqa: E402
 from marine_audit import text_category  # noqa: E402
 
-DROP_VERDICTS = ("foreign_bug_chain", "non_marine")
+DROP_VERDICTS = ("foreign_bug_chain", "foreign_hub", "non_marine")
 CHUNK = 20_000
 
 

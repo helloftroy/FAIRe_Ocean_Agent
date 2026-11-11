@@ -90,13 +90,27 @@ def _targets(session, note: str, source_name: str, aliases: dict[str, str], stud
         "('bioproject_accession','sra_study_accession','ena_study_accession')"
     )):
         attached[s].add(aliases.get(v, v))
-    out, seen = [], set()
+    primary_since = {}
+    for s, v, created in session.execute(text(
+        "select study_id, identifier_value, created_at from external_identifiers where identifier_type in "
+        "('bioproject_accession','sra_study_accession','ena_study_accession') "
+        "and (relationship_type is null or relationship_type = '')"
+    )):
+        primary_since.setdefault((s, aliases.get(v, v)), str(created))
+    out, seen, filled = [], set(), set()
+    # one study per project: entities are global, so a project shared by
+    # several studies (Tara Oceans) is fetched once, under the study that has
+    # it as a primary identifier (earliest), else the first one listed
+    rows = sorted(rows, key=lambda r: (primary_since.get((r[0], aliases.get(r[1], r[1])), "~"), r[0]))
     for s, ident, source_id, note_text in rows:
         key = aliases.get(ident, ident)
         if (s, ident) in seen or s in bad_studies or (s, key) in dropped or key not in attached[s]:
             continue
         if study and s != study:
             continue
+        if key in filled:
+            continue
+        filled.add(key)
         seen.add((s, ident))
         m = re.search(r"of (\d+)", note_text or "")
         out.append((s, ident, source_id, int(m.group(1)) if m else 0))

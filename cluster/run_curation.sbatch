@@ -35,6 +35,12 @@ DB_FILE="${DB_FILE:-$(pwd)/data/fair_ocean.db}"
 export FAIR_OCEAN_DATABASE_URL="sqlite:///${DB_FILE}"
 : "${AUDIT_DIR:?set AUDIT_DIR to the run_audits.sbatch output folder, e.g. data/audits/2026-11-12}"
 REVIEW="${REVIEW:-curation/bioproject_review_2026-11-11.csv}"
+mkdir -p "${AUDIT_DIR}"
+# Verdicts must come from the current code: re-run the BioProject audit here
+# (minutes) unless told not to.
+if [ "${SKIP_BP_AUDIT:-0}" != "1" ]; then
+  python scripts/bioproject_audit.py "${DB_FILE}" "${AUDIT_DIR}"
+fi
 [ -f "${AUDIT_DIR}/bioproject_audit.csv" ] || { echo "missing ${AUDIT_DIR}/bioproject_audit.csv" >&2; exit 2; }
 echo "Job started: $(date)  db: ${DB_FILE}  audit: ${AUDIT_DIR}"
 
