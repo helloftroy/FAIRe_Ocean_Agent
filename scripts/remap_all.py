@@ -20,7 +20,7 @@ Steps (one transaction per 200 components, so a re-run resumes):
 Then run: python -m fair_ocean_agent.cli worker --task-type MAP_FAIRE --until-empty
 (re-mapping deletes and rebuilds a study's values, mapping/faire.py).
 
-Usage: python scripts/remap_all.py [--label LABEL] [--dry-run]
+Usage: python scripts/remap_all.py [--label LABEL] [--dry-run] [--studies FILE]
 """
 from __future__ import annotations
 
@@ -43,10 +43,14 @@ from fair_ocean_agent.workflow.settle_handlers import _mark_settled_and_determin
 from fair_ocean_agent.workflow.task_queue import enqueue_task  # noqa: E402
 
 
-def remap_all(session, label: str, dry_run: bool = False, commit_every: int = 200) -> dict:
+def remap_all(session, label: str, dry_run: bool = False, commit_every: int = 200,
+              only: set[str] | None = None) -> dict:
+    """only: re-map just these studies and the studies sharing a connected
+    component with them (2026-11-12, new PDFs); None = every study."""
     with_facts = set(session.scalars(select(RawFact.study_id).distinct()))
     studies = sorted(
-        s for s in session.scalars(select(Study.study_id).where(Study.canonical_status != "merged")) if s in with_facts
+        s for s in session.scalars(select(Study.study_id).where(Study.canonical_status != "merged"))
+        if s in with_facts and (only is None or s in only)
     )
     seen: set[str] = set()
     components = 0
@@ -76,6 +80,8 @@ def remap_all(session, label: str, dry_run: bool = False, commit_every: int = 20
                                     Task.status.in_([TaskStatus.PENDING.value, TaskStatus.RETRY_PENDING.value]))
     ))
     queued = 0
+    if only is not None:
+        studies = sorted(s for s in seen if s in with_facts)
     for sid in studies:
         if sid in pending:
             continue
@@ -93,9 +99,11 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--label", default=f"remap-{date.today():%Y-%m-%d}")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--studies", help="file with one study_id per line: re-map only these (and linked studies)")
     args = ap.parse_args()
+    only = set(Path(args.studies).read_text().split()) if args.studies else None
     with session_scope() as session:
-        print(remap_all(session, args.label, args.dry_run))
+        print(remap_all(session, args.label, args.dry_run, only=only))
 
 
 if __name__ == "__main__":

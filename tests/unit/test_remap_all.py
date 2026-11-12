@@ -43,3 +43,20 @@ def test_remap_all_settles_and_queues_every_study(db_session):
     # running it again does not queue duplicates
     again = remap_all.remap_all(s, "remap-test")
     assert again["queued_map"] == 0
+
+
+def test_remap_only_listed_studies_and_their_component(db_session):
+    s = db_session
+    s.add_all([Study(study_id=x, title=x) for x in ("S1", "S2", "S4")])
+    s.add(Entity(entity_id="E1", study_id="S1", entity_level="sample", external_identifier="SAMN1", root_status="pending"))
+    s.add_all([EntityStudy(entity_id="E1", study_id="S1", relationship_type="home", confidence="structured_source"),
+               EntityStudy(entity_id="E1", study_id="S2", relationship_type="shares_accession_with", confidence="structured_source")])
+    for sid in ("S1", "S2", "S4"):
+        s.add(RawFact(study_id=sid, entity_id="E1" if sid != "S4" else None, fact_type_candidate="organism",
+                      raw_value="marine metagenome", entity_level="sample", support_type="structured_source",
+                      review_status="accepted"))
+    s.commit()
+    result = remap_all.remap_all(s, "newpdf-test", only={"S1"})
+    pending = s.scalars(select(Task.study_id).where(Task.task_type == "MAP_FAIRE", Task.status == "pending")).all()
+    assert sorted(pending) == ["S1", "S2"]          # S2 shares a sample with S1; S4 untouched
+    assert result["studies"] == 2 and result["components"] == 1   # S1 plus linked S2

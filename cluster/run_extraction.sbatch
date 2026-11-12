@@ -180,6 +180,34 @@ else
   exit 2
 fi
 
+# STUDY_LIST mode (2026-11-12, new PDFs): extract and re-map only the studies
+# listed in STUDY_LIST (one study_id per line, from scripts/match_new_pdfs.py),
+# then stop. Workers claim only these task types, so other pending tasks
+# (e.g. discovery, which needs the internet) are left alone.
+if [ -n "${STUDY_LIST:-}" ]; then
+  : "${FAIR_OCEAN_LOCAL_PDF_DIR:?STUDY_LIST mode reads the new PDFs: set FAIR_OCEAN_LOCAL_PDF_DIR}"
+  echo "=== LLM text extraction: $(wc -l < "${STUDY_LIST}") studies in ${STUDY_LIST} ==="
+  python - "${STUDY_LIST}" <<'PYEOF'
+import sys
+from pathlib import Path
+from fair_ocean_agent.database.enums import TaskType
+from fair_ocean_agent.database.session import session_scope
+from fair_ocean_agent.workflow.task_queue import enqueue_task
+ids = Path(sys.argv[1]).read_text().split()
+with session_scope() as session:
+    for sid in ids:
+        enqueue_task(session, TaskType.EXTRACT_TEXT_FACTS, study_id=sid)
+print(f"queued EXTRACT_TEXT_FACTS for {len(ids)} studies")
+PYEOF
+  python -m fair_ocean_agent.cli worker --task-type EXTRACT_TEXT_FACTS --until-empty --worker-id "newpdf-${SLURM_JOB_ID}"
+  echo "=== re-map these studies (and studies sharing their samples) ==="
+  python scripts/remap_all.py --studies "${STUDY_LIST}" --label "newpdf-$(date +%Y-%m-%d)"
+  python -m fair_ocean_agent.cli worker --task-type MAP_FAIRE --until-empty --worker-id "newpdf-map-${SLURM_JOB_ID}"
+  python -m fair_ocean_agent.cli status
+  echo "Job finished: $(date)"
+  exit 0
+fi
+
 echo "=== LLM text extraction (main papers) ==="
 python -m fair_ocean_agent.cli enqueue-text-extraction-backfill
 python -m fair_ocean_agent.cli worker --until-empty
