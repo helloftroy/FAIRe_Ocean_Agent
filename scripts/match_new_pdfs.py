@@ -21,7 +21,7 @@ PMC full text), so it is listed but not put on the extraction list.
 
 Writes OUT_DIR/pdf_matches.csv, OUT_DIR/studies.txt (the studies to
 extract: matched, no finished extraction) and OUT_DIR/no_study_seeds.csv
-(doi,title: a seed file for the PDFs with no study).
+(an ingest-seeds file for the PDFs with no study).
 
 Usage: python scripts/match_new_pdfs.py DB MANIFEST_CSV OUT_DIR [--apply]
 """
@@ -106,8 +106,9 @@ def main() -> None:
     (out / "studies.txt").write_text("".join(f"{s}\n" for s in todo))
     with open(out / "no_study_seeds.csv", "w", newline="") as h:
         w = csv.writer(h)
-        w.writerow(["doi", "title"])
-        w.writerows((r["doi"], r["title"]) for r in rows if r["match"] == "no_study")
+        w.writerow(["seed_id", "title", "doi", "notes"])
+        w.writerows((f"newpdf-{i:04d}", r["title"], r["doi"], "PDF supplied 2026-11-12")
+                    for i, r in enumerate((r for r in rows if r["match"] == "no_study"), 1))
 
     c = collections.Counter(r["match"] for r in rows)
     print(f"{len(rows)} PDFs: " + ", ".join(f"{k} {v}" for k, v in c.most_common()))
